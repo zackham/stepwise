@@ -1,0 +1,18 @@
+[project]
+name = "stepwise"
+version = "0.1.0"
+description = "Portable workflow orchestration for agents and humans"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
