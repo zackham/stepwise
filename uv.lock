@@ -363,11 +363,17 @@ wheels = [
 [[package]]
 name = "stepwise"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "pyyaml" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "websockets" },
+]
+
+[package.optional-dependencies]
+llm = [
+    { name = "httpx" },
 ]
 
 [package.dev-dependencies]
@@ -379,9 +385,12 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115.0" },
+    { name = "httpx", marker = "extra == 'llm'", specifier = ">=0.28.1" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34.0" },
     { name = "websockets", specifier = ">=14.0" },
 ]
+provides-extras = ["llm"]
 
 [package.metadata.requires-dev]
 dev = [

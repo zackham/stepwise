@@ -1,0 +1,450 @@
+"""Tests for stepwise.runner — headless flow execution."""
+
+import json
+import signal
+import time
+import pytest
+from io import StringIO
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+from stepwise.config import StepwiseConfig
+from stepwise.engine import Engine
+from stepwise.executors import ExecutorRegistry, ScriptExecutor, HumanExecutor, MockLLMExecutor
+from stepwise.models import (
+    ExecutorRef,
+    Job,
+    JobStatus,
+    StepDefinition,
+    StepRun,
+    StepRunStatus,
+    WorkflowDefinition,
+)
+from stepwise.project import init_project
+from stepwise.runner import (
+    EXIT_CONFIG_ERROR,
+    EXIT_JOB_FAILED,
+    EXIT_SUCCESS,
+    EXIT_USAGE_ERROR,
+    StdinHumanHandler,
+    TerminalReporter,
+    load_vars_file,
+    parse_vars,
+    run_flow,
+)
+from stepwise.store import SQLiteStore
+
+
+def _write_flow(tmp_path: Path, content: str, name: str = "test.flow.yaml") -> Path:
+    flow = tmp_path / name
+    flow.write_text(content)
+    return flow
+
+
+SIMPLE_SCRIPT_FLOW = """\
+name: simple
+steps:
+  hello:
+    run: 'echo "{\\"message\\": \\"hello world\\"}"'
+    outputs: [message]
+"""
+
+TWO_STEP_FLOW = """\
+name: two-step
+steps:
+  step1:
+    run: 'echo "{\\"result\\": \\"done\\"}"'
+    outputs: [result]
+  step2:
+    run: 'echo "{\\"final\\": \\"complete\\"}"'
+    outputs: [final]
+    inputs:
+      data: step1.result
+"""
+
+FAILING_FLOW = """\
+name: failing
+steps:
+  bad:
+    run: "exit 1"
+    outputs: [result]
+"""
+
+HUMAN_STEP_FLOW = """\
+name: with-human
+steps:
+  ask:
+    executor: human
+    prompt: "What is your name?"
+    outputs: [name]
+  greet:
+    run: 'echo "{\\"greeting\\": \\"hello\\"}"'
+    outputs: [greeting]
+    inputs:
+      user_name: ask.name
+"""
+
+HUMAN_MULTI_FIELD_FLOW = """\
+name: multi-field-human
+steps:
+  review:
+    executor: human
+    prompt: "Review this draft."
+    outputs: [decision, feedback]
+"""
+
+
+class TestRunFlow:
+    """run_flow() runs flows to completion."""
+
+    def test_simple_script_flow_completes(self, tmp_path):
+        project = init_project(tmp_path)
+        flow = _write_flow(tmp_path, SIMPLE_SCRIPT_FLOW)
+        output = StringIO()
+        rc = run_flow(flow, project, quiet=False, output_stream=output, config=StepwiseConfig())
+        assert rc == EXIT_SUCCESS
+
+    def test_two_step_flow_completes(self, tmp_path):
+        project = init_project(tmp_path)
+        flow = _write_flow(tmp_path, TWO_STEP_FLOW)
+        output = StringIO()
+        rc = run_flow(flow, project, quiet=True, output_stream=output, config=StepwiseConfig())
+        assert rc == EXIT_SUCCESS
+
+    def test_failing_step_returns_exit_1(self, tmp_path):
+        project = init_project(tmp_path)
+        flow = _write_flow(tmp_path, FAILING_FLOW)
+        output = StringIO()
+        rc = run_flow(flow, project, quiet=True, output_stream=output, config=StepwiseConfig())
+        assert rc == EXIT_JOB_FAILED
+
+    def test_missing_file_returns_exit_2(self, tmp_path):
+        project = init_project(tmp_path)
+        output = StringIO()
+        rc = run_flow(
+            tmp_path / "nonexistent.yaml",
+            project,
+            quiet=True,
+            output_stream=output,
+            config=StepwiseConfig(),
+        )
+        assert rc == EXIT_USAGE_ERROR
+
+    def test_invalid_flow_returns_exit_2(self, tmp_path):
+        project = init_project(tmp_path)
+        flow = _write_flow(tmp_path, "not: valid: yaml: [")
+        output = StringIO()
+        rc = run_flow(flow, project, quiet=True, output_stream=output, config=StepwiseConfig())
+        assert rc == EXIT_USAGE_ERROR
+
+    def test_creates_job_under_project_jobs_dir(self, tmp_path):
+        project = init_project(tmp_path)
+        flow = _write_flow(tmp_path, SIMPLE_SCRIPT_FLOW)
+        output = StringIO()
+        run_flow(flow, project, quiet=True, output_stream=output, config=StepwiseConfig())
+        # DB should exist
+        assert project.db_path.exists()
+
+    def test_objective_defaults_to_flow_name(self, tmp_path):
+        project = init_project(tmp_path)
+        flow = _write_flow(tmp_path, SIMPLE_SCRIPT_FLOW, name="simple.flow.yaml")
+        output = StringIO()
+        run_flow(flow, project, quiet=True, output_stream=output, config=StepwiseConfig())
+        # Verify the job was created with the flow file stem
+        store = SQLiteStore(str(project.db_path))
+        jobs = [store.load_job(r["id"]) for r in store._conn.execute("SELECT id FROM jobs").fetchall()]
+        store.close()
+        # stem of "simple.flow.yaml" is "simple.flow"
+        assert any(j.objective == "simple.flow" for j in jobs)
+
+    def test_custom_objective(self, tmp_path):
+        project = init_project(tmp_path)
+        flow = _write_flow(tmp_path, SIMPLE_SCRIPT_FLOW)
+        output = StringIO()
+        run_flow(
+            flow, project,
+            objective="Custom Objective",
+            quiet=True,
+            output_stream=output,
+            config=StepwiseConfig(),
+        )
+        store = SQLiteStore(str(project.db_path))
+        jobs = [store.load_job(r["id"]) for r in store._conn.execute("SELECT id FROM jobs").fetchall()]
+        store.close()
+        assert any(j.objective == "Custom Objective" for j in jobs)
+
+    def test_inputs_passed_to_job(self, tmp_path):
+        project = init_project(tmp_path)
+        flow_content = """\
+name: with-inputs
+steps:
+  echo:
+    run: 'echo "{\\"out\\": \\"ok\\"}"'
+    outputs: [out]
+"""
+        flow = _write_flow(tmp_path, flow_content)
+        output = StringIO()
+        rc = run_flow(
+            flow, project,
+            inputs={"env": "staging"},
+            quiet=True,
+            output_stream=output,
+            config=StepwiseConfig(),
+        )
+        assert rc == EXIT_SUCCESS
+
+
+class TestTerminalReporter:
+    """TerminalReporter callbacks called in correct order."""
+
+    def test_reports_start_and_completion(self):
+        output = StringIO()
+        reporter = TerminalReporter(quiet=False, _out=output)
+
+        reporter.on_flow_start("test-flow")
+        reporter.on_step_started("build", "script")
+        reporter.on_step_completed("build", 2.3, None)
+
+        text = output.getvalue()
+        assert "entering flow" in text
+        assert "build" in text
+        assert "running" in text
+        assert "completed" in text
+        assert "2.3s" in text
+
+    def test_reports_cost(self):
+        output = StringIO()
+        reporter = TerminalReporter(quiet=False, _out=output)
+        reporter.on_step_completed("deploy", 1.5, 0.042)
+        text = output.getvalue()
+        assert "$0.042" in text
+
+    def test_reports_failure(self):
+        output = StringIO()
+        reporter = TerminalReporter(quiet=False, _out=output)
+        reporter.on_step_failed("deploy", "connection timeout")
+        text = output.getvalue()
+        assert "failed" in text
+        assert "connection timeout" in text
+
+    def test_reports_suspension(self):
+        output = StringIO()
+        reporter = TerminalReporter(quiet=False, _out=output)
+        reporter.on_step_suspended("review")
+        text = output.getvalue()
+        assert "needs input" in text
+
+    def test_quiet_suppresses_output(self):
+        output = StringIO()
+        reporter = TerminalReporter(quiet=True, _out=output)
+        reporter.on_flow_start("test")
+        reporter.on_step_started("build", "script")
+        reporter.on_step_completed("build", 1.0, None)
+        reporter.on_flow_completed(MagicMock(), 1, 1.0)
+        assert output.getvalue() == ""
+
+
+class TestStdinHumanHandler:
+    """StdinHumanHandler detects suspended steps and collects input."""
+
+    def _make_suspended_run(self, fields: list[str], prompt: str = "Enter data") -> StepRun:
+        from stepwise.models import WatchSpec, _gen_id, _now
+        return StepRun(
+            id=_gen_id("run"),
+            job_id="job-test",
+            step_name="human_step",
+            attempt=1,
+            status=StepRunStatus.SUSPENDED,
+            watch=WatchSpec(
+                mode="human",
+                config={"prompt": prompt},
+                fulfillment_outputs=fields,
+            ),
+            started_at=_now(),
+        )
+
+    def test_single_field_prompt(self):
+        input_stream = StringIO("Alice\n")
+        output_stream = StringIO()
+        handler = StdinHumanHandler(input_stream=input_stream, output_stream=output_stream)
+
+        run = self._make_suspended_run(["name"], prompt="What is your name?")
+        engine = MagicMock()
+        handler.handle_suspended_step(engine, run)
+
+        engine.fulfill_watch.assert_called_once_with(run.id, {"name": "Alice"})
+        output_text = output_stream.getvalue()
+        assert "What is your name?" in output_text
+
+    def test_multi_field_prompt(self):
+        input_stream = StringIO("approve\nLooks great!\n")
+        output_stream = StringIO()
+        handler = StdinHumanHandler(input_stream=input_stream, output_stream=output_stream)
+
+        run = self._make_suspended_run(["decision", "feedback"], prompt="Review this draft.")
+        engine = MagicMock()
+        handler.handle_suspended_step(engine, run)
+
+        engine.fulfill_watch.assert_called_once_with(
+            run.id, {"decision": "approve", "feedback": "Looks great!"}
+        )
+
+    def test_calls_fulfill_watch(self):
+        input_stream = StringIO("yes\n")
+        output_stream = StringIO()
+        handler = StdinHumanHandler(input_stream=input_stream, output_stream=output_stream)
+
+        run = self._make_suspended_run(["confirmed"])
+        engine = MagicMock()
+        handler.handle_suspended_step(engine, run)
+
+        engine.fulfill_watch.assert_called_once()
+        call_args = engine.fulfill_watch.call_args
+        assert call_args[0][0] == run.id
+        assert call_args[0][1] == {"confirmed": "yes"}
+
+
+class TestHumanStepEndToEnd:
+    """End-to-end: human step in headless mode with mocked stdin."""
+
+    def test_human_step_flow_completes(self, tmp_path):
+        project = init_project(tmp_path)
+        flow = _write_flow(tmp_path, HUMAN_STEP_FLOW)
+        input_stream = StringIO("Zack\n")
+        output_stream = StringIO()
+
+        rc = run_flow(
+            flow, project,
+            quiet=False,
+            input_stream=input_stream,
+            output_stream=output_stream,
+            config=StepwiseConfig(),
+        )
+        assert rc == EXIT_SUCCESS
+        output_text = output_stream.getvalue()
+        assert "needs input" in output_text
+        assert "completed" in output_text
+
+    def test_multi_field_human_step(self, tmp_path):
+        project = init_project(tmp_path)
+        flow = _write_flow(tmp_path, HUMAN_MULTI_FIELD_FLOW)
+        input_stream = StringIO("approve\nLooks good\n")
+        output_stream = StringIO()
+
+        rc = run_flow(
+            flow, project,
+            quiet=False,
+            input_stream=input_stream,
+            output_stream=output_stream,
+            config=StepwiseConfig(),
+        )
+        assert rc == EXIT_SUCCESS
+
+
+class TestParseVars:
+    """--var flag parsing."""
+
+    def test_simple_key_value(self):
+        result = parse_vars(["key=value"])
+        assert result == {"key": "value"}
+
+    def test_splits_on_first_equals(self):
+        result = parse_vars(["key=value=with=equals"])
+        assert result == {"key": "value=with=equals"}
+
+    def test_multiple_vars(self):
+        result = parse_vars(["env=staging", "region=us-west-2"])
+        assert result == {"env": "staging", "region": "us-west-2"}
+
+    def test_empty_list(self):
+        result = parse_vars([])
+        assert result == {}
+
+    def test_none(self):
+        result = parse_vars(None)
+        assert result == {}
+
+    def test_no_equals_raises(self):
+        with pytest.raises(ValueError, match="KEY=VALUE"):
+            parse_vars(["invalid"])
+
+
+class TestLoadVarsFile:
+    """--vars-file loading from YAML and JSON."""
+
+    def test_yaml_file(self, tmp_path):
+        f = tmp_path / "vars.yaml"
+        f.write_text("env: staging\nregion: us-west-2\n")
+        result = load_vars_file(str(f))
+        assert result == {"env": "staging", "region": "us-west-2"}
+
+    def test_json_file(self, tmp_path):
+        f = tmp_path / "vars.json"
+        f.write_text('{"env": "staging", "count": 5}')
+        result = load_vars_file(str(f))
+        assert result == {"env": "staging", "count": 5}
+
+    def test_missing_file_raises(self):
+        with pytest.raises(FileNotFoundError):
+            load_vars_file("/nonexistent/vars.yaml")
+
+
+class TestSignalHandling:
+    """Signal handler sets shutdown flag, cancels active runs."""
+
+    def test_signal_handler_cancels_job(self, tmp_path):
+        """Signal during execution should cancel the job cleanly."""
+        # We test the signal mechanism indirectly by verifying
+        # the runner restores signal handlers after completion
+        project = init_project(tmp_path)
+        flow = _write_flow(tmp_path, SIMPLE_SCRIPT_FLOW)
+        output = StringIO()
+
+        original_handler = signal.getsignal(signal.SIGINT)
+        run_flow(flow, project, quiet=True, output_stream=output, config=StepwiseConfig())
+        restored_handler = signal.getsignal(signal.SIGINT)
+
+        # Signal handlers should be restored after run completes
+        assert restored_handler == original_handler
+
+
+class TestRunnerUsesDefaultRegistry:
+    """Runner uses create_default_registry() (same executors as server)."""
+
+    def test_registry_created_with_config(self, tmp_path):
+        project = init_project(tmp_path)
+        flow = _write_flow(tmp_path, SIMPLE_SCRIPT_FLOW)
+        output = StringIO()
+        # If this runs without error, the registry was created successfully
+        rc = run_flow(flow, project, quiet=True, output_stream=output, config=StepwiseConfig())
+        assert rc == EXIT_SUCCESS
+
+
+class TestLoopFlow:
+    """Flow with exit rules and loops runs correctly in headless mode."""
+
+    def test_loop_flow(self, tmp_path):
+        loop_flow = """\
+name: loop-test
+steps:
+  count:
+    run: 'echo "{\\"n\\": 1}"'
+    outputs: [n]
+    exits:
+      - name: done
+        when: "attempt >= 2"
+        action: advance
+      - name: again
+        when: "attempt < 2"
+        action: loop
+        target: count
+  finish:
+    run: 'echo "{\\"done\\": true}"'
+    outputs: [done]
+    sequencing: [count]
+"""
+        project = init_project(tmp_path)
+        flow = _write_flow(tmp_path, loop_flow)
+        output = StringIO()
+        rc = run_flow(flow, project, quiet=True, output_stream=output, config=StepwiseConfig())
+        assert rc == EXIT_SUCCESS

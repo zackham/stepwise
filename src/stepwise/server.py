@@ -15,11 +15,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from stepwise.agent import AgentExecutor, AcpxBackend
 from stepwise.engine import Engine
 from stepwise.executors import (
     Executor, ExecutionContext, ExecutorResult, ExecutorStatus,
-    ExecutorRegistry, ScriptExecutor, HumanExecutor, MockLLMExecutor, LLMExecutor,
 )
 from stepwise.config import load_config, save_config, StepwiseConfig, ModelEntry
 from stepwise.models import (
@@ -270,74 +268,27 @@ async def lifespan(app: FastAPI):
 
     db_path = os.environ.get("STEPWISE_DB", "stepwise.db")
     tmpl_dir = os.environ.get("STEPWISE_TEMPLATES", "templates")
+    jobs_dir = os.environ.get("STEPWISE_JOBS_DIR", "jobs")
     _templates_dir = Path(tmpl_dir)
     _templates_dir.mkdir(parents=True, exist_ok=True)
 
     store = ThreadSafeStore(db_path)
-    registry = ExecutorRegistry()
 
-    # Register built-in executors
-    registry.register("script", lambda config: ScriptExecutor(
-        command=config.get("command", "echo '{}'"),
-        working_dir=config.get("working_dir"),
-    ))
-    registry.register("human", lambda config: HumanExecutor(
-        prompt=config.get("prompt", "Awaiting human input"),
-        notify=config.get("notify"),
-    ))
-    registry.register("mock_llm", lambda config: MockLLMExecutor(
-        failure_rate=config.get("failure_rate", 0.0),
-        partial_rate=config.get("partial_rate", 0.0),
-        latency_range=tuple(config.get("latency_range", [0.0, 0.0])),
-        responses=config.get("responses"),
-    ))
-    registry.register("delegating", lambda config: DelegatingExecutor(
-        objective=config.get("objective", "Sub-job"),
-        child_workflow=config.get("child_workflow", {"steps": {}}),
-    ))
+    from stepwise.registry_factory import create_default_registry
+    registry = create_default_registry()
 
-    # Agent executor (M4) — ACP via acpx
-    acpx_backend = AcpxBackend(
-        acpx_path=os.environ.get("ACPX_PATH", "acpx"),
-        default_agent=os.environ.get("STEPWISE_DEFAULT_AGENT", "claude"),
-    )
-    registry.register("agent", lambda config: AgentExecutor(
-        backend=acpx_backend,
-        prompt=config.get("prompt", ""),
-        output_mode=config.get("output_mode", "effect"),
-        output_path=config.get("output_path"),
-        **{k: v for k, v in config.items()
-           if k not in ("prompt", "output_mode", "output_path", "output_fields")},
-    ))
-
-    # LLM executor (M3)
-    sw_config = load_config()
-    llm_client = None
-    if sw_config.openrouter_api_key:
-        from stepwise.openrouter import OpenRouterClient
-        llm_client = OpenRouterClient(api_key=sw_config.openrouter_api_key)
-
-    def _create_llm_executor(config: dict) -> LLMExecutor:
-        if llm_client is None:
-            raise RuntimeError("LLM executor requires OpenRouter API key in config")
-        model_ref = config.get("model", sw_config.default_model or "")
-        model_id = sw_config.resolve_model(model_ref)
-        executor = LLMExecutor(
-            client=llm_client,
-            model=model_id,
-            prompt=config.get("prompt", ""),
-            system=config.get("system"),
-            temperature=config.get("temperature", 0.0),
-            max_tokens=config.get("max_tokens", 4096),
-        )
-        # Set output fields from step definition (passed through config by engine)
-        executor._output_fields = config.get("output_fields", [])
-        return executor
-
-    registry.register("llm", _create_llm_executor)
-
-    _engine = Engine(store, registry)
+    _engine = Engine(store, registry, jobs_dir=jobs_dir)
     _tick_task = asyncio.create_task(_tick_loop())
+
+    # --watch mode: auto-create and start a job if env var is set
+    watch_workflow_json = os.environ.pop("STEPWISE_WATCH_WORKFLOW", None)
+    if watch_workflow_json:
+        wf = WorkflowDefinition.from_dict(json.loads(watch_workflow_json))
+        objective = os.environ.pop("STEPWISE_WATCH_OBJECTIVE", "watch")
+        watch_inputs_json = os.environ.pop("STEPWISE_WATCH_INPUTS", None)
+        watch_inputs = json.loads(watch_inputs_json) if watch_inputs_json else None
+        job = _engine.create_job(objective=objective, workflow=wf, inputs=watch_inputs)
+        _engine.start_job(job.id)
 
     yield
 
@@ -754,7 +705,12 @@ async def websocket_endpoint(ws: WebSocket):
 
 # ── Static files (production) ─────────────────────────────────────────
 
-_web_dist = Path(__file__).parent.parent.parent / "web" / "dist"
+from stepwise.project import get_bundled_web_dir
+
+# Prefer bundled web assets, fall back to dev-mode web/dist
+_web_dist = get_bundled_web_dir()
+if not _web_dist.exists():
+    _web_dist = Path(__file__).parent.parent.parent / "web" / "dist"
 if _web_dist.exists():
     from fastapi.responses import FileResponse
 
@@ -772,7 +728,7 @@ if _web_dist.exists():
         return FileResponse(_web_dist / "index.html")
 
 
-# ── CLI entry point ───────────────────────────────────────────────────
+# ── Legacy CLI entry point (use stepwise.cli:cli_main instead) ────────
 
 
 def main():

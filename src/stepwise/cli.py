@@ -1,0 +1,727 @@
+"""Stepwise CLI entry point.
+
+Usage:
+    stepwise init                          Create .stepwise/ in cwd
+    stepwise run <file> [flags]            Run a flow
+    stepwise serve [flags]                 Persistent server
+    stepwise flow get|share|search         Flow sharing
+    stepwise jobs [flags]                  List jobs
+    stepwise status <job-id>               Show job detail
+    stepwise cancel <job-id>               Cancel running job
+    stepwise validate <file>               Validate flow syntax
+    stepwise templates                     List templates
+    stepwise config get|set [key] [value]  Manage configuration
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+from stepwise.project import (
+    DOT_DIR_NAME,
+    ProjectNotFoundError,
+    StepwiseProject,
+    find_project,
+    get_bundled_templates_dir,
+    init_project,
+)
+
+
+# Exit codes
+EXIT_SUCCESS = 0
+EXIT_JOB_FAILED = 1
+EXIT_USAGE_ERROR = 2
+EXIT_CONFIG_ERROR = 3
+EXIT_PROJECT_ERROR = 4
+
+
+def _get_version() -> str:
+    """Read version from package metadata."""
+    try:
+        from importlib.metadata import version
+        return version("stepwise")
+    except Exception:
+        return "0.1.0"
+
+
+def _find_project_or_exit(args: argparse.Namespace) -> StepwiseProject:
+    """Find project, respecting --project-dir flag."""
+    start = Path(args.project_dir) if args.project_dir else None
+    try:
+        return find_project(start)
+    except ProjectNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(EXIT_PROJECT_ERROR)
+
+
+# ── Command handlers ─────────────────────────────────────────────────
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    target = Path(args.project_dir) if args.project_dir else None
+    try:
+        project = init_project(target, force=args.force)
+        print(f"Initialized Stepwise project in {project.dot_dir}")
+        print(f"  Run 'stepwise run <flow.yaml>' to execute a flow.")
+        return EXIT_SUCCESS
+    except FileExistsError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    project = _find_project_or_exit(args)
+
+    import os
+    import uvicorn
+
+    # Set env vars so server.py picks them up in lifespan
+    os.environ["STEPWISE_DB"] = str(project.db_path)
+    os.environ["STEPWISE_TEMPLATES"] = str(project.templates_dir)
+    os.environ["STEPWISE_JOBS_DIR"] = str(project.jobs_dir)
+
+    port = args.port or 8340
+    host = args.host or "127.0.0.1"
+
+    print(f"Stepwise server running at http://{host}:{port}")
+    if not args.no_open:
+        _open_browser(f"http://{host}:{port}")
+
+    uvicorn.run(
+        "stepwise.server:app",
+        host=host,
+        port=port,
+        log_level="warning",
+    )
+    return EXIT_SUCCESS
+
+
+def cmd_validate(args: argparse.Namespace) -> int:
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+    flow_path = Path(args.file)
+    if not flow_path.exists():
+        print(f"Error: File not found: {flow_path}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    try:
+        wf = load_workflow_yaml(str(flow_path))
+        errors = wf.validate()
+        if errors:
+            print(f"✗ {flow_path}:")
+            for err in errors:
+                print(f"  - {err}")
+            return EXIT_JOB_FAILED
+
+        step_count = len(wf.steps)
+        loop_count = sum(
+            1 for s in wf.steps.values()
+            for r in (s.exit_rules or [])
+            if r.config.get("action") == "loop"
+        )
+        parts = [f"{step_count} steps"]
+        if loop_count:
+            parts.append(f"{loop_count} loops")
+        print(f"✓ {flow_path} ({', '.join(parts)})")
+        return EXIT_SUCCESS
+    except YAMLLoadError as e:
+        print(f"✗ {flow_path}:")
+        for err in e.errors:
+            print(f"  - {err}")
+        return EXIT_JOB_FAILED
+    except Exception as e:
+        print(f"✗ {flow_path}: {e}", file=sys.stderr)
+        return EXIT_JOB_FAILED
+
+
+def cmd_templates(args: argparse.Namespace) -> int:
+    # Bundled templates
+    bundled_dir = get_bundled_templates_dir()
+    bundled = []
+    if bundled_dir.exists():
+        for f in sorted(bundled_dir.iterdir()):
+            if f.suffix in (".yaml", ".yml", ".json"):
+                bundled.append(f.stem)
+
+    print("BUILT-IN:")
+    if bundled:
+        for name in bundled:
+            print(f"  {name}")
+    else:
+        print("  (none)")
+
+    # Project templates
+    try:
+        project = find_project(Path(args.project_dir) if args.project_dir else None)
+        user_templates = []
+        if project.templates_dir.exists():
+            for f in sorted(project.templates_dir.iterdir()):
+                if f.suffix in (".yaml", ".yml", ".json"):
+                    user_templates.append(f.stem)
+
+        print("\nPROJECT:")
+        if user_templates:
+            for name in user_templates:
+                print(f"  {name}")
+        else:
+            print("  (none — save templates via the web UI)")
+    except ProjectNotFoundError:
+        print("\nPROJECT:")
+        print("  (no project — run 'stepwise init' first)")
+
+    return EXIT_SUCCESS
+
+
+def cmd_config(args: argparse.Namespace) -> int:
+    from stepwise.config import load_config, save_config
+
+    action = args.config_action
+
+    if action == "set":
+        if not args.key:
+            print("Error: config set requires a key", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+
+        if args.stdin:
+            import getpass
+            value = getpass.getpass("Enter value: ")
+        elif args.value is not None:
+            value = args.value
+        else:
+            print("Error: config set requires a value or --stdin", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+
+        config = load_config()
+
+        if args.key == "openrouter_api_key":
+            config.openrouter_api_key = value
+        elif args.key == "default_model":
+            config.default_model = value
+        else:
+            print(f"Error: Unknown config key '{args.key}'", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+
+        save_config(config)
+        print(f"✓ Set {args.key}")
+        return EXIT_SUCCESS
+
+    elif action == "get":
+        if not args.key:
+            print("Error: config get requires a key", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+
+        config = load_config()
+
+        if args.key == "openrouter_api_key":
+            val = config.openrouter_api_key or ""
+        elif args.key == "default_model":
+            val = config.default_model or ""
+        else:
+            print(f"Error: Unknown config key '{args.key}'", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+
+        if val and not args.unmask and args.key in ("openrouter_api_key",):
+            # Mask all but last 3 chars
+            masked = "*" * max(0, len(val) - 3) + val[-3:]
+            print(masked)
+        else:
+            print(val)
+        return EXIT_SUCCESS
+
+    else:
+        print("Error: config requires 'get' or 'set' action", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    from stepwise.runner import run_flow, parse_vars, load_vars_file
+
+    project = _find_project_or_exit(args)
+
+    flow_path = Path(args.file)
+    if not flow_path.exists():
+        print(f"Error: File not found: {flow_path}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    # Parse input variables
+    inputs: dict = {}
+    try:
+        inputs.update(parse_vars(args.vars))
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    if args.vars_file:
+        try:
+            inputs.update(load_vars_file(args.vars_file))
+        except (FileNotFoundError, Exception) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+
+    if args.watch:
+        return _run_watch(args, project, flow_path, inputs)
+
+    # Headless mode
+    return run_flow(
+        flow_path=flow_path,
+        project=project,
+        objective=args.objective,
+        inputs=inputs if inputs else None,
+        workspace=args.workspace,
+        quiet=args.quiet,
+    )
+
+
+def _run_watch(
+    args: argparse.Namespace,
+    project,
+    flow_path: Path,
+    inputs: dict,
+) -> int:
+    """--watch mode: ephemeral server with pre-loaded job."""
+    import os
+    import socket
+    import uvicorn
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+    # Load and validate the flow
+    try:
+        workflow = load_workflow_yaml(str(flow_path))
+    except YAMLLoadError as e:
+        print(f"Error: {'; '.join(e.errors)}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    errors = workflow.validate()
+    if errors:
+        print(f"Error: {'; '.join(errors)}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    # Pick port
+    if args.port:
+        port = args.port
+    else:
+        port = _find_free_port()
+
+    host = "127.0.0.1"
+
+    # Set env vars for server lifespan
+    os.environ["STEPWISE_DB"] = str(project.db_path)
+    os.environ["STEPWISE_TEMPLATES"] = str(project.templates_dir)
+    os.environ["STEPWISE_JOBS_DIR"] = str(project.jobs_dir)
+
+    # Stash flow data in env for the lifespan to pick up
+    import json
+    os.environ["STEPWISE_WATCH_WORKFLOW"] = json.dumps(workflow.to_dict())
+    os.environ["STEPWISE_WATCH_OBJECTIVE"] = args.objective or flow_path.stem
+    if inputs:
+        os.environ["STEPWISE_WATCH_INPUTS"] = json.dumps(inputs)
+
+    print(f"▸ entering flow...")
+    print(f"  http://{host}:{port}")
+    print()
+    print(f"  Press Ctrl+C to stop.")
+
+    if not args.no_open:
+        _open_browser(f"http://{host}:{port}")
+
+    uvicorn.run(
+        "stepwise.server:app",
+        host=host,
+        port=port,
+        log_level="warning",
+    )
+    return EXIT_SUCCESS
+
+
+def _find_free_port() -> int:
+    """Find a random available port."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def cmd_jobs(args: argparse.Namespace) -> int:
+    project = _find_project_or_exit(args)
+
+    from stepwise.models import JobStatus
+    from stepwise.store import SQLiteStore
+
+    store = SQLiteStore(str(project.db_path))
+    try:
+        status_filter = None
+        if args.status:
+            try:
+                status_filter = JobStatus(args.status)
+            except ValueError:
+                valid = ", ".join(s.value for s in JobStatus)
+                print(f"Error: Invalid status '{args.status}'. Valid: {valid}", file=sys.stderr)
+                return EXIT_USAGE_ERROR
+
+        jobs = store.all_jobs(status=status_filter, top_level_only=True)
+
+        if not args.all:
+            jobs = jobs[-args.limit:]
+
+        if args.output == "json":
+            import json
+            print(json.dumps([_job_summary(j) for j in jobs], indent=2, default=str))
+            return EXIT_SUCCESS
+
+        # Table format
+        if not jobs:
+            print("No jobs found.")
+            return EXIT_SUCCESS
+
+        print(f"{'ID':<16} {'STATUS':<12} {'OBJECTIVE':<24} {'STEPS':<8} {'CREATED'}")
+        for j in jobs:
+            runs = store.runs_for_job(j.id)
+            completed = sum(1 for r in runs if r.status.value == "completed")
+            total = len(j.workflow.steps)
+            obj = (j.objective or "")[:23]
+            created = _relative_time(j.created_at) if j.created_at else ""
+            print(f"{j.id:<16} {j.status.value:<12} {obj:<24} {completed}/{total:<5} {created}")
+
+        return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    project = _find_project_or_exit(args)
+
+    from stepwise.store import SQLiteStore
+
+    store = SQLiteStore(str(project.db_path))
+    try:
+        try:
+            job = store.load_job(args.job_id)
+        except KeyError:
+            print(f"Error: Job not found: {args.job_id}", file=sys.stderr)
+            return EXIT_JOB_FAILED
+
+        runs = store.runs_for_job(job.id)
+
+        if args.output == "json":
+            import json
+            data = _job_summary(job)
+            data["runs"] = [r.to_dict() for r in runs]
+            print(json.dumps(data, indent=2, default=str))
+            return EXIT_SUCCESS
+
+        # Table format
+        print(f"Job: {job.id}")
+        print(f"Status: {job.status.value}")
+        print(f"Objective: {job.objective}")
+        if job.created_at:
+            print(f"Created: {_relative_time(job.created_at)}")
+        print()
+        print("Steps:")
+
+        # Group runs by step, show latest
+        step_runs: dict[str, list] = {}
+        for r in runs:
+            step_runs.setdefault(r.step_name, []).append(r)
+
+        status_icons = {
+            "completed": "✓",
+            "failed": "✗",
+            "running": "⠋",
+            "suspended": "◆",
+            "delegated": "↗",
+        }
+
+        for step_name in job.workflow.steps:
+            step_def = job.workflow.steps[step_name]
+            executor_type = step_def.executor.type
+            step_r = step_runs.get(step_name, [])
+            if step_r:
+                latest = step_r[-1]
+                icon = status_icons.get(latest.status.value, "○")
+                status_str = latest.status.value
+                extra = f"  {executor_type}"
+                if latest.started_at and latest.completed_at:
+                    dur = (latest.completed_at - latest.started_at).total_seconds()
+                    cost = store.accumulated_cost(latest.id)
+                    extra += f"   ({dur:.1f}s"
+                    if cost:
+                        extra += f", ${cost:.3f}"
+                    extra += ")"
+                elif latest.status.value == "suspended":
+                    extra += "   waiting for input..."
+                print(f"  {icon} {step_name:<16} {status_str:<12}{extra}")
+            else:
+                print(f"  ○ {step_name:<16} pending")
+
+        return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def cmd_cancel(args: argparse.Namespace) -> int:
+    project = _find_project_or_exit(args)
+
+    from stepwise.engine import Engine
+    from stepwise.store import SQLiteStore
+    from stepwise.registry_factory import create_default_registry
+
+    store = SQLiteStore(str(project.db_path))
+    try:
+        try:
+            job = store.load_job(args.job_id)
+        except KeyError:
+            print(f"Error: Job not found: {args.job_id}", file=sys.stderr)
+            return EXIT_JOB_FAILED
+
+        from stepwise.models import JobStatus
+        if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
+            print(f"Error: Job already {job.status.value}", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+
+        registry = create_default_registry()
+        engine = Engine(store, registry, jobs_dir=str(project.jobs_dir))
+        engine.cancel_job(args.job_id)
+        print(f"✓ Cancelled {args.job_id}")
+        return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def _job_summary(job) -> dict:
+    """Create a JSON-serializable job summary."""
+    return {
+        "id": job.id,
+        "status": job.status.value,
+        "objective": job.objective,
+        "steps": len(job.workflow.steps),
+        "created_at": str(job.created_at) if job.created_at else None,
+    }
+
+
+def _relative_time(dt) -> str:
+    """Format a datetime as a relative time string."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        from datetime import timezone as tz
+        dt = dt.replace(tzinfo=tz.utc)
+    diff = now - dt
+    seconds = diff.total_seconds()
+    if seconds < 60:
+        return "just now"
+    elif seconds < 3600:
+        mins = int(seconds / 60)
+        return f"{mins} min ago"
+    elif seconds < 86400:
+        hours = int(seconds / 3600)
+        return f"{hours} hours ago"
+    else:
+        days = int(seconds / 86400)
+        return f"{days} days ago"
+
+
+def cmd_flow(args: argparse.Namespace) -> int:
+    action = args.flow_action
+
+    if action == "get":
+        url = args.target
+        if not url:
+            print("Error: flow get requires a URL or name", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+
+        # URL download (starts with http)
+        if url.startswith("http://") or url.startswith("https://"):
+            return _flow_get_url(url)
+
+        # Name-based lookup (stub)
+        print(f"Flow registry coming soon. For now, use a direct URL:")
+        print(f"  stepwise flow get https://example.com/{url}.flow.yaml")
+        return EXIT_SUCCESS
+
+    elif action == "share":
+        flow_file = args.file
+        if flow_file:
+            flow_path = Path(flow_file)
+            if not flow_path.exists():
+                print(f"Error: File not found: {flow_path}", file=sys.stderr)
+                return EXIT_USAGE_ERROR
+            print(f"Validating {flow_path}...")
+            print(f"Flow sharing coming soon.")
+        else:
+            print("Flow sharing coming soon.")
+        return EXIT_SUCCESS
+
+    elif action == "search":
+        query = " ".join(args.query) if args.query else ""
+        if query:
+            print(f"Searching for '{query}'...")
+        print("Flow registry coming soon.")
+        return EXIT_SUCCESS
+
+    else:
+        print("Error: flow requires 'get', 'share', or 'search' action", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+
+def _flow_get_url(url: str) -> int:
+    """Download a flow from a URL."""
+    import urllib.request
+    import urllib.error
+
+    # Derive filename from URL
+    filename = url.rsplit("/", 1)[-1]
+    if not filename.endswith((".yaml", ".yml")):
+        print(f"Error: URL does not point to a YAML file: {url}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    target = Path(filename)
+    if target.exists():
+        print(f"Error: {target} already exists", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    try:
+        urllib.request.urlretrieve(url, str(target))
+        print(f"✓ Downloaded {target}")
+        print(f"  Run 'stepwise run {target}' to execute.")
+        return EXIT_SUCCESS
+    except urllib.error.URLError as e:
+        print(f"Error: Failed to download: {e}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+
+def _open_browser(url: str) -> None:
+    """Open URL in default browser (best-effort, non-blocking)."""
+    try:
+        import webbrowser
+        webbrowser.open(url)
+    except Exception:
+        pass
+
+
+# ── Parser ───────────────────────────────────────────────────────────
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="stepwise",
+        description="Enter the flow state. Portable orchestration for agents and humans.",
+    )
+    parser.add_argument("--version", action="store_true", help="Print version and exit")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
+    parser.add_argument("-q", "--quiet", action="store_true", help="Suppress non-essential output")
+    parser.add_argument("--project-dir", help="Use specified project directory instead of cwd")
+
+    sub = parser.add_subparsers(dest="command")
+
+    # init
+    p_init = sub.add_parser("init", help="Create .stepwise/ in current directory")
+    p_init.add_argument("--force", action="store_true", help="Reinitialize existing project")
+
+    # serve
+    p_serve = sub.add_parser("serve", help="Start persistent server with web UI")
+    p_serve.add_argument("--port", type=int, help="Port to listen on (default: 8340)")
+    p_serve.add_argument("--host", help="Bind address (default: 127.0.0.1)")
+    p_serve.add_argument("--no-open", action="store_true", help="Don't auto-open browser")
+
+    # run
+    p_run = sub.add_parser("run", help="Run a flow")
+    p_run.add_argument("file", help="Path to .flow.yaml file")
+    p_run.add_argument("--watch", action="store_true", help="Ephemeral server + browser UI")
+    p_run.add_argument("--var", action="append", dest="vars", metavar="KEY=VALUE",
+                       help="Pass input variable (repeatable)")
+    p_run.add_argument("--vars-file", help="Load variables from YAML/JSON file")
+    p_run.add_argument("--port", type=int, help="Override port (for --watch)")
+    p_run.add_argument("--objective", help="Set job objective (defaults to flow name)")
+    p_run.add_argument("--workspace", help="Override workspace directory")
+    p_run.add_argument("--no-open", action="store_true", help="Don't auto-open browser (for --watch)")
+
+    # validate
+    p_validate = sub.add_parser("validate", help="Validate a flow file")
+    p_validate.add_argument("file", help="Path to flow file")
+
+    # templates
+    sub.add_parser("templates", help="List available templates")
+
+    # config
+    p_config = sub.add_parser("config", help="Manage configuration")
+    p_config.add_argument("config_action", choices=["get", "set"], help="Action")
+    p_config.add_argument("key", nargs="?", help="Config key")
+    p_config.add_argument("value", nargs="?", help="Config value (for set)")
+    p_config.add_argument("--stdin", action="store_true", help="Read value from stdin")
+    p_config.add_argument("--unmask", action="store_true", help="Show full values")
+
+    # flow
+    p_flow = sub.add_parser("flow", help="Flow sharing commands")
+    flow_sub = p_flow.add_subparsers(dest="flow_action")
+
+    p_flow_get = flow_sub.add_parser("get", help="Download a flow")
+    p_flow_get.add_argument("target", help="URL or flow name")
+
+    p_flow_share = flow_sub.add_parser("share", help="Publish a flow")
+    p_flow_share.add_argument("file", nargs="?", help="Flow file to share")
+
+    p_flow_search = flow_sub.add_parser("search", help="Search flows")
+    p_flow_search.add_argument("query", nargs="*", help="Search query")
+
+    # jobs
+    p_jobs = sub.add_parser("jobs", help="List jobs")
+    p_jobs.add_argument("--output", choices=["table", "json"], default="table")
+    p_jobs.add_argument("--limit", type=int, default=20)
+    p_jobs.add_argument("--all", action="store_true")
+    p_jobs.add_argument("--status", help="Filter by status")
+
+    # status
+    p_status = sub.add_parser("status", help="Show job detail")
+    p_status.add_argument("job_id", help="Job ID")
+    p_status.add_argument("--output", choices=["table", "json"], default="table")
+
+    # cancel
+    p_cancel = sub.add_parser("cancel", help="Cancel a running job")
+    p_cancel.add_argument("job_id", help="Job ID")
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.version:
+        print(f"stepwise {_get_version()}")
+        return EXIT_SUCCESS
+
+    if not args.command:
+        parser.print_help()
+        return EXIT_USAGE_ERROR
+
+    handlers = {
+        "init": cmd_init,
+        "serve": cmd_serve,
+        "run": cmd_run,
+        "validate": cmd_validate,
+        "templates": cmd_templates,
+        "config": cmd_config,
+        "flow": cmd_flow,
+        "jobs": cmd_jobs,
+        "status": cmd_status,
+        "cancel": cmd_cancel,
+    }
+
+    handler = handlers.get(args.command)
+    if handler:
+        return handler(args)
+
+    parser.print_help()
+    return EXIT_USAGE_ERROR
+
+
+def cli_main() -> None:
+    """Entry point for console_scripts."""
+    sys.exit(main())
+
+
+if __name__ == "__main__":
+    cli_main()

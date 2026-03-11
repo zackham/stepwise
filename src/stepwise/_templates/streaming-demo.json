@@ -1,0 +1,172 @@
+{
+  "name": "streaming-demo",
+  "description": "Demo: clarify \u2192 human answer \u2192 check (loop) \u2192 plan \u2192 evaluate+refine (loop) \u2192 word count",
+  "workflow": {
+    "steps": {
+      "clarify": {
+        "name": "clarify",
+        "executor": {
+          "type": "agent",
+          "config": {
+            "prompt": "You are helping plan a code change to the Stepwise project (a Python workflow engine + React frontend).\n\nThe user's change request: $objective\n\nExplore the relevant parts of the codebase to understand what's involved. Then ask exactly ONE specific clarifying question that would help you write a better implementation plan.\n\nFormat your response as:\n1. Brief summary of what you found (2-3 sentences)\n2. Your clarifying question (clearly labeled)\n\nDo NOT answer the question yourself \u2014 a human will answer in the next step.",
+            "output_mode": "stream_result"
+          },
+          "decorators": []
+        },
+        "outputs": ["result"],
+        "inputs": [],
+        "sequencing": [],
+        "exit_rules": [],
+        "idempotency": "allow_restart",
+        "limits": null
+      },
+      "answer": {
+        "name": "answer",
+        "executor": {
+          "type": "human",
+          "config": {
+            "prompt": "Answer the clarifying question from the 'clarify' step. Click on the clarify node in the DAG to see the question."
+          },
+          "decorators": []
+        },
+        "outputs": ["response"],
+        "inputs": [],
+        "sequencing": ["clarify"],
+        "exit_rules": [],
+        "idempotency": "allow_restart",
+        "limits": null
+      },
+      "check": {
+        "name": "check",
+        "executor": {
+          "type": "agent",
+          "config": {
+            "prompt": "You are helping plan a code change. Evaluate whether you have enough context to write a solid implementation plan.\n\nOriginal request: $objective\n\nClarifying question that was asked:\n$question\n\nUser's answer:\n$response\n\nConsider:\n- Do you understand the scope and intent of the change?\n- Do you know which files and components are involved?\n- Are there ambiguities that could lead to a wrong plan?\n\nIf you have enough context, write a comprehensive summary capturing everything needed for planning, then end with:\nSTATUS: READY\n\nIf you need another clarifying question, explain what's still unclear and end with:\nSTATUS: NEEDS_MORE",
+            "output_mode": "stream_result"
+          },
+          "decorators": []
+        },
+        "outputs": ["result"],
+        "inputs": [
+          {"local_name": "question", "source_step": "clarify", "source_field": "result"},
+          {"local_name": "response", "source_step": "answer", "source_field": "response"}
+        ],
+        "sequencing": ["answer"],
+        "exit_rules": [
+          {
+            "name": "ready",
+            "type": "expression",
+            "config": {
+              "condition": "'STATUS: READY' in str(outputs.get('result', ''))",
+              "action": "advance"
+            },
+            "priority": 10
+          },
+          {
+            "name": "max_attempts",
+            "type": "expression",
+            "config": {
+              "condition": "attempt >= 5",
+              "action": "advance"
+            },
+            "priority": 5
+          },
+          {
+            "name": "needs_more",
+            "type": "expression",
+            "config": {
+              "condition": "'STATUS: NEEDS_MORE' in str(outputs.get('result', ''))",
+              "action": "loop",
+              "target": "clarify"
+            },
+            "priority": 1
+          }
+        ],
+        "idempotency": "allow_restart",
+        "limits": null
+      },
+      "plan": {
+        "name": "plan",
+        "executor": {
+          "type": "agent",
+          "config": {
+            "prompt": "Write a detailed implementation plan for this code change.\n\nContext from clarification:\n$context\n\nChange request: $objective\n\nWrite a clear, numbered step-by-step plan. For each step:\n- Specify the exact file path to modify\n- Describe what changes to make\n- Note any risks or edge cases\n\nBe concrete and actionable.",
+            "output_mode": "stream_result"
+          },
+          "decorators": []
+        },
+        "outputs": ["result"],
+        "inputs": [
+          {"local_name": "context", "source_step": "check", "source_field": "result"}
+        ],
+        "sequencing": ["check"],
+        "exit_rules": [],
+        "idempotency": "allow_restart",
+        "limits": null
+      },
+      "evaluate": {
+        "name": "evaluate",
+        "executor": {
+          "type": "agent",
+          "config": {
+            "prompt": "Score this implementation plan on 5 dimensions (1-10):\n\n1. **Completeness** \u2014 covers all aspects?\n2. **Correctness** \u2014 file paths and technical details accurate?\n3. **Clarity** \u2014 developer can follow without questions?\n4. **Risk Awareness** \u2014 identifies edge cases and pitfalls?\n5. **Testability** \u2014 mentions how to verify?\n\nPlan:\n$plan\n\nProcess:\n1. Score each dimension with one-line justification\n2. Find the weakest (lowest score)\n3. If weakest < 7: rewrite the plan to strengthen that dimension\n4. If all >= 7: plan passes\n\nEnd with exactly:\nSTATUS: PASS\nor\nSTATUS: NEEDS_REFINEMENT",
+            "output_mode": "stream_result"
+          },
+          "decorators": []
+        },
+        "outputs": ["result"],
+        "inputs": [
+          {"local_name": "plan", "source_step": "plan", "source_field": "result"}
+        ],
+        "sequencing": ["plan"],
+        "exit_rules": [
+          {
+            "name": "passed",
+            "type": "expression",
+            "config": {
+              "condition": "'STATUS: PASS' in str(outputs.get('result', ''))",
+              "action": "advance"
+            },
+            "priority": 10
+          },
+          {
+            "name": "max_attempts",
+            "type": "expression",
+            "config": {
+              "condition": "attempt >= 5",
+              "action": "advance"
+            },
+            "priority": 5
+          },
+          {
+            "name": "refine",
+            "type": "always",
+            "config": {
+              "action": "loop"
+            },
+            "priority": 1
+          }
+        ],
+        "idempotency": "allow_restart",
+        "limits": null
+      },
+      "word_count": {
+        "name": "word_count",
+        "executor": {
+          "type": "script",
+          "config": {
+            "command": "python3 << 'PYEOF'\nimport json, glob\ntotal = 0\nfor f in sorted(glob.glob('.step-io/*.output.jsonl')):\n    for line in open(f):\n        try:\n            d = json.loads(line)\n            u = d.get('params', {}).get('update', {})\n            if u.get('sessionUpdate') == 'agent_message_chunk':\n                c = u.get('content', {})\n                if c.get('type') == 'text':\n                    total += len(c.get('text', '').split())\n        except:\n            pass\nprint(json.dumps({'total_agent_words': total}))\nPYEOF"
+          },
+          "decorators": []
+        },
+        "outputs": ["total_agent_words"],
+        "inputs": [],
+        "sequencing": ["evaluate"],
+        "exit_rules": [],
+        "idempotency": "allow_restart",
+        "limits": null
+      }
+    }
+  },
+  "created_at": "2026-03-09T12:00:00"
+}

@@ -214,8 +214,43 @@ class StepDefinition:
 
 
 @dataclass
+class FlowMetadata:
+    """Optional metadata parsed from flow YAML header."""
+    name: str = ""
+    description: str = ""
+    author: str = ""
+    version: str = ""
+    tags: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        d: dict = {}
+        if self.name:
+            d["name"] = self.name
+        if self.description:
+            d["description"] = self.description
+        if self.author:
+            d["author"] = self.author
+        if self.version:
+            d["version"] = self.version
+        if self.tags:
+            d["tags"] = self.tags
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> FlowMetadata:
+        return cls(
+            name=d.get("name", ""),
+            description=d.get("description", ""),
+            author=d.get("author", ""),
+            version=d.get("version", ""),
+            tags=d.get("tags", []),
+        )
+
+
+@dataclass
 class WorkflowDefinition:
     steps: dict[str, StepDefinition] = field(default_factory=dict)
+    metadata: FlowMetadata = field(default_factory=FlowMetadata)
 
     def validate(self) -> list[str]:
         """Validate the workflow definition. Returns list of errors."""
@@ -370,16 +405,21 @@ class WorkflowDefinition:
         return []
 
     def to_dict(self) -> dict:
-        return {
+        d: dict = {
             "steps": {name: step.to_dict() for name, step in self.steps.items()},
         }
+        meta = self.metadata.to_dict()
+        if meta:
+            d["metadata"] = meta
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> WorkflowDefinition:
         steps = {}
         for name, step_d in d.get("steps", {}).items():
             steps[name] = StepDefinition.from_dict(step_d)
-        return cls(steps=steps)
+        metadata = FlowMetadata.from_dict(d.get("metadata", {}))
+        return cls(steps=steps, metadata=metadata)
 
 
 # ── Handoff Envelope ───────────────────────────────────────────────────

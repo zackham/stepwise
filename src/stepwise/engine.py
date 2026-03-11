@@ -58,9 +58,15 @@ from stepwise.store import SQLiteStore
 class Engine:
     """Tick-based workflow engine."""
 
-    def __init__(self, store: SQLiteStore, registry: ExecutorRegistry | None = None) -> None:
+    def __init__(
+        self,
+        store: SQLiteStore,
+        registry: ExecutorRegistry | None = None,
+        jobs_dir: str | None = None,
+    ) -> None:
         self.store = store
         self.registry = registry or ExecutorRegistry()
+        self.jobs_dir = jobs_dir or "jobs"
         self._injected_contexts: dict[str, list[str]] = {}  # job_id -> contexts
 
     # ── Job Lifecycle ─────────────────────────────────────────────────────
@@ -80,7 +86,7 @@ class Engine:
             raise ValueError(f"Invalid workflow: {'; '.join(errors)}")
 
         job_id = _gen_id("job")
-        ws = workspace_path or os.path.join("jobs", job_id, "workspace")
+        ws = workspace_path or os.path.join(self.jobs_dir, job_id, "workspace")
 
         job = Job(
             id=job_id,

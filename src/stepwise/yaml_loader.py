@@ -16,6 +16,7 @@ from stepwise.models import (
     DecoratorRef,
     ExecutorRef,
     ExitRule,
+    FlowMetadata,
     InputBinding,
     StepDefinition,
     WorkflowDefinition,
@@ -247,6 +248,41 @@ def _parse_step(step_name: str, step_data: dict) -> StepDefinition:
     )
 
 
+def _parse_metadata(data: dict, source_path: Path | None = None) -> FlowMetadata:
+    """Extract FlowMetadata from YAML top-level fields."""
+    name = data.get("name", "")
+    if not name and source_path:
+        # Default name from filename: "my-flow.flow.yaml" → "my-flow"
+        stem = source_path.stem
+        if stem.endswith(".flow"):
+            stem = stem[:-5]
+        name = stem
+
+    return FlowMetadata(
+        name=name,
+        description=data.get("description", ""),
+        author=data.get("author", ""),
+        version=data.get("version", ""),
+        tags=data.get("tags", []) if isinstance(data.get("tags"), list) else [],
+    )
+
+
+def get_author() -> str:
+    """Get author name: git config → $USER → 'anonymous'."""
+    import os
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "config", "user.name"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return os.environ.get("USER", os.environ.get("USERNAME", "anonymous"))
+
+
 def load_workflow_yaml(source: str | Path) -> WorkflowDefinition:
     """Load a WorkflowDefinition from a YAML file or string.
 
@@ -260,11 +296,13 @@ def load_workflow_yaml(source: str | Path) -> WorkflowDefinition:
         YAMLLoadError: If the YAML is malformed or the workflow is invalid.
     """
     # Parse YAML
+    source_path: Path | None = None
     if isinstance(source, Path) or (isinstance(source, str) and not source.strip().startswith(("name:", "steps:"))):
         # Try as file path
         path = Path(source)
         if path.exists():
             raw = path.read_text()
+            source_path = path
         elif isinstance(source, str) and ("\n" in source or ":" in source):
             # Might be inline YAML that doesn't start with name/steps
             raw = source
@@ -301,7 +339,10 @@ def load_workflow_yaml(source: str | Path) -> WorkflowDefinition:
     if errors:
         raise YAMLLoadError(errors)
 
-    workflow = WorkflowDefinition(steps=steps)
+    # Parse metadata from top-level fields
+    metadata = _parse_metadata(data, source_path)
+
+    workflow = WorkflowDefinition(steps=steps, metadata=metadata)
 
     # Run the standard workflow validation
     validation_errors = workflow.validate()
