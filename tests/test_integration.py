@@ -1,501 +1,1053 @@
-"""End-to-end integration tests: linear, fan-out/fan-in, loops, sub-jobs, watches."""
+"""Integration tests: sub-jobs, watches, crash recovery.
 
-import asyncio
+Covers required test cases 10-14, 18.
+"""
+
+import json
+import os
+import tempfile
 
 import pytest
 
+from tests.conftest import CallableExecutor, register_step_fn
 from stepwise.engine import Engine
-from stepwise.events import EventBus, EventType
 from stepwise.executors import (
+    ExecutionContext,
+    Executor,
+    ExecutorRegistry,
     ExecutorResult,
+    ExecutorStatus,
     HumanExecutor,
     MockLLMExecutor,
     ScriptExecutor,
-    SubJobExecutor,
-    ExecutorRegistry,
 )
 from stepwise.models import (
+    ExitRule,
+    ExecutorRef,
+    HandoffEnvelope,
     InputBinding,
-    Job,
+    JobConfig,
     JobStatus,
+    Sidecar,
     StepDefinition,
     StepRun,
-    StepStatus,
+    StepRunStatus,
+    SubJobDefinition,
+    WatchSpec,
     WorkflowDefinition,
+    _gen_id,
+    _now,
 )
-from stepwise.store import StepwiseStore
+from stepwise.store import SQLiteStore
 
 
-def _run_engine(workflow, inputs=None, store=None, extra_executors=None):
-    """Create an engine with standard executors."""
-    job = Job.create(workflow, inputs=inputs)
-    eb = EventBus()
-    engine = Engine(job, store=store, event_bus=eb)
-    engine.register_executor("script", ScriptExecutor())
-    engine.register_executor("mock_llm", MockLLMExecutor())
-    if extra_executors:
-        for name, ex in extra_executors.items():
-            engine.register_executor(name, ex)
-    return engine
+def make_registry():
+    reg = ExecutorRegistry()
+    reg.register("callable", lambda config: CallableExecutor(fn_name=config.get("fn_name", "default")))
+    reg.register("script", lambda config: ScriptExecutor(command=config.get("command", "echo '{}'")))
+    reg.register("human", lambda config: HumanExecutor(prompt=config.get("prompt", ""), notify=config.get("notify")))
+    reg.register("mock_llm", lambda config: MockLLMExecutor(
+        failure_rate=config.get("failure_rate", 0.0),
+        partial_rate=config.get("partial_rate", 0.0),
+        responses=config.get("responses"),
+    ))
+    return reg
 
 
-# ── Linear Workflow ──────────────────────────────────────────────────
+# ── Test 10: Sub-job delegation ──────────────────────────────────────
 
 
-class TestLinearWorkflow:
-    async def test_three_step_chain(self, linear_workflow):
-        engine = _run_engine(linear_workflow)
-        job = await engine.run()
+class TestSubJobDelegation:
+    def test_step_returns_sub_job(self):
+        register_step_fn("sub_process", lambda i: {"result": f"sub_processed_{i.get('data', '')}"})
 
+        store = SQLiteStore(":memory:")
+        reg = make_registry()
+
+        class DelegatingExecutor(Executor):
+            def start(self, inputs, context):
+                sub_w = WorkflowDefinition(steps={
+                    "sub_a": StepDefinition(
+                        name="sub_a", outputs=["result"],
+                        executor=ExecutorRef("callable", {"fn_name": "sub_process"}),
+                    ),
+                })
+                return ExecutorResult(
+                    type="sub_job",
+                    sub_job_def=SubJobDefinition(
+                        objective="sub task",
+                        workflow=sub_w,
+                    ),
+                )
+
+            def check_status(self, state):
+                return ExecutorStatus(state="running")
+
+            def cancel(self, state):
+                pass
+
+        reg.register("delegating", lambda config: DelegatingExecutor())
+
+        engine = Engine(store=store, registry=reg)
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["result"],
+                executor=ExecutorRef("delegating", {}),
+            ),
+        })
+
+        job = engine.create_job("Sub-job test", w, inputs={"data": "hello"})
+        engine.start_job(job.id)
+
+        for _ in range(10):
+            job = engine.get_job(job.id)
+            if job.status != JobStatus.RUNNING:
+                break
+            engine.tick()
+
+        job = engine.get_job(job.id)
         assert job.status == JobStatus.COMPLETED
-        assert job.step_runs["step_a"].outputs == {"value": 1}
-        assert job.step_runs["step_b"].outputs == {"value": 11}  # 1 + 10
-        assert job.step_runs["step_c"].outputs == {"value": 22}  # 11 * 2
 
-    async def test_linear_with_job_inputs(self):
-        wf = WorkflowDefinition(
-            name="with_inputs",
-            steps=[
-                StepDefinition(
-                    name="echo",
-                    executor="script",
-                    config={
-                        "callable": lambda inputs: {
-                            "msg": f"Hello {inputs.get('name', 'world')}"
-                        }
-                    },
-                ),
-            ],
-        )
-        engine = _run_engine(wf, inputs={"name": "Alice"})
-        job = await engine.run()
+        runs = engine.get_runs(job.id, "a")
+        assert runs[-1].status == StepRunStatus.COMPLETED
+        assert "sub_processed" in runs[-1].result.artifact.get("result", "")
+
+
+# ── Test 11: Sub-job validation ──────────────────────────────────────
+
+
+class TestSubJobValidation:
+    def test_reject_multiple_terminal_steps(self):
+        register_step_fn("sj_a", lambda i: {"result": "a"})
+        register_step_fn("sj_b", lambda i: {"result": "b"})
+
+        store = SQLiteStore(":memory:")
+        reg = make_registry()
+
+        class BadDelegator(Executor):
+            def start(self, inputs, context):
+                sub_w = WorkflowDefinition(steps={
+                    "sub_a": StepDefinition(
+                        name="sub_a", outputs=["result"],
+                        executor=ExecutorRef("callable", {"fn_name": "sj_a"}),
+                    ),
+                    "sub_b": StepDefinition(
+                        name="sub_b", outputs=["result"],
+                        executor=ExecutorRef("callable", {"fn_name": "sj_b"}),
+                    ),
+                })
+                return ExecutorResult(
+                    type="sub_job",
+                    sub_job_def=SubJobDefinition(
+                        objective="bad sub",
+                        workflow=sub_w,
+                    ),
+                )
+
+            def check_status(self, state):
+                return ExecutorStatus(state="running")
+
+            def cancel(self, state):
+                pass
+
+        reg.register("bad_delegator", lambda config: BadDelegator())
+
+        engine = Engine(store=store, registry=reg)
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["result"],
+                executor=ExecutorRef("bad_delegator", {}),
+            ),
+        })
+
+        job = engine.create_job("Bad sub-job", w)
+        with pytest.raises(ValueError, match="exactly one terminal"):
+            engine.start_job(job.id)
+
+
+# ── Test 12: Nested sub-jobs ─────────────────────────────────────────
+
+
+class TestNestedSubJobs:
+    def test_depth_2_sub_jobs(self):
+        register_step_fn("deep_fn", lambda i: {"result": f"deep_{i.get('data', '')}"})
+
+        store = SQLiteStore(":memory:")
+        reg = make_registry()
+
+        class Level1Executor(Executor):
+            def start(self, inputs, context):
+                sub_w = WorkflowDefinition(steps={
+                    "inner": StepDefinition(
+                        name="inner", outputs=["result"],
+                        executor=ExecutorRef("callable", {"fn_name": "deep_fn"}),
+                    ),
+                })
+                return ExecutorResult(
+                    type="sub_job",
+                    sub_job_def=SubJobDefinition(
+                        objective="level 1 sub",
+                        workflow=sub_w,
+                    ),
+                )
+
+            def check_status(self, state):
+                return ExecutorStatus(state="running")
+
+            def cancel(self, state):
+                pass
+
+        class RootExecutor(Executor):
+            def start(self, inputs, context):
+                sub_w = WorkflowDefinition(steps={
+                    "mid": StepDefinition(
+                        name="mid", outputs=["result"],
+                        executor=ExecutorRef("level1", {}),
+                    ),
+                })
+                return ExecutorResult(
+                    type="sub_job",
+                    sub_job_def=SubJobDefinition(
+                        objective="root sub",
+                        workflow=sub_w,
+                    ),
+                )
+
+            def check_status(self, state):
+                return ExecutorStatus(state="running")
+
+            def cancel(self, state):
+                pass
+
+        reg.register("root_delegator", lambda config: RootExecutor())
+        reg.register("level1", lambda config: Level1Executor())
+
+        engine = Engine(store=store, registry=reg)
+
+        w = WorkflowDefinition(steps={
+            "start": StepDefinition(
+                name="start", outputs=["result"],
+                executor=ExecutorRef("root_delegator", {}),
+            ),
+        })
+
+        job = engine.create_job("Nested sub-jobs", w, inputs={"data": "test"})
+        engine.start_job(job.id)
+
+        for _ in range(20):
+            job = engine.get_job(job.id)
+            if job.status != JobStatus.RUNNING:
+                break
+            engine.tick()
+
+        job = engine.get_job(job.id)
         assert job.status == JobStatus.COMPLETED
-        assert job.step_runs["echo"].outputs["msg"] == "Hello Alice"
 
-    async def test_all_steps_executed_in_order(self, linear_workflow):
-        eb = EventBus()
-        executed = []
-        eb.subscribe(
-            EventType.STEP_COMPLETED,
-            lambda e: executed.append(e.step_name),
+
+# ── Test 13: Poll watch ──────────────────────────────────────────────
+
+
+class TestPollWatch:
+    def test_poll_watch_fulfill(self):
+        store = SQLiteStore(":memory:")
+        reg = make_registry()
+        tmpdir = tempfile.mkdtemp()
+
+        # Use a state file: first check returns empty (not ready),
+        # second check returns JSON (fulfilled). This ensures the step
+        # stays suspended through start_job and resolves on a later tick.
+        state_file = os.path.join(tmpdir, "poll_state")
+        check_script = (
+            f'if [ -f "{state_file}" ]; then '
+            f'echo \'{{"status": "done", "url": "http://test"}}\'; '
+            f'else touch "{state_file}"; fi'
         )
-        engine = _run_engine(linear_workflow)
-        engine._event_bus = eb
-        await engine.run()
-        assert executed == ["step_a", "step_b", "step_c"]
 
+        class PollStarter(Executor):
+            def start(self, inputs, context):
+                return ExecutorResult(
+                    type="watch",
+                    watch=WatchSpec(
+                        mode="poll",
+                        config={
+                            "check_command": check_script,
+                            "interval_seconds": 0,
+                        },
+                        fulfillment_outputs=["status", "url"],
+                    ),
+                )
 
-# ── Fan-out / Fan-in ────────────────────────────────────────────────
+            def check_status(self, state):
+                return ExecutorStatus(state="running")
 
+            def cancel(self, state):
+                pass
 
-class TestFanOutFanIn:
-    async def test_parallel_branches(self, fanout_workflow):
-        engine = _run_engine(fanout_workflow)
-        job = await engine.run()
+        reg.register("poll_starter", lambda config: PollStarter())
 
+        engine = Engine(store=store, registry=reg)
+
+        w = WorkflowDefinition(steps={
+            "deploy": StepDefinition(
+                name="deploy", outputs=["status", "url"],
+                executor=ExecutorRef("poll_starter", {}),
+            ),
+        })
+
+        job = engine.create_job("Poll test", w, workspace_path=tmpdir)
+        engine.start_job(job.id)
+
+        runs = engine.get_runs(job.id, "deploy")
+        assert runs[0].status == StepRunStatus.SUSPENDED
+
+        # Tick checks the poll — second call finds state file and returns JSON
+        engine.tick()
+
+        for _ in range(5):
+            job = engine.get_job(job.id)
+            if job.status != JobStatus.RUNNING:
+                break
+            engine.tick()
+
+        job = engine.get_job(job.id)
         assert job.status == JobStatus.COMPLETED
-        assert job.step_runs["branch_1"].outputs["result"] == "hello_b1"
-        assert job.step_runs["branch_2"].outputs["result"] == "hello_b2"
-        assert job.step_runs["merge"].outputs["combined"] == "hello_b1,hello_b2"
 
-    async def test_merge_waits_for_all_branches(self, fanout_workflow):
-        eb = EventBus()
-        engine = _run_engine(fanout_workflow)
-        engine._event_bus = eb
-        await engine.run()
+        runs = engine.get_runs(job.id, "deploy")
+        assert runs[0].status == StepRunStatus.COMPLETED
+        assert runs[0].result.artifact["status"] == "done"
 
-        completed_names = [
-            e.step_name
-            for e in eb.history
-            if e.event_type == EventType.STEP_COMPLETED
-        ]
-        merge_idx = completed_names.index("merge")
-        assert "branch_1" in completed_names[:merge_idx]
-        assert "branch_2" in completed_names[:merge_idx]
+    def test_poll_watch_not_ready(self):
+        store = SQLiteStore(":memory:")
+        reg = make_registry()
+        tmpdir = tempfile.mkdtemp()
+
+        class PollNotReady(Executor):
+            def start(self, inputs, context):
+                return ExecutorResult(
+                    type="watch",
+                    watch=WatchSpec(
+                        mode="poll",
+                        config={
+                            "check_command": "true",
+                            "interval_seconds": 0,
+                        },
+                        fulfillment_outputs=["status"],
+                    ),
+                )
+
+            def check_status(self, state):
+                return ExecutorStatus(state="running")
+
+            def cancel(self, state):
+                pass
+
+        reg.register("poll_not_ready", lambda config: PollNotReady())
+
+        engine = Engine(store=store, registry=reg)
+
+        w = WorkflowDefinition(steps={
+            "check": StepDefinition(
+                name="check", outputs=["status"],
+                executor=ExecutorRef("poll_not_ready", {}),
+            ),
+        })
+
+        job = engine.create_job("Poll not ready", w, workspace_path=tmpdir)
+        engine.start_job(job.id)
+
+        engine.tick()
+
+        runs = engine.get_runs(job.id, "check")
+        assert runs[0].status == StepRunStatus.SUSPENDED
+
+    def test_poll_watch_error_retries(self):
+        store = SQLiteStore(":memory:")
+        reg = make_registry()
+        tmpdir = tempfile.mkdtemp()
+
+        class PollError(Executor):
+            def start(self, inputs, context):
+                return ExecutorResult(
+                    type="watch",
+                    watch=WatchSpec(
+                        mode="poll",
+                        config={
+                            "check_command": "exit 1",
+                            "interval_seconds": 0,
+                        },
+                        fulfillment_outputs=["status"],
+                    ),
+                )
+
+            def check_status(self, state):
+                return ExecutorStatus(state="running")
+
+            def cancel(self, state):
+                pass
+
+        reg.register("poll_error", lambda config: PollError())
+
+        engine = Engine(store=store, registry=reg)
+
+        w = WorkflowDefinition(steps={
+            "check": StepDefinition(
+                name="check", outputs=["status"],
+                executor=ExecutorRef("poll_error", {}),
+            ),
+        })
+
+        job = engine.create_job("Poll error", w, workspace_path=tmpdir)
+        engine.start_job(job.id)
+
+        engine.tick()
+
+        runs = engine.get_runs(job.id, "check")
+        assert runs[0].status == StepRunStatus.SUSPENDED
+        watch_state = runs[0].executor_state.get("_watch", {})
+        assert watch_state.get("last_error") is not None
 
 
-# ── Loops ────────────────────────────────────────────────────────────
+# ── Test 14: Human watch fulfilled via API ───────────────────────────
 
 
-class TestLoopWorkflow:
-    async def test_loop_with_collection(self, loop_workflow):
-        engine = _run_engine(loop_workflow)
-        job = await engine.run()
+class TestHumanWatch:
+    def test_human_watch_fulfilled(self):
+        store = SQLiteStore(":memory:")
+        reg = make_registry()
+        engine = Engine(store=store, registry=reg)
 
+        w = WorkflowDefinition(steps={
+            "review": StepDefinition(
+                name="review", outputs=["decision", "comments"],
+                executor=ExecutorRef("human", {
+                    "prompt": "Review this code",
+                    "notify": "slack:#reviews",
+                }),
+            ),
+        })
+
+        job = engine.create_job("Human watch test", w)
+        engine.start_job(job.id)
+
+        runs = engine.get_runs(job.id, "review")
+        assert runs[0].status == StepRunStatus.SUSPENDED
+        assert runs[0].watch.mode == "human"
+
+        engine.fulfill_watch(runs[0].id, {
+            "decision": True,
+            "comments": "looks good",
+        })
+
+        engine.tick()
+
+        job = engine.get_job(job.id)
         assert job.status == JobStatus.COMPLETED
-        # process produces results=[{doubled:2}, {doubled:4}, {doubled:6}]
-        # collect sums them: 2+4+6 = 12
-        assert job.step_runs["collect"].outputs["total"] == 12
 
-    async def test_loop_iteration_outputs(self, loop_workflow):
-        engine = _run_engine(loop_workflow)
-        await engine.run()
+        runs = engine.get_runs(job.id, "review")
+        assert runs[0].status == StepRunStatus.COMPLETED
+        assert runs[0].result.artifact["decision"] is True
 
-        proc = engine.job.step_runs["process"]
-        assert proc.outputs["count"] == 3
-        assert len(proc.outputs["results"]) == 3
+    def test_fulfill_validates_payload(self):
+        store = SQLiteStore(":memory:")
+        reg = make_registry()
+        engine = Engine(store=store, registry=reg)
+
+        w = WorkflowDefinition(steps={
+            "review": StepDefinition(
+                name="review", outputs=["decision", "comments"],
+                executor=ExecutorRef("human", {"prompt": "Review"}),
+            ),
+        })
+
+        job = engine.create_job("Validation test", w)
+        engine.start_job(job.id)
+
+        runs = engine.get_runs(job.id, "review")
+        run_id = runs[0].id
+
+        with pytest.raises(ValueError, match="missing required field"):
+            engine.fulfill_watch(run_id, {"decision": True})
 
 
-# ── Sub-jobs ─────────────────────────────────────────────────────────
+# ── Test 18: Crash recovery ──────────────────────────────────────────
 
 
-class TestSubJobs:
-    async def test_nested_workflow(self):
-        inner_wf = WorkflowDefinition(
-            name="inner",
-            steps=[
-                StepDefinition(
-                    name="inner_step",
-                    executor="script",
-                    config={
-                        "callable": lambda inputs: {
-                            "result": inputs.get("x", 0) * 100
-                        }
-                    },
-                ),
-            ],
+class TestCrashRecovery:
+    def test_persist_restart_continue(self):
+        register_step_fn("cr_a", lambda i: {"value": "from_a"})
+
+        tmpdir = tempfile.mkdtemp()
+        db_path = os.path.join(tmpdir, "test.db")
+
+        store1 = SQLiteStore(db_path)
+        reg = make_registry()
+        engine1 = Engine(store=store1, registry=reg)
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["value"],
+                executor=ExecutorRef("callable", {"fn_name": "cr_a"}),
+            ),
+            "b": StepDefinition(
+                name="b", outputs=["result"],
+                executor=ExecutorRef("human", {"prompt": "approve"}),
+                inputs=[InputBinding("data", "a", "value")],
+            ),
+        })
+
+        job = engine1.create_job("Crash test", w)
+        engine1.start_job(job.id)
+        job_id = job.id
+
+        runs = engine1.get_runs(job_id)
+        a_runs = [r for r in runs if r.step_name == "a"]
+        b_runs = [r for r in runs if r.step_name == "b"]
+        assert a_runs[0].status == StepRunStatus.COMPLETED
+        assert b_runs[0].status == StepRunStatus.SUSPENDED
+
+        b_run_id = b_runs[0].id
+        store1.close()
+
+        # "Crash" — new engine, same DB
+        store2 = SQLiteStore(db_path)
+        engine2 = Engine(store=store2, registry=reg)
+
+        job2 = engine2.get_job(job_id)
+        assert job2.status == JobStatus.RUNNING
+
+        engine2.fulfill_watch(b_run_id, {"result": "approved"})
+        engine2.tick()
+
+        job2 = engine2.get_job(job_id)
+        assert job2.status == JobStatus.COMPLETED
+
+        store2.close()
+
+    def test_running_steps_on_crash(self):
+        tmpdir = tempfile.mkdtemp()
+        db_path = os.path.join(tmpdir, "crash2.db")
+
+        store1 = SQLiteStore(db_path)
+        reg = make_registry()
+        engine1 = Engine(store=store1, registry=reg)
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["value"],
+                executor=ExecutorRef("callable", {"fn_name": "default"}),
+            ),
+        })
+
+        job = engine1.create_job("Crash running test", w)
+        job_id = job.id
+
+        # Simulate crash with a RUNNING step
+        run = StepRun(
+            id=_gen_id("run"),
+            job_id=job_id,
+            step_name="a",
+            attempt=1,
+            status=StepRunStatus.RUNNING,
+            started_at=_now(),
         )
+        store1.save_run(run)
 
-        outer_wf = WorkflowDefinition(
-            name="outer",
-            steps=[
-                StepDefinition(
-                    name="prepare",
-                    executor="script",
-                    config={"callable": lambda inputs: {"x": 5}},
-                ),
-                StepDefinition(
-                    name="sub",
-                    executor="sub_job",
-                    depends_on=["prepare"],
-                    inputs=[InputBinding("prepare", "x", "x")],
-                    config={"workflow": inner_wf.to_dict()},
-                ),
-                StepDefinition(
-                    name="finish",
-                    executor="script",
-                    depends_on=["sub"],
-                    inputs=[InputBinding("sub", "inner_step", "sub_output")],
-                    config={
-                        "callable": lambda inputs: {
-                            "final": inputs.get("sub_output", {}).get("result", 0) + 1
-                        }
-                    },
-                ),
-            ],
-        )
-
-        registry = ExecutorRegistry()
-        registry.register("script", ScriptExecutor())
-        registry.register("sub_job", SubJobExecutor(registry))
-
-        engine = _run_engine(
-            outer_wf,
-            extra_executors={
-                "sub_job": SubJobExecutor(registry),
-            },
-        )
-        # Also register script for the sub-job executor
-        job = await engine.run()
-
-        assert job.status == JobStatus.COMPLETED
-        assert job.step_runs["sub"].status == StepStatus.COMPLETED
-        # inner_step output: {result: 500} -> sub outputs: {inner_step: {result: 500}}
-        assert job.step_runs["finish"].outputs["final"] == 501
-
-    async def test_sub_job_failure(self):
-        inner_wf = WorkflowDefinition(
-            name="failing_inner",
-            steps=[
-                StepDefinition(
-                    name="fail_step",
-                    executor="script",
-                    config={
-                        "callable": lambda i: (_ for _ in ()).throw(
-                            ValueError("inner fail")
-                        )
-                    },
-                ),
-            ],
-        )
-
-        outer_wf = WorkflowDefinition(
-            name="outer",
-            steps=[
-                StepDefinition(
-                    name="sub",
-                    executor="sub_job",
-                    config={"workflow": inner_wf.to_dict()},
-                ),
-            ],
-        )
-
-        registry = ExecutorRegistry()
-        registry.register("script", ScriptExecutor())
-        registry.register("sub_job", SubJobExecutor(registry))
-
-        engine = _run_engine(
-            outer_wf,
-            extra_executors={"sub_job": SubJobExecutor(registry)},
-        )
-        job = await engine.run()
-        assert job.status == JobStatus.FAILED
-
-
-# ── Watches (Stale & Re-run) ────────────────────────────────────────
-
-
-class TestWatches:
-    async def test_watch_triggers_rerun(self):
-        """Simulate a watch by marking a step stale and re-running."""
-        counter = {"val": 0}
-
-        def read_val(inputs):
-            counter["val"] += 1
-            return {"reading": counter["val"]}
-
-        wf = WorkflowDefinition(
-            name="watch",
-            steps=[
-                StepDefinition(
-                    name="sensor",
-                    executor="script",
-                    config={"callable": read_val},
-                ),
-                StepDefinition(
-                    name="react",
-                    executor="script",
-                    depends_on=["sensor"],
-                    inputs=[InputBinding("sensor", "reading", "reading")],
-                    config={
-                        "callable": lambda i: {
-                            "processed": i["reading"] * 10
-                        }
-                    },
-                ),
-            ],
-        )
-
-        engine = _run_engine(wf)
-        job = await engine.run()
-        assert job.status == JobStatus.COMPLETED
-        assert job.step_runs["sensor"].outputs["reading"] == 1
-        assert job.step_runs["react"].outputs["processed"] == 10
-
-        # Simulate watch trigger: mark sensor as stale
-        engine.mark_stale("sensor")
-        assert job.step_runs["sensor"].status == StepStatus.PENDING
-        assert job.step_runs["react"].status == StepStatus.PENDING
-
-        # Re-run
-        job = await engine.run()
-        assert job.status == JobStatus.COMPLETED
-        assert job.step_runs["sensor"].outputs["reading"] == 2
-        assert job.step_runs["react"].outputs["processed"] == 20
-
-    async def test_watch_only_reruns_stale(self):
-        """Only the stale step and its dependents re-run."""
-        calls = {"a": 0, "b": 0, "c": 0}
-
-        def track(name):
-            def fn(inputs):
-                calls[name] += 1
-                return {"v": calls[name]}
-            return fn
-
-        wf = WorkflowDefinition(
-            name="selective",
-            steps=[
-                StepDefinition(name="a", executor="script", config={"callable": track("a")}),
-                StepDefinition(name="b", executor="script", config={"callable": track("b")}),
-                StepDefinition(
-                    name="c",
-                    executor="script",
-                    depends_on=["a"],
-                    config={"callable": track("c")},
-                ),
-            ],
-        )
-
-        engine = _run_engine(wf)
-        await engine.run()
-        assert calls == {"a": 1, "b": 1, "c": 1}
-
-        # Mark only 'a' stale -> 'c' should also re-run, but 'b' should not
-        engine.mark_stale("a")
-        await engine.run()
-        assert calls == {"a": 2, "b": 1, "c": 2}
-
-
-# ── Persistence Integration ─────────────────────────────────────────
-
-
-class TestPersistenceIntegration:
-    async def test_engine_persists_state(self):
-        store = StepwiseStore(":memory:")
-        wf = WorkflowDefinition(
-            name="persist",
-            steps=[
-                StepDefinition(
-                    name="a",
-                    executor="script",
-                    config={"callable": lambda i: {"v": 1}},
-                ),
-                StepDefinition(
-                    name="b",
-                    executor="script",
-                    depends_on=["a"],
-                    inputs=[InputBinding("a", "v", "input_v")],
-                    config={"callable": lambda i: {"v": i["input_v"] + 1}},
-                ),
-            ],
-        )
-
-        job = Job.create(wf)
-        engine = Engine(job, store=store, event_bus=EventBus())
-        engine.register_executor("script", ScriptExecutor())
-        await engine.run()
-
-        # Verify persisted
-        loaded = store.load_job(job.id)
-        assert loaded is not None
-        assert loaded.status == JobStatus.COMPLETED
-        assert loaded.step_runs["a"].status == StepStatus.COMPLETED
-        assert loaded.step_runs["b"].status == StepStatus.COMPLETED
-
-        # Events persisted
-        events = store.load_events(job.id)
-        assert len(events) > 0
-        store.close()
-
-    async def test_crash_recovery_and_resume(self):
-        """Simulate crash by saving partial state, recovering, and resuming."""
-        store = StepwiseStore(":memory:")
-        wf = WorkflowDefinition(
-            name="recover",
-            steps=[
-                StepDefinition(name="a", executor="script", config={"command": "echo v1"}),
-                StepDefinition(
-                    name="b",
-                    executor="script",
-                    depends_on=["a"],
-                    config={"command": "echo v2"},
-                ),
-            ],
-        )
-
-        # Simulate: step a completed, step b was running when crash happened
-        job = Job.create(wf)
         job.status = JobStatus.RUNNING
-        job.step_runs["a"].status = StepStatus.COMPLETED
-        job.step_runs["a"].outputs = {"v": 1}
-        job.step_runs["b"].status = StepStatus.RUNNING
-        store.save_job(job)
+        store1.save_job(job)
+        store1.close()
 
-        # Recover
-        recovered = store.recover_job(job.id)
-        assert recovered.step_runs["a"].status == StepStatus.COMPLETED
-        assert recovered.step_runs["b"].status == StepStatus.PENDING
+        # New engine
+        store2 = SQLiteStore(db_path)
+        engine2 = Engine(store=store2, registry=reg)
 
-        # Resume
-        engine = Engine(recovered, store=store, event_bus=EventBus())
-        engine.register_executor("script", ScriptExecutor())
-        result = await engine.run()
+        runs = engine2.get_runs(job_id, "a")
+        assert runs[0].status == StepRunStatus.RUNNING
 
-        assert result.status == JobStatus.COMPLETED
-        assert result.step_runs["b"].status == StepStatus.COMPLETED
-        store.close()
+        engine2.tick()
+        store2.close()
 
 
-# ── Complex Workflow ─────────────────────────────────────────────────
+# ── Test: Sub-job output flows back to parent ────────────────────────
 
 
-class TestComplexWorkflow:
-    async def test_combined_patterns(self):
-        """A workflow combining linear, fan-out, and loop patterns."""
-        wf = WorkflowDefinition(
-            name="complex",
-            steps=[
-                # Step 1: Generate data
-                StepDefinition(
-                    name="init",
-                    executor="script",
-                    config={"callable": lambda i: {"data": "hello", "items": [1, 2]}},
-                ),
-                # Step 2a: Process data (branch 1)
-                StepDefinition(
-                    name="upper",
-                    executor="script",
-                    depends_on=["init"],
-                    inputs=[InputBinding("init", "data", "data")],
-                    config={"callable": lambda i: {"result": i["data"].upper()}},
-                ),
-                # Step 2b: Loop over items (branch 2)
-                StepDefinition(
-                    name="double",
-                    executor="script",
-                    depends_on=["init"],
-                    loop_over="init.items",
-                    config={"callable": lambda i: {"doubled": i["item"] * 2}},
-                ),
-                # Step 3: Merge all
-                StepDefinition(
-                    name="merge",
-                    executor="script",
-                    depends_on=["upper", "double"],
-                    inputs=[
-                        InputBinding("upper", "result", "upper_result"),
-                        InputBinding("double", "results", "doubled_results"),
-                    ],
-                    config={
-                        "callable": lambda i: {
-                            "summary": f"{i['upper_result']}: {i['doubled_results']}"
-                        }
-                    },
-                ),
-            ],
-        )
+class TestSubJobOutputFlowback:
+    def test_sub_job_terminal_result_becomes_parent_result(self):
+        """The child job's terminal step output becomes the parent step's result."""
+        register_step_fn("sub_work", lambda i: {
+            "analysis": "deep analysis result",
+            "confidence": 0.95,
+        })
 
-        engine = _run_engine(wf)
-        job = await engine.run()
+        store = SQLiteStore(":memory:")
+        reg = make_registry()
 
+        class AnalysisExecutor(Executor):
+            def start(self, inputs, context):
+                sub_w = WorkflowDefinition(steps={
+                    "deep_analyze": StepDefinition(
+                        name="deep_analyze", outputs=["analysis", "confidence"],
+                        executor=ExecutorRef("callable", {"fn_name": "sub_work"}),
+                    ),
+                })
+                return ExecutorResult(
+                    type="sub_job",
+                    sub_job_def=SubJobDefinition(
+                        objective="deep analysis",
+                        workflow=sub_w,
+                    ),
+                )
+
+            def check_status(self, state):
+                return ExecutorStatus(state="running")
+
+            def cancel(self, state):
+                pass
+
+        reg.register("analysis", lambda config: AnalysisExecutor())
+
+        engine = Engine(store=store, registry=reg)
+
+        w = WorkflowDefinition(steps={
+            "analyze": StepDefinition(
+                name="analyze", outputs=["analysis", "confidence"],
+                executor=ExecutorRef("analysis", {}),
+            ),
+            "report": StepDefinition(
+                name="report", outputs=["summary"],
+                executor=ExecutorRef("callable", {"fn_name": "reporter"}),
+                inputs=[
+                    InputBinding("data", "analyze", "analysis"),
+                    InputBinding("score", "analyze", "confidence"),
+                ],
+            ),
+        })
+
+        register_step_fn("reporter", lambda i: {
+            "summary": f"Report: {i['data']} (score: {i['score']})"
+        })
+
+        job = engine.create_job("Flowback test", w)
+        engine.start_job(job.id)
+
+        for _ in range(20):
+            job = engine.get_job(job.id)
+            if job.status != JobStatus.RUNNING:
+                break
+            engine.tick()
+
+        job = engine.get_job(job.id)
         assert job.status == JobStatus.COMPLETED
-        assert job.step_runs["upper"].outputs["result"] == "HELLO"
-        assert job.step_runs["double"].outputs["results"] == [
-            {"doubled": 2},
-            {"doubled": 4},
-        ]
-        merge_output = job.step_runs["merge"].outputs["summary"]
-        assert "HELLO" in merge_output
 
-    async def test_error_in_branch_fails_job(self):
-        wf = WorkflowDefinition(
-            name="error_branch",
-            steps=[
-                StepDefinition(
-                    name="ok",
-                    executor="script",
-                    config={"callable": lambda i: {"v": 1}},
-                ),
-                StepDefinition(
-                    name="fail",
-                    executor="script",
-                    config={
-                        "callable": lambda i: (_ for _ in ()).throw(
-                            ValueError("branch error")
-                        )
+        # Check parent step got the sub-job output
+        analyze_runs = engine.get_runs(job.id, "analyze")
+        assert analyze_runs[-1].result.artifact["analysis"] == "deep analysis result"
+        assert analyze_runs[-1].result.artifact["confidence"] == 0.95
+
+        # Check downstream step got the data
+        report_runs = engine.get_runs(job.id, "report")
+        assert "deep analysis result" in report_runs[-1].result.artifact["summary"]
+
+
+# ── Test: Cancel propagates to children ──────────────────────────────
+
+
+class TestCancelPropagation:
+    def test_cancel_job_cancels_sub_job(self):
+        """cancel_job propagates to child jobs."""
+        store = SQLiteStore(":memory:")
+        reg = make_registry()
+
+        class SlowDelegator(Executor):
+            def start(self, inputs, context):
+                sub_w = WorkflowDefinition(steps={
+                    "slow": StepDefinition(
+                        name="slow", outputs=["result"],
+                        executor=ExecutorRef("human", {"prompt": "do something slow"}),
+                    ),
+                })
+                return ExecutorResult(
+                    type="sub_job",
+                    sub_job_def=SubJobDefinition(
+                        objective="slow sub task",
+                        workflow=sub_w,
+                    ),
+                )
+
+            def check_status(self, state):
+                return ExecutorStatus(state="running")
+
+            def cancel(self, state):
+                pass
+
+        reg.register("slow_delegator", lambda config: SlowDelegator())
+
+        engine = Engine(store=store, registry=reg)
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["result"],
+                executor=ExecutorRef("slow_delegator", {}),
+            ),
+        })
+
+        job = engine.create_job("Cancel propagation test", w)
+        engine.start_job(job.id)
+
+        # Step a should be delegated with a sub-job
+        runs = engine.get_runs(job.id, "a")
+        a_run = runs[-1]
+        assert a_run.status == StepRunStatus.DELEGATED
+        sub_job_id = a_run.sub_job_id
+        assert sub_job_id is not None
+
+        # Sub-job should be running
+        sub_job = engine.get_job(sub_job_id)
+        assert sub_job.status == JobStatus.RUNNING
+
+        # Cancel parent
+        engine.cancel_job(job.id)
+
+        # Parent should be cancelled
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.CANCELLED
+
+        # Sub-job should also be cancelled
+        sub_job = engine.get_job(sub_job_id)
+        assert sub_job.status == JobStatus.CANCELLED
+
+
+# ── Test: Rerun rejected for DELEGATED status ───────────────────────
+
+
+class TestRerunSafetyDelegated:
+    def test_reject_rerun_when_delegated(self):
+        """Cannot rerun a step whose latest run is DELEGATED."""
+        store = SQLiteStore(":memory:")
+        reg = make_registry()
+
+        class DelegatorExecutor(Executor):
+            def start(self, inputs, context):
+                sub_w = WorkflowDefinition(steps={
+                    "inner": StepDefinition(
+                        name="inner", outputs=["result"],
+                        executor=ExecutorRef("human", {"prompt": "waiting"}),
+                    ),
+                })
+                return ExecutorResult(
+                    type="sub_job",
+                    sub_job_def=SubJobDefinition(
+                        objective="sub",
+                        workflow=sub_w,
+                    ),
+                )
+
+            def check_status(self, state):
+                return ExecutorStatus(state="running")
+
+            def cancel(self, state):
+                pass
+
+        reg.register("delegator", lambda config: DelegatorExecutor())
+
+        engine = Engine(store=store, registry=reg)
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["result"],
+                executor=ExecutorRef("delegator", {}),
+            ),
+        })
+
+        job = engine.create_job("Rerun delegated", w)
+        engine.start_job(job.id)
+
+        runs = engine.get_runs(job.id, "a")
+        assert runs[-1].status == StepRunStatus.DELEGATED
+
+        with pytest.raises(ValueError, match="Cannot rerun"):
+            engine.rerun_step(job.id, "a")
+
+
+# ── Test: Decorator executor_meta passthrough ────────────────────────
+
+
+class TestDecoratorMetaPassthrough:
+    def test_timeout_meta_in_completed_step(self):
+        """Timeout decorator adds metadata to HandoffEnvelope."""
+        register_step_fn("meta_fn", lambda i: {"result": "done"})
+
+        store = SQLiteStore(":memory:")
+        reg = make_registry()
+
+        # Register callable with timeout decorator
+        reg.register("callable", lambda config: CallableExecutor(fn_name=config.get("fn_name", "default")))
+
+        from stepwise.decorators import TimeoutDecorator
+
+        def callable_with_timeout(config):
+            inner = CallableExecutor(fn_name=config.get("fn_name", "default"))
+            return TimeoutDecorator(inner, {"minutes": 60})
+
+        reg.register("callable_timeout", callable_with_timeout)
+
+        engine = Engine(store=store, registry=reg)
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["result"],
+                executor=ExecutorRef("callable_timeout", {"fn_name": "meta_fn"}),
+            ),
+        })
+
+        job = engine.create_job("Meta test", w)
+        engine.start_job(job.id)
+
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.COMPLETED
+
+        runs = engine.get_runs(job.id, "a")
+        assert runs[0].result.executor_meta.get("timeout") is not None
+        assert runs[0].result.executor_meta["timeout"]["triggered"] is False
+
+
+# ── Test: Inject context ─────────────────────────────────────────────
+
+
+class TestInjectContext:
+    def test_inject_context_creates_event(self):
+        store = SQLiteStore(":memory:")
+        reg = make_registry()
+        engine = Engine(store=store, registry=reg)
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["value"],
+                executor=ExecutorRef("human", {"prompt": "do something"}),
+            ),
+        })
+
+        job = engine.create_job("Context test", w)
+        engine.start_job(job.id)
+
+        engine.inject_context(job.id, "Focus on the API first")
+
+        events = engine.get_events(job.id)
+        context_events = [e for e in events if e.type == "context.injected"]
+        assert len(context_events) == 1
+        assert context_events[0].data["context"] == "Focus on the API first"
+
+    def test_inject_context_does_not_modify_job_inputs(self):
+        """inject_context does NOT modify Job.inputs — they are immutable."""
+        store = SQLiteStore(":memory:")
+        reg = make_registry()
+        engine = Engine(store=store, registry=reg)
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["value"],
+                executor=ExecutorRef("human", {"prompt": "do something"}),
+            ),
+        })
+
+        job = engine.create_job("Immutable test", w, inputs={"key": "original"})
+        engine.start_job(job.id)
+
+        engine.inject_context(job.id, "new context info")
+
+        job = engine.get_job(job.id)
+        assert job.inputs == {"key": "original"}
+
+    def test_inject_context_available_to_future_steps(self):
+        """Injected context is passed in ExecutionContext.injected_context."""
+        captured_contexts = []
+
+        def capture_fn(inputs):
+            return {"result": "ok"}
+
+        register_step_fn("capture_fn", capture_fn)
+
+        store = SQLiteStore(":memory:")
+        reg = make_registry()
+
+        class ContextCapturingExecutor(Executor):
+            def start(self, inputs, context):
+                captured_contexts.append(context.injected_context)
+                return ExecutorResult(
+                    type="data",
+                    envelope=HandoffEnvelope(
+                        artifact={"result": "captured"},
+                        sidecar=Sidecar(),
+                        workspace=context.workspace_path,
+                        timestamp=_now(),
+                    ),
+                )
+
+            def check_status(self, state):
+                return ExecutorStatus(state="completed")
+
+            def cancel(self, state):
+                pass
+
+        reg.register("capturing", lambda config: ContextCapturingExecutor())
+
+        engine = Engine(store=store, registry=reg)
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["value"],
+                executor=ExecutorRef("human", {"prompt": "step 1"}),
+            ),
+            "b": StepDefinition(
+                name="b", outputs=["result"],
+                executor=ExecutorRef("capturing", {}),
+                inputs=[InputBinding("data", "a", "value")],
+            ),
+        })
+
+        job = engine.create_job("Context passthrough", w)
+        engine.start_job(job.id)
+
+        # Inject context while waiting for human step
+        engine.inject_context(job.id, "Focus on API first")
+        engine.inject_context(job.id, "Also consider caching")
+
+        # Fulfill the human step
+        runs = engine.get_runs(job.id, "a")
+        engine.fulfill_watch(runs[0].id, {"value": "human input"})
+        engine.tick()
+
+        # The capturing executor should have received the injected contexts
+        assert len(captured_contexts) == 1
+        assert captured_contexts[0] == ["Focus on API first", "Also consider caching"]
+
+
+# ── Test: Effector event emission ────────────────────────────────────
+
+
+class TestEffectorEvents:
+    def test_executor_meta_effector_events_emitted(self):
+        """Executors can mark events as effectors via executor_meta."""
+
+        def effector_fn(inputs):
+            from stepwise.executors import ExecutorResult
+            from stepwise.models import HandoffEnvelope, Sidecar, _now
+            return ExecutorResult(
+                type="data",
+                envelope=HandoffEnvelope(
+                    artifact={"result": "deployed"},
+                    sidecar=Sidecar(),
+                    workspace="",
+                    timestamp=_now(),
+                    executor_meta={
+                        "effector_events": [
+                            {"type": "deploy.executed", "data": {"target": "production"}},
+                            {"type": "notification.sent", "data": {"channel": "slack"}},
+                        ],
                     },
                 ),
-                StepDefinition(
-                    name="merge",
-                    executor="script",
-                    depends_on=["ok", "fail"],
-                    config={"callable": lambda i: {"v": 1}},
-                ),
-            ],
-        )
+            )
 
-        engine = _run_engine(wf)
-        job = await engine.run()
-        assert job.status == JobStatus.FAILED
-        assert job.step_runs["merge"].status != StepStatus.COMPLETED
+        register_step_fn("effector_fn", effector_fn)
+
+        store = SQLiteStore(":memory:")
+        reg = make_registry()
+        engine = Engine(store=store, registry=reg)
+
+        w = WorkflowDefinition(steps={
+            "deploy": StepDefinition(
+                name="deploy", outputs=["result"],
+                executor=ExecutorRef("callable", {"fn_name": "effector_fn"}),
+            ),
+        })
+
+        job = engine.create_job("Effector test", w)
+        engine.start_job(job.id)
+
+        events = engine.get_events(job.id)
+        effector_events = [e for e in events if e.is_effector]
+        assert len(effector_events) == 2
+        types = {e.type for e in effector_events}
+        assert "deploy.executed" in types
+        assert "notification.sent" in types
+        # Check data is passed through
+        deploy_evt = [e for e in effector_events if e.type == "deploy.executed"][0]
+        assert deploy_evt.data["target"] == "production"
+
+    def test_no_effector_events_when_meta_empty(self):
+        """No effector events emitted when executor_meta doesn't contain them."""
+        register_step_fn("normal_fn", lambda i: {"result": "ok"})
+
+        store = SQLiteStore(":memory:")
+        reg = make_registry()
+        engine = Engine(store=store, registry=reg)
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["result"],
+                executor=ExecutorRef("callable", {"fn_name": "normal_fn"}),
+            ),
+        })
+
+        job = engine.create_job("No effector test", w)
+        engine.start_job(job.id)
+
+        events = engine.get_events(job.id)
+        effector_events = [e for e in events if e.is_effector]
+        assert len(effector_events) == 0
+
+
+# ── Test: Pause and Resume ───────────────────────────────────────────
+
+
+class TestPauseResume:
+    def test_pause_and_resume(self):
+        store = SQLiteStore(":memory:")
+        reg = make_registry()
+        engine = Engine(store=store, registry=reg)
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["value"],
+                executor=ExecutorRef("human", {"prompt": "do something"}),
+            ),
+        })
+
+        job = engine.create_job("Pause test", w)
+        engine.start_job(job.id)
+
+        engine.pause_job(job.id)
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.PAUSED
+
+        engine.resume_job(job.id)
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.RUNNING
+
+
+# ── Test: Cancel job ─────────────────────────────────────────────────
+
+
+class TestCancelJob:
+    def test_cancel_running_job(self):
+        store = SQLiteStore(":memory:")
+        reg = make_registry()
+        engine = Engine(store=store, registry=reg)
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["value"],
+                executor=ExecutorRef("human", {"prompt": "do something"}),
+            ),
+        })
+
+        job = engine.create_job("Cancel test", w)
+        engine.start_job(job.id)
+
+        engine.cancel_job(job.id)
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.CANCELLED
+
+        runs = engine.get_runs(job.id, "a")
+        assert runs[0].status == StepRunStatus.FAILED

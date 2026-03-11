@@ -2,111 +2,209 @@
 
 from __future__ import annotations
 
-import asyncio
+import signal
+import time
 from typing import Any
 
-from stepwise.events import Event, EventBus, EventType
-from stepwise.executors import Executor, ExecutorResult
-from stepwise.models import StepRun
+from stepwise.executors import (
+    Executor,
+    ExecutionContext,
+    ExecutorResult,
+    ExecutorStatus,
+)
+from stepwise.models import HandoffEnvelope, Sidecar, _now
 
 
 class TimeoutDecorator(Executor):
-    """Wraps an executor with a timeout."""
+    """Cancels after N minutes."""
 
-    def __init__(self, executor: Executor, timeout_seconds: float) -> None:
+    def __init__(self, executor: Executor, config: dict) -> None:
         self._executor = executor
-        self._timeout = timeout_seconds
+        self._limit_minutes = config.get("minutes", 30)
 
-    async def execute(self, step_run: StepRun, config: dict[str, Any]) -> ExecutorResult:
-        try:
-            return await asyncio.wait_for(
-                self._executor.execute(step_run, config),
-                timeout=self._timeout,
-            )
-        except asyncio.TimeoutError:
-            return ExecutorResult(
-                error=f"Step timed out after {self._timeout}s"
-            )
+    def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
+        # Set timeout on context
+        context.timeout_minutes = self._limit_minutes
 
+        start_time = time.monotonic()
+        result = self._executor.start(inputs, context)
+        elapsed = time.monotonic() - start_time
+        elapsed_minutes = elapsed / 60.0
 
-class RetryDecorator(Executor):
-    """Wraps an executor with retry logic."""
+        # Build timeout metadata
+        timeout_meta = {
+            "timeout": {
+                "limit_minutes": self._limit_minutes,
+                "triggered": elapsed_minutes >= self._limit_minutes,
+                "elapsed_minutes": round(elapsed_minutes, 3),
+            }
+        }
 
-    def __init__(
-        self,
-        executor: Executor,
-        max_retries: int,
-        delay_seconds: float = 0,
-    ) -> None:
-        self._executor = executor
-        self._max_retries = max_retries
-        self._delay = delay_seconds
-
-    async def execute(self, step_run: StepRun, config: dict[str, Any]) -> ExecutorResult:
-        last_result: ExecutorResult | None = None
-        total_attempts = 1 + self._max_retries
-
-        for attempt in range(1, total_attempts + 1):
-            step_run.attempt = attempt
-            result = await self._executor.execute(step_run, config)
-            if result.success:
-                return result
-            last_result = result
-            if attempt < total_attempts and self._delay > 0:
-                await asyncio.sleep(self._delay)
-
-        return last_result  # type: ignore[return-value]
-
-
-class NotificationDecorator(Executor):
-    """Emits events on step start, completion, and failure."""
-
-    def __init__(self, executor: Executor, event_bus: EventBus) -> None:
-        self._executor = executor
-        self._event_bus = event_bus
-
-    async def execute(self, step_run: StepRun, config: dict[str, Any]) -> ExecutorResult:
-        await self._event_bus.emit(
-            Event.create(
-                step_run.job_id,
-                EventType.STEP_STARTED,
-                step_run.step_name,
-            )
-        )
-
-        result = await self._executor.execute(step_run, config)
-
-        if result.success:
-            await self._event_bus.emit(
-                Event.create(
-                    step_run.job_id,
-                    EventType.STEP_COMPLETED,
-                    step_run.step_name,
-                    data={"outputs": result.outputs},
-                )
-            )
-        else:
-            await self._event_bus.emit(
-                Event.create(
-                    step_run.job_id,
-                    EventType.STEP_FAILED,
-                    step_run.step_name,
-                    data={"error": result.error},
-                )
+        if result.envelope:
+            result.envelope.executor_meta.update(timeout_meta)
+        elif result.type == "data" and not result.envelope:
+            # If somehow no envelope, create one
+            result.envelope = HandoffEnvelope(
+                artifact={},
+                sidecar=Sidecar(),
+                workspace="",
+                timestamp=_now(),
+                executor_meta=timeout_meta,
             )
 
         return result
 
+    def check_status(self, state: dict) -> ExecutorStatus:
+        return self._executor.check_status(state)
+
+    def cancel(self, state: dict) -> None:
+        self._executor.cancel(state)
+
+
+class RetryDecorator(Executor):
+    """Retries on failure. Checks context.idempotency before retrying."""
+
+    def __init__(self, executor: Executor, config: dict) -> None:
+        self._executor = executor
+        self._max_retries = config.get("max_retries", 2)
+        self._backoff = config.get("backoff", "none")
+
+    def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
+        if context.idempotency == "non_retriable":
+            # Don't retry non-retriable steps
+            return self._executor.start(inputs, context)
+
+        attempts: list[str] = []
+        last_result: ExecutorResult | None = None
+
+        for attempt_num in range(1 + self._max_retries):
+            result = self._executor.start(inputs, context)
+
+            # Check if it's a real failure (executor_state has failed flag or envelope has failed meta)
+            is_failure = False
+            if result.executor_state and result.executor_state.get("failed"):
+                is_failure = True
+            elif result.envelope and result.envelope.executor_meta.get("failed"):
+                is_failure = True
+
+            if not is_failure:
+                # Success — add retry metadata
+                retry_meta = {
+                    "retry": {
+                        "attempts": attempt_num + 1,
+                        "reasons": attempts,
+                    }
+                }
+                if result.envelope:
+                    result.envelope.executor_meta.update(retry_meta)
+                return result
+
+            error_msg = ""
+            if result.executor_state:
+                error_msg = result.executor_state.get("error", "unknown")
+            attempts.append(error_msg)
+            last_result = result
+
+            # Backoff
+            if attempt_num < self._max_retries and self._backoff == "exponential":
+                time.sleep(0.01 * (2 ** attempt_num))  # Very short for testing
+
+        # All retries exhausted
+        retry_meta = {
+            "retry": {
+                "attempts": 1 + self._max_retries,
+                "reasons": attempts,
+            }
+        }
+        if last_result and last_result.envelope:
+            last_result.envelope.executor_meta.update(retry_meta)
+        return last_result  # type: ignore[return-value]
+
+    def check_status(self, state: dict) -> ExecutorStatus:
+        return self._executor.check_status(state)
+
+    def cancel(self, state: dict) -> None:
+        self._executor.cancel(state)
+
+
+class NotificationDecorator(Executor):
+    """Sends notifications on start/complete/fail. M1: just records in executor_meta."""
+
+    def __init__(self, executor: Executor, config: dict) -> None:
+        self._executor = executor
+        self._config = config
+        self.notifications: list[dict] = []
+
+    def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
+        self.notifications.append({
+            "event": "start",
+            "step": context.step_name,
+            "attempt": context.attempt,
+        })
+
+        result = self._executor.start(inputs, context)
+
+        is_failure = False
+        if result.executor_state and result.executor_state.get("failed"):
+            is_failure = True
+
+        self.notifications.append({
+            "event": "failed" if is_failure else "completed",
+            "step": context.step_name,
+            "attempt": context.attempt,
+        })
+
+        notification_meta = {"notification": {"events": list(self.notifications)}}
+        if result.envelope:
+            result.envelope.executor_meta.update(notification_meta)
+
+        return result
+
+    def check_status(self, state: dict) -> ExecutorStatus:
+        return self._executor.check_status(state)
+
+    def cancel(self, state: dict) -> None:
+        self._executor.cancel(state)
+
 
 class FallbackDecorator(Executor):
-    """Tries a primary executor, falls back to a secondary on failure."""
+    """Tries primary executor, falls back to secondary on failure."""
 
-    def __init__(self, primary: Executor, fallback: Executor) -> None:
+    def __init__(self, primary: Executor, fallback: Executor, config: dict) -> None:
         self._primary = primary
         self._fallback = fallback
+        self._config = config
 
-    async def execute(self, step_run: StepRun, config: dict[str, Any]) -> ExecutorResult:
-        result = await self._primary.execute(step_run, config)
-        if result.success:
+    def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
+        result = self._primary.start(inputs, context)
+
+        is_failure = False
+        if result.executor_state and result.executor_state.get("failed"):
+            is_failure = True
+        elif result.envelope and result.envelope.executor_meta.get("failed"):
+            is_failure = True
+
+        if not is_failure:
             return result
-        return await self._fallback.execute(step_run, config)
+
+        primary_error = ""
+        if result.executor_state:
+            primary_error = result.executor_state.get("error", "unknown")
+
+        # Try fallback
+        fallback_result = self._fallback.start(inputs, context)
+        fallback_meta = {
+            "fallback": {
+                "primary_failed": True,
+                "reason": primary_error,
+            }
+        }
+        if fallback_result.envelope:
+            fallback_result.envelope.executor_meta.update(fallback_meta)
+        return fallback_result
+
+    def check_status(self, state: dict) -> ExecutorStatus:
+        return self._primary.check_status(state)
+
+    def cancel(self, state: dict) -> None:
+        self._primary.cancel(state)

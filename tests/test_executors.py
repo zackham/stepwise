@@ -1,329 +1,310 @@
-"""Tests for ScriptExecutor, HumanExecutor, MockLLMExecutor, and decorators."""
+"""Tests for ScriptExecutor, HumanExecutor, MockLLMExecutor, and decorators.
 
-import asyncio
+Covers required test cases 15, 16, 24.
+"""
+
+import json
+import os
+import tempfile
 
 import pytest
 
 from stepwise.decorators import (
     FallbackDecorator,
-    NotificationDecorator,
     RetryDecorator,
     TimeoutDecorator,
 )
-from stepwise.events import EventBus, EventType
 from stepwise.executors import (
+    ExecutionContext,
+    Executor,
     ExecutorResult,
+    ExecutorStatus,
     HumanExecutor,
     MockLLMExecutor,
     ScriptExecutor,
 )
-from stepwise.models import StepRun
+from stepwise.models import (
+    HandoffEnvelope,
+    Sidecar,
+    WatchSpec,
+    _now,
+)
 
 
-def _make_sr(**kwargs):
-    defaults = {"job_id": "j1", "step_name": "test_step"}
-    defaults.update(kwargs)
-    return StepRun.create(**defaults)
+def _ctx(step_name="test", attempt=1, workspace=None):
+    return ExecutionContext(
+        job_id="job-test",
+        step_name=step_name,
+        attempt=attempt,
+        workspace_path=workspace or tempfile.mkdtemp(),
+        idempotency="idempotent",
+    )
 
 
-# ── ScriptExecutor ───────────────────────────────────────────────────
+# ── ScriptExecutor ────────────────────────────────────────────────────
 
 
 class TestScriptExecutor:
-    async def test_callable_success(self, script_executor):
-        sr = _make_sr(inputs={"x": 5})
-        result = await script_executor.execute(
-            sr, {"callable": lambda inputs: {"doubled": inputs["x"] * 2}}
-        )
-        assert result.success
-        assert result.outputs["doubled"] == 10
+    def test_success_json_output(self):
+        ctx = _ctx()
+        executor = ScriptExecutor(command='echo \'{"result": "hello"}\'')
+        result = executor.start({}, ctx)
+        assert result.type == "data"
+        assert result.envelope.artifact["result"] == "hello"
 
-    async def test_callable_returns_non_dict(self, script_executor):
-        sr = _make_sr()
-        result = await script_executor.execute(
-            sr, {"callable": lambda inputs: 42}
-        )
-        assert result.success
-        assert result.outputs["result"] == 42
+    def test_success_non_json_output(self):
+        ctx = _ctx()
+        executor = ScriptExecutor(command="echo 'plain text'")
+        result = executor.start({}, ctx)
+        assert result.type == "data"
+        assert result.envelope.artifact["stdout"] == "plain text"
 
-    async def test_callable_exception(self, script_executor):
-        def fail(inputs):
-            raise ValueError("boom")
+    def test_failure_exit_code(self):
+        ctx = _ctx()
+        executor = ScriptExecutor(command="exit 1")
+        result = executor.start({}, ctx)
+        assert result.type == "data"
+        assert result.executor_state["failed"] is True
 
-        sr = _make_sr()
-        result = await script_executor.execute(sr, {"callable": fail})
-        assert not result.success
-        assert "boom" in result.error
+    def test_inputs_written_to_file(self):
+        ctx = _ctx()
+        executor = ScriptExecutor(command="cat $JOB_ENGINE_INPUTS")
+        inputs = {"key": "value", "num": 42}
+        result = executor.start(inputs, ctx)
+        assert result.type == "data"
+        # The command reads the input file (JSON) and prints it to stdout.
+        # ScriptExecutor parses valid JSON stdout directly into artifact.
+        assert result.envelope.artifact["key"] == "value"
+        assert result.envelope.artifact["num"] == 42
 
-    async def test_async_callable(self, script_executor):
-        async def async_fn(inputs):
-            return {"async": True}
+    def test_empty_stdout(self):
+        ctx = _ctx()
+        executor = ScriptExecutor(command="true")  # exit 0, no output
+        result = executor.start({}, ctx)
+        assert result.type == "data"
+        assert result.envelope.artifact.get("stdout", "") == ""
 
-        sr = _make_sr()
-        result = await script_executor.execute(sr, {"callable": async_fn})
-        assert result.success
-        assert result.outputs["async"] is True
+    # ── Test 24: Poll watch protocol ──────────────────────────────────
 
-    async def test_command_success(self, script_executor):
-        sr = _make_sr()
-        result = await script_executor.execute(sr, {"command": "echo hello"})
-        assert result.success
-        assert result.outputs["stdout"] == "hello"
-        assert result.outputs["return_code"] == 0
-
-    async def test_command_failure(self, script_executor):
-        sr = _make_sr()
-        result = await script_executor.execute(sr, {"command": "exit 1"})
-        assert not result.success
-        assert result.outputs["return_code"] == 1
-
-    async def test_command_with_input_substitution(self, script_executor):
-        sr = _make_sr(inputs={"name": "world"})
-        result = await script_executor.execute(
-            sr, {"command": "echo {name}"}
-        )
-        assert result.success
-        assert "world" in result.outputs["stdout"]
-
-    async def test_no_config(self, script_executor):
-        sr = _make_sr()
-        result = await script_executor.execute(sr, {})
-        assert not result.success
-        assert "no 'command' or 'callable'" in result.error
+    def test_watch_signaling(self):
+        """If output JSON contains _watch key, step suspends."""
+        ctx = _ctx()
+        watch_output = json.dumps({
+            "_watch": {
+                "mode": "poll",
+                "config": {"check_command": "echo done", "interval_seconds": 5},
+                "fulfillment_outputs": ["status"],
+            }
+        })
+        executor = ScriptExecutor(command=f"echo '{watch_output}'")
+        result = executor.start({}, ctx)
+        assert result.type == "watch"
+        assert result.watch.mode == "poll"
+        assert result.watch.config["interval_seconds"] == 5
 
 
-# ── HumanExecutor ────────────────────────────────────────────────────
+# ── HumanExecutor ─────────────────────────────────────────────────────
 
 
 class TestHumanExecutor:
-    async def test_complete(self, human_executor):
-        sr = _make_sr()
+    def test_immediately_returns_watch(self):
+        executor = HumanExecutor(prompt="Approve?", notify="slack:#reviews")
+        ctx = _ctx()
+        result = executor.start({}, ctx)
+        assert result.type == "watch"
+        assert result.watch.mode == "human"
+        assert result.watch.config["prompt"] == "Approve?"
 
-        async def resolve():
-            await asyncio.sleep(0.01)
-            human_executor.complete(sr.id, {"approved": True})
-
-        asyncio.create_task(resolve())
-        result = await human_executor.execute(sr, {"prompt": "Approve?"})
-        assert result.success
-        assert result.outputs["approved"] is True
-
-    async def test_fail(self, human_executor):
-        sr = _make_sr()
-
-        async def resolve():
-            await asyncio.sleep(0.01)
-            human_executor.fail(sr.id, "Rejected by reviewer")
-
-        asyncio.create_task(resolve())
-        result = await human_executor.execute(sr, {"prompt": "Approve?"})
-        assert not result.success
-        assert "Rejected" in result.error
-
-    async def test_pending_ids(self, human_executor):
-        sr = _make_sr()
-
-        async def resolve():
-            await asyncio.sleep(0.02)
-            assert sr.id in human_executor.pending_ids
-            human_executor.complete(sr.id, {})
-
-        asyncio.create_task(resolve())
-        await human_executor.execute(sr, {})
-        assert sr.id not in human_executor.pending_ids
+    def test_check_status_running(self):
+        executor = HumanExecutor(prompt="test")
+        status = executor.check_status({})
+        assert status.state == "running"
 
 
-# ── MockLLMExecutor ──────────────────────────────────────────────────
+# ── Test 16: MockLLMExecutor ─────────────────────────────────────────
 
 
 class TestMockLLMExecutor:
-    async def test_config_response(self, mock_llm):
-        sr = _make_sr()
-        result = await mock_llm.execute(sr, {"response": "hello from LLM"})
-        assert result.success
-        assert result.outputs["response"] == "hello from LLM"
+    def test_success_default(self):
+        executor = MockLLMExecutor()
+        ctx = _ctx(step_name="analyze")
+        result = executor.start({"data": "test"}, ctx)
+        assert result.type == "data"
+        assert result.envelope is not None
 
-    async def test_config_response_dict(self, mock_llm):
-        sr = _make_sr()
-        result = await mock_llm.execute(
-            sr, {"response": {"answer": 42, "confidence": 0.9}}
-        )
-        assert result.success
-        assert result.outputs["answer"] == 42
+    def test_with_preconfigured_responses(self):
+        executor = MockLLMExecutor(responses={
+            "analyze": {"plan": "do stuff", "confidence": 0.9},
+        })
+        ctx = _ctx(step_name="analyze")
+        result = executor.start({}, ctx)
+        assert result.envelope.artifact["plan"] == "do stuff"
+        assert result.envelope.artifact["confidence"] == 0.9
 
-    async def test_instance_responses(self):
-        llm = MockLLMExecutor(responses={"my_step": "custom"})
-        sr = _make_sr(step_name="my_step")
-        result = await llm.execute(sr, {})
-        assert result.outputs["response"] == "custom"
+    def test_failure_mode(self):
+        executor = MockLLMExecutor(failure_rate=1.0)  # always fail
+        ctx = _ctx()
+        result = executor.start({}, ctx)
+        assert result.executor_state.get("failed") is True
 
-    async def test_default_response(self):
-        llm = MockLLMExecutor(responses={"default": "fallback"})
-        sr = _make_sr(step_name="unknown_step")
-        result = await llm.execute(sr, {})
-        assert result.outputs["response"] == "fallback"
+    def test_partial_mode(self):
+        executor = MockLLMExecutor(partial_rate=1.0)  # always partial
+        ctx = _ctx()
+        result = executor.start({}, ctx)
+        assert result.envelope.executor_meta.get("partial") is True
 
-    async def test_response_fn(self, mock_llm):
-        sr = _make_sr(inputs={"question": "2+2?"})
-        result = await mock_llm.execute(
-            sr,
-            {"response_fn": lambda inputs, config: f"Answer: {inputs['question']}"},
-        )
-        assert result.success
-        assert "2+2?" in result.outputs["response"]
-
-    async def test_response_fn_exception(self, mock_llm):
-        sr = _make_sr()
-        result = await mock_llm.execute(
-            sr,
-            {"response_fn": lambda i, c: 1 / 0},
-        )
-        assert not result.success
-        assert "division by zero" in result.error
+    def test_callable_response(self):
+        executor = MockLLMExecutor(responses={
+            "transform": lambda inputs: {"doubled": inputs.get("n", 0) * 2},
+        })
+        ctx = _ctx(step_name="transform")
+        result = executor.start({"n": 5}, ctx)
+        assert result.envelope.artifact["doubled"] == 10
 
 
-# ── TimeoutDecorator ─────────────────────────────────────────────────
+# ── Test 15: Decorator composition ───────────────────────────────────
 
 
-class TestTimeoutDecorator:
-    async def test_completes_within_timeout(self, script_executor):
-        wrapped = TimeoutDecorator(script_executor, timeout_seconds=5.0)
-        sr = _make_sr()
-        result = await wrapped.execute(
-            sr, {"callable": lambda i: {"ok": True}}
-        )
-        assert result.success
+class TestDecoratorComposition:
+    def test_timeout_retry_script(self):
+        """timeout(retry(script)) — decorators compose."""
+        # Inner: script that succeeds
+        inner = ScriptExecutor(command='echo \'{"result": "ok"}\'')
 
-    async def test_times_out(self):
-        class SlowExecutor:
-            async def execute(self, sr, config):
-                await asyncio.sleep(10)
-                return ExecutorResult(outputs={"done": True})
+        # Wrap with retry
+        retried = RetryDecorator(inner, {"max_retries": 2})
 
-        wrapped = TimeoutDecorator(SlowExecutor(), timeout_seconds=0.05)
-        sr = _make_sr()
-        result = await wrapped.execute(sr, {})
-        assert not result.success
-        assert "timed out" in result.error
+        # Wrap with timeout
+        timed = TimeoutDecorator(retried, {"minutes": 5})
 
+        ctx = _ctx()
+        result = timed.start({}, ctx)
 
-# ── RetryDecorator ───────────────────────────────────────────────────
+        assert result.type == "data"
+        assert result.envelope.artifact["result"] == "ok"
+        # Check decorator metadata is present
+        assert "timeout" in result.envelope.executor_meta
+        assert result.envelope.executor_meta["timeout"]["triggered"] is False
 
+    def test_retry_on_failure(self):
+        """RetryDecorator retries failed executor."""
+        call_count = {"n": 0}
 
-class TestRetryDecorator:
-    async def test_succeeds_on_retry(self):
-        call_count = 0
+        class FailOnceExecutor(Executor):
+            def start(self, inputs, context):
+                call_count["n"] += 1
+                if call_count["n"] == 1:
+                    return ExecutorResult(
+                        type="data",
+                        envelope=HandoffEnvelope(
+                            artifact={},
+                            sidecar=Sidecar(),
+                            workspace="",
+                            timestamp=_now(),
+                            executor_meta={"failed": True},
+                        ),
+                        executor_state={"failed": True, "error": "first fail"},
+                    )
+                return ExecutorResult(
+                    type="data",
+                    envelope=HandoffEnvelope(
+                        artifact={"result": "success"},
+                        sidecar=Sidecar(),
+                        workspace="",
+                        timestamp=_now(),
+                    ),
+                )
 
-        class FlakyExecutor:
-            async def execute(self, sr, config):
-                nonlocal call_count
-                call_count += 1
-                if call_count < 3:
-                    return ExecutorResult(error=f"fail {call_count}")
-                return ExecutorResult(outputs={"ok": True})
+            def check_status(self, state):
+                return ExecutorStatus(state="completed")
 
-        wrapped = RetryDecorator(FlakyExecutor(), max_retries=4)
-        sr = _make_sr()
-        result = await wrapped.execute(sr, {})
-        assert result.success
-        assert call_count == 3
+            def cancel(self, state):
+                pass
 
-    async def test_exhausts_retries(self):
-        class AlwaysFail:
-            async def execute(self, sr, config):
-                return ExecutorResult(error="always fails")
+        retried = RetryDecorator(FailOnceExecutor(), {"max_retries": 2})
+        ctx = _ctx()
+        result = retried.start({}, ctx)
 
-        wrapped = RetryDecorator(AlwaysFail(), max_retries=2)
-        sr = _make_sr()
-        result = await wrapped.execute(sr, {})
-        assert not result.success
-        assert sr.attempt == 3  # 1 original + 2 retries
+        assert result.type == "data"
+        assert result.envelope.artifact["result"] == "success"
+        assert call_count["n"] == 2
+        assert result.envelope.executor_meta["retry"]["attempts"] == 2
 
-    async def test_no_retry_on_success(self, script_executor):
-        call_count = 0
-        original_execute = script_executor.execute
+    def test_retry_respects_non_retriable(self):
+        """RetryDecorator doesn't retry non-retriable steps."""
+        call_count = {"n": 0}
 
-        async def counting_execute(sr, config):
-            nonlocal call_count
-            call_count += 1
-            return await original_execute(sr, config)
+        class AlwaysFailExecutor(Executor):
+            def start(self, inputs, context):
+                call_count["n"] += 1
+                return ExecutorResult(
+                    type="data",
+                    envelope=HandoffEnvelope(
+                        artifact={},
+                        sidecar=Sidecar(),
+                        workspace="",
+                        timestamp=_now(),
+                        executor_meta={"failed": True},
+                    ),
+                    executor_state={"failed": True, "error": "fail"},
+                )
 
-        script_executor.execute = counting_execute
-        wrapped = RetryDecorator(script_executor, max_retries=3)
-        sr = _make_sr()
-        result = await wrapped.execute(sr, {"callable": lambda i: {"ok": True}})
-        assert result.success
-        assert call_count == 1
+            def check_status(self, state):
+                return ExecutorStatus(state="failed")
 
+            def cancel(self, state):
+                pass
 
-# ── NotificationDecorator ────────────────────────────────────────────
+        retried = RetryDecorator(AlwaysFailExecutor(), {"max_retries": 3})
+        ctx = _ctx()
+        ctx.idempotency = "non_retriable"
+        result = retried.start({}, ctx)
 
+        # Should only be called once since it's non-retriable
+        assert call_count["n"] == 1
 
-class TestNotificationDecorator:
-    async def test_emits_start_and_complete(self, script_executor, event_bus):
-        wrapped = NotificationDecorator(script_executor, event_bus)
-        sr = _make_sr()
-        result = await wrapped.execute(
-            sr, {"callable": lambda i: {"ok": True}}
-        )
-        assert result.success
+    def test_fallback_decorator(self):
+        class FailExecutor(Executor):
+            def start(self, inputs, context):
+                return ExecutorResult(
+                    type="data",
+                    envelope=HandoffEnvelope(
+                        artifact={},
+                        sidecar=Sidecar(),
+                        workspace="",
+                        timestamp=_now(),
+                        executor_meta={"failed": True},
+                    ),
+                    executor_state={"failed": True, "error": "primary failed"},
+                )
 
-        types = [e.event_type for e in event_bus.history]
-        assert EventType.STEP_STARTED in types
-        assert EventType.STEP_COMPLETED in types
+            def check_status(self, state):
+                return ExecutorStatus(state="failed")
 
-    async def test_emits_start_and_fail(self, event_bus):
-        class FailExec:
-            async def execute(self, sr, config):
-                return ExecutorResult(error="oops")
+            def cancel(self, state):
+                pass
 
-        wrapped = NotificationDecorator(FailExec(), event_bus)
-        sr = _make_sr()
-        result = await wrapped.execute(sr, {})
-        assert not result.success
+        class SuccessExecutor(Executor):
+            def start(self, inputs, context):
+                return ExecutorResult(
+                    type="data",
+                    envelope=HandoffEnvelope(
+                        artifact={"result": "from_fallback"},
+                        sidecar=Sidecar(),
+                        workspace="",
+                        timestamp=_now(),
+                    ),
+                )
 
-        types = [e.event_type for e in event_bus.history]
-        assert EventType.STEP_STARTED in types
-        assert EventType.STEP_FAILED in types
+            def check_status(self, state):
+                return ExecutorStatus(state="completed")
 
+            def cancel(self, state):
+                pass
 
-# ── FallbackDecorator ────────────────────────────────────────────────
+        fb = FallbackDecorator(FailExecutor(), SuccessExecutor(), {})
+        ctx = _ctx()
+        result = fb.start({}, ctx)
 
-
-class TestFallbackDecorator:
-    async def test_primary_succeeds(self, script_executor, mock_llm):
-        wrapped = FallbackDecorator(script_executor, mock_llm)
-        sr = _make_sr()
-        result = await wrapped.execute(
-            sr, {"callable": lambda i: {"primary": True}}
-        )
-        assert result.success
-        assert result.outputs.get("primary") is True
-
-    async def test_fallback_used(self, mock_llm):
-        class FailExec:
-            async def execute(self, sr, config):
-                return ExecutorResult(error="primary failed")
-
-        wrapped = FallbackDecorator(FailExec(), mock_llm)
-        sr = _make_sr()
-        result = await wrapped.execute(
-            sr, {"response": "fallback response"}
-        )
-        assert result.success
-        assert result.outputs["response"] == "fallback response"
-
-    async def test_both_fail(self):
-        class Fail1:
-            async def execute(self, sr, config):
-                return ExecutorResult(error="fail 1")
-
-        class Fail2:
-            async def execute(self, sr, config):
-                return ExecutorResult(error="fail 2")
-
-        wrapped = FallbackDecorator(Fail1(), Fail2())
-        sr = _make_sr()
-        result = await wrapped.execute(sr, {})
-        assert not result.success
-        assert "fail 2" in result.error
+        assert result.envelope.artifact["result"] == "from_fallback"
+        assert result.envelope.executor_meta["fallback"]["primary_failed"] is True

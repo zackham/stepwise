@@ -4,38 +4,38 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 from typing import Any
 
-
-class _SafeEncoder(json.JSONEncoder):
-    """JSON encoder that handles non-serializable values (e.g. callables)."""
-
-    def default(self, o: Any) -> Any:
-        if callable(o):
-            return f"<callable:{getattr(o, '__name__', 'lambda')}>"
-        try:
-            return super().default(o)
-        except TypeError:
-            return f"<unserializable:{type(o).__name__}>"
-
-
-def _dumps(obj: Any) -> str:
-    return json.dumps(obj, cls=_SafeEncoder)
-
-from stepwise.events import Event, EventType
 from stepwise.models import (
+    Event,
+    HandoffEnvelope,
     Job,
+    JobConfig,
     JobStatus,
     StepRun,
-    StepStatus,
+    StepRunStatus,
+    WatchSpec,
     WorkflowDefinition,
 )
 
 
-class StepwiseStore:
-    """SQLite-backed persistence for Stepwise jobs, step runs, and events."""
+def _dumps(obj: Any) -> str:
+    return json.dumps(obj, default=str)
+
+
+def _parse_dt(s: str) -> datetime:
+    dt = datetime.fromisoformat(s)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+class SQLiteStore:
+    """SQLite-backed persistence for Stepwise."""
 
     def __init__(self, db_path: str = ":memory:") -> None:
+        self._db_path = db_path
         self._conn = sqlite3.connect(db_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -43,302 +43,395 @@ class StepwiseStore:
         self._create_tables()
 
     def _create_tables(self) -> None:
-        self._conn.executescript(
-            """
+        self._conn.executescript("""
             CREATE TABLE IF NOT EXISTS jobs (
                 id TEXT PRIMARY KEY,
-                workflow_json TEXT NOT NULL,
-                status TEXT NOT NULL,
-                inputs_json TEXT NOT NULL DEFAULT '{}',
-                outputs_json TEXT,
+                objective TEXT,
+                workflow TEXT,
+                status TEXT,
+                inputs TEXT,
                 parent_job_id TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                parent_step_run_id TEXT,
+                workspace_path TEXT,
+                config TEXT,
+                created_at TEXT,
+                updated_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS step_runs (
                 id TEXT PRIMARY KEY,
-                job_id TEXT NOT NULL,
-                step_name TEXT NOT NULL,
-                status TEXT NOT NULL,
-                inputs_json TEXT NOT NULL DEFAULT '{}',
-                outputs_json TEXT,
+                job_id TEXT REFERENCES jobs(id),
+                step_name TEXT,
+                attempt INTEGER,
+                status TEXT,
+                inputs TEXT,
+                dep_run_ids TEXT,
+                result TEXT,
                 error TEXT,
-                attempt INTEGER NOT NULL DEFAULT 1,
+                error_category TEXT,
+                executor_state TEXT,
+                watch TEXT,
+                sub_job_id TEXT,
                 started_at TEXT,
-                completed_at TEXT,
-                iteration_index INTEGER,
-                iteration_value_json TEXT,
-                input_hash TEXT,
-                FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+                completed_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS events (
                 id TEXT PRIMARY KEY,
-                job_id TEXT NOT NULL,
-                event_type TEXT NOT NULL,
-                step_name TEXT,
-                data_json TEXT NOT NULL DEFAULT '{}',
-                timestamp TEXT NOT NULL,
-                FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+                job_id TEXT REFERENCES jobs(id),
+                timestamp TEXT,
+                type TEXT,
+                data TEXT,
+                is_effector INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS step_events (
+                id TEXT PRIMARY KEY,
+                run_id TEXT,
+                timestamp TEXT,
+                type TEXT,
+                data TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_step_runs_job
-                ON step_runs(job_id);
+                ON step_runs(job_id, step_name, attempt);
+            CREATE INDEX IF NOT EXISTS idx_step_runs_status
+                ON step_runs(job_id, status);
             CREATE INDEX IF NOT EXISTS idx_events_job
-                ON events(job_id);
-            CREATE INDEX IF NOT EXISTS idx_events_type
-                ON events(job_id, event_type);
-            """
-        )
+                ON events(job_id, timestamp);
+            CREATE INDEX IF NOT EXISTS idx_step_events_run
+                ON step_events(run_id, timestamp);
+        """)
         self._conn.commit()
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns that may not exist in older databases."""
+        cursor = self._conn.execute("PRAGMA table_info(step_runs)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if "error_category" not in columns:
+            self._conn.execute("ALTER TABLE step_runs ADD COLUMN error_category TEXT")
+            self._conn.commit()
 
     # ── Jobs ──────────────────────────────────────────────────────────────
 
     def save_job(self, job: Job) -> None:
         self._conn.execute(
-            """
-            INSERT INTO jobs
-                (id, workflow_json, status, inputs_json, outputs_json,
-                 parent_job_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """INSERT INTO jobs
+                (id, objective, workflow, status, inputs, parent_job_id,
+                 parent_step_run_id, workspace_path, config, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
-                workflow_json = excluded.workflow_json,
+                objective = excluded.objective,
+                workflow = excluded.workflow,
                 status = excluded.status,
-                inputs_json = excluded.inputs_json,
-                outputs_json = excluded.outputs_json,
+                inputs = excluded.inputs,
                 parent_job_id = excluded.parent_job_id,
+                parent_step_run_id = excluded.parent_step_run_id,
+                workspace_path = excluded.workspace_path,
+                config = excluded.config,
                 updated_at = excluded.updated_at
             """,
             (
                 job.id,
+                job.objective,
                 _dumps(job.workflow.to_dict()),
                 job.status.value,
                 _dumps(job.inputs),
-                _dumps(job.outputs) if job.outputs is not None else None,
                 job.parent_job_id,
+                job.parent_step_run_id,
+                job.workspace_path,
+                _dumps(job.config.to_dict()),
                 job.created_at.isoformat(),
                 job.updated_at.isoformat(),
             ),
         )
-        # Save all step runs in the same transaction
-        for sr in job.step_runs.values():
-            self._save_step_run_internal(sr)
         self._conn.commit()
 
-    def load_job(self, job_id: str) -> Job | None:
+    def load_job(self, job_id: str) -> Job:
         row = self._conn.execute(
             "SELECT * FROM jobs WHERE id = ?", (job_id,)
         ).fetchone()
         if not row:
-            return None
+            raise KeyError(f"Job not found: {job_id}")
+        return self._row_to_job(row)
 
-        workflow = WorkflowDefinition.from_dict(json.loads(row["workflow_json"]))
-        job = Job(
+    def _row_to_job(self, row: sqlite3.Row) -> Job:
+        return Job(
             id=row["id"],
-            workflow=workflow,
+            objective=row["objective"] or "",
+            workflow=WorkflowDefinition.from_dict(json.loads(row["workflow"])),
             status=JobStatus(row["status"]),
-            inputs=json.loads(row["inputs_json"]),
-            outputs=json.loads(row["outputs_json"]) if row["outputs_json"] else None,
+            inputs=json.loads(row["inputs"]) if row["inputs"] else {},
             parent_job_id=row["parent_job_id"],
+            parent_step_run_id=row["parent_step_run_id"],
+            workspace_path=row["workspace_path"] or "",
+            config=JobConfig.from_dict(json.loads(row["config"])) if row["config"] else JobConfig(),
             created_at=_parse_dt(row["created_at"]),
             updated_at=_parse_dt(row["updated_at"]),
         )
 
-        step_run_rows = self._conn.execute(
-            "SELECT * FROM step_runs WHERE job_id = ?", (job_id,)
+    def active_jobs(self) -> list[Job]:
+        """Return all jobs in RUNNING status."""
+        rows = self._conn.execute(
+            "SELECT * FROM jobs WHERE status = ?", (JobStatus.RUNNING.value,)
         ).fetchall()
-        for sr_row in step_run_rows:
-            sr = self._row_to_step_run(sr_row)
-            job.step_runs[sr.step_name] = sr
+        return [self._row_to_job(r) for r in rows]
 
-        return job
+    def delete_job(self, job_id: str) -> None:
+        """Delete a job and all associated runs and events."""
+        self._conn.execute("DELETE FROM events WHERE job_id = ?", (job_id,))
+        self._conn.execute("DELETE FROM step_runs WHERE job_id = ?", (job_id,))
+        self._conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        self._conn.commit()
 
-    def list_jobs(self, status: JobStatus | None = None) -> list[Job]:
+    def all_jobs(self, status: JobStatus | None = None, top_level_only: bool = False) -> list[Job]:
+        clauses = []
+        params: list[str] = []
         if status:
-            rows = self._conn.execute(
-                "SELECT id FROM jobs WHERE status = ? ORDER BY created_at DESC",
-                (status.value,),
-            ).fetchall()
-        else:
-            rows = self._conn.execute(
-                "SELECT id FROM jobs ORDER BY created_at DESC"
-            ).fetchall()
-
-        jobs = []
-        for row in rows:
-            job = self.load_job(row["id"])
-            if job:
-                jobs.append(job)
-        return jobs
-
-    def delete_job(self, job_id: str) -> bool:
-        cursor = self._conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
-        self._conn.commit()
-        return cursor.rowcount > 0
-
-    def update_job_status(self, job_id: str, status: JobStatus) -> None:
-        from datetime import datetime, timezone
-
-        self._conn.execute(
-            "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?",
-            (status.value, datetime.now(timezone.utc).isoformat(), job_id),
-        )
-        self._conn.commit()
+            clauses.append("status = ?")
+            params.append(status.value)
+        if top_level_only:
+            clauses.append("parent_job_id IS NULL")
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self._conn.execute(
+            f"SELECT * FROM jobs{where} ORDER BY created_at",
+            params,
+        ).fetchall()
+        return [self._row_to_job(r) for r in rows]
 
     # ── Step Runs ─────────────────────────────────────────────────────────
 
-    def save_step_run(self, step_run: StepRun) -> None:
-        self._save_step_run_internal(step_run)
-        self._conn.commit()
-
-    def _save_step_run_internal(self, sr: StepRun) -> None:
+    def save_run(self, run: StepRun) -> None:
         self._conn.execute(
-            """
-            INSERT INTO step_runs
-                (id, job_id, step_name, status, inputs_json, outputs_json,
-                 error, attempt, started_at, completed_at,
-                 iteration_index, iteration_value_json, input_hash)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """INSERT INTO step_runs
+                (id, job_id, step_name, attempt, status, inputs, dep_run_ids,
+                 result, error, error_category, executor_state, watch, sub_job_id,
+                 started_at, completed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 status = excluded.status,
-                inputs_json = excluded.inputs_json,
-                outputs_json = excluded.outputs_json,
+                inputs = excluded.inputs,
+                dep_run_ids = excluded.dep_run_ids,
+                result = excluded.result,
                 error = excluded.error,
-                attempt = excluded.attempt,
+                error_category = excluded.error_category,
+                executor_state = excluded.executor_state,
+                watch = excluded.watch,
+                sub_job_id = excluded.sub_job_id,
                 started_at = excluded.started_at,
-                completed_at = excluded.completed_at,
-                iteration_index = excluded.iteration_index,
-                iteration_value_json = excluded.iteration_value_json,
-                input_hash = excluded.input_hash
+                completed_at = excluded.completed_at
             """,
             (
-                sr.id,
-                sr.job_id,
-                sr.step_name,
-                sr.status.value,
-                _dumps(sr.inputs),
-                _dumps(sr.outputs) if sr.outputs is not None else None,
-                sr.error,
-                sr.attempt,
-                sr.started_at.isoformat() if sr.started_at else None,
-                sr.completed_at.isoformat() if sr.completed_at else None,
-                sr.iteration_index,
-                _dumps(sr.iteration_value) if sr.iteration_value is not None else None,
-                sr.input_hash,
+                run.id,
+                run.job_id,
+                run.step_name,
+                run.attempt,
+                run.status.value,
+                _dumps(run.inputs) if run.inputs is not None else None,
+                _dumps(run.dep_run_ids) if run.dep_run_ids is not None else None,
+                _dumps(run.result.to_dict()) if run.result else None,
+                run.error,
+                run.error_category,
+                _dumps(run.executor_state) if run.executor_state is not None else None,
+                _dumps(run.watch.to_dict()) if run.watch else None,
+                run.sub_job_id,
+                run.started_at.isoformat() if run.started_at else None,
+                run.completed_at.isoformat() if run.completed_at else None,
             ),
         )
+        self._conn.commit()
 
-    def load_step_runs(self, job_id: str) -> list[StepRun]:
-        rows = self._conn.execute(
-            "SELECT * FROM step_runs WHERE job_id = ?", (job_id,)
-        ).fetchall()
-        return [self._row_to_step_run(r) for r in rows]
+    def load_run(self, run_id: str) -> StepRun:
+        row = self._conn.execute(
+            "SELECT * FROM step_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        if not row:
+            raise KeyError(f"StepRun not found: {run_id}")
+        return self._row_to_run(row)
 
-    def _row_to_step_run(self, row: sqlite3.Row) -> StepRun:
+    def _row_to_run(self, row: sqlite3.Row) -> StepRun:
+        result_data = json.loads(row["result"]) if row["result"] else None
+        watch_data = json.loads(row["watch"]) if row["watch"] else None
         return StepRun(
             id=row["id"],
             job_id=row["job_id"],
             step_name=row["step_name"],
-            status=StepStatus(row["status"]),
-            inputs=json.loads(row["inputs_json"]) if row["inputs_json"] else {},
-            outputs=json.loads(row["outputs_json"]) if row["outputs_json"] else None,
-            error=row["error"],
             attempt=row["attempt"],
+            status=StepRunStatus(row["status"]),
+            inputs=json.loads(row["inputs"]) if row["inputs"] else None,
+            dep_run_ids=json.loads(row["dep_run_ids"]) if row["dep_run_ids"] else None,
+            result=HandoffEnvelope.from_dict(result_data) if result_data else None,
+            error=row["error"],
+            error_category=row["error_category"] if "error_category" in row.keys() else None,
+            executor_state=json.loads(row["executor_state"]) if row["executor_state"] else None,
+            watch=WatchSpec.from_dict(watch_data) if watch_data else None,
+            sub_job_id=row["sub_job_id"],
             started_at=_parse_dt(row["started_at"]) if row["started_at"] else None,
             completed_at=_parse_dt(row["completed_at"]) if row["completed_at"] else None,
-            iteration_index=row["iteration_index"],
-            iteration_value=(
-                json.loads(row["iteration_value_json"])
-                if row["iteration_value_json"]
-                else None
-            ),
-            input_hash=row["input_hash"],
         )
+
+    def runs_for_job(self, job_id: str) -> list[StepRun]:
+        rows = self._conn.execute(
+            "SELECT * FROM step_runs WHERE job_id = ? ORDER BY attempt",
+            (job_id,),
+        ).fetchall()
+        return [self._row_to_run(r) for r in rows]
+
+    def runs_for_step(self, job_id: str, step_name: str) -> list[StepRun]:
+        rows = self._conn.execute(
+            "SELECT * FROM step_runs WHERE job_id = ? AND step_name = ? ORDER BY attempt",
+            (job_id, step_name),
+        ).fetchall()
+        return [self._row_to_run(r) for r in rows]
+
+    def running_runs(self, job_id: str) -> list[StepRun]:
+        rows = self._conn.execute(
+            "SELECT * FROM step_runs WHERE job_id = ? AND status = ?",
+            (job_id, StepRunStatus.RUNNING.value),
+        ).fetchall()
+        return [self._row_to_run(r) for r in rows]
+
+    def suspended_runs(self, job_id: str) -> list[StepRun]:
+        rows = self._conn.execute(
+            "SELECT * FROM step_runs WHERE job_id = ? AND status = ?",
+            (job_id, StepRunStatus.SUSPENDED.value),
+        ).fetchall()
+        return [self._row_to_run(r) for r in rows]
+
+    def delegated_runs(self, job_id: str) -> list[StepRun]:
+        rows = self._conn.execute(
+            "SELECT * FROM step_runs WHERE job_id = ? AND status = ?",
+            (job_id, StepRunStatus.DELEGATED.value),
+        ).fetchall()
+        return [self._row_to_run(r) for r in rows]
+
+    def latest_run(self, job_id: str, step_name: str) -> StepRun | None:
+        """Latest run (any status) for a step — by attempt number."""
+        row = self._conn.execute(
+            "SELECT * FROM step_runs WHERE job_id = ? AND step_name = ? ORDER BY attempt DESC LIMIT 1",
+            (job_id, step_name),
+        ).fetchone()
+        return self._row_to_run(row) if row else None
+
+    def latest_completed_run(self, job_id: str, step_name: str) -> StepRun | None:
+        """Latest completed run for a step."""
+        row = self._conn.execute(
+            "SELECT * FROM step_runs WHERE job_id = ? AND step_name = ? AND status = ? ORDER BY attempt DESC LIMIT 1",
+            (job_id, step_name, StepRunStatus.COMPLETED.value),
+        ).fetchone()
+        return self._row_to_run(row) if row else None
+
+    def next_attempt(self, job_id: str, step_name: str) -> int:
+        row = self._conn.execute(
+            "SELECT MAX(attempt) as max_attempt FROM step_runs WHERE job_id = ? AND step_name = ?",
+            (job_id, step_name),
+        ).fetchone()
+        if row and row["max_attempt"] is not None:
+            return row["max_attempt"] + 1
+        return 1
+
+    def completed_run_count(self, job_id: str, step_name: str) -> int:
+        """Count of COMPLETED runs for a step (for iteration tracking)."""
+        row = self._conn.execute(
+            "SELECT COUNT(*) as cnt FROM step_runs WHERE job_id = ? AND step_name = ? AND status = ?",
+            (job_id, step_name, StepRunStatus.COMPLETED.value),
+        ).fetchone()
+        return row["cnt"] if row else 0
+
+    # ── Step Events (M4: fine-grained agent activity) ───────────────────
+
+    def save_step_event(self, run_id: str, event_type: str, data: dict | None = None) -> None:
+        from stepwise.models import _gen_id, _now
+        self._conn.execute(
+            "INSERT INTO step_events (id, run_id, timestamp, type, data) VALUES (?, ?, ?, ?, ?)",
+            (_gen_id("sevt"), run_id, _now().isoformat(), event_type, _dumps(data or {})),
+        )
+        self._conn.commit()
+
+    def save_step_events_batch(self, events: list[tuple[str, str, str, dict]]) -> None:
+        """Batch insert step events: [(run_id, timestamp, type, data), ...]"""
+        from stepwise.models import _gen_id
+        self._conn.executemany(
+            "INSERT INTO step_events (id, run_id, timestamp, type, data) VALUES (?, ?, ?, ?, ?)",
+            [(_gen_id("sevt"), run_id, ts, evt_type, _dumps(data)) for run_id, ts, evt_type, data in events],
+        )
+        self._conn.commit()
+
+    def load_step_events(self, run_id: str, since: str | None = None, limit: int = 200) -> list[dict]:
+        if since:
+            rows = self._conn.execute(
+                "SELECT * FROM step_events WHERE run_id = ? AND timestamp > ? ORDER BY timestamp LIMIT ?",
+                (run_id, since, limit),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM step_events WHERE run_id = ? ORDER BY timestamp LIMIT ?",
+                (run_id, limit),
+            ).fetchall()
+        return [{"id": r["id"], "run_id": r["run_id"], "timestamp": r["timestamp"],
+                 "type": r["type"], "data": json.loads(r["data"]) if r["data"] else {}} for r in rows]
+
+    def step_event_count(self, run_id: str) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) as cnt FROM step_events WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        return row["cnt"] if row else 0
+
+    def accumulated_cost(self, run_id: str) -> float:
+        """Sum cost from step_events for a run."""
+        row = self._conn.execute(
+            """SELECT SUM(json_extract(data, '$.cost_usd')) as total
+               FROM step_events WHERE run_id = ? AND type = 'cost'""",
+            (run_id,),
+        ).fetchone()
+        return float(row["total"]) if row and row["total"] else 0.0
 
     # ── Events ────────────────────────────────────────────────────────────
 
     def save_event(self, event: Event) -> None:
         self._conn.execute(
-            """
-            INSERT OR REPLACE INTO events
-                (id, job_id, event_type, step_name, data_json, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
+            """INSERT INTO events (id, job_id, timestamp, type, data, is_effector)
+            VALUES (?, ?, ?, ?, ?, ?)""",
             (
                 event.id,
                 event.job_id,
-                event.event_type.value,
-                event.step_name,
-                _dumps(event.data),
                 event.timestamp.isoformat(),
+                event.type,
+                _dumps(event.data),
+                1 if event.is_effector else 0,
             ),
         )
         self._conn.commit()
 
-    def load_events(
-        self,
-        job_id: str,
-        event_type: EventType | None = None,
-    ) -> list[Event]:
-        if event_type:
+    def load_events(self, job_id: str, since: datetime | None = None) -> list[Event]:
+        if since:
             rows = self._conn.execute(
-                "SELECT * FROM events WHERE job_id = ? AND event_type = ? ORDER BY timestamp",
-                (job_id, event_type.value),
+                "SELECT * FROM events WHERE job_id = ? AND timestamp >= ? ORDER BY timestamp",
+                (job_id, since.isoformat()),
             ).fetchall()
         else:
             rows = self._conn.execute(
                 "SELECT * FROM events WHERE job_id = ? ORDER BY timestamp",
                 (job_id,),
             ).fetchall()
+        return [self._row_to_event(r) for r in rows]
 
-        return [
-            Event(
-                id=r["id"],
-                job_id=r["job_id"],
-                event_type=EventType(r["event_type"]),
-                step_name=r["step_name"],
-                data=json.loads(r["data_json"]) if r["data_json"] else {},
-                timestamp=_parse_dt(r["timestamp"]),
-            )
-            for r in rows
-        ]
-
-    # ── Crash Recovery ────────────────────────────────────────────────────
-
-    def recover_job(self, job_id: str) -> Job | None:
-        """Load a job and reset any RUNNING steps to PENDING for re-execution."""
-        job = self.load_job(job_id)
-        if not job:
-            return None
-
-        changed = False
-        for sr in job.step_runs.values():
-            if sr.status == StepStatus.RUNNING:
-                sr.status = StepStatus.PENDING
-                sr.started_at = None
-                sr.error = None
-                changed = True
-
-        if job.status == JobStatus.RUNNING:
-            job.status = JobStatus.PENDING
-            changed = True
-
-        if changed:
-            self.save_job(job)
-
-        return job
+    def _row_to_event(self, row: sqlite3.Row) -> Event:
+        return Event(
+            id=row["id"],
+            job_id=row["job_id"],
+            timestamp=_parse_dt(row["timestamp"]),
+            type=row["type"],
+            data=json.loads(row["data"]) if row["data"] else {},
+            is_effector=bool(row["is_effector"]),
+        )
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
     def close(self) -> None:
         self._conn.close()
 
-
-def _parse_dt(s: str) -> datetime:
-    from datetime import datetime, timezone
-
-    dt = datetime.fromisoformat(s)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt
+    def new_connection(self) -> SQLiteStore:
+        """Create a new store from the same database file (for crash recovery testing)."""
+        return SQLiteStore(self._db_path)

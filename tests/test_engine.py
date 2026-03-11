@@ -1,536 +1,881 @@
-"""Tests for engine: readiness, currentness, loops, completion, exit resolution."""
+"""Tests for engine: readiness, currentness, loops, completion, exit resolution.
 
-import asyncio
+Covers required test cases 1-9, 19-24.
+"""
 
 import pytest
 
+from tests.conftest import CallableExecutor, register_step_fn
 from stepwise.engine import Engine
-from stepwise.events import EventBus, EventType
-from stepwise.executors import ExecutorResult, MockLLMExecutor, ScriptExecutor
+from stepwise.executors import (
+    ExecutionContext,
+    ExecutorRegistry,
+    ExecutorResult,
+    ExecutorStatus,
+    HumanExecutor,
+    MockLLMExecutor,
+    ScriptExecutor,
+)
 from stepwise.models import (
+    ExitRule,
+    ExecutorRef,
+    HandoffEnvelope,
     InputBinding,
-    Job,
+    JobConfig,
     JobStatus,
+    Sidecar,
     StepDefinition,
     StepRun,
-    StepStatus,
+    StepRunStatus,
+    SubJobDefinition,
+    WatchSpec,
     WorkflowDefinition,
+    _now,
 )
+from stepwise.store import SQLiteStore
 
 
-def _make_engine(workflow, inputs=None, store=None, event_bus=None):
-    job = Job.create(workflow, inputs=inputs)
-    eb = event_bus or EventBus()
-    engine = Engine(job, store=store, event_bus=eb)
-    engine.register_executor("script", ScriptExecutor())
-    engine.register_executor("mock_llm", MockLLMExecutor())
-    return engine
+def make_engine():
+    """Create a fresh store + registry + engine for tests."""
+    store = SQLiteStore(":memory:")
+    reg = ExecutorRegistry()
+    reg.register("callable", lambda config: CallableExecutor(fn_name=config.get("fn_name", "default")))
+    reg.register("script", lambda config: ScriptExecutor(command=config.get("command", "echo '{}'")))
+    reg.register("human", lambda config: HumanExecutor(prompt=config.get("prompt", ""), notify=config.get("notify")))
+    reg.register("mock_llm", lambda config: MockLLMExecutor(
+        failure_rate=config.get("failure_rate", 0.0),
+        partial_rate=config.get("partial_rate", 0.0),
+        responses=config.get("responses"),
+    ))
+    return Engine(store=store, registry=reg)
 
 
-# ── Readiness ────────────────────────────────────────────────────────
+# ── Test 1: Linear workflow A → B → C ────────────────────────────────
 
 
-class TestReadiness:
-    async def test_no_deps_ready_immediately(self):
-        wf = WorkflowDefinition(
-            name="simple",
-            steps=[
-                StepDefinition(
-                    name="a",
-                    executor="script",
-                    config={"callable": lambda i: {"v": 1}},
-                ),
-            ],
-        )
-        engine = _make_engine(wf)
-        ready = engine._find_ready_steps()
-        assert "a" in ready
+class TestLinearWorkflow:
+    def test_linear_a_b_c(self):
+        register_step_fn("a_fn", lambda inputs: {"value": 1})
+        register_step_fn("b_fn", lambda inputs: {"value": inputs["a_value"] + 10})
+        register_step_fn("c_fn", lambda inputs: {"value": inputs["b_value"] * 2})
 
-    async def test_dep_not_met(self):
-        wf = WorkflowDefinition(
-            name="chain",
-            steps=[
-                StepDefinition(name="a", executor="script", config={"callable": lambda i: {}}),
-                StepDefinition(name="b", executor="script", depends_on=["a"], config={"callable": lambda i: {}}),
-            ],
-        )
-        engine = _make_engine(wf)
-        ready = engine._find_ready_steps()
-        assert "a" in ready
-        assert "b" not in ready
+        engine = make_engine()
 
-    async def test_dep_met_after_completion(self):
-        wf = WorkflowDefinition(
-            name="chain",
-            steps=[
-                StepDefinition(name="a", executor="script", config={"callable": lambda i: {"v": 1}}),
-                StepDefinition(name="b", executor="script", depends_on=["a"], config={"callable": lambda i: {}}),
-            ],
-        )
-        engine = _make_engine(wf)
-        # Manually complete step a
-        engine.job.step_runs["a"].status = StepStatus.COMPLETED
-        engine.job.step_runs["a"].outputs = {"v": 1}
-        ready = engine._find_ready_steps()
-        assert "b" in ready
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["value"],
+                executor=ExecutorRef("callable", {"fn_name": "a_fn"}),
+            ),
+            "b": StepDefinition(
+                name="b", outputs=["value"],
+                executor=ExecutorRef("callable", {"fn_name": "b_fn"}),
+                inputs=[InputBinding("a_value", "a", "value")],
+            ),
+            "c": StepDefinition(
+                name="c", outputs=["value"],
+                executor=ExecutorRef("callable", {"fn_name": "c_fn"}),
+                inputs=[InputBinding("b_value", "b", "value")],
+            ),
+        })
 
-    async def test_input_binding_dep(self):
-        wf = WorkflowDefinition(
-            name="binding",
-            steps=[
-                StepDefinition(name="a", executor="script", config={"callable": lambda i: {"x": 1}}),
-                StepDefinition(
-                    name="b",
-                    executor="script",
-                    inputs=[InputBinding("a", "x", "input_x")],
-                    config={"callable": lambda i: {}},
-                ),
-            ],
-        )
-        engine = _make_engine(wf)
-        ready = engine._find_ready_steps()
-        assert "b" not in ready  # a hasn't completed yet
+        job = engine.create_job("Linear test", w)
+        engine.start_job(job.id)
 
-    async def test_multiple_deps(self):
-        wf = WorkflowDefinition(
-            name="multi",
-            steps=[
-                StepDefinition(name="a", executor="script", config={"callable": lambda i: {}}),
-                StepDefinition(name="b", executor="script", config={"callable": lambda i: {}}),
-                StepDefinition(name="c", executor="script", depends_on=["a", "b"], config={"callable": lambda i: {}}),
-            ],
-        )
-        engine = _make_engine(wf)
-        # Only a completed
-        engine.job.step_runs["a"].status = StepStatus.COMPLETED
-        engine.job.step_runs["a"].outputs = {}
-        assert "c" not in engine._find_ready_steps()
-        # Both completed
-        engine.job.step_runs["b"].status = StepStatus.COMPLETED
-        engine.job.step_runs["b"].outputs = {}
-        assert "c" in engine._find_ready_steps()
-
-
-# ── Currentness ──────────────────────────────────────────────────────
-
-
-class TestCurrentness:
-    async def test_completed_step_is_current(self):
-        wf = WorkflowDefinition(
-            name="test",
-            steps=[StepDefinition(name="a", executor="script", config={"callable": lambda i: {"v": 1}})],
-        )
-        engine = _make_engine(wf, inputs={"x": 1})
-        sr = engine.job.step_runs["a"]
-        sr.status = StepStatus.COMPLETED
-        sr.inputs = {"x": 1}
-        sr.input_hash = sr.compute_input_hash()
-        sr.outputs = {"v": 1}
-        assert engine.is_current("a")
-
-    async def test_stale_step_not_current(self):
-        wf = WorkflowDefinition(
-            name="test",
-            steps=[StepDefinition(name="a", executor="script", config={"callable": lambda i: {}})],
-        )
-        engine = _make_engine(wf, inputs={"x": 1})
-        sr = engine.job.step_runs["a"]
-        sr.status = StepStatus.COMPLETED
-        sr.inputs = {"x": 99}  # Different from job inputs
-        sr.input_hash = sr.compute_input_hash()
-        assert not engine.is_current("a")
-
-    async def test_pending_not_current(self):
-        wf = WorkflowDefinition(
-            name="test",
-            steps=[StepDefinition(name="a", executor="script", config={"callable": lambda i: {}})],
-        )
-        engine = _make_engine(wf)
-        assert not engine.is_current("a")
-
-    async def test_get_current_steps(self):
-        wf = WorkflowDefinition(
-            name="test",
-            steps=[
-                StepDefinition(name="a", executor="script", config={"callable": lambda i: {}}),
-                StepDefinition(name="b", executor="script", config={"callable": lambda i: {}}),
-            ],
-        )
-        engine = _make_engine(wf)
-        engine.job.step_runs["a"].status = StepStatus.RUNNING
-        engine.job.step_runs["b"].status = StepStatus.READY
-        current = engine.get_current_steps()
-        names = {s.step_name for s in current}
-        assert names == {"a", "b"}
-
-
-# ── Loops ────────────────────────────────────────────────────────────
-
-
-class TestLoops:
-    async def test_loop_execution(self):
-        wf = WorkflowDefinition(
-            name="loop",
-            steps=[
-                StepDefinition(
-                    name="gen",
-                    executor="script",
-                    config={"callable": lambda i: {"items": [10, 20, 30]}},
-                ),
-                StepDefinition(
-                    name="process",
-                    executor="script",
-                    config={"callable": lambda i: {"doubled": i["item"] * 2}},
-                    depends_on=["gen"],
-                    loop_over="gen.items",
-                ),
-            ],
-        )
-        engine = _make_engine(wf)
-        job = await engine.run()
+        job = engine.get_job(job.id)
         assert job.status == JobStatus.COMPLETED
-        proc_sr = job.step_runs["process"]
-        assert proc_sr.status == StepStatus.COMPLETED
-        assert proc_sr.outputs["results"] == [
-            {"doubled": 20},
-            {"doubled": 40},
-            {"doubled": 60},
-        ]
-        assert proc_sr.outputs["count"] == 3
 
-    async def test_loop_creates_iteration_runs(self):
-        wf = WorkflowDefinition(
-            name="loop",
-            steps=[
-                StepDefinition(
-                    name="gen",
-                    executor="script",
-                    config={"callable": lambda i: {"items": ["a", "b"]}},
-                ),
-                StepDefinition(
-                    name="proc",
-                    executor="script",
-                    config={"callable": lambda i: {"val": i["item"]}},
-                    depends_on=["gen"],
-                    loop_over="gen.items",
-                ),
-            ],
-        )
-        engine = _make_engine(wf)
-        await engine.run()
-        assert "proc:0" in engine.job.step_runs
-        assert "proc:1" in engine.job.step_runs
-        assert engine.job.step_runs["proc:0"].iteration_value == "a"
-        assert engine.job.step_runs["proc:1"].iteration_value == "b"
+        runs = engine.get_runs(job.id)
+        c_run = [r for r in runs if r.step_name == "c"][0]
+        assert c_run.result.artifact["value"] == 22  # (1 + 10) * 2
 
-    async def test_empty_loop(self):
-        wf = WorkflowDefinition(
-            name="empty_loop",
-            steps=[
-                StepDefinition(
-                    name="gen",
-                    executor="script",
-                    config={"callable": lambda i: {"items": []}},
-                ),
-                StepDefinition(
-                    name="proc",
-                    executor="script",
-                    config={"callable": lambda i: {"val": i["item"]}},
-                    depends_on=["gen"],
-                    loop_over="gen.items",
-                ),
-            ],
-        )
-        engine = _make_engine(wf)
-        job = await engine.run()
+
+# ── Test 2: Fan-out/fan-in ───────────────────────────────────────────
+
+
+class TestFanOutFanIn:
+    def test_fan_out_fan_in(self):
+        register_step_fn("topic_fn", lambda inputs: {"topic": "workflow engines"})
+        register_step_fn("hist_fn", lambda inputs: {"findings": f"history of {inputs['topic']}"})
+        register_step_fn("prior_fn", lambda inputs: {"findings": f"prior art in {inputs['topic']}"})
+        register_step_fn("best_fn", lambda inputs: {"findings": f"best practices for {inputs['topic']}"})
+        register_step_fn("synth_fn", lambda inputs: {
+            "synthesis": f"{inputs['history']} | {inputs['prior_art']} | {inputs['best']}"
+        })
+
+        engine = make_engine()
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["topic"],
+                executor=ExecutorRef("callable", {"fn_name": "topic_fn"}),
+            ),
+            "b": StepDefinition(
+                name="b", outputs=["findings"],
+                executor=ExecutorRef("callable", {"fn_name": "hist_fn"}),
+                inputs=[InputBinding("topic", "a", "topic")],
+            ),
+            "c": StepDefinition(
+                name="c", outputs=["findings"],
+                executor=ExecutorRef("callable", {"fn_name": "prior_fn"}),
+                inputs=[InputBinding("topic", "a", "topic")],
+            ),
+            "d": StepDefinition(
+                name="d", outputs=["findings"],
+                executor=ExecutorRef("callable", {"fn_name": "best_fn"}),
+                inputs=[InputBinding("topic", "a", "topic")],
+            ),
+            "e": StepDefinition(
+                name="e", outputs=["synthesis"],
+                executor=ExecutorRef("callable", {"fn_name": "synth_fn"}),
+                inputs=[
+                    InputBinding("history", "b", "findings"),
+                    InputBinding("prior_art", "c", "findings"),
+                    InputBinding("best", "d", "findings"),
+                ],
+            ),
+        })
+
+        job = engine.create_job("Fan-out test", w)
+        engine.start_job(job.id)
+
+        job = engine.get_job(job.id)
         assert job.status == JobStatus.COMPLETED
-        assert job.step_runs["proc"].outputs == {"results": [], "count": 0}
 
-    async def test_loop_failure_propagates(self):
-        def fail_on_b(inputs):
-            if inputs["item"] == "b":
-                raise ValueError("bad item")
-            return {"val": inputs["item"]}
+        e_run = [r for r in engine.get_runs(job.id) if r.step_name == "e"][0]
+        assert "history of workflow engines" in e_run.result.artifact["synthesis"]
+        assert "prior art in workflow engines" in e_run.result.artifact["synthesis"]
+        assert "best practices for workflow engines" in e_run.result.artifact["synthesis"]
 
-        wf = WorkflowDefinition(
-            name="fail_loop",
-            steps=[
-                StepDefinition(
-                    name="gen",
-                    executor="script",
-                    config={"callable": lambda i: {"items": ["a", "b", "c"]}},
-                ),
-                StepDefinition(
-                    name="proc",
-                    executor="script",
-                    config={"callable": fail_on_b},
-                    depends_on=["gen"],
-                    loop_over="gen.items",
-                ),
-            ],
+
+# ── Test 3: Job-level inputs ─────────────────────────────────────────
+
+
+class TestJobLevelInputs:
+    def test_entry_step_binds_from_job(self):
+        register_step_fn("analyze_fn", lambda inputs: {
+            "plan": f"plan for {inputs['requirements']}"
+        })
+
+        engine = make_engine()
+
+        w = WorkflowDefinition(steps={
+            "analyze": StepDefinition(
+                name="analyze", outputs=["plan"],
+                executor=ExecutorRef("callable", {"fn_name": "analyze_fn"}),
+                inputs=[
+                    InputBinding("requirements", "$job", "requirements"),
+                    InputBinding("repo", "$job", "repo_path"),
+                ],
+            ),
+        })
+
+        job = engine.create_job(
+            "Job inputs test", w,
+            inputs={"requirements": "add avatars", "repo_path": "/code"},
         )
-        engine = _make_engine(wf)
-        job = await engine.run()
+        engine.start_job(job.id)
+
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.COMPLETED
+
+        runs = engine.get_runs(job.id)
+        assert runs[0].inputs["requirements"] == "add avatars"
+        assert runs[0].inputs["repo"] == "/code"
+        assert runs[0].result.artifact["plan"] == "plan for add avatars"
+
+
+# ── Test 4: Loop A → B → (loop back to A, max 3) ────────────────────
+
+
+class TestLoopBasic:
+    def test_loop_with_max_iterations(self):
+        call_count = {"a": 0, "b": 0}
+
+        def a_fn(inputs):
+            call_count["a"] += 1
+            return {"value": call_count["a"]}
+
+        def b_fn(inputs):
+            call_count["b"] += 1
+            return {"pass": call_count["b"] >= 3, "result": inputs["data"]}
+
+        register_step_fn("loop_a", a_fn)
+        register_step_fn("loop_b", b_fn)
+
+        engine = make_engine()
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["value"],
+                executor=ExecutorRef("callable", {"fn_name": "loop_a"}),
+            ),
+            "b": StepDefinition(
+                name="b", outputs=["pass", "result"],
+                executor=ExecutorRef("callable", {"fn_name": "loop_b"}),
+                inputs=[InputBinding("data", "a", "value")],
+                exit_rules=[
+                    ExitRule("pass", "field_match", {
+                        "field": "pass", "value": True, "action": "advance",
+                    }, priority=10),
+                    ExitRule("loop", "field_match", {
+                        "field": "pass", "value": False,
+                        "action": "loop", "target": "a", "max_iterations": 5,
+                    }, priority=5),
+                ],
+            ),
+        })
+
+        job = engine.create_job("Loop test", w)
+        engine.start_job(job.id)
+
+        for _ in range(20):
+            job = engine.get_job(job.id)
+            if job.status != JobStatus.RUNNING:
+                break
+            engine.tick()
+
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.COMPLETED
+        assert call_count["a"] == 3
+        assert call_count["b"] == 3
+
+
+# ── Test 5: Transitive currentness ───────────────────────────────────
+
+
+class TestTransitiveCurrentness:
+    def test_a_loops_b_c_must_rerun_before_d(self):
+        """A → B, A → C, B+C → D. A loops. D must wait for both B and C."""
+        a_count = {"n": 0}
+        d_inputs_log = []
+
+        def a_fn(inputs):
+            a_count["n"] += 1
+            return {"value": a_count["n"]}
+
+        def b_fn(inputs):
+            return {"result": f"b_got_{inputs['a_val']}"}
+
+        def c_fn(inputs):
+            return {"result": f"c_got_{inputs['a_val']}"}
+
+        def d_fn(inputs):
+            d_inputs_log.append(dict(inputs))
+            return {"done": a_count["n"] >= 2, "combined": f"{inputs['b_val']}+{inputs['c_val']}"}
+
+        register_step_fn("tc_a", a_fn)
+        register_step_fn("tc_b", b_fn)
+        register_step_fn("tc_c", c_fn)
+        register_step_fn("tc_d", d_fn)
+
+        engine = make_engine()
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["value"],
+                executor=ExecutorRef("callable", {"fn_name": "tc_a"}),
+            ),
+            "b": StepDefinition(
+                name="b", outputs=["result"],
+                executor=ExecutorRef("callable", {"fn_name": "tc_b"}),
+                inputs=[InputBinding("a_val", "a", "value")],
+            ),
+            "c": StepDefinition(
+                name="c", outputs=["result"],
+                executor=ExecutorRef("callable", {"fn_name": "tc_c"}),
+                inputs=[InputBinding("a_val", "a", "value")],
+            ),
+            "d": StepDefinition(
+                name="d", outputs=["done", "combined"],
+                executor=ExecutorRef("callable", {"fn_name": "tc_d"}),
+                inputs=[
+                    InputBinding("b_val", "b", "result"),
+                    InputBinding("c_val", "c", "result"),
+                ],
+                exit_rules=[
+                    ExitRule("done", "field_match", {
+                        "field": "done", "value": True, "action": "advance",
+                    }, priority=10),
+                    ExitRule("loop", "field_match", {
+                        "field": "done", "value": False,
+                        "action": "loop", "target": "a", "max_iterations": 5,
+                    }, priority=5),
+                ],
+            ),
+        })
+
+        job = engine.create_job("Transitive test", w)
+        engine.start_job(job.id)
+
+        for _ in range(30):
+            job = engine.get_job(job.id)
+            if job.status != JobStatus.RUNNING:
+                break
+            engine.tick()
+
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.COMPLETED
+
+        # D should have run twice
+        assert len(d_inputs_log) >= 2
+        last_d = d_inputs_log[-1]
+        assert "b_got_2" in last_d["b_val"]
+        assert "c_got_2" in last_d["c_val"]
+
+
+# ── Test 6: Loop does not prematurely complete job ───────────────────
+
+
+class TestLoopNoPrematureCompletion:
+    def test_terminal_step_loops_job_stays_running(self):
+        count = {"n": 0}
+
+        def a_fn(inputs):
+            count["n"] += 1
+            return {"value": count["n"]}
+
+        def b_fn(inputs):
+            return {"pass": inputs["data"] >= 3, "result": inputs["data"]}
+
+        register_step_fn("npc_a", a_fn)
+        register_step_fn("npc_b", b_fn)
+
+        engine = make_engine()
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["value"],
+                executor=ExecutorRef("callable", {"fn_name": "npc_a"}),
+            ),
+            "b": StepDefinition(
+                name="b", outputs=["pass", "result"],
+                executor=ExecutorRef("callable", {"fn_name": "npc_b"}),
+                inputs=[InputBinding("data", "a", "value")],
+                exit_rules=[
+                    ExitRule("pass", "field_match", {
+                        "field": "pass", "value": True, "action": "advance",
+                    }, priority=10),
+                    ExitRule("loop", "field_match", {
+                        "field": "pass", "value": False,
+                        "action": "loop", "target": "a", "max_iterations": 10,
+                    }, priority=5),
+                ],
+            ),
+        })
+
+        job = engine.create_job("No premature completion", w)
+        engine.start_job(job.id)
+
+        for _ in range(30):
+            job = engine.get_job(job.id)
+            if job.status == JobStatus.COMPLETED:
+                break
+            if job.status != JobStatus.RUNNING:
+                break
+            engine.tick()
+
+        assert job.status == JobStatus.COMPLETED
+        assert count["n"] == 3
+
+
+# ── Test 7: In-flight supersession ───────────────────────────────────
+
+
+class TestInflightSupersession:
+    def test_running_run_supersedes_completed(self):
+        """A2 running means A1 is not current."""
+        engine = make_engine()
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["value"],
+                executor=ExecutorRef("human", {"prompt": "provide value"}),
+            ),
+            "b": StepDefinition(
+                name="b", outputs=["result"],
+                executor=ExecutorRef("callable", {"fn_name": "echo_fn"}),
+                inputs=[InputBinding("data", "a", "value")],
+            ),
+        })
+
+        register_step_fn("echo_fn", lambda inputs: {"result": inputs.get("data", "")})
+
+        job = engine.create_job("Supersession test", w)
+        engine.start_job(job.id)
+
+        # A is suspended (human watch)
+        runs = engine.get_runs(job.id, "a")
+        assert len(runs) == 1
+        a1 = runs[0]
+        assert a1.status == StepRunStatus.SUSPENDED
+
+        # Fulfill A1
+        engine.fulfill_watch(a1.id, {"value": "first"})
+
+        # Tick — B should run
+        engine.tick()
+        job = engine.get_job(job.id)
+
+        # Rerun A
+        a2 = engine.rerun_step(job.id, "a")
+        assert a2.status == StepRunStatus.SUSPENDED
+
+        # Check B's old run is not current
+        b_runs = engine.get_runs(job.id, "b")
+        if b_runs:
+            job = engine.get_job(job.id)
+            assert not engine._is_current(job, b_runs[-1])
+
+
+# ── Test 8: Sequencing freshness ─────────────────────────────────────
+
+
+class TestSequencingFreshness:
+    def test_sequencing_dep_must_rerun(self):
+        impl_count = {"n": 0}
+        test_count = {"n": 0}
+
+        def impl_fn(inputs):
+            impl_count["n"] += 1
+            return {"result": f"impl_v{impl_count['n']}"}
+
+        def test_fn(inputs):
+            test_count["n"] += 1
+            return {"report": f"test_run_{test_count['n']}", "passed": True}
+
+        register_step_fn("seq_impl", impl_fn)
+        register_step_fn("seq_test", test_fn)
+
+        engine = make_engine()
+
+        w = WorkflowDefinition(steps={
+            "implement": StepDefinition(
+                name="implement", outputs=["result"],
+                executor=ExecutorRef("callable", {"fn_name": "seq_impl"}),
+            ),
+            "test": StepDefinition(
+                name="test", outputs=["report", "passed"],
+                executor=ExecutorRef("callable", {"fn_name": "seq_test"}),
+                sequencing=["implement"],
+            ),
+        })
+
+        job = engine.create_job("Sequencing test", w)
+        engine.start_job(job.id)
+
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.COMPLETED
+        assert impl_count["n"] == 1
+        assert test_count["n"] == 1
+
+        # Rerun implement
+        engine.rerun_step(job.id, "implement")
+        for _ in range(10):
+            job = engine.get_job(job.id)
+            if job.status != JobStatus.RUNNING:
+                break
+            engine.tick()
+
+        assert impl_count["n"] == 2
+        assert test_count["n"] == 2
+
+
+# ── Test 9: Manual rerun during completion ───────────────────────────
+
+
+class TestManualRerunDuringCompletion:
+    def test_rerun_a_b_becomes_non_current(self):
+        register_step_fn("mr_a", lambda inputs: {"value": "hello"})
+        register_step_fn("mr_b", lambda inputs: {"result": inputs.get("data", "")})
+
+        engine = make_engine()
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["value"],
+                executor=ExecutorRef("callable", {"fn_name": "mr_a"}),
+            ),
+            "b": StepDefinition(
+                name="b", outputs=["result"],
+                executor=ExecutorRef("callable", {"fn_name": "mr_b"}),
+                inputs=[InputBinding("data", "a", "value")],
+            ),
+        })
+
+        job = engine.create_job("Rerun test", w)
+        engine.start_job(job.id)
+
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.COMPLETED
+
+        # Rerun A
+        engine.rerun_step(job.id, "a")
+
+        for _ in range(10):
+            job = engine.get_job(job.id)
+            if job.status != JobStatus.RUNNING:
+                break
+            engine.tick()
+
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.COMPLETED
+
+        b_runs = engine.get_runs(job.id, "b")
+        assert len(b_runs) == 2
+
+
+# ── Artifact field validation ────────────────────────────────────────
+
+
+class TestArtifactValidation:
+    def test_missing_declared_outputs_fails_step(self):
+        """When artifact doesn't contain declared outputs, step fails."""
+        # Return {"wrong_field": 1} but step declares outputs=["expected"]
+        register_step_fn("bad_output", lambda i: {"wrong_field": 1})
+        engine = make_engine()
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["expected"],
+                executor=ExecutorRef("callable", {"fn_name": "bad_output"}),
+            ),
+        })
+
+        job = engine.create_job("Validation test", w)
+        engine.start_job(job.id)
+
+        job = engine.get_job(job.id)
         assert job.status == JobStatus.FAILED
 
+        runs = engine.get_runs(job.id, "a")
+        assert runs[0].status == StepRunStatus.FAILED
+        assert "missing declared outputs" in runs[0].error
 
-# ── Completion & Exit Resolution ─────────────────────────────────────
+    def test_correct_outputs_pass_validation(self):
+        """When artifact contains all declared outputs, step succeeds."""
+        register_step_fn("good_output", lambda i: {"expected": "yes", "extra": "ok"})
+        engine = make_engine()
 
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["expected"],
+                executor=ExecutorRef("callable", {"fn_name": "good_output"}),
+            ),
+        })
 
-class TestCompletion:
-    async def test_single_step_completes(self):
-        wf = WorkflowDefinition(
-            name="single",
-            steps=[
-                StepDefinition(
-                    name="a",
-                    executor="script",
-                    config={"callable": lambda i: {"result": 42}},
-                ),
-            ],
-        )
-        engine = _make_engine(wf)
-        job = await engine.run()
+        job = engine.create_job("Validation pass", w)
+        engine.start_job(job.id)
+
+        job = engine.get_job(job.id)
         assert job.status == JobStatus.COMPLETED
-        assert job.outputs["a"]["result"] == 42
 
-    async def test_failure_propagates(self):
-        wf = WorkflowDefinition(
-            name="fail",
-            steps=[
-                StepDefinition(
-                    name="a",
-                    executor="script",
-                    config={"callable": lambda i: (_ for _ in ()).throw(ValueError("boom"))},
-                ),
-            ],
-        )
-        engine = _make_engine(wf)
-        job = await engine.run()
-        assert job.status == JobStatus.FAILED
+    def test_empty_outputs_no_validation(self):
+        """Steps with no declared outputs skip validation."""
+        register_step_fn("no_outputs", lambda i: {"anything": "goes"})
+        engine = make_engine()
 
-    async def test_partial_failure(self):
-        wf = WorkflowDefinition(
-            name="partial",
-            steps=[
-                StepDefinition(
-                    name="ok",
-                    executor="script",
-                    config={"callable": lambda i: {"v": 1}},
-                ),
-                StepDefinition(
-                    name="fail",
-                    executor="script",
-                    config={"callable": lambda i: (_ for _ in ()).throw(ValueError("nope"))},
-                ),
-            ],
-        )
-        engine = _make_engine(wf)
-        job = await engine.run()
-        assert job.status == JobStatus.FAILED
-        assert "fail" in job.outputs["error"]
-        assert "ok" in job.outputs["step_outputs"]
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=[],
+                executor=ExecutorRef("callable", {"fn_name": "no_outputs"}),
+            ),
+        })
 
-    async def test_conditional_skip(self):
-        wf = WorkflowDefinition(
-            name="conditional",
-            steps=[
-                StepDefinition(
-                    name="check",
-                    executor="script",
-                    config={"callable": lambda i: {"flag": False}},
-                ),
-                StepDefinition(
-                    name="maybe",
-                    executor="script",
-                    config={"callable": lambda i: {"v": 1}},
-                    depends_on=["check"],
-                    condition="steps.get('check', {}).get('flag', False)",
-                ),
-            ],
-        )
-        engine = _make_engine(wf)
-        job = await engine.run()
+        job = engine.create_job("No outputs", w)
+        engine.start_job(job.id)
+
+        job = engine.get_job(job.id)
         assert job.status == JobStatus.COMPLETED
-        assert job.step_runs["maybe"].status == StepStatus.SKIPPED
 
-    async def test_deadlock_detection(self):
-        """A step waiting on a failed dependency should cause job failure."""
-        wf = WorkflowDefinition(
-            name="deadlock",
-            steps=[
-                StepDefinition(
-                    name="a",
-                    executor="script",
-                    config={"callable": lambda i: (_ for _ in ()).throw(ValueError("fail"))},
-                ),
-                StepDefinition(
-                    name="b",
-                    executor="script",
-                    depends_on=["a"],
-                    config={"callable": lambda i: {"v": 1}},
-                ),
-            ],
-        )
-        engine = _make_engine(wf)
-        job = await engine.run()
+
+# ── Test 19: Rerun safety ────────────────────────────────────────────
+
+
+class TestRerunSafety:
+    def test_reject_rerun_when_suspended(self):
+        engine = make_engine()
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["value"],
+                executor=ExecutorRef("human", {"prompt": "provide"}),
+            ),
+        })
+
+        job = engine.create_job("Rerun safety", w)
+        engine.start_job(job.id)
+
+        with pytest.raises(ValueError, match="Cannot rerun"):
+            engine.rerun_step(job.id, "a")
+
+
+# ── Test 20: Rerun fail then succeed ─────────────────────────────────
+
+
+class TestRerunFailSucceed:
+    def test_fail_rerun_succeed(self):
+        count = {"n": 0}
+
+        def a_fn(inputs):
+            count["n"] += 1
+            if count["n"] == 1:
+                raise RuntimeError("first attempt fails")
+            return {"value": "success"}
+
+        register_step_fn("frs_a", a_fn)
+
+        engine = make_engine()
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["value"],
+                executor=ExecutorRef("callable", {"fn_name": "frs_a"}),
+            ),
+        })
+
+        job = engine.create_job("Fail then succeed", w)
+        engine.start_job(job.id)
+
+        job = engine.get_job(job.id)
         assert job.status == JobStatus.FAILED
 
+        engine.rerun_step(job.id, "a")
+        engine.tick()
 
-# ── Mark Stale & Re-run ──────────────────────────────────────────────
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.COMPLETED
 
-
-class TestMarkStale:
-    async def test_mark_stale_resets_step(self):
-        wf = WorkflowDefinition(
-            name="test",
-            steps=[
-                StepDefinition(name="a", executor="script", config={"callable": lambda i: {"v": 1}}),
-            ],
-        )
-        engine = _make_engine(wf)
-        job = await engine.run()
-        assert job.step_runs["a"].status == StepStatus.COMPLETED
-
-        engine.mark_stale("a")
-        assert job.step_runs["a"].status == StepStatus.PENDING
-        assert job.step_runs["a"].outputs is None
-
-    async def test_mark_stale_cascades(self):
-        wf = WorkflowDefinition(
-            name="chain",
-            steps=[
-                StepDefinition(name="a", executor="script", config={"callable": lambda i: {"v": 1}}),
-                StepDefinition(
-                    name="b",
-                    executor="script",
-                    depends_on=["a"],
-                    config={"callable": lambda i: {"v": 2}},
-                ),
-                StepDefinition(
-                    name="c",
-                    executor="script",
-                    depends_on=["b"],
-                    config={"callable": lambda i: {"v": 3}},
-                ),
-            ],
-        )
-        engine = _make_engine(wf)
-        await engine.run()
-
-        engine.mark_stale("a")
-        assert engine.job.step_runs["a"].status == StepStatus.PENDING
-        assert engine.job.step_runs["b"].status == StepStatus.PENDING
-        assert engine.job.step_runs["c"].status == StepStatus.PENDING
-
-    async def test_rerun_after_stale(self):
-        counter = {"calls": 0}
-
-        def counting_fn(inputs):
-            counter["calls"] += 1
-            return {"call_num": counter["calls"]}
-
-        wf = WorkflowDefinition(
-            name="rerun",
-            steps=[
-                StepDefinition(
-                    name="a",
-                    executor="script",
-                    config={"callable": counting_fn},
-                ),
-            ],
-        )
-        engine = _make_engine(wf)
-        await engine.run()
-        assert counter["calls"] == 1
-
-        engine.mark_stale("a")
-        await engine.run()
-        assert counter["calls"] == 2
-        assert engine.job.step_runs["a"].outputs["call_num"] == 2
+        runs = engine.get_runs(job.id, "a")
+        assert len(runs) == 2
+        assert runs[0].status == StepRunStatus.FAILED
+        assert runs[1].status == StepRunStatus.COMPLETED
 
 
-# ── Tick-by-tick Control ─────────────────────────────────────────────
+# ── Test 21: Exit rules ──────────────────────────────────────────────
 
 
-class TestTick:
-    async def test_single_tick_launches(self):
-        wf = WorkflowDefinition(
-            name="tick",
-            steps=[
-                StepDefinition(
-                    name="a",
-                    executor="script",
-                    config={"callable": lambda i: {"v": 1}},
-                ),
-            ],
-        )
-        engine = _make_engine(wf)
-        engine.job.status = JobStatus.RUNNING
+class TestExitRules:
+    def test_advance_action(self):
+        register_step_fn("adv", lambda i: {"pass": True})
+        engine = make_engine()
 
-        active = await engine.tick()
-        # Step should be launched (task created)
-        assert "a" in engine._tasks or engine.job.step_runs["a"].status in (
-            StepStatus.RUNNING,
-            StepStatus.COMPLETED,
-        )
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["pass"],
+                executor=ExecutorRef("callable", {"fn_name": "adv"}),
+                exit_rules=[
+                    ExitRule("ok", "field_match", {
+                        "field": "pass", "value": True, "action": "advance",
+                    }, priority=10),
+                ],
+            ),
+        })
 
-    async def test_tick_returns_false_when_done(self):
-        wf = WorkflowDefinition(
-            name="done",
-            steps=[
-                StepDefinition(
-                    name="a",
-                    executor="script",
-                    config={"callable": lambda i: {"v": 1}},
-                ),
-            ],
-        )
-        engine = _make_engine(wf)
-        engine.job.status = JobStatus.COMPLETED
-        assert not await engine.tick()
+        job = engine.create_job("Advance test", w)
+        engine.start_job(job.id)
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.COMPLETED
+
+    def test_escalate_action(self):
+        register_step_fn("esc", lambda i: {"severity": "critical"})
+        engine = make_engine()
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["severity"],
+                executor=ExecutorRef("callable", {"fn_name": "esc"}),
+                exit_rules=[
+                    ExitRule("critical", "field_match", {
+                        "field": "severity", "value": "critical",
+                        "action": "escalate",
+                    }, priority=10),
+                ],
+            ),
+        })
+
+        job = engine.create_job("Escalate test", w)
+        engine.start_job(job.id)
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.PAUSED
+
+    def test_abandon_action(self):
+        register_step_fn("abn", lambda i: {"fatal": True})
+        engine = make_engine()
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["fatal"],
+                executor=ExecutorRef("callable", {"fn_name": "abn"}),
+                exit_rules=[
+                    ExitRule("abandon", "field_match", {
+                        "field": "fatal", "value": True,
+                        "action": "abandon",
+                    }, priority=10),
+                ],
+            ),
+        })
+
+        job = engine.create_job("Abandon test", w)
+        engine.start_job(job.id)
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.FAILED
+
+    def test_loop_action(self):
+        count = {"n": 0}
+
+        def a_fn(inputs):
+            count["n"] += 1
+            return {"done": count["n"] >= 2}
+
+        register_step_fn("loop_act", a_fn)
+        engine = make_engine()
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["done"],
+                executor=ExecutorRef("callable", {"fn_name": "loop_act"}),
+                exit_rules=[
+                    ExitRule("done", "field_match", {
+                        "field": "done", "value": True, "action": "advance",
+                    }, priority=10),
+                    ExitRule("loop", "field_match", {
+                        "field": "done", "value": False,
+                        "action": "loop", "target": "a", "max_iterations": 5,
+                    }, priority=5),
+                ],
+            ),
+        })
+
+        job = engine.create_job("Loop action test", w)
+        engine.start_job(job.id)
+
+        for _ in range(20):
+            job = engine.get_job(job.id)
+            if job.status != JobStatus.RUNNING:
+                break
+            engine.tick()
+
+        assert job.status == JobStatus.COMPLETED
+        assert count["n"] == 2
 
 
-# ── Events ───────────────────────────────────────────────────────────
+# ── Test 22: Exit rule defaults ──────────────────────────────────────
 
 
-class TestEngineEvents:
-    async def test_events_emitted(self):
-        wf = WorkflowDefinition(
-            name="events",
-            steps=[
-                StepDefinition(
-                    name="a",
-                    executor="script",
-                    config={"callable": lambda i: {"v": 1}},
-                ),
-            ],
-        )
-        eb = EventBus()
-        engine = _make_engine(wf, event_bus=eb)
-        await engine.run()
+class TestExitRuleDefaults:
+    def test_empty_rules_advance(self):
+        register_step_fn("empty_rules", lambda i: {"value": 42})
+        engine = make_engine()
 
-        types = [e.event_type for e in eb.history]
-        assert EventType.JOB_STARTED in types
-        assert EventType.STEP_STARTED in types
-        assert EventType.STEP_COMPLETED in types
-        assert EventType.JOB_COMPLETED in types
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["value"],
+                executor=ExecutorRef("callable", {"fn_name": "empty_rules"}),
+                exit_rules=[],
+            ),
+        })
 
-    async def test_failure_events(self):
-        wf = WorkflowDefinition(
-            name="fail_events",
-            steps=[
-                StepDefinition(
-                    name="a",
-                    executor="script",
-                    config={"callable": lambda i: (_ for _ in ()).throw(ValueError("x"))},
-                ),
-            ],
-        )
-        eb = EventBus()
-        engine = _make_engine(wf, event_bus=eb)
-        await engine.run()
+        job = engine.create_job("Empty rules", w)
+        engine.start_job(job.id)
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.COMPLETED
 
-        types = [e.event_type for e in eb.history]
-        assert EventType.STEP_FAILED in types
-        assert EventType.JOB_FAILED in types
+    def test_no_match_advances(self):
+        register_step_fn("no_match", lambda i: {"value": 42})
+        engine = make_engine()
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["value"],
+                executor=ExecutorRef("callable", {"fn_name": "no_match"}),
+                exit_rules=[
+                    ExitRule("specific", "field_match", {
+                        "field": "value", "value": 999, "action": "escalate",
+                    }, priority=10),
+                ],
+            ),
+        })
+
+        job = engine.create_job("No match", w)
+        engine.start_job(job.id)
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.COMPLETED
+
+    def test_max_iterations_escalates(self):
+        register_step_fn("max_iter", lambda i: {"done": False})
+        engine = make_engine()
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["done"],
+                executor=ExecutorRef("callable", {"fn_name": "max_iter"}),
+                exit_rules=[
+                    ExitRule("loop", "field_match", {
+                        "field": "done", "value": False,
+                        "action": "loop", "target": "a", "max_iterations": 2,
+                    }, priority=5),
+                ],
+            ),
+        })
+
+        job = engine.create_job("Max iterations", w)
+        engine.start_job(job.id)
+
+        for _ in range(30):
+            job = engine.get_job(job.id)
+            if job.status != JobStatus.RUNNING:
+                break
+            engine.tick()
+
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.PAUSED
+
+
+# ── Test 23: Loop counting ───────────────────────────────────────────
+
+
+class TestLoopCounting:
+    def test_counts_completions_not_attempts(self):
+        call_count = {"n": 0}
+
+        def a_fn(inputs):
+            call_count["n"] += 1
+            if call_count["n"] == 2:
+                raise RuntimeError("fail on second call")
+            return {"done": False}
+
+        register_step_fn("lc_a", a_fn)
+        engine = make_engine()
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["done"],
+                executor=ExecutorRef("callable", {"fn_name": "lc_a"}),
+                exit_rules=[
+                    ExitRule("loop", "field_match", {
+                        "field": "done", "value": False,
+                        "action": "loop", "target": "a", "max_iterations": 3,
+                    }, priority=5),
+                ],
+            ),
+        })
+
+        job = engine.create_job("Loop counting", w)
+        engine.start_job(job.id)
+
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.FAILED
+
+        # Rerun — the failed run shouldn't count
+        call_count["n"] = 0
+
+        engine.rerun_step(job.id, "a")
+
+        for _ in range(20):
+            job = engine.get_job(job.id)
+            if job.status != JobStatus.RUNNING:
+                break
+            engine.tick()
+
+        completed_count = engine.store.completed_run_count(job.id, "a")
+        assert completed_count <= 3

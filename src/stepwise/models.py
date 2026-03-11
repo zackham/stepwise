@@ -1,9 +1,12 @@
-"""Core data structures: Job, StepDefinition, StepRun, InputBinding, etc."""
+"""Core data structures for Stepwise workflow engine.
+
+Job, WorkflowDefinition, StepDefinition, StepRun, InputBinding,
+ExecutorRef, DecoratorRef, ExitRule, HandoffEnvelope, Sidecar,
+SubJobDefinition, WatchSpec, and all enums.
+"""
 
 from __future__ import annotations
 
-import hashlib
-import json
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
@@ -12,236 +15,344 @@ from enum import Enum
 from typing import Any
 
 
-class StepStatus(Enum):
-    PENDING = "pending"
-    READY = "ready"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    SKIPPED = "skipped"
-    CANCELLED = "cancelled"
+def _gen_id(prefix: str = "id") -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:8]}"
 
 
-TERMINAL_STEP_STATUSES = frozenset(
-    {StepStatus.COMPLETED, StepStatus.FAILED, StepStatus.SKIPPED, StepStatus.CANCELLED}
-)
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+# ── Enums ──────────────────────────────────────────────────────────────
 
 
 class JobStatus(Enum):
     PENDING = "pending"
     RUNNING = "running"
+    PAUSED = "paused"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
 
 
-TERMINAL_JOB_STATUSES = frozenset(
-    {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}
-)
+class StepRunStatus(Enum):
+    RUNNING = "running"
+    SUSPENDED = "suspended"
+    DELEGATED = "delegated"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+# ── Step Limits ───────────────────────────────────────────────────────
+
+
+@dataclass
+class StepLimits:
+    """Cost and time limits enforced by the engine."""
+    max_cost_usd: float | None = None
+    max_duration_minutes: float | None = None
+    max_iterations: int | None = None  # loop bound (cheap steps can iterate fast)
+
+    def to_dict(self) -> dict:
+        d: dict = {}
+        if self.max_cost_usd is not None:
+            d["max_cost_usd"] = self.max_cost_usd
+        if self.max_duration_minutes is not None:
+            d["max_duration_minutes"] = self.max_duration_minutes
+        if self.max_iterations is not None:
+            d["max_iterations"] = self.max_iterations
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> StepLimits:
+        return cls(
+            max_cost_usd=d.get("max_cost_usd"),
+            max_duration_minutes=d.get("max_duration_minutes"),
+            max_iterations=d.get("max_iterations"),
+        )
+
+
+# ── Serializable References ────────────────────────────────────────────
+
+
+@dataclass
+class DecoratorRef:
+    type: str  # "timeout", "retry", "notification", "fallback"
+    config: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {"type": self.type, "config": self.config}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> DecoratorRef:
+        return cls(type=d["type"], config=d.get("config", {}))
+
+
+@dataclass
+class ExecutorRef:
+    type: str  # registered name: "script", "mock_llm", "human", etc.
+    config: dict = field(default_factory=dict)
+    decorators: list[DecoratorRef] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "type": self.type,
+            "config": self.config,
+            "decorators": [d.to_dict() for d in self.decorators],
+        }
+
+    def with_config(self, extra: dict) -> ExecutorRef:
+        """Return a copy with additional config keys merged in."""
+        return ExecutorRef(
+            type=self.type,
+            config={**self.config, **extra},
+            decorators=self.decorators,
+        )
+
+    @classmethod
+    def from_dict(cls, d: dict) -> ExecutorRef:
+        return cls(
+            type=d["type"],
+            config=d.get("config", {}),
+            decorators=[DecoratorRef.from_dict(dr) for dr in d.get("decorators", [])],
+        )
+
+
+@dataclass
+class ExitRule:
+    name: str
+    type: str  # "field_match", "always"
+    config: dict = field(default_factory=dict)
+    priority: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "type": self.type,
+            "config": self.config,
+            "priority": self.priority,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> ExitRule:
+        return cls(
+            name=d["name"],
+            type=d["type"],
+            config=d.get("config", {}),
+            priority=d.get("priority", 0),
+        )
+
+
+# ── Input Binding ──────────────────────────────────────────────────────
 
 
 @dataclass
 class InputBinding:
-    """Maps an output key from a source step to an input key on the target step."""
+    local_name: str  # what the executor sees
+    source_step: str  # which predecessor, or "$job"
+    source_field: str  # which output field
 
-    source_step: str
-    source_key: str
-    target_key: str
-
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict:
         return {
+            "local_name": self.local_name,
             "source_step": self.source_step,
-            "source_key": self.source_key,
-            "target_key": self.target_key,
+            "source_field": self.source_field,
         }
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> InputBinding:
+    def from_dict(cls, d: dict) -> InputBinding:
         return cls(
+            local_name=d["local_name"],
             source_step=d["source_step"],
-            source_key=d["source_key"],
-            target_key=d["target_key"],
+            source_field=d["source_field"],
         )
+
+
+# ── Step Definition ────────────────────────────────────────────────────
 
 
 @dataclass
 class StepDefinition:
-    """Blueprint for a step in a workflow."""
-
     name: str
-    executor: str
-    config: dict[str, Any] = field(default_factory=dict)
-    depends_on: list[str] = field(default_factory=list)
+    outputs: list[str]  # declared output field names
+    executor: ExecutorRef
     inputs: list[InputBinding] = field(default_factory=list)
-    max_retries: int = 0
-    timeout_seconds: float | None = None
-    condition: str | None = None
-    loop_over: str | None = None  # "step_name.output_key" -> iterate over that list
-    is_sub_job: bool = False
+    sequencing: list[str] = field(default_factory=list)  # wait-for-completion deps
+    exit_rules: list[ExitRule] = field(default_factory=list)
+    idempotency: str = "idempotent"  # "idempotent" | "retriable_with_guard" | "non_retriable"
+    limits: StepLimits | None = None  # M4: cost/time/iteration limits
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
+    def to_dict(self) -> dict:
+        d = {
             "name": self.name,
-            "executor": self.executor,
-            "config": self.config,
-            "depends_on": self.depends_on,
+            "outputs": self.outputs,
+            "executor": self.executor.to_dict(),
             "inputs": [b.to_dict() for b in self.inputs],
-            "max_retries": self.max_retries,
-            "timeout_seconds": self.timeout_seconds,
-            "condition": self.condition,
-            "loop_over": self.loop_over,
-            "is_sub_job": self.is_sub_job,
+            "sequencing": self.sequencing,
+            "exit_rules": [r.to_dict() for r in self.exit_rules],
+            "idempotency": self.idempotency,
         }
+        if self.limits:
+            d["limits"] = self.limits.to_dict()
+        return d
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> StepDefinition:
+    def from_dict(cls, d: dict) -> StepDefinition:
         return cls(
             name=d["name"],
-            executor=d["executor"],
-            config=d.get("config", {}),
-            depends_on=d.get("depends_on", []),
+            outputs=d["outputs"],
+            executor=ExecutorRef.from_dict(d["executor"]),
             inputs=[InputBinding.from_dict(b) for b in d.get("inputs", [])],
-            max_retries=d.get("max_retries", 0),
-            timeout_seconds=d.get("timeout_seconds"),
-            condition=d.get("condition"),
-            loop_over=d.get("loop_over"),
-            is_sub_job=d.get("is_sub_job", False),
+            sequencing=d.get("sequencing", []),
+            exit_rules=[ExitRule.from_dict(r) for r in d.get("exit_rules", [])],
+            idempotency=d.get("idempotency", "idempotent"),
+            limits=StepLimits.from_dict(d["limits"]) if d.get("limits") else None,
         )
 
 
-@dataclass
-class StepRun:
-    """Runtime state of a single step execution."""
-
-    id: str
-    job_id: str
-    step_name: str
-    status: StepStatus = StepStatus.PENDING
-    inputs: dict[str, Any] = field(default_factory=dict)
-    outputs: dict[str, Any] | None = None
-    error: str | None = None
-    attempt: int = 1
-    started_at: datetime | None = None
-    completed_at: datetime | None = None
-    iteration_index: int | None = None
-    iteration_value: Any = None
-    input_hash: str | None = None
-
-    @classmethod
-    def create(cls, job_id: str, step_name: str, **kwargs: Any) -> StepRun:
-        return cls(id=str(uuid.uuid4()), job_id=job_id, step_name=step_name, **kwargs)
-
-    def compute_input_hash(self) -> str:
-        raw = json.dumps(self.inputs, sort_keys=True, default=str)
-        return hashlib.sha256(raw.encode()).hexdigest()
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "job_id": self.job_id,
-            "step_name": self.step_name,
-            "status": self.status.value,
-            "inputs": self.inputs,
-            "outputs": self.outputs,
-            "error": self.error,
-            "attempt": self.attempt,
-            "started_at": self.started_at.isoformat() if self.started_at else None,
-            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
-            "iteration_index": self.iteration_index,
-            "iteration_value": self.iteration_value,
-            "input_hash": self.input_hash,
-        }
-
-    @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> StepRun:
-        return cls(
-            id=d["id"],
-            job_id=d["job_id"],
-            step_name=d["step_name"],
-            status=StepStatus(d["status"]),
-            inputs=d.get("inputs", {}),
-            outputs=d.get("outputs"),
-            error=d.get("error"),
-            attempt=d.get("attempt", 1),
-            started_at=(
-                datetime.fromisoformat(d["started_at"]) if d.get("started_at") else None
-            ),
-            completed_at=(
-                datetime.fromisoformat(d["completed_at"])
-                if d.get("completed_at")
-                else None
-            ),
-            iteration_index=d.get("iteration_index"),
-            iteration_value=d.get("iteration_value"),
-            input_hash=d.get("input_hash"),
-        )
+# ── Workflow Definition ────────────────────────────────────────────────
 
 
 @dataclass
 class WorkflowDefinition:
-    """Blueprint for a workflow — a DAG of steps."""
-
-    name: str
-    steps: list[StepDefinition] = field(default_factory=list)
-    description: str = ""
-
-    def get_step(self, name: str) -> StepDefinition | None:
-        for step in self.steps:
-            if step.name == name:
-                return step
-        return None
+    steps: dict[str, StepDefinition] = field(default_factory=dict)
 
     def validate(self) -> list[str]:
-        """Return a list of validation errors (empty if valid)."""
+        """Validate the workflow definition. Returns list of errors."""
         errors: list[str] = []
-        step_names = [s.name for s in self.steps]
-        name_set = set(step_names)
+        step_names = set(self.steps.keys())
 
-        if len(name_set) != len(step_names):
-            seen: set[str] = set()
-            for n in step_names:
-                if n in seen:
-                    errors.append(f"Duplicate step name: '{n}'")
-                seen.add(n)
+        if not step_names:
+            errors.append("Workflow has no steps")
+            return errors
 
-        for step in self.steps:
-            for dep in step.depends_on:
-                if dep not in name_set:
-                    errors.append(
-                        f"Step '{step.name}' depends on unknown step '{dep}'"
-                    )
+        # Check input binding sources
+        for name, step in self.steps.items():
             for binding in step.inputs:
-                if binding.source_step not in name_set:
+                if binding.source_step != "$job" and binding.source_step not in step_names:
                     errors.append(
-                        f"Step '{step.name}' has input from unknown step '{binding.source_step}'"
+                        f"Step '{name}': input binding references unknown step '{binding.source_step}'"
                     )
-            if step.loop_over:
-                src = step.loop_over.split(".")[0]
-                if src not in name_set:
+                elif binding.source_step != "$job":
+                    source_step = self.steps[binding.source_step]
+                    if binding.source_field not in source_step.outputs:
+                        errors.append(
+                            f"Step '{name}': input binding references unknown field "
+                            f"'{binding.source_field}' on step '{binding.source_step}'"
+                        )
+
+            # Check sequencing references
+            for seq_step in step.sequencing:
+                if seq_step not in step_names:
                     errors.append(
-                        f"Step '{step.name}' loops over unknown step '{src}'"
+                        f"Step '{name}': sequencing references unknown step '{seq_step}'"
                     )
 
+            # Check duplicate local names
+            local_names = [b.local_name for b in step.inputs]
+            seen_locals: set[str] = set()
+            for ln in local_names:
+                if ln in seen_locals:
+                    errors.append(
+                        f"Step '{name}': duplicate local_name '{ln}' in inputs"
+                    )
+                seen_locals.add(ln)
+
+            # Check duplicate outputs
+            seen_outputs: set[str] = set()
+            for out in step.outputs:
+                if out in seen_outputs:
+                    errors.append(
+                        f"Step '{name}': duplicate output '{out}'"
+                    )
+                seen_outputs.add(out)
+
+            # Check exit rule loop targets
+            for rule in step.exit_rules:
+                target = rule.config.get("target")
+                if rule.config.get("action") == "loop" and target:
+                    if target not in step_names:
+                        errors.append(
+                            f"Step '{name}': exit rule '{rule.name}' loop target "
+                            f"'{target}' is not a valid step"
+                        )
+
+        # Check for cycles
         if not errors:
             cycle_errors = self._detect_cycles()
             errors.extend(cycle_errors)
 
+        # Check at least one entry step
+        entry = self.entry_steps()
+        if not entry and not errors:
+            errors.append("Workflow has no entry steps (all steps have dependencies)")
+
+        # Check at least one terminal step
+        terminal = self.terminal_steps()
+        if not terminal and not errors:
+            errors.append("Workflow has no terminal steps")
+
         return errors
 
-    def _detect_cycles(self) -> list[str]:
-        """Detect cycles via topological sort (Kahn's algorithm)."""
-        adj: dict[str, list[str]] = {s.name: [] for s in self.steps}
-        in_degree: dict[str, int] = {s.name: 0 for s in self.steps}
+    def entry_steps(self) -> list[str]:
+        """Steps with no dependencies (no inputs or sequencing)."""
+        result = []
+        for name, step in self.steps.items():
+            has_step_deps = any(
+                b.source_step != "$job" for b in step.inputs
+            )
+            if not has_step_deps and not step.sequencing:
+                result.append(name)
+        return result
 
-        for step in self.steps:
-            for dep in step.depends_on:
-                if dep in adj:
-                    adj[dep].append(step.name)
-                    in_degree[step.name] += 1
+    def terminal_steps(self) -> list[str]:
+        """Steps that nothing else depends on.
+
+        Excludes loop-internal steps: steps that loop back to one of their
+        own dependencies are intermediate loop participants, not terminals.
+        """
+        depended_on: set[str] = set()
+        for step in self.steps.values():
             for binding in step.inputs:
-                if binding.source_step in adj and binding.source_step not in step.depends_on:
-                    adj[binding.source_step].append(step.name)
-                    in_degree[step.name] += 1
+                if binding.source_step != "$job":
+                    depended_on.add(binding.source_step)
+            for seq in step.sequencing:
+                depended_on.add(seq)
+
+        terminals = []
+        for name in self.steps:
+            if name in depended_on:
+                continue
+            # Exclude loop-internal steps (loop back to own dep)
+            step_def = self.steps[name]
+            own_deps = {b.source_step for b in step_def.inputs if b.source_step != "$job"}
+            own_deps.update(step_def.sequencing)
+            is_loop_internal = any(
+                rule.config.get("action") == "loop"
+                and rule.type == "always"  # Only unconditional loops
+                and rule.config.get("target", name) in own_deps
+                for rule in step_def.exit_rules
+            )
+            if not is_loop_internal:
+                terminals.append(name)
+        return terminals
+
+    def _detect_cycles(self) -> list[str]:
+        """Detect cycles using Kahn's algorithm."""
+        adj: dict[str, list[str]] = {name: [] for name in self.steps}
+        in_degree: dict[str, int] = {name: 0 for name in self.steps}
+
+        for name, step in self.steps.items():
+            deps: set[str] = set()
+            for binding in step.inputs:
+                if binding.source_step != "$job":
+                    deps.add(binding.source_step)
+            for seq in step.sequencing:
+                deps.add(seq)
+            for dep in deps:
+                if dep in adj:
+                    adj[dep].append(name)
+                    in_degree[name] += 1
 
         queue = deque(n for n, d in in_degree.items() if d == 0)
         visited = 0
@@ -258,106 +369,289 @@ class WorkflowDefinition:
             return [f"Cycle detected involving steps: {', '.join(sorted(remaining))}"]
         return []
 
-    def topological_order(self) -> list[str]:
-        """Return step names in topological order."""
-        adj: dict[str, list[str]] = {s.name: [] for s in self.steps}
-        in_degree: dict[str, int] = {s.name: 0 for s in self.steps}
-
-        for step in self.steps:
-            for dep in step.depends_on:
-                if dep in adj:
-                    adj[dep].append(step.name)
-                    in_degree[step.name] += 1
-
-        queue = deque(n for n, d in in_degree.items() if d == 0)
-        result: list[str] = []
-        while queue:
-            node = queue.popleft()
-            result.append(node)
-            for neighbor in adj[node]:
-                in_degree[neighbor] -= 1
-                if in_degree[neighbor] == 0:
-                    queue.append(neighbor)
-
-        return result
-
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict:
         return {
-            "name": self.name,
-            "steps": [s.to_dict() for s in self.steps],
-            "description": self.description,
+            "steps": {name: step.to_dict() for name, step in self.steps.items()},
         }
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> WorkflowDefinition:
+    def from_dict(cls, d: dict) -> WorkflowDefinition:
+        steps = {}
+        for name, step_d in d.get("steps", {}).items():
+            steps[name] = StepDefinition.from_dict(step_d)
+        return cls(steps=steps)
+
+
+# ── Handoff Envelope ───────────────────────────────────────────────────
+
+
+@dataclass
+class Sidecar:
+    decisions_made: list[str] = field(default_factory=list)
+    assumptions: list[str] = field(default_factory=list)
+    open_questions: list[str] = field(default_factory=list)
+    constraints_discovered: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "decisions_made": self.decisions_made,
+            "assumptions": self.assumptions,
+            "open_questions": self.open_questions,
+            "constraints_discovered": self.constraints_discovered,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> Sidecar:
         return cls(
-            name=d["name"],
-            steps=[StepDefinition.from_dict(s) for s in d.get("steps", [])],
-            description=d.get("description", ""),
+            decisions_made=d.get("decisions_made", []),
+            assumptions=d.get("assumptions", []),
+            open_questions=d.get("open_questions", []),
+            constraints_discovered=d.get("constraints_discovered", []),
         )
 
 
 @dataclass
-class Job:
-    """A running instance of a workflow."""
+class HandoffEnvelope:
+    artifact: dict
+    sidecar: Sidecar = field(default_factory=Sidecar)
+    executor_meta: dict = field(default_factory=dict)
+    workspace: str = ""
+    timestamp: datetime = field(default_factory=_now)
 
-    id: str
-    workflow: WorkflowDefinition
-    status: JobStatus = JobStatus.PENDING
-    step_runs: dict[str, StepRun] = field(default_factory=dict)
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    parent_job_id: str | None = None
-    inputs: dict[str, Any] = field(default_factory=dict)
-    outputs: dict[str, Any] | None = None
+    def to_dict(self) -> dict:
+        return {
+            "artifact": self.artifact,
+            "sidecar": self.sidecar.to_dict(),
+            "executor_meta": self.executor_meta,
+            "workspace": self.workspace,
+            "timestamp": self.timestamp.isoformat(),
+        }
 
     @classmethod
-    def create(
-        cls,
-        workflow: WorkflowDefinition,
-        inputs: dict[str, Any] | None = None,
-        parent_job_id: str | None = None,
-    ) -> Job:
-        job = cls(
-            id=str(uuid.uuid4()),
-            workflow=workflow,
-            inputs=inputs or {},
-            parent_job_id=parent_job_id,
+    def from_dict(cls, d: dict) -> HandoffEnvelope:
+        return cls(
+            artifact=d["artifact"],
+            sidecar=Sidecar.from_dict(d.get("sidecar", {})),
+            executor_meta=d.get("executor_meta", {}),
+            workspace=d.get("workspace", ""),
+            timestamp=datetime.fromisoformat(d["timestamp"]) if d.get("timestamp") else _now(),
         )
-        for step_def in workflow.steps:
-            sr = StepRun.create(job_id=job.id, step_name=step_def.name)
-            job.step_runs[step_def.name] = sr
-        return job
 
-    def get_step_run(self, step_name: str) -> StepRun | None:
-        return self.step_runs.get(step_name)
 
-    def to_dict(self) -> dict[str, Any]:
+# ── Watch Spec ─────────────────────────────────────────────────────────
+
+
+@dataclass
+class WatchSpec:
+    mode: str  # "poll", "human", "timeout"
+    config: dict = field(default_factory=dict)
+    fulfillment_outputs: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "mode": self.mode,
+            "config": self.config,
+            "fulfillment_outputs": self.fulfillment_outputs,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> WatchSpec:
+        return cls(
+            mode=d["mode"],
+            config=d.get("config", {}),
+            fulfillment_outputs=d.get("fulfillment_outputs", []),
+        )
+
+
+# ── Sub-Job Definition ─────────────────────────────────────────────────
+
+
+@dataclass
+class SubJobDefinition:
+    objective: str
+    workflow: WorkflowDefinition
+    config: JobConfig | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "objective": self.objective,
+            "workflow": self.workflow.to_dict(),
+            "config": self.config.to_dict() if self.config else None,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> SubJobDefinition:
+        return cls(
+            objective=d["objective"],
+            workflow=WorkflowDefinition.from_dict(d["workflow"]),
+            config=JobConfig.from_dict(d["config"]) if d.get("config") else None,
+        )
+
+
+# ── Step Run ───────────────────────────────────────────────────────────
+
+
+@dataclass
+class StepRun:
+    id: str
+    job_id: str
+    step_name: str
+    attempt: int
+    status: StepRunStatus
+    inputs: dict | None = None
+    dep_run_ids: dict[str, str] | None = None  # {dep_step: run_id}
+    result: HandoffEnvelope | None = None
+    error: str | None = None
+    error_category: str | None = None  # M4: typed failure classification
+    executor_state: dict | None = None
+    watch: WatchSpec | None = None
+    sub_job_id: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+    def to_dict(self) -> dict:
         return {
             "id": self.id,
-            "workflow": self.workflow.to_dict(),
+            "job_id": self.job_id,
+            "step_name": self.step_name,
+            "attempt": self.attempt,
             "status": self.status.value,
-            "step_runs": {k: v.to_dict() for k, v in self.step_runs.items()},
-            "created_at": self.created_at.isoformat(),
-            "updated_at": self.updated_at.isoformat(),
-            "parent_job_id": self.parent_job_id,
             "inputs": self.inputs,
-            "outputs": self.outputs,
+            "dep_run_ids": self.dep_run_ids,
+            "result": self.result.to_dict() if self.result else None,
+            "error": self.error,
+            "error_category": self.error_category,
+            "executor_state": self.executor_state,
+            "watch": self.watch.to_dict() if self.watch else None,
+            "sub_job_id": self.sub_job_id,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
         }
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> Job:
-        job = cls(
+    def from_dict(cls, d: dict) -> StepRun:
+        return cls(
             id=d["id"],
+            job_id=d["job_id"],
+            step_name=d["step_name"],
+            attempt=d["attempt"],
+            status=StepRunStatus(d["status"]),
+            inputs=d.get("inputs"),
+            dep_run_ids=d.get("dep_run_ids"),
+            result=HandoffEnvelope.from_dict(d["result"]) if d.get("result") else None,
+            error=d.get("error"),
+            error_category=d.get("error_category"),
+            executor_state=d.get("executor_state"),
+            watch=WatchSpec.from_dict(d["watch"]) if d.get("watch") else None,
+            sub_job_id=d.get("sub_job_id"),
+            started_at=datetime.fromisoformat(d["started_at"]) if d.get("started_at") else None,
+            completed_at=datetime.fromisoformat(d["completed_at"]) if d.get("completed_at") else None,
+        )
+
+
+# ── Job Config ─────────────────────────────────────────────────────────
+
+
+@dataclass
+class JobConfig:
+    max_sub_job_depth: int = 5
+    timeout_minutes: int | None = None
+    metadata: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "max_sub_job_depth": self.max_sub_job_depth,
+            "timeout_minutes": self.timeout_minutes,
+            "metadata": self.metadata,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> JobConfig:
+        return cls(
+            max_sub_job_depth=d.get("max_sub_job_depth", 5),
+            timeout_minutes=d.get("timeout_minutes"),
+            metadata=d.get("metadata", {}),
+        )
+
+
+# ── Job ────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class Job:
+    id: str
+    objective: str
+    workflow: WorkflowDefinition
+    status: JobStatus = JobStatus.PENDING
+    inputs: dict = field(default_factory=dict)
+    parent_job_id: str | None = None
+    parent_step_run_id: str | None = None
+    workspace_path: str = ""
+    config: JobConfig = field(default_factory=JobConfig)
+    created_at: datetime = field(default_factory=_now)
+    updated_at: datetime = field(default_factory=_now)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "objective": self.objective,
+            "workflow": self.workflow.to_dict(),
+            "status": self.status.value,
+            "inputs": self.inputs,
+            "parent_job_id": self.parent_job_id,
+            "parent_step_run_id": self.parent_step_run_id,
+            "workspace_path": self.workspace_path,
+            "config": self.config.to_dict(),
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> Job:
+        return cls(
+            id=d["id"],
+            objective=d["objective"],
             workflow=WorkflowDefinition.from_dict(d["workflow"]),
             status=JobStatus(d["status"]),
-            created_at=datetime.fromisoformat(d["created_at"]),
-            updated_at=datetime.fromisoformat(d["updated_at"]),
-            parent_job_id=d.get("parent_job_id"),
             inputs=d.get("inputs", {}),
-            outputs=d.get("outputs"),
+            parent_job_id=d.get("parent_job_id"),
+            parent_step_run_id=d.get("parent_step_run_id"),
+            workspace_path=d.get("workspace_path", ""),
+            config=JobConfig.from_dict(d["config"]) if d.get("config") else JobConfig(),
+            created_at=datetime.fromisoformat(d["created_at"]) if d.get("created_at") else _now(),
+            updated_at=datetime.fromisoformat(d["updated_at"]) if d.get("updated_at") else _now(),
         )
-        job.step_runs = {
-            k: StepRun.from_dict(v) for k, v in d.get("step_runs", {}).items()
+
+
+# ── Event ──────────────────────────────────────────────────────────────
+
+
+@dataclass
+class Event:
+    id: str
+    job_id: str
+    timestamp: datetime
+    type: str
+    data: dict = field(default_factory=dict)
+    is_effector: bool = False
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "job_id": self.job_id,
+            "timestamp": self.timestamp.isoformat(),
+            "type": self.type,
+            "data": self.data,
+            "is_effector": self.is_effector,
         }
-        return job
+
+    @classmethod
+    def from_dict(cls, d: dict) -> Event:
+        return cls(
+            id=d["id"],
+            job_id=d["job_id"],
+            timestamp=datetime.fromisoformat(d["timestamp"]),
+            type=d["type"],
+            data=d.get("data", {}),
+            is_effector=d.get("is_effector", False),
+        )

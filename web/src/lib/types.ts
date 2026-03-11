@@ -1,0 +1,248 @@
+// ── Enums ──────────────────────────────────────────────────────────────
+
+export type JobStatus =
+  | "pending"
+  | "running"
+  | "paused"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type StepRunStatus =
+  | "running"
+  | "suspended"
+  | "delegated"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+// ── Serializable References ────────────────────────────────────────────
+
+export interface DecoratorRef {
+  type: string; // "timeout", "retry", "notification", "fallback"
+  config: Record<string, unknown>;
+}
+
+export interface ExecutorRef {
+  type: string; // "script", "mock_llm", "human", etc.
+  config: Record<string, unknown>;
+  decorators: DecoratorRef[];
+}
+
+export interface ExitRule {
+  name: string;
+  type: string; // "field_match", "always"
+  config: Record<string, unknown>;
+  priority: number;
+}
+
+// ── Input Binding ──────────────────────────────────────────────────────
+
+export interface InputBinding {
+  local_name: string;
+  source_step: string; // "$job" or step name
+  source_field: string;
+}
+
+// ── Step Limits ────────────────────────────────────────────────────────
+
+export interface StepLimits {
+  max_cost_usd: number | null;
+  max_duration_minutes: number | null;
+  max_iterations: number | null;
+}
+
+// ── Step Definition ────────────────────────────────────────────────────
+
+export interface StepDefinition {
+  name: string;
+  outputs: string[];
+  executor: ExecutorRef;
+  inputs: InputBinding[];
+  sequencing: string[];
+  exit_rules: ExitRule[];
+  idempotency: string;
+  limits: StepLimits | null;
+}
+
+// ── Workflow Definition ────────────────────────────────────────────────
+
+export interface WorkflowDefinition {
+  steps: Record<string, StepDefinition>;
+}
+
+// ── Sidecar ────────────────────────────────────────────────────────────
+
+export interface Sidecar {
+  decisions_made: string[];
+  assumptions: string[];
+  open_questions: string[];
+  constraints_discovered: string[];
+}
+
+// ── HandoffEnvelope ────────────────────────────────────────────────────
+
+export interface HandoffEnvelope {
+  artifact: Record<string, unknown>;
+  sidecar: Sidecar;
+  executor_meta: Record<string, unknown>;
+  workspace: string;
+  timestamp: string;
+}
+
+// ── WatchSpec ──────────────────────────────────────────────────────────
+
+export interface WatchSpec {
+  mode: string; // "poll", "human", "timeout"
+  config: Record<string, unknown>;
+  fulfillment_outputs: string[];
+}
+
+// ── SubJobDefinition ───────────────────────────────────────────────────
+
+export interface SubJobDefinition {
+  objective: string;
+  workflow: WorkflowDefinition;
+  config: JobConfig | null;
+}
+
+// ── StepRun ────────────────────────────────────────────────────────────
+
+export interface StepRun {
+  id: string;
+  job_id: string;
+  step_name: string;
+  attempt: number;
+  status: StepRunStatus;
+  inputs: Record<string, unknown> | null;
+  dep_run_ids: Record<string, string> | null;
+  result: HandoffEnvelope | null;
+  error: string | null;
+  error_category: string | null;
+  executor_state: Record<string, unknown> | null;
+  watch: WatchSpec | null;
+  sub_job_id: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+// ── Step Event ────────────────────────────────────────────────────────
+
+export interface StepEvent {
+  id: number;
+  run_id: string;
+  timestamp: string;
+  type: string;
+  data: Record<string, unknown>;
+}
+
+// ── JobConfig ──────────────────────────────────────────────────────────
+
+export interface JobConfig {
+  max_sub_job_depth: number;
+  timeout_minutes: number | null;
+  metadata: Record<string, unknown>;
+}
+
+// ── Job ────────────────────────────────────────────────────────────────
+
+export interface Job {
+  id: string;
+  objective: string;
+  workflow: WorkflowDefinition;
+  status: JobStatus;
+  inputs: Record<string, unknown>;
+  parent_job_id: string | null;
+  parent_step_run_id: string | null;
+  workspace_path: string;
+  config: JobConfig;
+  created_at: string;
+  updated_at: string;
+}
+
+// ── Event ──────────────────────────────────────────────────────────────
+
+export interface StepwiseEvent {
+  id: string;
+  job_id: string;
+  timestamp: string;
+  type: string;
+  data: Record<string, unknown>;
+  is_effector: boolean;
+}
+
+// ── Job Tree ───────────────────────────────────────────────────────────
+
+export interface JobTreeNode {
+  job: Job;
+  runs: StepRun[];
+  sub_jobs: JobTreeNode[];
+}
+
+// ── Template ───────────────────────────────────────────────────────────
+
+export interface WorkflowTemplate {
+  name: string;
+  description: string;
+  workflow: WorkflowDefinition;
+  created_at: string;
+}
+
+// ── Engine Status ──────────────────────────────────────────────────────
+
+export interface EngineStatus {
+  active_jobs: number;
+  total_jobs: number;
+  registered_executors: string[];
+}
+
+// ── Agent Streaming ───────────────────────────────────────────────────
+
+export type AgentStreamEvent =
+  | { t: "text"; text: string }
+  | { t: "tool_start"; id: string; title: string; kind: string }
+  | { t: "tool_end"; id: string }
+  | { t: "usage"; used: number; size: number };
+
+export interface AgentOutputMessage {
+  type: "agent_output";
+  run_id: string;
+  events: AgentStreamEvent[];
+}
+
+// ── WebSocket Message ──────────────────────────────────────────────────
+
+export interface TickMessage {
+  type: "tick";
+  changed_jobs: string[];
+  timestamp: string;
+}
+
+export type WebSocketMessage = TickMessage | AgentOutputMessage;
+
+// ── Event type constants ───────────────────────────────────────────────
+
+export const EVENT_TYPES = {
+  // Step lifecycle
+  STEP_STARTED: "step.started",
+  STEP_STARTED_ASYNC: "step.started_async",
+  STEP_COMPLETED: "step.completed",
+  STEP_FAILED: "step.failed",
+  STEP_SUSPENDED: "step.suspended",
+  STEP_DELEGATED: "step.delegated",
+  STEP_CANCELLED: "step.cancelled",
+  STEP_LIMIT_EXCEEDED: "step.limit_exceeded",
+  // Job lifecycle
+  JOB_STARTED: "job.started",
+  JOB_COMPLETED: "job.completed",
+  JOB_FAILED: "job.failed",
+  JOB_PAUSED: "job.paused",
+  JOB_RESUMED: "job.resumed",
+  // Engine actions
+  EXIT_RESOLVED: "exit.resolved",
+  WATCH_FULFILLED: "watch.fulfilled",
+  HUMAN_RERUN: "human.rerun",
+  LOOP_ITERATION: "loop.iteration",
+  LOOP_MAX_REACHED: "loop.max_reached",
+  CONTEXT_INJECTED: "context.injected",
+} as const;

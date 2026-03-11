@@ -1,246 +1,589 @@
-"""Executor interface, registry, and M1 implementations: ScriptExecutor, HumanExecutor, MockLLMExecutor."""
+"""Executor interface, registry, and built-in implementations."""
 
 from __future__ import annotations
 
-import asyncio
+import json
 import os
+import subprocess
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pathlib import Path
+from string import Template
 from typing import Any, Callable
 
-from stepwise.models import Job, StepRun, WorkflowDefinition
+from stepwise.llm_client import LLMClient, LLMResponse
+
+from stepwise.models import (
+    HandoffEnvelope,
+    Sidecar,
+    SubJobDefinition,
+    WatchSpec,
+    _now,
+)
+
+
+# ── Execution Context ──────────────────────────────────────────────────
+
+
+@dataclass
+class ExecutionContext:
+    job_id: str
+    step_name: str
+    attempt: int
+    workspace_path: str
+    idempotency: str
+    objective: str = ""
+    timeout_minutes: int | None = None
+    injected_context: list[str] | None = None
+
+
+# ── Executor Result ────────────────────────────────────────────────────
 
 
 @dataclass
 class ExecutorResult:
-    """Result returned by an executor."""
+    type: str  # "data" | "sub_job" | "watch" | "async"
+    envelope: HandoffEnvelope | None = None
+    sub_job_def: SubJobDefinition | None = None
+    watch: WatchSpec | None = None
+    executor_state: dict | None = None
 
-    outputs: dict[str, Any] = field(default_factory=dict)
-    error: str | None = None
 
-    @property
-    def success(self) -> bool:
-        return self.error is None
+# ── Executor Status (for check_status) ─────────────────────────────────
+
+
+@dataclass
+class ExecutorStatus:
+    state: str  # "running" | "completed" | "failed"
+    message: str | None = None
+    result: ExecutorResult | None = None  # M4: completed async executors return result here
+    error_category: str | None = None  # M4: typed failure classification
+    cost_so_far: float | None = None  # M4: accumulated cost for limit enforcement
+
+
+# ── Executor ABC ───────────────────────────────────────────────────────
 
 
 class Executor(ABC):
-    """Base class for all executors."""
+    @abstractmethod
+    def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
+        ...
 
     @abstractmethod
-    async def execute(self, step_run: StepRun, config: dict[str, Any]) -> ExecutorResult:
+    def check_status(self, state: dict) -> ExecutorStatus:
+        ...
+
+    @abstractmethod
+    def cancel(self, state: dict) -> None:
         ...
 
 
+# ── Executor Registry ─────────────────────────────────────────────────
+
+
 class ExecutorRegistry:
-    """Maps executor type names to Executor instances."""
-
     def __init__(self) -> None:
-        self._executors: dict[str, Executor] = {}
+        self._factories: dict[str, Callable[[dict], Executor]] = {}
 
-    def register(self, name: str, executor: Executor) -> None:
-        self._executors[name] = executor
+    def register(self, type_name: str, factory: Callable[[dict], Executor]) -> None:
+        self._factories[type_name] = factory
 
-    def get(self, name: str) -> Executor:
-        if name not in self._executors:
-            raise KeyError(f"Unknown executor type: '{name}'")
-        return self._executors[name]
+    def create(self, ref: Any) -> Executor:
+        """Create an executor from an ExecutorRef, wrapping with decorators."""
+        from stepwise.decorators import (
+            FallbackDecorator,
+            NotificationDecorator,
+            RetryDecorator,
+            TimeoutDecorator,
+        )
 
-    def __contains__(self, name: str) -> bool:
-        return name in self._executors
+        if ref.type not in self._factories:
+            raise KeyError(f"Unknown executor type: '{ref.type}'")
 
-    def names(self) -> list[str]:
-        return list(self._executors.keys())
+        executor = self._factories[ref.type](ref.config)
+
+        # Wrap with decorators (innermost first)
+        for dec_ref in ref.decorators:
+            match dec_ref.type:
+                case "timeout":
+                    executor = TimeoutDecorator(executor, dec_ref.config)
+                case "retry":
+                    executor = RetryDecorator(executor, dec_ref.config)
+                case "notification":
+                    executor = NotificationDecorator(executor, dec_ref.config)
+                case "fallback":
+                    fallback_ref = dec_ref.config.get("fallback_ref")
+                    if fallback_ref:
+                        fallback_executor = self._factories[fallback_ref["type"]](
+                            fallback_ref.get("config", {})
+                        )
+                        executor = FallbackDecorator(executor, fallback_executor, dec_ref.config)
+                case _:
+                    raise KeyError(f"Unknown decorator type: '{dec_ref.type}'")
+
+        return executor
 
 
-# ── M1 Implementations ──────────────────────────────────────────────────
+# ── ScriptExecutor ─────────────────────────────────────────────────────
 
 
 class ScriptExecutor(Executor):
-    """Runs a shell command or Python callable.
+    """Run a shell command. Synchronous in M1."""
 
-    Config keys:
-      command:  str — shell command to execute
-      callable: Callable — Python function(inputs) -> dict  (takes priority)
-      shell:    bool — use shell mode for command (default True)
-    """
+    def __init__(self, command: str, working_dir: str | None = None) -> None:
+        self.command = command
+        self.working_dir = working_dir
 
-    async def execute(self, step_run: StepRun, config: dict[str, Any]) -> ExecutorResult:
-        fn = config.get("callable")
-        if fn is not None:
-            return await self._run_callable(fn, step_run)
-        command = config.get("command")
-        if command is not None:
-            return await self._run_command(command, step_run, config)
-        return ExecutorResult(error="ScriptExecutor: no 'command' or 'callable' in config")
+    def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
+        workspace = context.workspace_path or "."
 
-    async def _run_callable(
-        self, fn: Callable, step_run: StepRun
-    ) -> ExecutorResult:
-        try:
-            if asyncio.iscoroutinefunction(fn):
-                result = await fn(step_run.inputs)
-            else:
-                result = fn(step_run.inputs)
-            if isinstance(result, dict):
-                return ExecutorResult(outputs=result)
-            return ExecutorResult(outputs={"result": result})
-        except Exception as e:
-            return ExecutorResult(error=str(e))
+        # Write inputs to .step-io directory
+        step_io_dir = Path(workspace) / ".step-io"
+        step_io_dir.mkdir(parents=True, exist_ok=True)
+        input_file = step_io_dir / f"{context.step_name}-{context.attempt}.input.json"
+        input_file.write_text(json.dumps(inputs, default=str))
 
-    async def _run_command(
-        self, command: str, step_run: StepRun, config: dict[str, Any]
-    ) -> ExecutorResult:
-        # Template substitution in command
-        for key, value in step_run.inputs.items():
-            command = command.replace(f"{{{key}}}", str(value))
-
-        env = {**os.environ, **{k: str(v) for k, v in step_run.inputs.items()}}
+        env = {
+            **os.environ,
+            "JOB_ENGINE_INPUTS": str(input_file),
+            "JOB_ENGINE_WORKSPACE": str(workspace),
+        }
+        cwd = self.working_dir or workspace
 
         try:
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            result = subprocess.run(
+                self.command,
+                shell=True,
+                capture_output=True,
+                text=True,
                 env=env,
+                cwd=cwd,
             )
-            stdout_bytes, stderr_bytes = await proc.communicate()
-            stdout = stdout_bytes.decode().strip() if stdout_bytes else ""
-            stderr = stderr_bytes.decode().strip() if stderr_bytes else ""
-
-            outputs = {
-                "stdout": stdout,
-                "stderr": stderr,
-                "return_code": proc.returncode,
-            }
-
-            if proc.returncode != 0:
-                return ExecutorResult(
-                    outputs=outputs,
-                    error=f"Command exited with code {proc.returncode}",
-                )
-            return ExecutorResult(outputs=outputs)
         except Exception as e:
-            return ExecutorResult(error=f"ScriptExecutor error: {e}")
+            return ExecutorResult(
+                type="data",
+                envelope=HandoffEnvelope(
+                    artifact={"stdout": ""},
+                    sidecar=Sidecar(),
+                    workspace=workspace,
+                    timestamp=_now(),
+                    executor_meta={"error": str(e)},
+                ),
+            )
+
+        stdout = result.stdout.strip()
+        stderr = result.stderr.strip()
+
+        if result.returncode != 0:
+            # Failure
+            return ExecutorResult(
+                type="data",
+                envelope=HandoffEnvelope(
+                    artifact={"stdout": stdout} if stdout else {"stdout": ""},
+                    sidecar=Sidecar(),
+                    workspace=workspace,
+                    timestamp=_now(),
+                    executor_meta={"return_code": result.returncode, "failed": True},
+                ),
+                executor_state={"failed": True, "error": stderr or f"Exit code {result.returncode}"},
+            )
+
+        # Parse stdout
+        artifact: dict
+        try:
+            parsed = json.loads(stdout) if stdout else {}
+            if isinstance(parsed, dict):
+                # Check for _watch key
+                if "_watch" in parsed:
+                    watch_data = parsed.pop("_watch")
+                    watch = WatchSpec(
+                        mode=watch_data["mode"],
+                        config=watch_data.get("config", {}),
+                        fulfillment_outputs=watch_data.get("fulfillment_outputs", []),
+                    )
+                    return ExecutorResult(
+                        type="watch",
+                        watch=watch,
+                        executor_state={"partial_output": parsed} if parsed else None,
+                    )
+                artifact = parsed
+            else:
+                artifact = {"stdout": stdout}
+        except (json.JSONDecodeError, ValueError):
+            artifact = {"stdout": stdout} if stdout else {"stdout": ""}
+
+        return ExecutorResult(
+            type="data",
+            envelope=HandoffEnvelope(
+                artifact=artifact,
+                sidecar=Sidecar(),
+                workspace=workspace,
+                timestamp=_now(),
+            ),
+        )
+
+    def check_status(self, state: dict) -> ExecutorStatus:
+        # M1: synchronous, always completed or failed
+        if state and state.get("failed"):
+            return ExecutorStatus(state="failed", message=state.get("error"))
+        return ExecutorStatus(state="completed")
+
+    def cancel(self, state: dict) -> None:
+        pass  # M1: synchronous, nothing to cancel
+
+
+# ── HumanExecutor ──────────────────────────────────────────────────────
 
 
 class HumanExecutor(Executor):
-    """Waits for external human input via an asyncio.Future.
+    """Immediately suspends with a human watch."""
 
-    Config keys:
-      prompt: str — message shown to the human
+    def __init__(self, prompt: str, notify: str | None = None) -> None:
+        self.prompt = prompt
+        self.notify = notify
+
+    def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
+        config: dict[str, Any] = {"prompt": self.prompt}
+        if self.notify:
+            config["notify"] = self.notify
+
+        return ExecutorResult(
+            type="watch",
+            watch=WatchSpec(
+                mode="human",
+                config=config,
+                fulfillment_outputs=context_to_outputs(context),
+            ),
+        )
+
+    def check_status(self, state: dict) -> ExecutorStatus:
+        return ExecutorStatus(state="running")
+
+    def cancel(self, state: dict) -> None:
+        pass
+
+
+def context_to_outputs(context: ExecutionContext) -> list[str]:
+    """Get expected outputs from the step definition context.
+
+    HumanExecutor doesn't know the step's declared outputs at construction time.
+    The engine sets fulfillment_outputs from the step definition after receiving the watch.
     """
+    return []  # Engine will override from step definition
 
-    def __init__(self) -> None:
-        self._pending: dict[str, asyncio.Future[ExecutorResult]] = {}
 
-    async def execute(self, step_run: StepRun, config: dict[str, Any]) -> ExecutorResult:
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[ExecutorResult] = loop.create_future()
-        self._pending[step_run.id] = future
-        try:
-            return await future
-        finally:
-            self._pending.pop(step_run.id, None)
-
-    def complete(self, step_run_id: str, outputs: dict[str, Any]) -> None:
-        """Externally complete a pending human step."""
-        future = self._pending.get(step_run_id)
-        if future and not future.done():
-            future.set_result(ExecutorResult(outputs=outputs))
-
-    def fail(self, step_run_id: str, error: str) -> None:
-        """Externally fail a pending human step."""
-        future = self._pending.get(step_run_id)
-        if future and not future.done():
-            future.set_result(ExecutorResult(error=error))
-
-    @property
-    def pending_ids(self) -> list[str]:
-        return list(self._pending.keys())
+# ── MockLLMExecutor ────────────────────────────────────────────────────
 
 
 class MockLLMExecutor(Executor):
-    """Returns preconfigured responses for testing.
-
-    Config keys:
-      response:   Any — static response to return
-      response_fn: Callable(inputs, config) -> Any — dynamic response generator
-    """
-
-    def __init__(self, responses: dict[str, Any] | None = None) -> None:
-        self._responses = responses or {}
-
-    async def execute(self, step_run: StepRun, config: dict[str, Any]) -> ExecutorResult:
-        # Check config-level response first
-        fn = config.get("response_fn")
-        if fn is not None:
-            try:
-                if asyncio.iscoroutinefunction(fn):
-                    result = await fn(step_run.inputs, config)
-                else:
-                    result = fn(step_run.inputs, config)
-                if isinstance(result, dict):
-                    return ExecutorResult(outputs=result)
-                return ExecutorResult(outputs={"response": result})
-            except Exception as e:
-                return ExecutorResult(error=str(e))
-
-        if "response" in config:
-            resp = config["response"]
-            if isinstance(resp, dict):
-                return ExecutorResult(outputs=resp)
-            return ExecutorResult(outputs={"response": resp})
-
-        # Fall back to instance-level responses by step name
-        resp = self._responses.get(
-            step_run.step_name, self._responses.get("default", "Mock LLM response")
-        )
-        if callable(resp):
-            resp = resp(step_run.inputs, config)
-        if isinstance(resp, dict):
-            return ExecutorResult(outputs=resp)
-        return ExecutorResult(outputs={"response": resp})
-
-
-class SubJobExecutor(Executor):
-    """Executes a nested workflow as a sub-job.
-
-    Config keys:
-      workflow: dict — WorkflowDefinition as a dict
-    """
+    """Simulates LLM behavior for testing."""
 
     def __init__(
         self,
-        executor_registry: ExecutorRegistry | None = None,
-        store: Any | None = None,
+        failure_rate: float = 0.0,
+        partial_rate: float = 0.0,
+        latency_range: tuple = (0.0, 0.0),
+        responses: dict[str, Any] | None = None,
     ) -> None:
-        self._registry = executor_registry
-        self._store = store
+        self.failure_rate = failure_rate
+        self.partial_rate = partial_rate
+        self.latency_range = latency_range
+        self.responses = responses or {}
+        self._call_count = 0
 
-    async def execute(self, step_run: StepRun, config: dict[str, Any]) -> ExecutorResult:
-        from stepwise.engine import Engine
-        from stepwise.events import EventBus
-        from stepwise.models import JobStatus
+    def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
+        import random
 
-        workflow_dict = config.get("workflow")
-        if not workflow_dict:
-            return ExecutorResult(error="SubJobExecutor: no 'workflow' in config")
+        self._call_count += 1
 
-        workflow = WorkflowDefinition.from_dict(workflow_dict)
-        sub_job = Job.create(
-            workflow, inputs=step_run.inputs, parent_job_id=step_run.job_id
+        # Simulate latency
+        if self.latency_range[1] > 0:
+            time.sleep(random.uniform(*self.latency_range))
+
+        # Simulate failure
+        if random.random() < self.failure_rate:
+            return ExecutorResult(
+                type="data",
+                envelope=HandoffEnvelope(
+                    artifact={},
+                    sidecar=Sidecar(),
+                    workspace="",
+                    timestamp=_now(),
+                    executor_meta={"failed": True, "reason": "simulated_failure"},
+                ),
+                executor_state={"failed": True, "error": "Simulated LLM failure"},
+            )
+
+        # Simulate partial output
+        if random.random() < self.partial_rate:
+            return ExecutorResult(
+                type="data",
+                envelope=HandoffEnvelope(
+                    artifact={"partial": True, "stdout": "incomplete response..."},
+                    sidecar=Sidecar(),
+                    workspace="",
+                    timestamp=_now(),
+                    executor_meta={"partial": True},
+                ),
+                executor_state={"partial": True},
+            )
+
+        # Check for pre-configured responses
+        step_key = context.step_name
+        if step_key in self.responses:
+            resp = self.responses[step_key]
+            if callable(resp):
+                resp = resp(inputs)
+            artifact = resp if isinstance(resp, dict) else {"result": resp}
+        else:
+            # Default: echo inputs with mock response
+            artifact = {
+                "result": f"mock_response_for_{context.step_name}",
+                **{k: v for k, v in inputs.items()},
+            }
+
+        return ExecutorResult(
+            type="data",
+            envelope=HandoffEnvelope(
+                artifact=artifact,
+                sidecar=Sidecar(),
+                workspace="",
+                timestamp=_now(),
+            ),
         )
 
-        engine = Engine(sub_job, store=self._store, event_bus=EventBus())
-        if self._registry:
-            for name in self._registry.names():
-                engine.register_executor(name, self._registry.get(name))
+    def check_status(self, state: dict) -> ExecutorStatus:
+        if state and state.get("failed"):
+            return ExecutorStatus(state="failed", message=state.get("error"))
+        return ExecutorStatus(state="completed")
 
-        result_job = await engine.run()
+    def cancel(self, state: dict) -> None:
+        pass
 
-        if result_job.status == JobStatus.COMPLETED:
-            return ExecutorResult(outputs=result_job.outputs or {})
-        error_msg = f"Sub-job failed with status {result_job.status.value}"
-        if result_job.outputs and "error" in result_job.outputs:
-            error_msg += f": {result_job.outputs['error']}"
-        return ExecutorResult(error=error_msg)
+
+# ── LLMExecutor ───────────────────────────────────────────────────────
+
+
+class LLMExecutor(Executor):
+    """One-shot LLM call via OpenRouter. No retries, no tool calls beyond structured output."""
+
+    def __init__(
+        self,
+        client: LLMClient,
+        model: str,
+        prompt: str,
+        system: str | None = None,
+        temperature: float = 0.0,
+        max_tokens: int = 4096,
+    ) -> None:
+        self.client = client
+        self.model = model
+        self.prompt_template = prompt
+        self.system = system
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+
+    def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
+        workspace = context.workspace_path or ""
+
+        # Render prompt
+        prompt = self._render_prompt(inputs, context)
+
+        # Build messages
+        messages: list[dict[str, str]] = []
+        if self.system:
+            messages.append({"role": "system", "content": self.system})
+        messages.append({"role": "user", "content": prompt})
+
+        # Build output tool for structured output
+        # The step's outputs are available from the engine context
+        # We get them from the step definition via the context
+        output_fields = self._get_output_fields(context)
+        tools = self._build_output_tool(output_fields) if output_fields else None
+
+        # Call LLM
+        try:
+            response = self.client.chat_completion(
+                model=self.model,
+                messages=messages,
+                tools=tools,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+            )
+        except Exception as e:
+            return ExecutorResult(
+                type="data",
+                envelope=HandoffEnvelope(
+                    artifact={},
+                    sidecar=Sidecar(),
+                    workspace=workspace,
+                    timestamp=_now(),
+                    executor_meta={
+                        "failed": True,
+                        "error": str(e),
+                        "model": self.model,
+                        "prompt": prompt,
+                    },
+                ),
+                executor_state={"failed": True, "error": str(e)},
+            )
+
+        # Parse output
+        artifact, parse_method = self._parse_output(response, output_fields)
+
+        if artifact is None:
+            # Parse failure
+            return ExecutorResult(
+                type="data",
+                envelope=HandoffEnvelope(
+                    artifact={},
+                    sidecar=Sidecar(),
+                    workspace=workspace,
+                    timestamp=_now(),
+                    executor_meta={
+                        "failed": True,
+                        "error": "Could not parse LLM output into declared output fields",
+                        "model": response.model,
+                        "prompt": prompt,
+                        "raw_content": response.content,
+                        "raw_tool_calls": response.tool_calls,
+                        "usage": response.usage,
+                        "cost_usd": response.cost_usd,
+                        "latency_ms": response.latency_ms,
+                    },
+                ),
+                executor_state={
+                    "failed": True,
+                    "error": "Output parse failure",
+                },
+            )
+
+        # Validate all output fields present
+        if output_fields:
+            missing = [f for f in output_fields if f not in artifact]
+            if missing:
+                return ExecutorResult(
+                    type="data",
+                    envelope=HandoffEnvelope(
+                        artifact=artifact,
+                        sidecar=Sidecar(),
+                        workspace=workspace,
+                        timestamp=_now(),
+                        executor_meta={
+                            "failed": True,
+                            "error": f"Missing output fields: {missing}",
+                            "model": response.model,
+                            "prompt": prompt,
+                            "usage": response.usage,
+                            "cost_usd": response.cost_usd,
+                            "latency_ms": response.latency_ms,
+                        },
+                    ),
+                    executor_state={
+                        "failed": True,
+                        "error": f"Missing output fields: {missing}",
+                    },
+                )
+
+        return ExecutorResult(
+            type="data",
+            envelope=HandoffEnvelope(
+                artifact=artifact,
+                sidecar=Sidecar(),
+                workspace=workspace,
+                timestamp=_now(),
+                executor_meta={
+                    "model": response.model,
+                    "prompt": prompt,
+                    "response": response.content,
+                    "parse_method": parse_method,
+                    "usage": response.usage,
+                    "cost_usd": response.cost_usd,
+                    "latency_ms": response.latency_ms,
+                },
+            ),
+        )
+
+    def _render_prompt(self, inputs: dict, context: ExecutionContext) -> str:
+        """Render the prompt template with step inputs."""
+        # Convert all input values to strings for template substitution
+        str_inputs = {k: str(v) if not isinstance(v, str) else v for k, v in inputs.items()}
+        prompt = Template(self.prompt_template).safe_substitute(str_inputs)
+
+        # Append injected context if present
+        if context.injected_context:
+            prompt += "\n\nAdditional context:\n" + "\n".join(context.injected_context)
+
+        return prompt
+
+    def _get_output_fields(self, context: ExecutionContext) -> list[str]:
+        """Get the step's declared output fields from executor config.
+
+        The engine passes output_fields through the ExecutionContext or
+        the executor config. For now, we store them on the executor instance.
+        """
+        # Output fields are set by the factory from step definition
+        return getattr(self, "_output_fields", [])
+
+    def _build_output_tool(self, output_fields: list[str]) -> list[dict] | None:
+        """Build a tool schema to enforce structured output."""
+        if not output_fields:
+            return None
+        return [{
+            "type": "function",
+            "function": {
+                "name": "step_output",
+                "description": "Provide the step output with the required fields.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        f: {"type": "string"} for f in output_fields
+                    },
+                    "required": output_fields,
+                },
+            },
+        }]
+
+    def _parse_output(
+        self, response: LLMResponse, output_fields: list[str]
+    ) -> tuple[dict, str] | tuple[None, str]:
+        """Parse LLM response into (artifact, parse_method). Returns (None, method) on failure."""
+        # 1. Tool call response (structured output)
+        if response.tool_calls:
+            for tc in response.tool_calls:
+                if tc.get("name") == "step_output":
+                    args = tc.get("arguments", {})
+                    if isinstance(args, dict):
+                        return args, "tool_call"
+
+        # 2. Try parsing content as JSON
+        if response.content:
+            content = response.content.strip()
+            # Strip markdown code fences if present
+            if content.startswith("```"):
+                lines = content.split("\n")
+                # Remove first and last lines (fences)
+                if len(lines) >= 3:
+                    content = "\n".join(lines[1:-1]).strip()
+
+            try:
+                parsed = json.loads(content)
+                if isinstance(parsed, dict):
+                    return parsed, "json_content"
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # 3. Single-field shortcut
+        if len(output_fields) == 1 and response.content:
+            return {output_fields[0]: response.content.strip()}, "single_field"
+
+        return None, "none"
+
+    def check_status(self, state: dict) -> ExecutorStatus:
+        if state and state.get("failed"):
+            return ExecutorStatus(state="failed", message=state.get("error"))
+        return ExecutorStatus(state="completed")
+
+    def cancel(self, state: dict) -> None:
+        pass
