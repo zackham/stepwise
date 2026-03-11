@@ -1,43 +1,48 @@
-# Skill: Create Stepwise Workflow
+# Skill: Create Stepwise Flow
 
 ## When to Use
 
 Activate when the user asks to:
-- Create, build, or define a workflow
-- "Make a workflow that..."
+- Create, build, or define a flow
+- "Make a flow that..."
 - "I need a pipeline for..."
 - "Set up steps to..."
-- Convert a natural language process description into a Stepwise workflow
-- Modify or extend an existing workflow definition
+- Convert a natural language process description into a Stepwise flow
+- Modify or extend an existing flow definition
 
 ## What This Skill Does
 
-Translates natural language descriptions into valid Stepwise workflow definitions (YAML preferred, JSON when targeting the API directly), then optionally creates and starts a job via the API.
+Translates natural language descriptions into valid Stepwise flow definitions (`.flow.yaml` files), then optionally runs them via the CLI or creates jobs via the API.
 
 ## Conversation Flow
 
-1. **Understand** what the workflow should accomplish
+1. **Understand** what the flow should accomplish
 2. **Identify** the steps, executor types, data flow, and loop conditions
-3. **Generate** a valid workflow definition
-4. **Validate** against the checklist at the bottom of this document
-5. **Optionally** create and start the job via the REST API
+3. **Generate** a valid `.flow.yaml` file
+4. **Validate** with `stepwise validate <file>`
+5. **Optionally** run with `stepwise run <file>` or `stepwise run <file> --watch`
 
 ---
 
-## Workflow Format (YAML)
+## Flow Format (YAML)
 
-YAML is the recommended authoring format. It is parsed into a `WorkflowDefinition` at job creation time.
+Flows are `.flow.yaml` files. YAML is parsed into a `WorkflowDefinition` at runtime.
 
 ### Top-Level Structure
 
 ```yaml
-name: workflow-name              # identifier (kebab-case)
+name: my-flow                    # identifier (kebab-case)
 description: "Human description" # optional
+author: zack                     # optional (auto-populated from git config)
+version: "1.0"                   # optional
+tags: [demo, agent]              # optional
 
 steps:
   step_name:
     # ... step definition
 ```
+
+If `name` is omitted, it defaults from the filename (`my-flow.flow.yaml` → `my-flow`).
 
 ### Complete Step Definition
 
@@ -119,7 +124,7 @@ count_words:
 
 ### human
 
-Suspends the step and waits for user input via the web UI.
+Suspends the step and waits for user input via the web UI (in `--watch` mode) or stdin (in headless mode).
 
 ```yaml
 approve:
@@ -132,7 +137,7 @@ approve:
 
 **Config:** `prompt` (string), `notify` (string, optional)
 
-The UI shows the prompt and collects output fields. The user submits via `POST /api/runs/{run_id}/fulfill` with `{"payload": {"decision": "approve", "reason": "Looks good"}}`. Payload keys must match declared `outputs`.
+In `--watch` mode, the UI shows the prompt and collects output fields. In headless mode, the terminal prompts for each output field.
 
 ### llm
 
@@ -250,7 +255,11 @@ inputs:
 
 ### Job-level Inputs
 
-Job inputs are passed at creation time in the `inputs` dict and are static for the job's lifetime:
+Job inputs are passed via `--var` on the CLI or in the `inputs` dict via the API:
+
+```bash
+stepwise run my-flow.flow.yaml --var topic="login flow UX"
+```
 
 ```yaml
 inputs:
@@ -643,7 +652,7 @@ decorators:
 
 ---
 
-## Complete Workflow Examples
+## Complete Flow Examples
 
 ### Example 1: Simple Linear Pipeline
 
@@ -936,11 +945,29 @@ steps:
 
 ---
 
-## Creating and Starting Jobs via the API
+## Running Flows
 
-Server default: `http://localhost:8340` (configurable via `STEPWISE_PORT` env var).
+### CLI (preferred)
 
-### Create a job
+```bash
+# Headless — terminal output, stdin for human steps
+stepwise run my-flow.flow.yaml
+
+# With live web UI
+stepwise run my-flow.flow.yaml --watch
+
+# Pass inputs
+stepwise run my-flow.flow.yaml --var topic="login flow UX" --var pr_url="https://..."
+
+# Specific port
+stepwise run my-flow.flow.yaml --watch --port 9000
+```
+
+### API (for programmatic use)
+
+Server default: `http://localhost:8340` (via `stepwise serve` or `stepwise run --watch`).
+
+#### Create a job
 
 ```bash
 curl -X POST http://localhost:8340/api/jobs \
@@ -959,13 +986,13 @@ curl -X POST http://localhost:8340/api/jobs \
 
 Returns full job object with `id` field.
 
-### Start a job
+#### Start a job
 
 ```bash
 curl -X POST http://localhost:8340/api/jobs/{job_id}/start
 ```
 
-### Other endpoints
+#### Other endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -982,7 +1009,7 @@ curl -X POST http://localhost:8340/api/jobs/{job_id}/start
 | `POST` | `/api/jobs/{id}/context` | Inject context into running job |
 | `GET/POST` | `/api/templates` | Template CRUD |
 
-### Fulfill a human step
+#### Fulfill a human step
 
 ```bash
 curl -X POST http://localhost:8340/api/runs/{run_id}/fulfill \
@@ -990,7 +1017,7 @@ curl -X POST http://localhost:8340/api/runs/{run_id}/fulfill \
   -d '{"payload": {"decision": "approve", "reason": "Looks good"}}'
 ```
 
-### WebSocket
+#### WebSocket
 
 `ws://localhost:8340/ws` -- real-time job state updates and agent output streaming.
 
@@ -1066,7 +1093,7 @@ When a loop step has an input from a step that hasn't run yet (e.g., `draft` tak
 
 ## Validation Checklist
 
-Before outputting a workflow, verify:
+Before outputting a flow, verify:
 
 1. Every step's `name` matches its dict key (JSON) or is set automatically (YAML)
 2. Every input binding's `source_step` is a valid step name or `"$job"`
