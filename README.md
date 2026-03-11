@@ -9,7 +9,7 @@
 
 Stepwise is a workflow engine that coordinates multi-step jobs where steps can be scripts, LLM calls, autonomous AI agents, or human decisions. Define your workflow as a DAG with conditional loops and exit rules, then watch it execute in a real-time visual UI with live agent output streaming.
 
-![Stepwise UI](docs/screenshot.png)
+<!-- TODO: add screenshot -->
 
 ## Features
 
