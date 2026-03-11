@@ -28,14 +28,22 @@ Stepwise is a workflow engine that coordinates multi-step jobs where steps can b
 ## Quick Start
 
 ```bash
-pip install stepwise    # or: uv add stepwise
+git clone https://github.com/zackham/stepwise.git
+cd stepwise
+uv sync              # install Python dependencies
+cd web && npm install  # install frontend dependencies
 ```
 
 Start the server:
 
 ```bash
-python -m stepwise.server
+# Backend (from repo root)
+uv run python -m stepwise.server
 # → http://localhost:8340
+
+# Frontend (separate terminal)
+cd web && npm run dev
+# → http://localhost:5173 (proxies API to :8340)
 ```
 
 Open the UI, create a job from a template, and hit Start. Steps execute automatically — agents stream output in real time, human steps pause and wait for your input.
