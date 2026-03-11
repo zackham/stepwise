@@ -543,6 +543,129 @@ Note: `draft` has an input from `review` (feedback). On the first iteration, thi
 
 ---
 
+## For-Each Steps (Fan-Out/Fan-In)
+
+For-each steps iterate over a list produced by an upstream step, running an embedded sub-flow for each item. Results are collected as an ordered array.
+
+### YAML Syntax
+
+```yaml
+steps:
+  generate:
+    executor: llm
+    prompt: "List 5 topics about $subject"
+    outputs: [topics]
+    inputs:
+      subject: $job.subject
+
+  research_all:
+    for_each: generate.topics        # "step_name.field" — must produce a list
+    as: topic                        # iteration variable name (default: "item")
+    on_error: continue               # "fail_fast" (default) | "continue"
+    outputs: [results]               # defaults to [results] if omitted
+
+    flow:
+      steps:
+        research:
+          executor: agent
+          prompt: "Research this topic: $topic"
+          outputs: [result]
+          inputs:
+            topic: $job.topic        # access current item via $job.<as_variable>
+
+        review:
+          executor: llm
+          prompt: "Rate research quality for: $finding"
+          outputs: [score]
+          inputs:
+            finding: research.result
+
+  summarize:
+    executor: llm
+    prompt: "Synthesize these research results: $all_results"
+    outputs: [summary]
+    inputs:
+      all_results: research_all.results   # array of sub-flow terminal outputs
+```
+
+### Key Concepts
+
+- `for_each: step.field` — source list to iterate over. Supports nested fields like `step.design.sections`
+- `as: variable_name` — names the iteration variable (default: `item`). Accessed in sub-flow via `$job.<variable_name>`
+- `flow:` — embedded workflow with its own `steps:` block. Each iteration runs this as an independent sub-job
+- `on_error: fail_fast` (default) — first failure cancels remaining items and fails the step
+- `on_error: continue` — failures become `{"_error": "..."}` in results; remaining items continue
+- Results are collected in source list order. Output artifact: `{"results": [...]}`
+- Empty source lists complete immediately with `{"results": []}`
+- Parent-level `inputs:` on the for_each step are passed through to every sub-job
+
+### When to Use For-Each vs Manual Fan-Out
+
+**Use for_each when:**
+- The list size is dynamic (determined at runtime)
+- Every item runs the same pipeline
+- You want ordered results collected automatically
+
+**Use manual fan-out (explicit parallel steps) when:**
+- You have a fixed, known set of branches
+- Each branch has different logic/configuration
+- Branches need different executor types
+
+### For-Each Patterns
+
+#### Simple transform
+```yaml
+process_all:
+  for_each: source.items
+  flow:
+    steps:
+      transform:
+        run: scripts/transform.py
+        outputs: [result]
+        inputs:
+          item: $job.item
+```
+
+#### Multi-step pipeline per item
+```yaml
+review_all:
+  for_each: generate.sections
+  as: section
+  flow:
+    steps:
+      write:
+        executor: agent
+        prompt: "Write content for: $section"
+        outputs: [content]
+        inputs:
+          section: $job.section
+      review:
+        executor: llm
+        prompt: "Review: $text"
+        outputs: [score, feedback]
+        inputs:
+          text: write.content
+```
+
+#### With parent context passthrough
+```yaml
+process_all:
+  for_each: source.items
+  inputs:
+    style: $job.style              # parent input passed to all iterations
+  flow:
+    steps:
+      process:
+        executor: llm
+        prompt: "Process $item in style: $style"
+        outputs: [result]
+        inputs:
+          item: $job.item
+          style: $job.style
+```
+
+---
+
 ## Template Variables (Prompt Templating)
 
 Prompts use Python `string.Template` syntax: `$variable` or `${variable}`. Rendering uses `safe_substitute`.
@@ -1108,3 +1231,6 @@ Before outputting a flow, verify:
 11. Agent steps that pass text downstream use `output_mode: "stream_result"`
 12. Prompt `$variables` match input `local_name` values exactly
 13. All loop patterns have a safety cap (`attempt >= N` rule at medium priority)
+14. For-each steps: `for_each` source references a valid step and field that produces a list
+15. For-each steps: sub-flow steps access the iteration variable via `$job.<as_variable>`
+16. For-each steps: downstream steps reference `for_each_step.results` (the collected array)

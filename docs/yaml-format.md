@@ -194,6 +194,57 @@ build:
 
 Decorators wrap the executor. Applied in order (first decorator is outermost).
 
+### For-Each Steps
+
+For-each steps iterate over a list produced by an upstream step, running an embedded sub-flow for each item. Results are collected as an ordered array.
+
+```yaml
+steps:
+  generate_sections:
+    run: scripts/design.py
+    outputs: [sections]          # must produce a list
+
+  process_sections:
+    for_each: generate_sections.sections   # "step_name.field" — must be a list
+    as: section                            # variable name for current item (default: "item")
+    on_error: continue                     # "fail_fast" (default) | "continue"
+    outputs: [results]                     # defaults to [results] if omitted
+
+    flow:
+      steps:
+        write:
+          run: scripts/write.py
+          outputs: [content]
+          inputs:
+            section: $job.section          # access current item via $job.<as_variable>
+
+        review:
+          executor: human
+          prompt: "Review this section"
+          outputs: [approved]
+          inputs:
+            content: write.content
+```
+
+**Key concepts:**
+- `for_each: step.field` — the source list to iterate over (supports nested fields like `step.design.sections`)
+- `as: variable_name` — names the iteration variable (default: `item`). Accessed in sub-flow steps via `$job.<variable_name>`
+- `flow:` — an embedded workflow definition with its own `steps:` block. Each iteration runs this sub-flow as an independent sub-job
+- `on_error: fail_fast` — first failure cancels remaining items and fails the step (default)
+- `on_error: continue` — failures are recorded as `{"_error": "..."}` in results; remaining items continue
+- Results are collected in source list order. The output artifact is `{"results": [...]}`
+- Empty source lists complete immediately with `{"results": []}`
+- Parent-level `inputs:` are passed through to every sub-job alongside the iteration variable
+
+**Downstream access:**
+```yaml
+  summarize:
+    run: scripts/summarize.py
+    outputs: [summary]
+    inputs:
+      all_results: process_sections.results   # array of sub-flow terminal outputs
+```
+
 ## How It Maps to the Data Model
 
 | YAML | Data Model |
@@ -206,3 +257,6 @@ Decorators wrap the executor. Applied in order (first decorator is outermost).
 | `exits: [{when: "...", action: "loop", target: "s"}]` | `ExitRule("name", "expression", {"condition": "...", "action": "loop", "target": "s"})` |
 | `sequencing: [a, b]` | `StepDefinition.sequencing = ["a", "b"]` |
 | `outputs: [x, y]` | `StepDefinition.outputs = ["x", "y"]` |
+| `for_each: step.field` + `flow:` | `ForEachSpec(source_step, source_field)` + `StepDefinition.sub_flow` |
+| `as: var_name` | `ForEachSpec.item_var` |
+| `on_error: continue` | `ForEachSpec.on_error` |

@@ -11,6 +11,9 @@ from pathlib import Path
 from stepwise.events import (
     CONTEXT_INJECTED,
     EXIT_RESOLVED,
+    FOR_EACH_COMPLETED,
+    FOR_EACH_ITEM_COMPLETED,
+    FOR_EACH_STARTED,
     HUMAN_RERUN,
     JOB_COMPLETED,
     JOB_FAILED,
@@ -160,12 +163,20 @@ class Engine:
             run.error = "Job cancelled"
             run.completed_at = _now()
             self.store.save_run(run)
-            # Cancel sub-job too
+            # Cancel sub-job(s)
             if run.sub_job_id:
                 try:
                     self.cancel_job(run.sub_job_id)
                 except Exception:
                     pass
+            # Cancel for_each sub-jobs
+            es = run.executor_state or {}
+            if es.get("for_each"):
+                for sid in es.get("sub_job_ids", []):
+                    try:
+                        self.cancel_job(sid)
+                    except Exception:
+                        pass
 
         job.status = JobStatus.CANCELLED
         job.updated_at = _now()
@@ -269,6 +280,14 @@ class Engine:
         for run in runs:
             if run.sub_job_id:
                 sub_jobs.append(self.get_job_tree(run.sub_job_id))
+            # for_each sub-jobs
+            es = run.executor_state or {}
+            if es.get("for_each"):
+                for sid in es.get("sub_job_ids", []):
+                    try:
+                        sub_jobs.append(self.get_job_tree(sid))
+                    except KeyError:
+                        pass
         return {
             "job": job,
             "runs": runs,
@@ -372,7 +391,14 @@ class Engine:
 
             # 2. Check delegated runs
             for run in self.store.delegated_runs(job.id):
-                if run.sub_job_id:
+                # For-each delegated runs (multiple sub-jobs)
+                if run.executor_state and run.executor_state.get("for_each"):
+                    if self._check_for_each_completion(job, run):
+                        made_progress = True
+                        job = self.store.load_job(job.id)
+                        if job.status != JobStatus.RUNNING:
+                            return
+                elif run.sub_job_id:
                     try:
                         sub_job = self.store.load_job(run.sub_job_id)
                         if sub_job.status == JobStatus.COMPLETED:
@@ -541,9 +567,11 @@ class Engine:
         return True
 
     def _dep_steps(self, step_def: StepDefinition) -> list[str]:
-        """All dependency steps: input binding sources + sequencing."""
+        """All dependency steps: input binding sources + sequencing + for_each source."""
         deps = [b.source_step for b in step_def.inputs]
         deps.extend(step_def.sequencing)
+        if step_def.for_each:
+            deps.append(step_def.for_each.source_step)
         return deps
 
     # ── Job Completion ────────────────────────────────────────────────────
@@ -561,6 +589,31 @@ class Engine:
 
     def _launch(self, job: Job, step_name: str) -> StepRun:
         step_def = job.workflow.steps[step_name]
+
+        # For-each steps get special handling
+        if step_def.for_each and step_def.sub_flow:
+            try:
+                return self._launch_for_each(job, step_def)
+            except (ValueError, KeyError) as e:
+                import logging
+                logging.getLogger("stepwise.engine").error(
+                    f"For-each step '{step_name}' failed to launch: {e}", exc_info=True
+                )
+                run = StepRun(
+                    id=_gen_id("run"),
+                    job_id=job.id,
+                    step_name=step_name,
+                    attempt=self.store.next_attempt(job.id, step_name),
+                    status=StepRunStatus.FAILED,
+                    error=str(e),
+                    started_at=_now(),
+                    completed_at=_now(),
+                )
+                self.store.save_run(run)
+                self._emit(job.id, STEP_FAILED, {"step": step_name, "error": str(e)})
+                self._halt_job(job, run)
+                return run
+
         attempt = self.store.next_attempt(job.id, step_name)
         inputs, dep_run_ids = self._resolve_inputs(job, step_def)
 
@@ -596,8 +649,25 @@ class Engine:
         if step_def.outputs and "output_fields" not in exec_ref.config:
             exec_ref = exec_ref.with_config({"output_fields": step_def.outputs})
 
-        executor = self.registry.create(exec_ref)
-        result = executor.start(inputs, ctx)
+        try:
+            executor = self.registry.create(exec_ref)
+            result = executor.start(inputs, ctx)
+        except Exception as e:
+            import logging
+            logging.getLogger("stepwise.engine").error(
+                f"Step '{step_name}' executor crashed: {type(e).__name__}: {e}", exc_info=True
+            )
+            run.status = StepRunStatus.FAILED
+            run.error = f"Executor crash: {type(e).__name__}: {e}"
+            run.completed_at = _now()
+            self.store.save_run(run)
+            self._emit(job.id, STEP_FAILED, {
+                "step": step_name,
+                "attempt": attempt,
+                "error": str(e),
+            })
+            self._halt_job(job, run)
+            return run
 
         match result.type:
             case "data":
@@ -688,6 +758,203 @@ class Engine:
 
         return run
 
+    # ── For-Each Launching ────────────────────────────────────────────────
+
+    def _launch_for_each(self, job: Job, step_def: StepDefinition) -> StepRun:
+        """Launch a for_each step: resolve source list, create N sub-jobs."""
+        fe = step_def.for_each
+        assert fe is not None
+        assert step_def.sub_flow is not None
+
+        step_name = step_def.name
+        attempt = self.store.next_attempt(job.id, step_name)
+        inputs, dep_run_ids = self._resolve_inputs(job, step_def)
+
+        # Resolve the source list from the for_each source step
+        source_run = self.store.latest_completed_run(job.id, fe.source_step)
+        if not source_run or not source_run.result:
+            raise ValueError(
+                f"For-each step '{step_name}': source step '{fe.source_step}' "
+                f"has no completed run"
+            )
+
+        # Navigate to the source field (supports nested: "design.sections")
+        source_list = source_run.result.artifact
+        for part in fe.source_field.split("."):
+            if isinstance(source_list, dict):
+                source_list = source_list.get(part)
+            else:
+                source_list = None
+                break
+
+        if not isinstance(source_list, list):
+            raise ValueError(
+                f"For-each step '{step_name}': '{fe.source_step}.{fe.source_field}' "
+                f"is not a list (got {type(source_list).__name__})"
+            )
+
+        # Create the run
+        run = StepRun(
+            id=_gen_id("run"),
+            job_id=job.id,
+            step_name=step_name,
+            attempt=attempt,
+            status=StepRunStatus.DELEGATED,
+            inputs=inputs,
+            dep_run_ids={**dep_run_ids, fe.source_step: source_run.id},
+            started_at=_now(),
+        )
+
+        # Handle empty list: complete immediately with empty results
+        if len(source_list) == 0:
+            run.status = StepRunStatus.COMPLETED
+            run.completed_at = _now()
+            run.result = HandoffEnvelope(
+                artifact={"results": []},
+                sidecar=Sidecar(),
+                workspace=job.workspace_path,
+                timestamp=_now(),
+            )
+            self.store.save_run(run)
+            self._emit(job.id, STEP_COMPLETED, {
+                "step": step_name,
+                "attempt": attempt,
+                "for_each": True,
+                "item_count": 0,
+            })
+            self._process_completion(job, run)
+            return run
+
+        # Create sub-jobs for each item
+        sub_job_ids: list[str] = []
+        for i, item in enumerate(source_list):
+            sub_inputs = {
+                **inputs,  # parent inputs passed through
+                fe.item_var: item,  # the iteration variable
+            }
+            sub_workspace = os.path.join(
+                job.workspace_path, "for_each", step_name, str(i),
+            )
+            sub_job = self.create_job(
+                objective=f"{job.objective} > {step_name}[{i}]",
+                workflow=step_def.sub_flow,
+                inputs=sub_inputs,
+                config=job.config,
+                parent_job_id=job.id,
+                parent_step_run_id=run.id,
+                workspace_path=sub_workspace,
+            )
+            sub_job_ids.append(sub_job.id)
+
+        # Store sub-job tracking info in executor_state
+        run.executor_state = {
+            "for_each": True,
+            "sub_job_ids": sub_job_ids,
+            "item_count": len(source_list),
+            "on_error": fe.on_error,
+        }
+        self.store.save_run(run)
+
+        self._emit(job.id, FOR_EACH_STARTED, {
+            "step": step_name,
+            "attempt": attempt,
+            "item_count": len(source_list),
+            "sub_job_ids": sub_job_ids,
+        })
+
+        # Start all sub-jobs
+        for sub_job_id in sub_job_ids:
+            self.start_job(sub_job_id)
+
+        return run
+
+    def _check_for_each_completion(self, job: Job, run: StepRun) -> bool:
+        """Check if all sub-jobs for a for_each step are complete.
+        Returns True if progress was made.
+        """
+        if not run.executor_state or not run.executor_state.get("for_each"):
+            return False
+
+        sub_job_ids = run.executor_state.get("sub_job_ids", [])
+        on_error = run.executor_state.get("on_error", "fail_fast")
+
+        completed_results: list[dict | None] = [None] * len(sub_job_ids)
+        all_done = True
+        any_failed = False
+        failed_indices: list[int] = []
+
+        for i, sub_job_id in enumerate(sub_job_ids):
+            try:
+                sub_job = self.store.load_job(sub_job_id)
+            except KeyError:
+                all_done = False
+                continue
+
+            if sub_job.status == JobStatus.COMPLETED:
+                terminal_output = self._terminal_output(sub_job)
+                completed_results[i] = terminal_output.artifact
+            elif sub_job.status == JobStatus.FAILED:
+                any_failed = True
+                failed_indices.append(i)
+                if on_error == "fail_fast":
+                    # Cancel remaining sub-jobs
+                    for j, other_id in enumerate(sub_job_ids):
+                        if j != i:
+                            try:
+                                other = self.store.load_job(other_id)
+                                if other.status == JobStatus.RUNNING:
+                                    self.cancel_job(other_id)
+                            except (KeyError, ValueError):
+                                pass
+                    # Fail the for_each run
+                    run.status = StepRunStatus.FAILED
+                    run.error = f"For-each item {i} failed"
+                    run.completed_at = _now()
+                    self.store.save_run(run)
+                    self._halt_job(job, run)
+                    return True
+                else:
+                    # continue mode: record failure, keep going
+                    completed_results[i] = {"_error": f"Sub-job {sub_job_id} failed"}
+            elif sub_job.status in (JobStatus.CANCELLED, JobStatus.PAUSED):
+                any_failed = True
+                failed_indices.append(i)
+                completed_results[i] = {"_error": f"Sub-job {sub_job.status.value}"}
+            else:
+                all_done = False
+
+        if not all_done:
+            return False
+
+        # All sub-jobs are done — collect results in order
+        results = []
+        for r in completed_results:
+            results.append(r if r is not None else {})
+
+        run.result = HandoffEnvelope(
+            artifact={"results": results},
+            sidecar=Sidecar(),
+            workspace=job.workspace_path,
+            timestamp=_now(),
+        )
+        run.status = StepRunStatus.COMPLETED
+        run.completed_at = _now()
+        self.store.save_run(run)
+
+        self._emit(job.id, FOR_EACH_COMPLETED, {
+            "step": run.step_name,
+            "item_count": len(sub_job_ids),
+            "failed_count": len(failed_indices),
+        })
+        self._emit(job.id, STEP_COMPLETED, {
+            "step": run.step_name,
+            "attempt": run.attempt,
+            "for_each": True,
+        })
+
+        self._process_completion(job, run)
+        return True
+
     # ── Input Resolution ──────────────────────────────────────────────────
 
     def _resolve_inputs(self, job: Job, step_def: StepDefinition) -> tuple[dict, dict]:
@@ -702,7 +969,18 @@ class Engine:
             else:
                 latest = self.store.latest_completed_run(job.id, binding.source_step)
                 if latest and latest.result:
-                    inputs[binding.local_name] = latest.result.artifact.get(binding.source_field)
+                    value = latest.result.artifact.get(binding.source_field)
+                    # Support nested field access: "hero.headline" → artifact["hero"]["headline"]
+                    if value is None and "." in binding.source_field:
+                        parts = binding.source_field.split(".")
+                        value = latest.result.artifact
+                        for part in parts:
+                            if isinstance(value, dict):
+                                value = value.get(part)
+                            else:
+                                value = None
+                                break
+                    inputs[binding.local_name] = value
                     dep_run_ids[binding.source_step] = latest.id
 
         # Record sequencing deps

@@ -5,6 +5,7 @@ Used by `stepwise run` (without --watch).
 
 from __future__ import annotations
 
+import logging
 import signal
 import sys
 import time
@@ -169,6 +170,8 @@ def run_flow(
     config: StepwiseConfig | None = None,
     input_stream: TextIO | None = None,
     output_stream: TextIO | None = None,
+    report: bool = False,
+    report_output: str | None = None,
 ) -> int:
     """Run a flow headlessly. Returns exit code.
 
@@ -183,6 +186,14 @@ def run_flow(
         input_stream: Override stdin for human steps (testing).
         output_stream: Override output stream (testing).
     """
+    # Configure logging to stderr so we can see engine/executor errors
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(name)s %(levelname)s: %(message)s",
+        stream=sys.stderr,
+        force=True,
+    )
+
     # 1. Load and validate flow
     if not flow_path.exists():
         _err(f"File not found: {flow_path}", output_stream)
@@ -263,11 +274,20 @@ def run_flow(
             for run in all_runs:
                 if run.id not in seen_running and run.status in (
                     StepRunStatus.RUNNING, StepRunStatus.SUSPENDED,
+                    StepRunStatus.DELEGATED,
                 ):
                     seen_running.add(run.id)
                     step_def = job.workflow.steps.get(run.step_name)
                     executor_type = step_def.executor.type if step_def else "unknown"
-                    reporter.on_step_started(run.step_name, executor_type)
+                    # For-each: show item count
+                    es = run.executor_state or {}
+                    if es.get("for_each"):
+                        count = es.get("item_count", 0)
+                        reporter.on_step_started(
+                            f"{run.step_name} ({count} items)", executor_type
+                        )
+                    else:
+                        reporter.on_step_started(run.step_name, executor_type)
 
                 if run.id not in seen_completed:
                     if run.status == StepRunStatus.COMPLETED:
@@ -293,20 +313,55 @@ def run_flow(
             if job.status == JobStatus.COMPLETED:
                 total_time = time.time() - start_time
                 reporter.on_flow_completed(job, steps_completed, total_time)
+                if report:
+                    _generate_report(job, store, flow_path, report_output, output_stream)
                 return EXIT_SUCCESS
             elif job.status in (JobStatus.FAILED, JobStatus.CANCELLED):
                 reporter.on_flow_failed(job)
+                if report:
+                    _generate_report(job, store, flow_path, report_output, output_stream)
                 return EXIT_JOB_FAILED
 
             # Tick again
             time.sleep(0.1)
-            engine.tick()
+            try:
+                engine.tick()
+            except Exception as e:
+                import traceback
+                logging.getLogger("stepwise.runner").error(
+                    f"Tick crashed: {e}\n{traceback.format_exc()}"
+                )
+                _err(f"\n✗ Engine error: {type(e).__name__}: {e}", output_stream)
+                return EXIT_JOB_FAILED
 
     finally:
         # Restore signal handlers
         signal.signal(signal.SIGINT, original_sigint)
         signal.signal(signal.SIGTERM, original_sigterm)
         store.close()
+
+
+def _generate_report(
+    job: Job, store: SQLiteStore, flow_path: Path,
+    report_output: str | None, output_stream: TextIO | None,
+) -> None:
+    """Generate HTML report after flow completion."""
+    from stepwise.report import generate_report, save_report, default_report_path
+
+    try:
+        html = generate_report(job, store, flow_path)
+        if report_output:
+            out_path = Path(report_output)
+        else:
+            out_path = default_report_path(flow_path)
+        save_report(html, out_path)
+        out = output_stream or sys.stderr
+        out.write(f"\n📄 Report: {out_path}\n")
+        out.flush()
+    except Exception as e:
+        out = output_stream or sys.stderr
+        out.write(f"\nWarning: Failed to generate report: {e}\n")
+        out.flush()
 
 
 def _err(msg: str, stream: TextIO | None = None) -> None:

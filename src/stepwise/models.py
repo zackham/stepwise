@@ -168,6 +168,35 @@ class InputBinding:
         )
 
 
+# ── For-Each Spec ─────────────────────────────────────────────────────
+
+
+@dataclass
+class ForEachSpec:
+    """Specifies iteration over a list output from an upstream step."""
+    source_step: str  # which step produces the list
+    source_field: str  # which output field is the list
+    item_var: str = "item"  # variable name for current element (default: "item")
+    on_error: str = "fail_fast"  # "fail_fast" | "continue"
+
+    def to_dict(self) -> dict:
+        return {
+            "source_step": self.source_step,
+            "source_field": self.source_field,
+            "item_var": self.item_var,
+            "on_error": self.on_error,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> ForEachSpec:
+        return cls(
+            source_step=d["source_step"],
+            source_field=d["source_field"],
+            item_var=d.get("item_var", "item"),
+            on_error=d.get("on_error", "fail_fast"),
+        )
+
+
 # ── Step Definition ────────────────────────────────────────────────────
 
 
@@ -181,6 +210,8 @@ class StepDefinition:
     exit_rules: list[ExitRule] = field(default_factory=list)
     idempotency: str = "idempotent"  # "idempotent" | "retriable_with_guard" | "non_retriable"
     limits: StepLimits | None = None  # M4: cost/time/iteration limits
+    for_each: ForEachSpec | None = None  # iteration over upstream list
+    sub_flow: WorkflowDefinition | None = None  # embedded flow for for_each
 
     def to_dict(self) -> dict:
         d = {
@@ -194,6 +225,10 @@ class StepDefinition:
         }
         if self.limits:
             d["limits"] = self.limits.to_dict()
+        if self.for_each:
+            d["for_each"] = self.for_each.to_dict()
+        if self.sub_flow:
+            d["sub_flow"] = self.sub_flow.to_dict()
         return d
 
     @classmethod
@@ -207,6 +242,8 @@ class StepDefinition:
             exit_rules=[ExitRule.from_dict(r) for r in d.get("exit_rules", [])],
             idempotency=d.get("idempotency", "idempotent"),
             limits=StepLimits.from_dict(d["limits"]) if d.get("limits") else None,
+            for_each=ForEachSpec.from_dict(d["for_each"]) if d.get("for_each") else None,
+            sub_flow=WorkflowDefinition.from_dict(d["sub_flow"]) if d.get("sub_flow") else None,
         )
 
 
@@ -270,7 +307,9 @@ class WorkflowDefinition:
                     )
                 elif binding.source_step != "$job":
                     source_step = self.steps[binding.source_step]
-                    if binding.source_field not in source_step.outputs:
+                    # Support nested field references: "hero.headline" checks "hero" exists
+                    field_root = binding.source_field.split(".")[0]
+                    if field_root not in source_step.outputs:
                         errors.append(
                             f"Step '{name}': input binding references unknown field "
                             f"'{binding.source_field}' on step '{binding.source_step}'"
@@ -312,6 +351,32 @@ class WorkflowDefinition:
                             f"'{target}' is not a valid step"
                         )
 
+            # Check for_each steps
+            if step.for_each:
+                fe = step.for_each
+                if fe.source_step not in step_names:
+                    errors.append(
+                        f"Step '{name}': for_each references unknown step '{fe.source_step}'"
+                    )
+                elif fe.source_field.split(".")[0] not in self.steps[fe.source_step].outputs:
+                    errors.append(
+                        f"Step '{name}': for_each references unknown field "
+                        f"'{fe.source_field}' on step '{fe.source_step}'"
+                    )
+                if not step.sub_flow:
+                    errors.append(
+                        f"Step '{name}': for_each requires a 'flow' block"
+                    )
+                elif step.sub_flow:
+                    sub_errors = step.sub_flow.validate()
+                    for se in sub_errors:
+                        errors.append(f"Step '{name}' sub-flow: {se}")
+                if fe.on_error not in ("fail_fast", "continue"):
+                    errors.append(
+                        f"Step '{name}': for_each on_error must be 'fail_fast' or 'continue', "
+                        f"got '{fe.on_error}'"
+                    )
+
         # Check for cycles
         if not errors:
             cycle_errors = self._detect_cycles()
@@ -330,13 +395,14 @@ class WorkflowDefinition:
         return errors
 
     def entry_steps(self) -> list[str]:
-        """Steps with no dependencies (no inputs or sequencing)."""
+        """Steps with no dependencies (no inputs, sequencing, or for_each source)."""
         result = []
         for name, step in self.steps.items():
             has_step_deps = any(
                 b.source_step != "$job" for b in step.inputs
             )
-            if not has_step_deps and not step.sequencing:
+            has_for_each_dep = step.for_each is not None
+            if not has_step_deps and not step.sequencing and not has_for_each_dep:
                 result.append(name)
         return result
 
@@ -353,6 +419,8 @@ class WorkflowDefinition:
                     depended_on.add(binding.source_step)
             for seq in step.sequencing:
                 depended_on.add(seq)
+            if step.for_each:
+                depended_on.add(step.for_each.source_step)
 
         terminals = []
         for name in self.steps:
@@ -384,6 +452,8 @@ class WorkflowDefinition:
                     deps.add(binding.source_step)
             for seq in step.sequencing:
                 deps.add(seq)
+            if step.for_each:
+                deps.add(step.for_each.source_step)
             for dep in deps:
                 if dep in adj:
                     adj[dep].append(name)

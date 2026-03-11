@@ -17,8 +17,10 @@ from stepwise.models import (
     ExecutorRef,
     ExitRule,
     FlowMetadata,
+    ForEachSpec,
     InputBinding,
     StepDefinition,
+    StepLimits,
     WorkflowDefinition,
 )
 
@@ -124,6 +126,14 @@ def _parse_executor(step_data: dict, step_name: str) -> ExecutorRef:
         for k in ("failure_rate", "partial_rate", "garbage_rate"):
             if k in step_data:
                 config[k] = step_data[k]
+    elif executor_type == "agent":
+        for k in ("prompt", "output_mode", "output_path"):
+            if k in step_data:
+                config[k] = step_data[k]
+        if "prompt" not in config:
+            raise ValueError(
+                f"Step '{step_name}': Agent executor requires 'prompt'"
+            )
     elif executor_type == "llm":
         for k in ("prompt", "model", "system", "temperature", "max_tokens"):
             if k in step_data:
@@ -192,6 +202,69 @@ def _parse_decorators(dec_data: list[dict], step_name: str) -> list[DecoratorRef
     return decorators
 
 
+def _parse_for_each(step_data: dict, step_name: str) -> tuple[ForEachSpec | None, WorkflowDefinition | None]:
+    """Parse for_each and flow blocks from step YAML data."""
+    for_each_source = step_data.get("for_each")
+    if not for_each_source:
+        return None, None
+
+    if not isinstance(for_each_source, str):
+        raise ValueError(
+            f"Step '{step_name}': 'for_each' must be a string like 'step.field'"
+        )
+
+    # Parse source: "step_name.field" or "step_name.field.nested"
+    parts = for_each_source.split(".", 1)
+    if len(parts) != 2:
+        raise ValueError(
+            f"Step '{step_name}': 'for_each' must be 'step_name.field_name', "
+            f"got '{for_each_source}'"
+        )
+    source_step, source_field = parts
+
+    # Item variable name
+    item_var = step_data.get("as", "item")
+    if not isinstance(item_var, str) or not item_var.isidentifier():
+        raise ValueError(
+            f"Step '{step_name}': 'as' must be a valid identifier, got '{item_var}'"
+        )
+
+    # Error policy
+    on_error = step_data.get("on_error", "fail_fast")
+
+    for_each_spec = ForEachSpec(
+        source_step=source_step,
+        source_field=source_field,
+        item_var=item_var,
+        on_error=on_error,
+    )
+
+    # Parse embedded flow
+    flow_data = step_data.get("flow")
+    if not flow_data or not isinstance(flow_data, dict):
+        raise ValueError(
+            f"Step '{step_name}': for_each requires a 'flow' block"
+        )
+
+    flow_steps_data = flow_data.get("steps")
+    if not flow_steps_data or not isinstance(flow_steps_data, dict):
+        raise ValueError(
+            f"Step '{step_name}': for_each flow must have a 'steps' mapping"
+        )
+
+    flow_steps: dict[str, StepDefinition] = {}
+    for sub_step_name, sub_step_data in flow_steps_data.items():
+        if not isinstance(sub_step_data, dict):
+            raise ValueError(
+                f"Step '{step_name}' sub-flow step '{sub_step_name}': must be a mapping"
+            )
+        flow_steps[sub_step_name] = _parse_step(sub_step_name, sub_step_data)
+
+    sub_flow = WorkflowDefinition(steps=flow_steps)
+
+    return for_each_spec, sub_flow
+
+
 def _parse_step(step_name: str, step_data: dict) -> StepDefinition:
     """Parse a single step from YAML data."""
     # Outputs
@@ -199,6 +272,49 @@ def _parse_step(step_name: str, step_data: dict) -> StepDefinition:
     if not isinstance(outputs, list):
         raise ValueError(f"Step '{step_name}': 'outputs' must be a list")
 
+    # Check for for_each (changes how the step is parsed)
+    for_each_spec, sub_flow = _parse_for_each(step_data, step_name)
+
+    if for_each_spec:
+        # For-each step: executor is a no-op placeholder, the engine handles it
+        executor = ExecutorRef("for_each", {})
+
+        # Inputs are parent-level bindings passed to every iteration
+        inputs_data = step_data.get("inputs", {})
+        input_bindings: list[InputBinding] = []
+        if isinstance(inputs_data, dict):
+            for local_name, source in inputs_data.items():
+                if isinstance(source, str):
+                    try:
+                        binding = _parse_input_binding(local_name, source)
+                        input_bindings.append(binding)
+                    except ValueError as e:
+                        raise ValueError(f"Step '{step_name}': {e}") from e
+                else:
+                    raise ValueError(
+                        f"Step '{step_name}': input '{local_name}' source must be a string, "
+                        f"got {type(source).__name__}"
+                    )
+
+        # Outputs default to ["results"] for for_each steps
+        if not outputs:
+            outputs = ["results"]
+
+        sequencing = step_data.get("sequencing", [])
+        if isinstance(sequencing, str):
+            sequencing = [sequencing]
+
+        return StepDefinition(
+            name=step_name,
+            outputs=outputs,
+            executor=executor,
+            inputs=input_bindings,
+            sequencing=sequencing,
+            for_each=for_each_spec,
+            sub_flow=sub_flow,
+        )
+
+    # Normal step parsing
     # Executor
     executor = _parse_executor(step_data, step_name)
 
@@ -237,6 +353,12 @@ def _parse_step(step_name: str, step_data: dict) -> StepDefinition:
     # Idempotency
     idempotency = step_data.get("idempotency", "idempotent")
 
+    # Limits
+    limits = None
+    limits_data = step_data.get("limits")
+    if isinstance(limits_data, dict):
+        limits = StepLimits.from_dict(limits_data)
+
     return StepDefinition(
         name=step_name,
         outputs=outputs,
@@ -245,6 +367,7 @@ def _parse_step(step_name: str, step_data: dict) -> StepDefinition:
         sequencing=sequencing,
         exit_rules=exit_rules,
         idempotency=idempotency,
+        limits=limits,
     )
 
 
