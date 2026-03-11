@@ -262,54 +262,30 @@ Authorization: Bearer stw_tok_abc123...
 
 ## Website (stepwise.run)
 
-The website is generated from this repository. It serves two purposes: project homepage and flow gallery.
+The website lives in a separate repo (`~/work/stepwise.run/`). It consumes this doc as the API spec.
 
-### Structure
+### URL Structure
 
 ```
 stepwise.run/
   /                          → homepage (project overview + featured flows)
-  /docs                      → documentation (from docs/)
+  /docs                      → documentation
   /flows                     → flow gallery (browse, search, inspect)
   /flows/{name}              → flow detail page (DAG preview, metadata, download)
   /flows/{name}/raw          → raw YAML download
   /api/...                   → registry API (above)
 ```
 
-### Homepage Generation
-
-The homepage is built from content in this repo:
-
-```
-web/site/
-  index.html                 → landing page template
-  docs/                      → rendered from docs/*.md
-  public/                    → static assets (logo, og-image, etc.)
-```
-
-The build step renders markdown docs to HTML and assembles the landing page. The flow gallery and detail pages are dynamic (served by the registry API + a thin frontend).
-
 ### Flow Detail Pages
 
 Each published flow gets a page at `stepwise.run/flows/{name}` showing:
 
 1. **Metadata** — name, author, description, tags, download count, publish date
-2. **DAG preview** — static SVG render of the step graph (same layout as the web UI)
+2. **DAG preview** — static render of the step graph (reuses dagre layout from the Stepwise web UI)
 3. **Step list** — executor types, outputs, exit rules summarized
 4. **YAML source** — syntax-highlighted, copyable
 5. **Download button** → `stepwise flow get {name}`
 6. **Run command** — copy-pasteable `stepwise flow get {name} && stepwise run {name}.flow.yaml`
-
-### DAG Preview Rendering
-
-Flow detail pages render a static DAG preview. This reuses the existing dagre layout code from the web UI:
-
-```
-web/src/lib/dag-renderer.ts   → shared layout logic (dagre)
-web/site/flow-preview.ts      → static SVG generation for the website
-```
-
-The preview is generated server-side when a flow is published and cached as SVG. It updates when the flow is updated.
 
 ---
 
