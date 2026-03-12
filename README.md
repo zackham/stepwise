@@ -21,19 +21,6 @@ Stepwise is a workflow engine that coordinates multi-step jobs where each step c
 curl -fsSL https://raw.githubusercontent.com/zackham/stepwise/master/install.sh | sh
 ```
 
-Or install directly with your preferred tool:
-
-```bash
-uv tool install stepwise-run@git+https://github.com/zackham/stepwise.git
-```
-
-Or with pipx/pip:
-
-```bash
-pipx install git+https://github.com/zackham/stepwise.git
-pip install git+https://github.com/zackham/stepwise.git
-```
-
 ## Get started in 30 seconds
 
 ```bash
