@@ -856,6 +856,47 @@ def list_local_flows():
     return result
 
 
+class CreateFlowRequest(BaseModel):
+    name: str
+
+
+@app.post("/api/local-flows")
+def create_local_flow(req: CreateFlowRequest):
+    """Create a new flow file with a minimal template."""
+    import re
+    from stepwise.flow_resolution import FLOW_NAME_PATTERN
+
+    name = req.name.strip()
+    if not name or not FLOW_NAME_PATTERN.match(name):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid flow name: '{name}'. Must match [a-zA-Z0-9_-]+",
+        )
+
+    flows_dir = _project_dir / "flows"
+    flows_dir.mkdir(parents=True, exist_ok=True)
+    flow_file = flows_dir / f"{name}.flow.yaml"
+
+    if flow_file.exists():
+        raise HTTPException(status_code=409, detail=f"Flow '{name}' already exists")
+
+    template = (
+        f"name: {name}\n"
+        f'description: ""\n'
+        f"\n"
+        f"steps:\n"
+        f"  hello:\n"
+        f"    run: 'echo \"{{\\\"message\\\": \\\"hello from {name}\\\"}}\"'\n"
+        f"    outputs: [message]\n"
+    )
+    flow_file.write_text(template)
+
+    return {
+        "path": str(flow_file.relative_to(_project_dir)),
+        "name": name,
+    }
+
+
 @app.get("/api/flows/local/{path:path}")
 def load_local_flow(path: str):
     """Load a specific flow by its relative path."""

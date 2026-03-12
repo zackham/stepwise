@@ -12,6 +12,7 @@ import { ChatPanel } from "@/components/editor/ChatPanel";
 import {
   useLocalFlows,
   useLocalFlow,
+  useCreateFlow,
   useParseYaml,
   useSaveFlow,
   usePatchStep,
@@ -20,7 +21,7 @@ import {
   useRegistryFlow,
   useInstallFlow,
 } from "@/hooks/useEditor";
-import { FileCode, FolderOpen, Globe, Sparkles } from "lucide-react";
+import { FileCode, FolderOpen, Globe, Sparkles, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { FlowDefinition, LocalFlow, RegistryFlow, ParseResult } from "@/lib/types";
 
@@ -38,6 +39,11 @@ export function EditorPage() {
 
   // Sidebar tab state
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("local");
+
+  // Create flow
+  const createFlowMutation = useCreateFlow();
+  const [showNewFlowInput, setShowNewFlowInput] = useState(false);
+  const [newFlowName, setNewFlowName] = useState("");
 
   // Fetch local flows list
   const { data: flows = [] } = useLocalFlows();
@@ -149,6 +155,20 @@ export function EditorPage() {
     },
     [isDirty, navigate]
   );
+
+  // Create new flow
+  const handleCreateFlow = useCallback(() => {
+    const name = newFlowName.trim();
+    if (!name) return;
+    createFlowMutation.mutate(name, {
+      onSuccess: (result) => {
+        setShowNewFlowInput(false);
+        setNewFlowName("");
+        setSidebarTab("local");
+        navigate({ to: "/editor/$flowName", params: { flowName: result.name } });
+      },
+    });
+  }, [newFlowName, createFlowMutation, navigate]);
 
   // Visual editing mutations
   const patchStepMutation = usePatchStep();
@@ -332,6 +352,55 @@ export function EditorPage() {
           </button>
         </div>
 
+        {/* New Flow button + inline input */}
+        <div className="px-2 py-2 border-b border-border">
+          {showNewFlowInput ? (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleCreateFlow();
+              }}
+              className="flex gap-1"
+            >
+              <input
+                autoFocus
+                value={newFlowName}
+                onChange={(e) => setNewFlowName(e.target.value)}
+                placeholder="flow-name"
+                className="flex-1 px-2 py-1 text-xs rounded bg-zinc-800 border border-zinc-700 text-foreground placeholder:text-zinc-600 focus:outline-none focus:border-blue-500"
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setShowNewFlowInput(false);
+                    setNewFlowName("");
+                  }
+                }}
+              />
+              <button
+                type="submit"
+                disabled={!newFlowName.trim() || createFlowMutation.isPending}
+                className="px-2 py-1 text-xs rounded bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {createFlowMutation.isPending ? "..." : "Create"}
+              </button>
+            </form>
+          ) : (
+            <button
+              onClick={() => setShowNewFlowInput(true)}
+              className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs rounded border border-dashed border-zinc-700 text-zinc-400 hover:text-foreground hover:border-zinc-500 transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              New Flow
+            </button>
+          )}
+          {createFlowMutation.isError && (
+            <p className="mt-1 text-xs text-red-400">
+              {(createFlowMutation.error as Error).message?.includes("409")
+                ? "Flow already exists"
+                : "Failed to create flow"}
+            </p>
+          )}
+        </div>
+
         {/* Tab content */}
         {sidebarTab === "local" ? (
           <FlowFileList
@@ -448,16 +517,22 @@ export function EditorPage() {
             <div className="text-center text-zinc-600">
               <FileCode className="w-12 h-12 mx-auto mb-3 opacity-50" />
               <p className="text-sm">Select a flow to edit</p>
-              <p className="text-xs text-zinc-700 mt-1">
-                or browse the{" "}
+              <div className="flex items-center justify-center gap-3 mt-3">
+                <button
+                  onClick={() => setShowNewFlowInput(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-blue-600 text-white hover:bg-blue-500 transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  New Flow
+                </button>
                 <button
                   onClick={() => setSidebarTab("registry")}
-                  className="text-blue-400 hover:text-blue-300"
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded border border-zinc-700 text-zinc-400 hover:text-foreground hover:border-zinc-500 transition-colors"
                 >
-                  registry
+                  <Globe className="w-3.5 h-3.5" />
+                  Browse Registry
                 </button>
-                {" "}to install one
-              </p>
+              </div>
             </div>
           </div>
         )}

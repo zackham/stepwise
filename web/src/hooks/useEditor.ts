@@ -9,6 +9,16 @@ export function useLocalFlows() {
   });
 }
 
+export function useCreateFlow() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => api.createLocalFlow(name),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["localFlows"] });
+    },
+  });
+}
+
 export function useLocalFlow(path: string | undefined) {
   return useQuery({
     queryKey: ["localFlow", path],

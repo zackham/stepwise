@@ -218,6 +218,15 @@ export function fetchLocalFlows(): Promise<LocalFlow[]> {
   return request<LocalFlow[]>("/local-flows");
 }
 
+export function createLocalFlow(
+  name: string
+): Promise<{ path: string; name: string }> {
+  return request<{ path: string; name: string }>("/local-flows", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
 export function fetchLocalFlow(path: string): Promise<LocalFlowDetail> {
   return request<LocalFlowDetail>(`/flows/local/${path}`);
 }

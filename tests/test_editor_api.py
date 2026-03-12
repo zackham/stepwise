@@ -385,3 +385,36 @@ steps:
             json={"yaml": SIMPLE_FLOW},
         )
         assert resp.status_code == 400
+
+
+# ── POST /api/local-flows (create flow) ─────────────────────────────
+
+
+class TestCreateFlow:
+
+    def test_create_flow(self, client, project_dir):
+        resp = client.post("/api/local-flows", json={"name": "new-flow"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["name"] == "new-flow"
+        assert "path" in data
+        assert (project_dir / "flows" / "new-flow.flow.yaml").exists()
+
+    def test_create_flow_appears_in_list(self, client, project_dir):
+        client.post("/api/local-flows", json={"name": "listed-flow"})
+        resp = client.get("/api/local-flows")
+        names = {f["name"] for f in resp.json()}
+        assert "listed-flow" in names
+
+    def test_create_duplicate_fails(self, client, project_dir):
+        client.post("/api/local-flows", json={"name": "dup-flow"})
+        resp = client.post("/api/local-flows", json={"name": "dup-flow"})
+        assert resp.status_code == 409
+
+    def test_create_invalid_name(self, client, project_dir):
+        resp = client.post("/api/local-flows", json={"name": "bad name!"})
+        assert resp.status_code == 400
+
+    def test_create_empty_name(self, client, project_dir):
+        resp = client.post("/api/local-flows", json={"name": ""})
+        assert resp.status_code == 400
