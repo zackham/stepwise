@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
+import threading
 import uuid
 from pathlib import Path
 from typing import Any, Generator
@@ -378,11 +380,38 @@ def _acpx_agent_loop(
         # Emit session_id so frontend can persist it
         yield {"type": "session", "session_id": sid}
 
-        # Stream NDJSON events from stdout
+        # Stream NDJSON events from stdout with keepalive support.
+        # acpx goes silent during long thinking phases — without
+        # periodic keepalives the HTTP stream goes idle and browsers
+        # or reverse proxies close the connection.
         full_text = ""
         total_tokens = 0
+        _KEEPALIVE_INTERVAL = 15  # seconds
 
-        for raw_line in proc.stdout:
+        event_queue: queue.Queue[bytes | None] = queue.Queue()
+
+        def _reader() -> None:
+            """Read stdout lines into a queue, then signal EOF."""
+            try:
+                for raw_line in proc.stdout:
+                    event_queue.put(raw_line)
+            finally:
+                event_queue.put(None)  # sentinel
+
+        reader_thread = threading.Thread(target=_reader, daemon=True)
+        reader_thread.start()
+
+        while True:
+            try:
+                raw_line = event_queue.get(timeout=_KEEPALIVE_INTERVAL)
+            except queue.Empty:
+                # No output for KEEPALIVE_INTERVAL seconds — send ping
+                yield {"type": "keepalive"}
+                continue
+
+            if raw_line is None:
+                break  # EOF
+
             line = raw_line.decode("utf-8", errors="replace").strip()
             if not line:
                 continue
@@ -422,6 +451,7 @@ def _acpx_agent_loop(
             elif event_type == "usage_update":
                 total_tokens = update.get("used", total_tokens)
 
+        reader_thread.join(timeout=5)
         proc.wait()
 
         # Extract file blocks (new format: ```file:path)

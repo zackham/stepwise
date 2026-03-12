@@ -361,7 +361,7 @@ export function deleteFlowFile(
 // ── Editor LLM Chat ──────────────────────────────────────────────────
 
 export interface ChatChunk {
-  type: "text" | "yaml" | "done" | "error" | "tool_use" | "tool_result" | "file_block" | "session";
+  type: "text" | "yaml" | "done" | "error" | "tool_use" | "tool_result" | "file_block" | "session" | "keepalive";
   content?: string;
   apply_id?: string;
   model?: string;
