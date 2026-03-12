@@ -101,7 +101,7 @@ Every executor's `start()` returns an `ExecutorResult` with one of these `type` 
 ### Web UI (`web/src/`)
 
 - Routes in `web/src/router.tsx` via `createRoute()`. Layout: `components/layout/AppLayout.tsx`
-- Pages in `web/src/pages/`: JobDashboard, JobDetailPage, JobEventsPage, JobTreePage, BuilderPage
+- Pages in `web/src/pages/`: JobDashboard, JobDetailPage, JobEventsPage, JobTreePage, EditorPage
 - All API calls through `lib/api.ts` — never use raw `fetch()` elsewhere
 - React Query hooks in `hooks/useStepwise.ts`. WebSocket: `hooks/useStepwiseWebSocket.ts`. Agent stream: `hooks/useAgentStream.ts`
 - Dark mode only. Tailwind 4 + shadcn/ui for all styling — do not add CSS files or inline styles
