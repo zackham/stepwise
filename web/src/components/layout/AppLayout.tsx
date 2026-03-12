@@ -1,4 +1,4 @@
-import { Outlet, Link, useRouter } from "@tanstack/react-router";
+import { Outlet, Link, useLocation } from "@tanstack/react-router";
 import { useStepwiseWebSocket } from "@/hooks/useStepwiseWebSocket";
 import { useEngineStatus } from "@/hooks/useStepwise";
 import { Workflow, LayoutGrid, FileCode, Zap } from "lucide-react";
@@ -6,10 +6,10 @@ import { cn } from "@/lib/utils";
 
 export function AppLayout() {
   useStepwiseWebSocket();
-  const router = useRouter();
+  const location = useLocation();
   const { data: status } = useEngineStatus();
 
-  const currentPath = router.state.location.pathname;
+  const currentPath = location.pathname;
   const isJobsActive =
     currentPath === "/jobs" || currentPath.startsWith("/jobs/");
   const isEditorActive = currentPath.startsWith("/editor");

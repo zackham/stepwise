@@ -24,7 +24,7 @@ import {
   useInstallFlow,
   useFlowFiles,
 } from "@/hooks/useEditor";
-import { FileCode, FolderOpen, Globe, Sparkles, Plus } from "lucide-react";
+import { FileCode, FolderOpen, Globe, Plus, Code, Workflow } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { FlowDefinition, LocalFlow, RegistryFlow, ParseResult } from "@/lib/types";
 
@@ -32,6 +32,7 @@ const EMPTY_SET = new Set<string>();
 const EMPTY_RUNS: never[] = [];
 
 type SidebarTab = "local" | "registry";
+type CenterTab = "flow" | "source";
 
 export function EditorPage() {
   const navigate = useNavigate();
@@ -74,6 +75,7 @@ export function EditorPage() {
   const [addStepOpen, setAddStepOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [viewingFile, setViewingFile] = useState<string | null>(null);
+  const [centerTab, setCenterTab] = useState<CenterTab>("flow");
 
   // Registry state
   const [selectedRegistryFlow, setSelectedRegistryFlow] = useState<RegistryFlow | null>(null);
@@ -100,6 +102,7 @@ export function EditorPage() {
       setParseErrors([]);
       setSelectedStep(null);
       setViewingFile(null);
+      setCenterTab("flow");
     }
   }, [flowDetail]);
 
@@ -160,7 +163,7 @@ export function EditorPage() {
   const handleSelectFlow = useCallback(
     (flow: LocalFlow) => {
       if (isDirty && !confirm("Discard unsaved changes?")) return;
-      setSelectedRegistryFlow(null); // clear registry selection
+      setSelectedRegistryFlow(null);
       navigate({ to: "/editor/$flowName", params: { flowName: flow.name } });
     },
     [isDirty, navigate]
@@ -185,7 +188,6 @@ export function EditorPage() {
   const addStepMutation = useAddStep();
   const deleteStepMutation = useDeleteStep();
 
-  // Apply result from visual edit (patch/add/delete) - updates YAML + flow state
   const applyVisualResult = useCallback(
     (result: ParseResult) => {
       if (result.raw_yaml) {
@@ -202,7 +204,6 @@ export function EditorPage() {
     []
   );
 
-  // Patch step field from visual panel
   const handlePatchStep = useCallback(
     (changes: Record<string, unknown>) => {
       if (!selectedFlow?.path || !selectedStep) return;
@@ -214,7 +215,6 @@ export function EditorPage() {
     [selectedFlow?.path, selectedStep, patchStepMutation, applyVisualResult]
   );
 
-  // Add step
   const handleAddStep = useCallback(
     (name: string, executor: string) => {
       if (!selectedFlow?.path) return;
@@ -232,7 +232,6 @@ export function EditorPage() {
     [selectedFlow?.path, addStepMutation, applyVisualResult]
   );
 
-  // Delete step
   const handleDeleteStep = useCallback(() => {
     if (!selectedFlow?.path || !selectedStep) return;
     if (!confirm(`Delete step "${selectedStep}"?`)) return;
@@ -253,7 +252,6 @@ export function EditorPage() {
     installMutation.mutate(selectedRegistryFlow.slug, {
       onSuccess: (result) => {
         setInstalledSlugs((prev) => new Set([...prev, selectedRegistryFlow.slug]));
-        // Switch to local tab and open the installed flow
         setSidebarTab("local");
         setSelectedRegistryFlow(null);
         navigate({ to: "/editor/$flowName", params: { flowName: result.name } });
@@ -261,16 +259,14 @@ export function EditorPage() {
     });
   }, [selectedRegistryFlow, installMutation, navigate]);
 
-  // Select registry flow for preview
   const handleSelectRegistryFlow = useCallback((flow: RegistryFlow) => {
     setSelectedRegistryFlow(flow);
   }, []);
 
-  // Apply YAML from chat (marks as unsaved)
+  // Apply YAML from chat
   const handleApplyChat = useCallback(
     (yaml: string) => {
       setYamlContent(yaml);
-      // Trigger parse
       clearTimeout(parseTimerRef.current);
       parseMutation.mutate(yaml, {
         onSuccess: (result) => {
@@ -286,7 +282,15 @@ export function EditorPage() {
     [parseMutation]
   );
 
-  // Ctrl+S global handler (via ref so effect doesn't re-register)
+  // Click file in tree → open source tab with that file
+  const handleSelectFile = useCallback((filePath: string | null) => {
+    setViewingFile(filePath);
+    if (filePath) {
+      setCenterTab("source");
+    }
+  }, []);
+
+  // Ctrl+S global handler
   const handleSaveRef = useRef(handleSave);
   handleSaveRef.current = handleSave;
 
@@ -316,18 +320,11 @@ export function EditorPage() {
     return () => clearTimeout(parseTimerRef.current);
   }, []);
 
-  // Build workflow for DAG view
   const dagWorkflow = parsedFlow ?? { steps: {} };
-
-  // Get the selected step definition for the panel
   const selectedStepDef = selectedStep && parsedFlow?.steps[selectedStep]
     ? parsedFlow.steps[selectedStep]
     : null;
-
-  // Registry DAG preview workflow
   const registryDagWorkflow = registryFlowDetail?.flow ?? { steps: {} };
-
-  // Determine if we're in registry preview mode
   const isRegistryPreview = sidebarTab === "registry" && selectedRegistryFlow != null;
 
   return (
@@ -362,7 +359,7 @@ export function EditorPage() {
           </button>
         </div>
 
-        {/* New Flow button + inline input */}
+        {/* New Flow button */}
         <div className="px-2 py-2 border-b border-border">
           {showNewFlowInput ? (
             <form
@@ -420,13 +417,12 @@ export function EditorPage() {
               onSelect={handleSelectFlow}
               dirtyFlows={dirtyFlows}
             />
-            {/* Flow file tree for directory flows */}
             {isDirectoryFlow && flowFilesData?.files && (
               <div className="border-t border-border mt-1 pt-1">
                 <FlowFileTree
                   files={flowFilesData.files}
                   selectedFile={viewingFile}
-                  onSelectFile={setViewingFile}
+                  onSelectFile={handleSelectFile}
                   onRefresh={() => refetchFiles()}
                   isRefreshing={isRefetchingFiles}
                 />
@@ -444,7 +440,6 @@ export function EditorPage() {
       {/* Center + right panels */}
       <div className="flex-1 flex flex-col min-w-0">
         {isRegistryPreview ? (
-          /* Registry preview mode */
           <div className="flex-1 flex min-h-0">
             <div className="flex-1 min-w-0">
               {registryFlowDetail?.flow ? (
@@ -473,7 +468,6 @@ export function EditorPage() {
             </div>
           </div>
         ) : flowName && selectedFlow ? (
-          /* Editor mode */
           <>
             <EditorToolbar
               flowName={flowName}
@@ -486,24 +480,38 @@ export function EditorPage() {
               chatOpen={chatOpen}
               parseErrors={parseErrors}
             />
+            {/* Center tab bar */}
+            <div className="flex items-center border-b border-border bg-zinc-950/50 px-4">
+              <button
+                onClick={() => setCenterTab("flow")}
+                className={cn(
+                  "px-3 py-2 text-xs font-medium border-b-2 transition-colors flex items-center gap-1.5",
+                  centerTab === "flow"
+                    ? "border-blue-500 text-foreground"
+                    : "border-transparent text-zinc-500 hover:text-zinc-300"
+                )}
+              >
+                <Workflow className="w-3 h-3" />
+                Flow
+              </button>
+              <button
+                onClick={() => setCenterTab("source")}
+                className={cn(
+                  "px-3 py-2 text-xs font-medium border-b-2 transition-colors flex items-center gap-1.5",
+                  centerTab === "source"
+                    ? "border-blue-500 text-foreground"
+                    : "border-transparent text-zinc-500 hover:text-zinc-300"
+                )}
+              >
+                <Code className="w-3 h-3" />
+                Source
+                {isDirty && <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />}
+              </button>
+            </div>
             <div className="flex-1 flex min-h-0">
-              {/* YAML Editor */}
-              <div className="flex-1 min-w-0 border-r border-border">
-                <YamlEditor
-                  value={yamlContent}
-                  onChange={handleYamlChange}
-                  onSave={handleSave}
-                />
-              </div>
-              {/* DAG View or File Viewer */}
+              {/* Center panel: Flow (DAG) or Source (editor/viewer) */}
               <div className="flex-1 min-w-0">
-                {viewingFile && selectedFlow?.path ? (
-                  <FlowFileViewer
-                    flowPath={selectedFlow.path}
-                    filePath={viewingFile}
-                    onClose={() => setViewingFile(null)}
-                  />
-                ) : (
+                {centerTab === "flow" ? (
                   <FlowDagView
                     workflow={dagWorkflow}
                     runs={EMPTY_RUNS}
@@ -512,6 +520,21 @@ export function EditorPage() {
                     onToggleExpand={() => {}}
                     selectedStep={selectedStep}
                     onSelectStep={setSelectedStep}
+                  />
+                ) : viewingFile && selectedFlow?.path ? (
+                  <FlowFileViewer
+                    flowPath={selectedFlow.path}
+                    filePath={viewingFile}
+                    onClose={() => {
+                      setViewingFile(null);
+                      setCenterTab("source"); // stay on source, show FLOW.yaml
+                    }}
+                  />
+                ) : (
+                  <YamlEditor
+                    value={yamlContent}
+                    onChange={handleYamlChange}
+                    onSave={handleSave}
                   />
                 )}
               </div>
@@ -534,7 +557,6 @@ export function EditorPage() {
                     onApplyYaml={handleApplyChat}
                     onFilesChanged={() => {
                       refetchFiles();
-                      // Also reload flow detail in case FLOW.yaml was modified
                       loadedPathRef.current = undefined;
                     }}
                     onClose={() => setChatOpen(false)}
@@ -550,7 +572,6 @@ export function EditorPage() {
             />
           </>
         ) : (
-          /* Empty state */
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center text-zinc-600">
               <FileCode className="w-12 h-12 mx-auto mb-3 opacity-50" />

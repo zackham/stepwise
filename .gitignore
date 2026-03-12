@@ -19,7 +19,7 @@ venv/
 # Runtime / ephemeral
 .step-io/
 .pids/
-jobs/
+/jobs/
 
 # Node
 web/node_modules/
