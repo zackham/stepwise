@@ -376,6 +376,7 @@ class WorkflowDefinition:
     steps: dict[str, StepDefinition] = field(default_factory=dict)
     metadata: FlowMetadata = field(default_factory=FlowMetadata)
     chains: dict[str, ChainConfig] = field(default_factory=dict)  # M7a
+    source_dir: str | None = None  # M10: directory containing the flow file
 
     def validate(self) -> list[str]:
         """Validate the workflow definition. Returns list of errors."""
@@ -652,6 +653,8 @@ class WorkflowDefinition:
             d["metadata"] = meta
         if self.chains:
             d["chains"] = {n: c.to_dict() for n, c in self.chains.items()}
+        if self.source_dir is not None:
+            d["source_dir"] = self.source_dir
         return d
 
     @classmethod
@@ -663,7 +666,12 @@ class WorkflowDefinition:
         chains = {}
         for name, chain_d in d.get("chains", {}).items():
             chains[name] = ChainConfig.from_dict(chain_d)
-        return cls(steps=steps, metadata=metadata, chains=chains)
+        return cls(
+            steps=steps,
+            metadata=metadata,
+            chains=chains,
+            source_dir=d.get("source_dir"),
+        )
 
 
 # ── Handoff Envelope ───────────────────────────────────────────────────

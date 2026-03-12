@@ -1,4 +1,4 @@
-"""Tests for flow subcommands (get, share, search)."""
+"""Tests for top-level flow commands (get, share, search)."""
 
 import pytest
 from unittest.mock import patch, MagicMock
@@ -20,7 +20,7 @@ steps:
 
 
 class TestFlowGet:
-    """flow get <url> downloads YAML to cwd."""
+    """get <url> downloads YAML to cwd."""
 
     def test_get_url_downloads_yaml(self, tmp_path, capsys, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -30,7 +30,7 @@ class TestFlowGet:
             Path(filename).write_text(SIMPLE_FLOW)
 
         with patch("urllib.request.urlretrieve", side_effect=mock_retrieve):
-            rc = main(["flow", "get", "https://example.com/test.flow.yaml"])
+            rc = main(["get", "https://example.com/test.flow.yaml"])
 
         assert rc == EXIT_SUCCESS
         out = capsys.readouterr().out
@@ -39,7 +39,7 @@ class TestFlowGet:
 
     def test_get_non_yaml_url_errors(self, tmp_path, capsys, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        rc = main(["flow", "get", "https://example.com/readme.txt"])
+        rc = main(["get", "https://example.com/readme.txt"])
         assert rc == EXIT_USAGE_ERROR
         err = capsys.readouterr().err
         assert "YAML" in err
@@ -47,7 +47,7 @@ class TestFlowGet:
     def test_get_existing_file_errors(self, tmp_path, capsys, monkeypatch):
         monkeypatch.chdir(tmp_path)
         (tmp_path / "exists.flow.yaml").write_text("already here")
-        rc = main(["flow", "get", "https://example.com/exists.flow.yaml"])
+        rc = main(["get", "https://example.com/exists.flow.yaml"])
         assert rc == EXIT_USAGE_ERROR
         err = capsys.readouterr().err
         assert "already exists" in err
@@ -57,33 +57,33 @@ class TestFlowGet:
         import urllib.error
 
         with patch("urllib.request.urlretrieve", side_effect=urllib.error.URLError("404")):
-            rc = main(["flow", "get", "https://example.com/missing.flow.yaml"])
+            rc = main(["get", "https://example.com/missing.flow.yaml"])
 
         assert rc == EXIT_USAGE_ERROR
         err = capsys.readouterr().err
         assert "Failed" in err
 
     def test_get_name_not_found(self, tmp_path, capsys, monkeypatch):
-        """flow get <name> (not URL) tries registry, fails if not found."""
+        """get <name> (not URL) tries registry, fails if not found."""
         monkeypatch.chdir(tmp_path)
-        rc = main(["flow", "get", "pr-review"])
+        rc = main(["get", "pr-review"])
         assert rc == EXIT_USAGE_ERROR
         err = capsys.readouterr().err
         assert "not found" in err.lower()
 
     def test_get_name_from_registry(self, tmp_path, capsys, monkeypatch):
-        """flow get <name> fetches from registry and saves to disk."""
+        """get <name> fetches from registry and saves to directory."""
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(
             "stepwise.registry_client.fetch_flow",
-            lambda slug: {"name": "downloaded", "slug": "downloaded", "author": "alice",
-                          "yaml": SIMPLE_FLOW, "steps": 1, "downloads": 42},
+            lambda slug, **kw: {"name": "downloaded", "slug": "downloaded", "author": "alice",
+                                "yaml": SIMPLE_FLOW, "steps": 1, "downloads": 42},
         )
-        rc = main(["flow", "get", "downloaded"])
+        rc = main(["get", "downloaded"])
         assert rc == EXIT_SUCCESS
         out = capsys.readouterr().out
         assert "downloaded" in out.lower()
-        assert (tmp_path / "downloaded.flow.yaml").exists()
+        assert (tmp_path / "flows" / "downloaded" / "FLOW.yaml").exists()
 
     def test_get_yml_extension_accepted(self, tmp_path, capsys, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -92,17 +92,17 @@ class TestFlowGet:
             Path(filename).write_text(SIMPLE_FLOW)
 
         with patch("urllib.request.urlretrieve", side_effect=mock_retrieve):
-            rc = main(["flow", "get", "https://example.com/test.yml"])
+            rc = main(["get", "https://example.com/test.yml"])
 
         assert rc == EXIT_SUCCESS
         assert (tmp_path / "test.yml").exists()
 
 
 class TestFlowShare:
-    """flow share publishes to registry."""
+    """share publishes to registry."""
 
     def test_share_no_args(self, capsys):
-        rc = main(["flow", "share"])
+        rc = main(["share"])
         assert rc == EXIT_USAGE_ERROR
 
     def test_share_with_file(self, tmp_path, capsys, monkeypatch):
@@ -128,19 +128,19 @@ class TestFlowShare:
 
         monkeypatch.setattr("stepwise.registry_client._client", lambda: mock_client)
 
-        rc = main(["flow", "share", str(flow)])
+        rc = main(["share", str(flow)])
         assert rc == EXIT_SUCCESS
         out = capsys.readouterr().out
         assert "downloaded" in out.lower()
 
     def test_share_missing_file(self, tmp_path, capsys, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        rc = main(["flow", "share", "nonexistent.flow.yaml"])
+        rc = main(["share", "nonexistent.flow.yaml"])
         assert rc == EXIT_USAGE_ERROR
 
 
 class TestFlowSearch:
-    """flow search queries the registry."""
+    """search queries the registry."""
 
     def test_search_no_args(self, capsys, monkeypatch):
         mock_response = MagicMock()
@@ -154,7 +154,7 @@ class TestFlowSearch:
 
         monkeypatch.setattr("stepwise.registry_client._client", lambda: mock_client)
 
-        rc = main(["flow", "search"])
+        rc = main(["search"])
         assert rc == EXIT_SUCCESS
 
     def test_search_with_query(self, capsys, monkeypatch):
@@ -172,7 +172,7 @@ class TestFlowSearch:
 
         monkeypatch.setattr("stepwise.registry_client._client", lambda: mock_client)
 
-        rc = main(["flow", "search", "pr", "review"])
+        rc = main(["search", "pr", "review"])
         assert rc == EXIT_SUCCESS
         out = capsys.readouterr().out
         assert "pr-review" in out.lower()

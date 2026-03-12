@@ -711,6 +711,10 @@ class Engine:
         if step_def.outputs and "output_fields" not in exec_ref.config:
             exec_ref = exec_ref.with_config({"output_fields": step_def.outputs})
 
+        # M10: Inject flow_dir for script path resolution
+        if job.workflow.source_dir and exec_ref.type == "script":
+            exec_ref = exec_ref.with_config({"flow_dir": job.workflow.source_dir})
+
         try:
             executor = self.registry.create(exec_ref)
             result = executor.start(inputs, ctx)

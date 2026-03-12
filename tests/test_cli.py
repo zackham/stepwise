@@ -36,23 +36,49 @@ class TestNoArgs:
 
 class TestInit:
     def test_init_creates_project(self, tmp_path, capsys):
-        rc = main(["--project-dir", str(tmp_path), "init"])
+        rc = main(["--project-dir", str(tmp_path), "init", "--no-skill"])
         assert rc == EXIT_SUCCESS
         assert (tmp_path / DOT_DIR_NAME).is_dir()
         out = capsys.readouterr().out
         assert "Initialized" in out
 
     def test_init_force(self, tmp_path, capsys):
-        main(["--project-dir", str(tmp_path), "init"])
-        rc = main(["--project-dir", str(tmp_path), "init", "--force"])
+        main(["--project-dir", str(tmp_path), "init", "--no-skill"])
+        rc = main(["--project-dir", str(tmp_path), "init", "--force", "--no-skill"])
         assert rc == EXIT_SUCCESS
 
-    def test_init_existing_errors(self, tmp_path, capsys):
-        main(["--project-dir", str(tmp_path), "init"])
-        rc = main(["--project-dir", str(tmp_path), "init"])
+    def test_init_existing_errors_with_no_skill(self, tmp_path, capsys):
+        """--no-skill on existing project errors (nothing to do)."""
+        main(["--project-dir", str(tmp_path), "init", "--no-skill"])
+        rc = main(["--project-dir", str(tmp_path), "init", "--no-skill"])
         assert rc == EXIT_USAGE_ERROR
         err = capsys.readouterr().err
-        assert "already exists" in err
+        assert "already initialized" in err.lower()
+
+    def test_init_existing_proceeds_to_skill(self, tmp_path, capsys):
+        """Existing project + --skill installs skill without error."""
+        main(["--project-dir", str(tmp_path), "init", "--no-skill"])
+        rc = main(["--project-dir", str(tmp_path), "init", "--skill", ".claude"])
+        assert rc == EXIT_SUCCESS
+        assert (tmp_path / ".claude" / "skills" / "stepwise" / "SKILL.md").exists()
+        out = capsys.readouterr().out
+        assert "already initialized" in out.lower()
+        assert "Installed agent skill" in out
+
+    def test_init_with_skill_target(self, tmp_path, capsys):
+        rc = main(["--project-dir", str(tmp_path), "init", "--skill", ".claude"])
+        assert rc == EXIT_SUCCESS
+        assert (tmp_path / ".claude" / "skills" / "stepwise" / "SKILL.md").exists()
+        assert (tmp_path / ".claude" / "skills" / "stepwise" / "FLOW_REFERENCE.md").exists()
+        out = capsys.readouterr().out
+        assert "Installed agent skill" in out
+
+    def test_init_skill_auto_detect_existing_dir(self, tmp_path, capsys, monkeypatch):
+        """When .agents/ exists, --skill .agents installs there."""
+        (tmp_path / ".agents").mkdir()
+        rc = main(["--project-dir", str(tmp_path), "init", "--skill", ".agents"])
+        assert rc == EXIT_SUCCESS
+        assert (tmp_path / ".agents" / "skills" / "stepwise" / "SKILL.md").exists()
 
 
 class TestValidate:
@@ -182,24 +208,24 @@ class TestConfig:
 
 
 class TestFlowStubs:
-    def test_flow_share_no_file(self, capsys):
-        rc = main(["flow", "share"])
+    def test_share_no_file(self, capsys):
+        rc = main(["share"])
         assert rc == EXIT_USAGE_ERROR
 
-    def test_flow_search_no_results(self, capsys):
-        rc = main(["flow", "search", "social", "media"])
+    def test_search_no_results(self, capsys):
+        rc = main(["search", "social", "media"])
         assert rc == EXIT_SUCCESS
         out = capsys.readouterr().out
         assert "no flows found" in out.lower()
 
-    def test_flow_get_name_not_found(self, capsys):
-        rc = main(["flow", "get", "tweet-generator"])
+    def test_get_name_not_found(self, capsys):
+        rc = main(["get", "tweet-generator"])
         assert rc == EXIT_USAGE_ERROR
         err = capsys.readouterr().err
         assert "not found" in err.lower()
 
-    def test_flow_get_non_yaml_url(self, capsys):
-        rc = main(["flow", "get", "https://example.com/not-a-yaml"])
+    def test_get_non_yaml_url(self, capsys):
+        rc = main(["get", "https://example.com/not-a-yaml"])
         assert rc == EXIT_USAGE_ERROR
 
 

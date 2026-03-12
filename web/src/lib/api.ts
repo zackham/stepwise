@@ -4,11 +4,16 @@ import type {
   StepEvent,
   StepwiseEvent,
   JobTreeNode,
-  WorkflowTemplate,
+  FlowTemplate,
   EngineStatus,
-  WorkflowDefinition,
+  FlowDefinition,
   JobConfig,
   AgentStreamEvent,
+  LocalFlow,
+  LocalFlowDetail,
+  ParseResult,
+  RegistryFlow,
+  RegistrySearchResult,
 } from "./types";
 
 const BASE_URL = "/api";
@@ -47,7 +52,7 @@ export function fetchJob(jobId: string): Promise<Job> {
 
 export function createJob(data: {
   objective: string;
-  workflow: WorkflowDefinition;
+  workflow: FlowDefinition;
   inputs?: Record<string, unknown>;
   config?: Partial<JobConfig>;
   workspace_path?: string;
@@ -179,9 +184,9 @@ export function fetchExecutors(): Promise<{ executors: string[] }> {
 export function saveTemplate(data: {
   name: string;
   description?: string;
-  workflow: WorkflowDefinition;
-}): Promise<WorkflowTemplate> {
-  return request<WorkflowTemplate>("/templates", {
+  workflow: FlowDefinition;
+}): Promise<FlowTemplate> {
+  return request<FlowTemplate>("/templates", {
     method: "POST",
     body: JSON.stringify({
       name: data.name,
@@ -191,12 +196,12 @@ export function saveTemplate(data: {
   });
 }
 
-export function fetchTemplates(): Promise<WorkflowTemplate[]> {
-  return request<WorkflowTemplate[]>("/templates");
+export function fetchTemplates(): Promise<FlowTemplate[]> {
+  return request<FlowTemplate[]>("/templates");
 }
 
-export function fetchTemplate(name: string): Promise<WorkflowTemplate> {
-  return request<WorkflowTemplate>(
+export function fetchTemplate(name: string): Promise<FlowTemplate> {
+  return request<FlowTemplate>(
     `/templates/${encodeURIComponent(name)}`
   );
 }
@@ -205,4 +210,166 @@ export function deleteTemplate(name: string): Promise<{ status: string }> {
   return request(`/templates/${encodeURIComponent(name)}`, {
     method: "DELETE",
   });
+}
+
+// ── Editor / Local Flows ─────────────────────────────────────────────
+
+export function fetchLocalFlows(): Promise<LocalFlow[]> {
+  return request<LocalFlow[]>("/local-flows");
+}
+
+export function fetchLocalFlow(path: string): Promise<LocalFlowDetail> {
+  return request<LocalFlowDetail>(`/flows/local/${path}`);
+}
+
+export function parseYaml(yaml: string): Promise<ParseResult> {
+  return request<ParseResult>("/flows/parse", {
+    method: "POST",
+    body: JSON.stringify({ yaml }),
+  });
+}
+
+export function saveFlow(
+  path: string,
+  yaml: string
+): Promise<LocalFlowDetail> {
+  return request<LocalFlowDetail>(`/flows/local/${path}`, {
+    method: "PUT",
+    body: JSON.stringify({ yaml }),
+  });
+}
+
+export function patchStep(
+  flowPath: string,
+  stepName: string,
+  changes: Record<string, unknown>
+): Promise<ParseResult> {
+  return request<ParseResult>("/flows/patch-step", {
+    method: "POST",
+    body: JSON.stringify({
+      flow_path: flowPath,
+      step_name: stepName,
+      changes,
+    }),
+  });
+}
+
+export function addStep(
+  flowPath: string,
+  name: string,
+  executor: string
+): Promise<ParseResult> {
+  return request<ParseResult>("/flows/add-step", {
+    method: "POST",
+    body: JSON.stringify({ flow_path: flowPath, name, executor }),
+  });
+}
+
+export function deleteStep(
+  flowPath: string,
+  stepName: string
+): Promise<ParseResult> {
+  return request<ParseResult>("/flows/delete-step", {
+    method: "POST",
+    body: JSON.stringify({ flow_path: flowPath, step_name: stepName }),
+  });
+}
+
+export function fetchFlowMtime(
+  path: string
+): Promise<{ mtime: number; modified_at: string }> {
+  return request(`/flows/mtime?path=${encodeURIComponent(path)}`);
+}
+
+// ── Registry ──────────────────────────────────────────────────────────
+
+export function searchRegistry(
+  query: string = "",
+  tag?: string,
+  sort: string = "downloads",
+  limit: number = 20
+): Promise<RegistrySearchResult> {
+  const params = new URLSearchParams({ sort, limit: String(limit) });
+  if (query) params.set("q", query);
+  if (tag) params.set("tag", tag);
+  return request<RegistrySearchResult>(`/registry/search?${params}`);
+}
+
+export function fetchRegistryFlow(slug: string): Promise<RegistryFlow> {
+  return request<RegistryFlow>(`/registry/flow/${encodeURIComponent(slug)}`);
+}
+
+export function installFlow(
+  slug: string
+): Promise<LocalFlowDetail & { errors: string[] }> {
+  return request(`/registry/install`, {
+    method: "POST",
+    body: JSON.stringify({ slug }),
+  });
+}
+
+// ── Editor LLM Chat ──────────────────────────────────────────────────
+
+export interface ChatChunk {
+  type: "text" | "yaml" | "done" | "error";
+  content?: string;
+  apply_id?: string;
+  model?: string;
+  cost_usd?: number | null;
+}
+
+export async function* streamEditorChat(
+  message: string,
+  history: Array<{ role: string; content: string }>,
+  currentYaml?: string,
+  selectedStep?: string,
+): AsyncGenerator<ChatChunk> {
+  const res = await fetch(`${BASE_URL}/editor/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      message,
+      history,
+      current_yaml: currentYaml ?? null,
+      selected_step: selectedStep ?? null,
+    }),
+  });
+
+  if (!res.ok) {
+    yield { type: "error", content: `${res.status}: ${await res.text()}` };
+    return;
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) return;
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        yield JSON.parse(line) as ChatChunk;
+      } catch {
+        // skip malformed lines
+      }
+    }
+  }
+
+  // Process remaining buffer
+  if (buffer.trim()) {
+    try {
+      yield JSON.parse(buffer) as ChatChunk;
+    } catch {
+      // skip
+    }
+  }
 }

@@ -583,7 +583,7 @@ steps:
       - Search bar: filters cards by name/description/tags (vanilla JS)
       - Tag filter: click a tag to filter by it
       - "Run this workflow" CTA on each card that copies a CLI command to clipboard:
-        `stepwise flow get <workflow-name>`
+        `stepwise get <workflow-name>`
       - Cards should feel clickable (hover states, subtle scale)
 
       ## Mock Data

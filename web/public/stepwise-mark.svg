@@ -7,9 +7,9 @@
     </linearGradient>
   </defs>
   <path
-    d="M 5 83 L 27 83 L 27 49 L 59 49 L 59 16 L 95 16"
+    d="M 10 80 L 50 80 L 50 20 L 90 20"
     stroke="url(#grad)"
-    stroke-width="12"
+    stroke-width="14"
     stroke-linejoin="round"
     stroke-linecap="round"
     fill="none"

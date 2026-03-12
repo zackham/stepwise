@@ -104,7 +104,50 @@ def _parse_input_binding(local_name: str, source: str) -> InputBinding:
     return InputBinding(local_name, parts[0], parts[1])
 
 
-def _parse_executor(step_data: dict, step_name: str) -> ExecutorRef:
+def _resolve_prompt_file(
+    step_data: dict,
+    step_name: str,
+    base_dir: Path | None,
+) -> str | None:
+    """Resolve prompt_file to its content if present.
+
+    Returns the file content as a string, or None if no prompt_file specified.
+    Raises ValueError if both prompt and prompt_file are specified,
+    or if the file cannot be read.
+    """
+    prompt_file = step_data.get("prompt_file")
+    if prompt_file is None:
+        return None
+
+    if "prompt" in step_data:
+        raise ValueError(
+            f"Step '{step_name}': cannot specify both 'prompt' and 'prompt_file'"
+        )
+
+    if base_dir is None:
+        raise ValueError(
+            f"Step '{step_name}': 'prompt_file' cannot be resolved without a base directory"
+        )
+
+    prompt_path = (base_dir / prompt_file).resolve()
+    if not prompt_path.exists():
+        raise ValueError(
+            f"Step '{step_name}': prompt file not found: {prompt_path}"
+        )
+
+    try:
+        return prompt_path.read_text()
+    except Exception as e:
+        raise ValueError(
+            f"Step '{step_name}': error reading prompt file '{prompt_path}': {e}"
+        ) from e
+
+
+def _parse_executor(
+    step_data: dict,
+    step_name: str,
+    base_dir: Path | None = None,
+) -> ExecutorRef:
     """Parse executor from step YAML data."""
     if "run" in step_data:
         command = step_data["run"]
@@ -119,9 +162,12 @@ def _parse_executor(step_data: dict, step_name: str) -> ExecutorRef:
             f"Step '{step_name}': must have either 'run' or 'executor'"
         )
 
+    # M10: Resolve prompt_file if present (consumed at parse time)
+    prompt_from_file = _resolve_prompt_file(step_data, step_name, base_dir)
+
     config: dict[str, Any] = {}
     if executor_type == "human":
-        prompt = step_data.get("prompt", "")
+        prompt = prompt_from_file or step_data.get("prompt", "")
         if prompt:
             config["prompt"] = prompt
     elif executor_type == "mock_llm":
@@ -133,6 +179,8 @@ def _parse_executor(step_data: dict, step_name: str) -> ExecutorRef:
         for k in ("prompt", "output_mode", "output_path"):
             if k in step_data:
                 config[k] = step_data[k]
+        if prompt_from_file:
+            config["prompt"] = prompt_from_file
         if "prompt" not in config:
             raise ValueError(
                 f"Step '{step_name}': Agent executor requires 'prompt'"
@@ -141,6 +189,8 @@ def _parse_executor(step_data: dict, step_name: str) -> ExecutorRef:
         for k in ("prompt", "model", "system", "temperature", "max_tokens"):
             if k in step_data:
                 config[k] = step_data[k]
+        if prompt_from_file:
+            config["prompt"] = prompt_from_file
         if "prompt" not in config:
             raise ValueError(
                 f"Step '{step_name}': LLM executor requires 'prompt'"
@@ -602,7 +652,7 @@ def _parse_step(
 
     # Normal step parsing
     # Executor
-    executor = _parse_executor(step_data, step_name)
+    executor = _parse_executor(step_data, step_name, base_dir=base_dir)
 
     # Inputs
     inputs_data = step_data.get("inputs", {})
@@ -799,7 +849,14 @@ def load_workflow_yaml(
     # Parse metadata from top-level fields
     metadata = _parse_metadata(data, source_path)
 
-    workflow = WorkflowDefinition(steps=steps, metadata=metadata, chains=chains)
+    # M10: Record the source directory for script path resolution
+    source_dir_str: str | None = None
+    if source_path is not None:
+        source_dir_str = str(source_path.parent.resolve())
+
+    workflow = WorkflowDefinition(
+        steps=steps, metadata=metadata, chains=chains, source_dir=source_dir_str
+    )
 
     # Run the standard workflow validation
     validation_errors = workflow.validate()

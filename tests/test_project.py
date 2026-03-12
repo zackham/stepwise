@@ -5,12 +5,16 @@ from pathlib import Path
 
 from stepwise.project import (
     DOT_DIR_NAME,
+    SKILL_NAME,
     ProjectNotFoundError,
     StepwiseProject,
+    detect_agent_skill_locations,
     find_project,
+    get_bundled_skill_dir,
     get_bundled_templates_dir,
     get_bundled_web_dir,
     init_project,
+    install_agent_skill,
 )
 
 
@@ -120,3 +124,113 @@ class TestBundledPaths:
         path = get_bundled_web_dir()
         assert path.name == "_web"
         assert "stepwise" in str(path)
+
+    def test_bundled_skill_dir_exists(self):
+        path = get_bundled_skill_dir()
+        assert path.is_dir()
+        assert (path / "SKILL.md").exists()
+        assert (path / "FLOW_REFERENCE.md").exists()
+
+
+class TestDetectAgentSkillLocations:
+    """detect_agent_skill_locations() finds framework dirs and existing skills."""
+
+    def _local(self, result):
+        """Filter to local-scope locations only (ignores real ~/.claude etc.)."""
+        return [loc for loc in result.locations if loc.scope == "local"]
+
+    def test_no_frameworks(self, tmp_path):
+        result = detect_agent_skill_locations(tmp_path)
+        assert len(self._local(result)) == 0
+
+    def test_claude_dir_no_skill(self, tmp_path):
+        (tmp_path / ".claude").mkdir()
+        result = detect_agent_skill_locations(tmp_path)
+        local = self._local(result)
+        assert len(local) == 1
+        assert local[0].framework_dir == ".claude"
+        assert not local[0].has_skill
+
+    def test_agents_dir_no_skill(self, tmp_path):
+        (tmp_path / ".agents").mkdir()
+        result = detect_agent_skill_locations(tmp_path)
+        local = self._local(result)
+        assert len(local) == 1
+        assert local[0].framework_dir == ".agents"
+        assert not local[0].has_skill
+
+    def test_both_dirs_exist(self, tmp_path):
+        (tmp_path / ".claude").mkdir()
+        (tmp_path / ".agents").mkdir()
+        result = detect_agent_skill_locations(tmp_path)
+        local = self._local(result)
+        assert len(local) == 2
+
+    def test_detects_installed_skill(self, tmp_path):
+        install_agent_skill(tmp_path / ".claude")
+        result = detect_agent_skill_locations(tmp_path)
+        local = self._local(result)
+        assert len(local) == 1
+        assert local[0].has_skill
+        assert local[0].skill_current
+
+    def test_detects_outdated_skill(self, tmp_path):
+        install_agent_skill(tmp_path / ".claude")
+        # Modify installed file to make it outdated
+        skill_file = tmp_path / ".claude" / "skills" / SKILL_NAME / "SKILL.md"
+        skill_file.write_text("outdated content")
+        result = detect_agent_skill_locations(tmp_path)
+        local = self._local(result)
+        assert local[0].has_skill
+        assert not local[0].skill_current
+
+    def test_symlink_detection(self, tmp_path):
+        (tmp_path / ".agents").mkdir()
+        (tmp_path / ".claude").symlink_to(tmp_path / ".agents")
+        result = detect_agent_skill_locations(tmp_path)
+        local = self._local(result)
+        assert len(local) == 2
+        assert len(result.symlinked_groups) >= 1
+        # Find the group containing our local dirs
+        local_group = None
+        for group in result.symlinked_groups:
+            if any(loc.scope == "local" for loc in group):
+                local_group = group
+                break
+        assert local_group is not None
+        local_in_group = [loc for loc in local_group if loc.scope == "local"]
+        assert len(local_in_group) == 2
+
+
+class TestInstallAgentSkill:
+    """install_agent_skill() copies bundled templates."""
+
+    def test_installs_files(self, tmp_path):
+        target = tmp_path / ".claude"
+        installed = install_agent_skill(target)
+        assert installed == target / "skills" / SKILL_NAME
+        assert (installed / "SKILL.md").exists()
+        assert (installed / "FLOW_REFERENCE.md").exists()
+
+    def test_creates_parent_dirs(self, tmp_path):
+        target = tmp_path / ".agents"
+        assert not target.exists()
+        installed = install_agent_skill(target)
+        assert installed.is_dir()
+
+    def test_overwrites_existing(self, tmp_path):
+        target = tmp_path / ".claude"
+        install_agent_skill(target)
+        skill_file = target / "skills" / SKILL_NAME / "SKILL.md"
+        skill_file.write_text("old content")
+        install_agent_skill(target)
+        assert skill_file.read_text() != "old content"
+
+    def test_installed_matches_bundled(self, tmp_path):
+        target = tmp_path / ".claude"
+        installed = install_agent_skill(target)
+        bundled = get_bundled_skill_dir()
+        for bundled_file in bundled.iterdir():
+            if bundled_file.is_file():
+                installed_file = installed / bundled_file.name
+                assert installed_file.read_text() == bundled_file.read_text()

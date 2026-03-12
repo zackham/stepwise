@@ -9,6 +9,41 @@ All notable changes to Stepwise are documented here. Versions are tagged milesto
 - `stepwise self-update` — upgrade to the latest version (auto-detects uv/pipx/pip)
 - `stepwise serve` auto-picks a random port when 8340 is already in use
 
+## [M10] — 2026-03-12
+
+**Flow Directories & CLI Flattening** — flows as directories with co-located scripts and prompts, name-based resolution, flat CLI, registry bundles.
+
+### Added
+- **Flow directories** — flows can now be directories containing `FLOW.yaml` (caps, like `SKILL.md`) alongside co-located scripts, prompts, and docs. Single-file `.flow.yaml` still works everywhere.
+- **Name-based flow resolution** — all CLI commands accept flow names: `stepwise run my-flow` resolves across project root, `flows/`, `.stepwise/flows/`. Directory flows take precedence over same-name single files.
+- **`stepwise new <name>`** — scaffolds a flow directory (`flows/<name>/FLOW.yaml`) from a minimal template
+- **`prompt_file:`** — alternative to inline `prompt:` on llm/agent/human steps. Loads file content relative to flow directory at parse time. Mutually exclusive with `prompt:`.
+- **Script path resolution** — for directory flows, `run:` paths resolve relative to the flow directory. Scripts execute with cwd=workspace (unchanged). `STEPWISE_FLOW_DIR` env var set for co-located asset access.
+- **Registry bundles** — `stepwise share` bundles directory flows (FLOW.yaml + co-located files) as structured JSON. Limits: 500KB total, 20 files, text-only, allowlisted extensions. Hard-blocks `.env`, `.git/`, `__pycache__/`, credentials.
+- **`.origin.json`** — provenance tracking when flows are installed from the registry (author, slug, version, content hash, fetch timestamp). Enables future `stepwise update` support.
+- **Shadow warnings** — warns on stderr when multiple flows match a name across discovery directories
+- **Name validation** — flow names must match `[a-zA-Z0-9_-]+` to prevent directory traversal
+- `flow_resolution.py` — shared module for flow discovery and name resolution
+- `bundle.py` — bundle collection (with manifest confirmation) and unpacking
+- `source_dir` field on `WorkflowDefinition` — tracks where the flow was loaded from
+- 74 new tests (flow resolution, script paths, prompt files, bundles, CLI integration)
+
+### Changed
+- **Flat CLI** — `stepwise share`, `stepwise get`, `stepwise search`, `stepwise info` are now top-level commands (removed `stepwise flow` subgroup). Pre-1.0, no deprecation alias.
+- `stepwise get` now installs flows as directories (`flows/<slug>/FLOW.yaml`) instead of single files
+- `stepwise get` errors on existing target directory unless `--force` is passed
+- CLI positional args renamed from `file` to `flow` on `run`, `validate`, `schema` commands
+- `discover_flows()` moved from `agent_help.py` to `flow_resolution.py` (agent_help imports from there)
+- Agent help CLI reference updated to reflect flat command structure
+- All documentation updated: FLOW_REFERENCE.md, SKILL.md, yaml-format.md, cli.md, flow-sharing.md
+
+### Registry (stepwise.run)
+- `files_json` column on flows table — stores bundled files as structured JSON
+- Server-side bundle validation (size, count, extension allowlist)
+- `GET /api/flows/{slug}` returns `files` dict when present
+- `POST /api/flows` and `PUT /api/flows/{slug}` accept optional `files` dict
+- 18 new API tests
+
 ## [M9] — 2026-03-12
 
 **Flow Sharing** — publish, discover, and reuse flows via the stepwise.run registry.

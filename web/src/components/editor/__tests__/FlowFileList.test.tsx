@@ -1,0 +1,140 @@
+import { describe, it, expect, vi } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
+import { FlowFileList } from "../FlowFileList";
+import type { LocalFlow } from "@/lib/types";
+
+const mockFlows: LocalFlow[] = [
+  {
+    path: "flows/research/FLOW.yaml",
+    name: "research",
+    steps_count: 3,
+    modified_at: "2026-03-11T10:00:00",
+    is_directory: true,
+  },
+  {
+    path: "flows/deploy.flow.yaml",
+    name: "deploy",
+    steps_count: 2,
+    modified_at: "2026-03-10T08:00:00",
+    is_directory: false,
+  },
+  {
+    path: "flows/review/FLOW.yaml",
+    name: "review",
+    steps_count: 5,
+    modified_at: "2026-03-09T14:00:00",
+    is_directory: true,
+  },
+];
+
+describe("FlowFileList", () => {
+  it("renders all flows", () => {
+    render(
+      <FlowFileList
+        flows={mockFlows}
+        selectedName={undefined}
+        onSelect={() => {}}
+        dirtyFlows={new Set()}
+      />
+    );
+    expect(screen.getByText("research")).toBeDefined();
+    expect(screen.getByText("deploy")).toBeDefined();
+    expect(screen.getByText("review")).toBeDefined();
+  });
+
+  it("shows step counts", () => {
+    render(
+      <FlowFileList
+        flows={mockFlows}
+        selectedName={undefined}
+        onSelect={() => {}}
+        dirtyFlows={new Set()}
+      />
+    );
+    expect(screen.getByText("3")).toBeDefined();
+    expect(screen.getByText("2")).toBeDefined();
+    expect(screen.getByText("5")).toBeDefined();
+  });
+
+  it("highlights selected flow", () => {
+    render(
+      <FlowFileList
+        flows={mockFlows}
+        selectedName="research"
+        onSelect={() => {}}
+        dirtyFlows={new Set()}
+      />
+    );
+    const button = screen.getByText("research").closest("button")!;
+    expect(button.className).toContain("bg-zinc-800");
+  });
+
+  it("calls onSelect when flow clicked", () => {
+    const onSelect = vi.fn();
+    render(
+      <FlowFileList
+        flows={mockFlows}
+        selectedName={undefined}
+        onSelect={onSelect}
+        dirtyFlows={new Set()}
+      />
+    );
+    fireEvent.click(screen.getByText("deploy"));
+    expect(onSelect).toHaveBeenCalledWith(mockFlows[1]);
+  });
+
+  it("filters flows by name", () => {
+    render(
+      <FlowFileList
+        flows={mockFlows}
+        selectedName={undefined}
+        onSelect={() => {}}
+        dirtyFlows={new Set()}
+      />
+    );
+    const input = screen.getByPlaceholderText("Filter flows...");
+    fireEvent.change(input, { target: { value: "res" } });
+    expect(screen.getByText("research")).toBeDefined();
+    expect(screen.queryByText("deploy")).toBeNull();
+    expect(screen.queryByText("review")).toBeNull();
+  });
+
+  it("shows empty state when no flows", () => {
+    render(
+      <FlowFileList
+        flows={[]}
+        selectedName={undefined}
+        onSelect={() => {}}
+        dirtyFlows={new Set()}
+      />
+    );
+    expect(screen.getByText("No flows found")).toBeDefined();
+  });
+
+  it("shows no match state when filter has no results", () => {
+    render(
+      <FlowFileList
+        flows={mockFlows}
+        selectedName={undefined}
+        onSelect={() => {}}
+        dirtyFlows={new Set()}
+      />
+    );
+    const input = screen.getByPlaceholderText("Filter flows...");
+    fireEvent.change(input, { target: { value: "zzzzz" } });
+    expect(screen.getByText("No matching flows")).toBeDefined();
+  });
+
+  it("shows dirty indicator for dirty flows", () => {
+    const { container } = render(
+      <FlowFileList
+        flows={mockFlows}
+        selectedName="research"
+        onSelect={() => {}}
+        dirtyFlows={new Set(["research"])}
+      />
+    );
+    const dots = container.querySelectorAll(".bg-amber-400");
+    expect(dots.length).toBe(1);
+  });
+});

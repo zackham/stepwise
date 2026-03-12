@@ -4,6 +4,24 @@
 
 YAML is the authoring format for Stepwise workflows. It maps to the internal `WorkflowDefinition` data model. The YAML is parsed once at job creation time — the engine never sees YAML at runtime.
 
+## Flow Formats
+
+Flows can be authored as a single file or as a directory:
+
+**Single file:** `my-flow.flow.yaml` — everything in one YAML file.
+
+**Directory flow:** A directory containing `FLOW.yaml` as the entry point, with co-located scripts, prompts, and data files alongside it.
+
+```
+my-flow/
+  FLOW.yaml              # flow definition (required)
+  analyze.py             # script referenced via run: analyze.py
+  prompts/
+    system.md            # prompt loaded via prompt_file: prompts/system.md
+```
+
+Both formats work identically everywhere in the CLI and engine. Use `stepwise new <name>` to scaffold a directory flow.
+
 ## Minimal Example
 
 ```yaml
@@ -87,6 +105,7 @@ step_name:
   # OR
   executor: human                  # human executor
   prompt: "What should we do?"     # prompt shown in UI
+  prompt_file: prompts/review.md   # alternative to prompt — loads file at parse time (mutually exclusive)
   # OR
   executor: mock_llm               # mock LLM for testing
 
@@ -178,6 +197,31 @@ approve:
 ```
 
 Human steps immediately suspend with a watch. The UI shows the prompt and a "Fulfill Watch" button. The user provides the declared outputs as JSON.
+
+### `prompt_file`
+
+An alternative to inline `prompt:` — loads the file content at parse time. Useful for long prompts or prompts shared across flows.
+
+```yaml
+summarize:
+  executor: llm
+  prompt_file: prompts/summarize.md
+  outputs: [summary]
+  inputs:
+    text: fetch.content
+```
+
+- Mutually exclusive with `prompt:` — specifying both is a parse error.
+- Path is resolved relative to the flow file's directory (relevant for directory flows).
+- File content replaces `prompt_file:` at parse time — the engine only sees `prompt:`.
+
+### Script Path Resolution (Directory Flows)
+
+For directory flows, `run:` paths resolve relative to the flow directory. A flow at `my-flow/FLOW.yaml` with `run: analyze.py` resolves to `my-flow/analyze.py`.
+
+Scripts always execute with cwd set to the job workspace directory (not the flow directory). The environment variable `STEPWISE_FLOW_DIR` is set to the flow directory's absolute path, so scripts can locate co-located data files if needed.
+
+For single-file flows, `run:` paths resolve relative to cwd as before.
 
 ### Decorators
 
@@ -389,4 +433,5 @@ steps:
 | `chains: {name: {...}}` | `WorkflowDefinition.chains = {name: ChainConfig(...)}` |
 | `chain: chain_name` | `StepDefinition.chain = "chain_name"` |
 | `chain_label: "Label"` | `StepDefinition.chain_label = "Label"` |
+| `prompt_file: path/to/file` | Resolved at parse time → `ExecutorRef.config["prompt"]` |
 | `routes: {name: {when, flow}}` | `StepDefinition.route_def = RouteDefinition(routes=[RouteSpec(...)])` |

@@ -125,6 +125,7 @@ def registry():
     reg.register("script", lambda config: ScriptExecutor(
         command=config.get("command", "echo '{}'"),
         working_dir=config.get("working_dir"),
+        flow_dir=config.get("flow_dir"),
     ))
 
     # Human executor factory

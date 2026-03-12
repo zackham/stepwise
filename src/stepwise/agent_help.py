@@ -1,173 +1,225 @@
 """Generate agent-readable instructions for Stepwise flows.
 
-Used by `stepwise agent-help` to produce a markdown block that tells
-agents how to use available flows. Paste into CLAUDE.md or similar.
+Used by `stepwise agent-help` to produce a flow catalog that tells agents
+what flows are available and how to call them.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
+from stepwise.flow_resolution import FlowInfo
+from stepwise.flow_resolution import discover_flows as _discover_flows
 from stepwise.schema import generate_schema
 from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
 
 
-def discover_flows(project_dir: Path) -> list[Path]:
-    """Find all .flow.yaml files in a project directory."""
-    flows: list[Path] = []
+def _build_flow_entries(
+    flows: list[FlowInfo | Path], project_dir: Path
+) -> list[dict]:
+    """Parse flows and return structured entries."""
+    entries = []
+    for item in flows:
+        # Accept both FlowInfo objects and raw Path objects
+        if isinstance(item, FlowInfo):
+            flow_path = item.path
+            flow_name = item.name
+        else:
+            flow_path = item
+            flow_name = None
 
-    # Check project root
-    for f in sorted(project_dir.glob("*.flow.yaml")):
-        flows.append(f)
-
-    # Check .stepwise/flows/ if it exists
-    stepwise_flows = project_dir / ".stepwise" / "flows"
-    if stepwise_flows.is_dir():
-        for f in sorted(stepwise_flows.rglob("*.flow.yaml")):
-            flows.append(f)
-
-    # Check flows/ directory
-    flows_dir = project_dir / "flows"
-    if flows_dir.is_dir():
-        for f in sorted(flows_dir.rglob("*.flow.yaml")):
-            if f not in flows:
-                flows.append(f)
-
-    return flows
-
-
-def generate_agent_help(project_dir: Path, flows_dir: Path | None = None) -> str:
-    """Generate markdown agent instructions for all flows in a project.
-
-    Args:
-        project_dir: Project root directory.
-        flows_dir: Override flow discovery directory (if given, only scans this dir).
-    """
-    if flows_dir:
-        flows = sorted(flows_dir.rglob("*.flow.yaml"))
-    else:
-        flows = discover_flows(project_dir)
-
-    if not flows:
-        return (
-            "# Stepwise Flows\n\n"
-            "No flows found in this project. "
-            "Create a .flow.yaml file to get started.\n"
-        )
-
-    lines = [
-        "# Stepwise Flows",
-        "",
-        "This project has Stepwise workflows available via CLI.",
-        "",
-        "## Available Flows",
-        "",
-    ]
-
-    for flow_path in flows:
         try:
             wf = load_workflow_yaml(str(flow_path))
             schema = generate_schema(wf)
         except (YAMLLoadError, Exception):
             continue
 
-        name = schema["name"] or flow_path.stem.replace(".flow", "")
+        name = schema["name"] or flow_name or flow_path.stem.replace(".flow", "")
+        inputs = schema.get("inputs", [])
+        outputs = schema.get("outputs", [])
+        human_steps = schema.get("humanSteps", [])
         desc = schema.get("description", "")
+
+        # Build run command — prefer flow name for clean invocation
+        if flow_name:
+            run_ref = flow_name
+        else:
+            try:
+                run_ref = str(flow_path.relative_to(project_dir))
+            except ValueError:
+                run_ref = flow_path.name
+        var_args = " ".join(f'--var {inp}="..."' for inp in inputs)
+        cmd = f"stepwise run {run_ref} --wait"
+        if var_args:
+            cmd += f" {var_args}"
+
+        # rel_path for file field
+        try:
+            rel_path = str(flow_path.relative_to(project_dir))
+        except ValueError:
+            rel_path = flow_path.name
+
+        entry: dict = {
+            "name": name,
+            "file": rel_path,
+            "inputs": inputs,
+            "outputs": outputs,
+            "run": cmd,
+        }
+        if desc:
+            entry["description"] = desc
+        if human_steps:
+            entry["human_steps"] = [
+                {"step": hs["step"], "fields": hs["fields"]}
+                for hs in human_steps
+            ]
+
+        entries.append(entry)
+
+    return entries
+
+
+def generate_agent_help(
+    project_dir: Path,
+    flows_dir: Path | None = None,
+    fmt: str = "compact",
+) -> str:
+    """Generate agent instructions for all flows in a project.
+
+    Args:
+        project_dir: Project root directory.
+        flows_dir: Override flow discovery directory.
+        fmt: Output format — "compact" (default, tight markdown),
+             "json" (machine-readable), or "full" (legacy verbose).
+    """
+    if flows_dir:
+        # Legacy: raw path glob for --flows-dir override
+        flow_paths = sorted(flows_dir.rglob("*.flow.yaml"))
+        flows: list[FlowInfo | Path] = list(flow_paths)
+    else:
+        flows = _discover_flows(project_dir)
+
+    if not flows:
+        if fmt == "json":
+            return json.dumps({"flows": [], "count": 0})
+        return "No flows found. Create a .flow.yaml file to get started."
+
+    entries = _build_flow_entries(flows, project_dir)
+
+    if fmt == "json":
+        return json.dumps({"flows": entries, "count": len(entries)}, indent=2)
+
+    if fmt == "full":
+        return _format_full(entries)
+
+    return _format_compact(entries)
+
+
+def _format_compact(entries: list[dict]) -> str:
+    """Tight, self-sufficient output for agent consumption.
+
+    Includes flow catalog + CLI reference so an agent can run and manage
+    jobs with no other context needed.
+    """
+    lines: list[str] = []
+
+    # Flow catalog
+    for entry in entries:
+        name = entry["name"]
+        desc = entry.get("description", "")
+
+        header = f"**{name}**"
+        if desc:
+            header += f" — {desc}"
+        lines.append(header)
+
+        lines.append(f"  `{entry['run']}`")
+
+        parts = []
+        if entry["inputs"]:
+            parts.append(f"in: {', '.join(entry['inputs'])}")
+        if entry["outputs"]:
+            parts.append(f"out: {', '.join(entry['outputs'])}")
+        if entry.get("human_steps"):
+            step_names = [hs["step"] for hs in entry["human_steps"]]
+            parts.append(f"human: {', '.join(step_names)}")
+        if parts:
+            lines.append(f"  {' | '.join(parts)}")
+
+        lines.append("")
+
+    # CLI reference — everything an agent needs to run and manage flows
+    lines.extend([
+        "---",
+        "CLI: `stepwise run <flow> --wait --var k=v` returns JSON to stdout.",
+        "`--wait` blocks until done. `--async` returns job_id immediately.",
+        "`stepwise status <job-id>` — check progress.",
+        "`stepwise output <job-id>` — retrieve outputs after completion.",
+        "`stepwise fulfill <run-id> '{\"field\": \"value\"}'` — satisfy a human step.",
+        "`stepwise schema <flow>` — JSON schema (inputs, outputs, human steps).",
+        "`stepwise validate <flow>` — syntax check a .flow.yaml file.",
+        "",
+        "Exit codes: 0=success, 1=failed, 2=input error, 3=timeout, 4=cancelled.",
+        "--wait JSON: `{\"status\": \"completed\", \"job_id\": \"...\", \"outputs\": [...], \"cost_usd\": N}`",
+        "On failure: `{\"status\": \"failed\", \"error\": \"...\", \"failed_step\": \"...\"}`",
+        "",
+    ])
+
+    return "\n".join(lines)
+
+
+def _format_full(entries: list[dict]) -> str:
+    """Verbose markdown with headers — legacy format for --update use."""
+    lines = [
+        "# Stepwise Flows",
+        "",
+        "## Available Flows",
+        "",
+    ]
+
+    for entry in entries:
+        name = entry["name"]
+        desc = entry.get("description", "")
 
         lines.append(f"### {name}")
         if desc:
-            lines.append(f"{desc}")
+            lines.append(desc)
 
-        # Inputs
-        inputs = schema.get("inputs", [])
-        if inputs:
-            lines.append(f"- Inputs: {', '.join(inputs)}")
+        if entry["inputs"]:
+            lines.append(f"- Inputs: {', '.join(entry['inputs'])}")
         else:
             lines.append("- Inputs: none")
 
-        # Human steps
-        human_steps = schema.get("humanSteps", [])
-        if human_steps:
+        if entry.get("human_steps"):
             parts = []
-            for hs in human_steps:
+            for hs in entry["human_steps"]:
                 fields_str = ", ".join(hs["fields"])
-                prompt_preview = hs["prompt"][:60] + "..." if len(hs["prompt"]) > 60 else hs["prompt"]
-                parts.append(f"{hs['step']} ({prompt_preview} → {fields_str})")
+                parts.append(f"{hs['step']} (→ {fields_str})")
             lines.append(f"- Human steps: {'; '.join(parts)}")
         else:
             lines.append("- Human steps: none")
 
-        # Run command
-        rel_path = flow_path.name
-        var_args = " ".join(f'--var {inp}="..."' for inp in inputs)
-        cmd = f"stepwise run {rel_path} --wait"
-        if var_args:
-            cmd += f" {var_args}"
-        lines.append(f"- Run: `{cmd}`")
+        lines.append(f"- Run: `{entry['run']}`")
 
-        # Output shape
-        outputs = schema.get("outputs", [])
-        if outputs:
-            lines.append(f"- Output fields: {', '.join(outputs)}")
+        if entry["outputs"]:
+            lines.append(f"- Output fields: {', '.join(entry['outputs'])}")
 
         lines.append("")
 
     lines.extend([
-        "## Output Shapes",
-        "",
-        "Success (exit code 0):",
-        "```json",
-        '{',
-        '  "status": "completed",',
-        '  "job_id": "job-...",',
-        '  "outputs": [{...}],',
-        '  "cost_usd": 0.052,',
-        '  "duration_seconds": 45.2',
-        '}',
-        "```",
-        "",
-        "Failure (exit code 1):",
-        "```json",
-        '{',
-        '  "status": "failed",',
-        '  "job_id": "job-...",',
-        '  "error": "Step \'test\' failed: exit code 1",',
-        '  "failed_step": "test",',
-        '  "completed_outputs": [{...}],',
-        '  "cost_usd": 0.012,',
-        '  "duration_seconds": 12.8',
-        '}',
-        "```",
-        "",
-        "Timeout (exit code 3):",
-        "```json",
-        '{',
-        '  "status": "timeout",',
-        '  "job_id": "job-...",',
-        '  "timeout_seconds": 300,',
-        '  "suspended_at_step": "approve"',
-        '}',
-        "```",
-        "",
-        "## CLI Quick Reference",
+        "## Quick Reference",
         "",
         "```",
-        "stepwise run <flow> --wait --var k=v                 # run, block, get JSON",
-        "stepwise run <flow> --async                          # fire-and-forget, returns job_id",
-        "stepwise output <job-id>                             # retrieve outputs",
-        "stepwise fulfill <run-id> '{\"field\": \"value\"}'       # satisfy human step",
-        "stepwise status <job-id>                             # check progress",
-        "stepwise schema <flow>                               # input/output schema",
+        "stepwise run <flow> --wait --var k=v     # run, block, get JSON",
+        "stepwise run <flow> --async               # fire-and-forget",
+        "stepwise output <job-id>                  # retrieve outputs",
+        "stepwise fulfill <run-id> '{...}'         # satisfy human step",
+        "stepwise status <job-id>                  # check progress",
         "```",
         "",
-        "## Exit Codes",
-        "",
-        "- 0: completed successfully",
-        "- 1: flow execution failed",
-        "- 2: input validation error",
-        "- 3: timeout",
-        "- 4: cancelled",
+        "Exit codes: 0=success, 1=failed, 2=input error, 3=timeout, 4=cancelled",
         "",
     ])
 

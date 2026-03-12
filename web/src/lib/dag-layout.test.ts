@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { computeDagLayout } from "./dag-layout";
-import type { WorkflowDefinition } from "./types";
+import type { FlowDefinition } from "./types";
 
 function makeStep(
   name: string,
@@ -23,7 +23,7 @@ function makeStep(
 
 describe("computeDagLayout", () => {
   it("lays out a linear workflow (A -> B -> C) in three layers", () => {
-    const workflow: WorkflowDefinition = {
+    const workflow: FlowDefinition = {
       steps: {
         A: makeStep("A"),
         B: makeStep("B", {
@@ -56,7 +56,7 @@ describe("computeDagLayout", () => {
   });
 
   it("places fan-out nodes (A -> B, C) at the same depth", () => {
-    const workflow: WorkflowDefinition = {
+    const workflow: FlowDefinition = {
       steps: {
         A: makeStep("A"),
         B: makeStep("B", {
@@ -85,7 +85,7 @@ describe("computeDagLayout", () => {
   });
 
   it("handles fan-in (B, C -> D) producing correct edges", () => {
-    const workflow: WorkflowDefinition = {
+    const workflow: FlowDefinition = {
       steps: {
         A: makeStep("A"),
         B: makeStep("B", {
@@ -125,7 +125,7 @@ describe("computeDagLayout", () => {
   });
 
   it("handles a single-node workflow", () => {
-    const workflow: WorkflowDefinition = {
+    const workflow: FlowDefinition = {
       steps: {
         only: makeStep("only"),
       },
@@ -141,7 +141,7 @@ describe("computeDagLayout", () => {
   });
 
   it("handles an empty workflow (no steps)", () => {
-    const workflow: WorkflowDefinition = {
+    const workflow: FlowDefinition = {
       steps: {},
     };
 
@@ -152,7 +152,7 @@ describe("computeDagLayout", () => {
   });
 
   it("deduplicates edges when same dependency comes from inputs and sequencing", () => {
-    const workflow: WorkflowDefinition = {
+    const workflow: FlowDefinition = {
       steps: {
         A: makeStep("A"),
         B: makeStep("B", {
@@ -174,7 +174,7 @@ describe("computeDagLayout", () => {
   });
 
   it("ignores $job input bindings as edges", () => {
-    const workflow: WorkflowDefinition = {
+    const workflow: FlowDefinition = {
       steps: {
         A: makeStep("A", {
           inputs: [
@@ -198,7 +198,7 @@ describe("computeDagLayout", () => {
   });
 
   it("uses sequencing-only edges for ordering", () => {
-    const workflow: WorkflowDefinition = {
+    const workflow: FlowDefinition = {
       steps: {
         A: makeStep("A"),
         B: makeStep("B", { sequencing: ["A"] }),
@@ -216,7 +216,7 @@ describe("computeDagLayout", () => {
   });
 
   it("produces nodes with correct dimensions", () => {
-    const workflow: WorkflowDefinition = {
+    const workflow: FlowDefinition = {
       steps: {
         A: makeStep("A"),
       },
@@ -230,7 +230,7 @@ describe("computeDagLayout", () => {
   });
 
   it("edges include data flow labels from input bindings", () => {
-    const workflow: WorkflowDefinition = {
+    const workflow: FlowDefinition = {
       steps: {
         A: makeStep("A"),
         B: makeStep("B", {
@@ -248,7 +248,7 @@ describe("computeDagLayout", () => {
   });
 
   it("sequencing-only edges have empty labels", () => {
-    const workflow: WorkflowDefinition = {
+    const workflow: FlowDefinition = {
       steps: {
         A: makeStep("A"),
         B: makeStep("B", { sequencing: ["A"] }),
@@ -262,7 +262,7 @@ describe("computeDagLayout", () => {
   });
 
   it("edges have at least 2 points each", () => {
-    const workflow: WorkflowDefinition = {
+    const workflow: FlowDefinition = {
       steps: {
         A: makeStep("A"),
         B: makeStep("B", { sequencing: ["A"] }),

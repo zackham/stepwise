@@ -132,9 +132,60 @@ class ExecutorRegistry:
 class ScriptExecutor(Executor):
     """Run a shell command. Synchronous in M1."""
 
-    def __init__(self, command: str, working_dir: str | None = None) -> None:
+    def __init__(
+        self,
+        command: str,
+        working_dir: str | None = None,
+        flow_dir: str | None = None,
+    ) -> None:
         self.command = command
         self.working_dir = working_dir
+        self.flow_dir = flow_dir  # M10: directory containing the flow file
+
+    def _resolve_command(self, command: str) -> str:
+        """Resolve script paths relative to flow_dir if set.
+
+        For directory flows, scripts referenced in `run:` fields are resolved
+        relative to the flow's directory. The script is then invoked with its
+        absolute path so it works regardless of cwd.
+
+        If the command starts with a relative path that exists under flow_dir,
+        it's converted to absolute. Otherwise left as-is (system command,
+        inline script, etc.).
+        """
+        if not self.flow_dir:
+            return command
+
+        # Split command into parts to find the script path
+        # Handle interpreter prefixes like "python3 script.py" or "bash script.sh"
+        parts = command.split(None, 1)
+        if not parts:
+            return command
+
+        # Check if the first token is an interpreter (python3, bash, etc.)
+        interpreters = {"python3", "python", "bash", "sh", "node", "ruby", "perl"}
+        if parts[0] in interpreters and len(parts) > 1:
+            # Second token is the script path
+            script_parts = parts[1].split(None, 1)
+            script_path = script_parts[0]
+            rest = script_parts[1] if len(script_parts) > 1 else ""
+            candidate = Path(self.flow_dir) / script_path
+            if candidate.exists():
+                resolved = f"{parts[0]} {candidate.resolve()}"
+                if rest:
+                    resolved += f" {rest}"
+                return resolved
+            return command
+
+        # First token might be the script itself
+        candidate = Path(self.flow_dir) / parts[0]
+        if candidate.exists():
+            resolved = str(candidate.resolve())
+            if len(parts) > 1:
+                resolved += f" {parts[1]}"
+            return resolved
+
+        return command
 
     def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
         workspace = context.workspace_path or "."
@@ -151,6 +202,9 @@ class ScriptExecutor(Executor):
             "JOB_ENGINE_WORKSPACE": str(workspace),
             "STEPWISE_STEP_IO": str(step_io_dir),
         }
+        # M10: Set STEPWISE_FLOW_DIR if flow_dir is available
+        if self.flow_dir:
+            env["STEPWISE_FLOW_DIR"] = self.flow_dir
         # Pass inputs as environment variables for convenience
         for k, v in inputs.items():
             if isinstance(v, str):
@@ -161,9 +215,12 @@ class ScriptExecutor(Executor):
                 env[k] = str(v)
         cwd = self.working_dir or workspace
 
+        # M10: Resolve script path relative to flow_dir
+        command = self._resolve_command(self.command)
+
         try:
             result = subprocess.run(
-                self.command,
+                command,
                 shell=True,
                 capture_output=True,
                 text=True,

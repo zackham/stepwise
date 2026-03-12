@@ -397,20 +397,23 @@ class TestFulfillCommand:
 
 
 class TestAgentHelp:
-    def test_agent_help_discovers_flows(self, simple_flow, human_flow, tmp_project):
+    def test_agent_help_compact_default(self, simple_flow, human_flow, tmp_project):
+        """Default compact format lists flows concisely with CLI reference."""
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
             "agent-help",
         ])
 
         assert code == EXIT_SUCCESS
-        assert "# Stepwise Flows" in output
-        assert "simple" in output
-        assert "human-test" in output
-        assert "## CLI Quick Reference" in output
+        assert "**simple**" in output
+        assert "**human-test**" in output
         assert "--wait" in output
+        # Compact includes CLI reference section
+        assert "stepwise run" in output
+        assert "stepwise status" in output
+        assert "stepwise fulfill" in output
 
-    def test_agent_help_shows_inputs(self, simple_flow, tmp_project):
+    def test_agent_help_compact_shows_inputs(self, simple_flow, tmp_project):
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
             "agent-help",
@@ -420,7 +423,7 @@ class TestAgentHelp:
         assert "question" in output
         assert '--var question="..."' in output
 
-    def test_agent_help_shows_human_steps(self, human_flow, tmp_project):
+    def test_agent_help_compact_shows_human_steps(self, human_flow, tmp_project):
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
             "agent-help",
@@ -428,7 +431,36 @@ class TestAgentHelp:
 
         assert code == EXIT_SUCCESS
         assert "approve" in output
-        assert "Human steps:" in output
+        assert "human:" in output
+
+    def test_agent_help_json_format(self, simple_flow, tmp_project):
+        """--format json returns structured JSON."""
+        code, output = _capture_stdout([
+            "--project-dir", str(tmp_project),
+            "agent-help",
+            "--format", "json",
+        ])
+
+        assert code == EXIT_SUCCESS
+        data = json.loads(output)
+        assert data["count"] == 1
+        assert data["flows"][0]["name"] == "simple"
+        assert "question" in data["flows"][0]["inputs"]
+        assert "formatted" in data["flows"][0]["outputs"]
+        assert "run" in data["flows"][0]
+
+    def test_agent_help_full_format(self, simple_flow, tmp_project):
+        """--format full produces verbose markdown."""
+        code, output = _capture_stdout([
+            "--project-dir", str(tmp_project),
+            "agent-help",
+            "--format", "full",
+        ])
+
+        assert code == EXIT_SUCCESS
+        assert "# Stepwise Flows" in output
+        assert "### simple" in output
+        assert "## Quick Reference" in output
 
     def test_agent_help_empty_project(self, tmp_project):
         """No flows found → helpful message."""
@@ -440,8 +472,21 @@ class TestAgentHelp:
         assert code == EXIT_SUCCESS
         assert "No flows found" in output
 
-    def test_agent_help_update_file(self, simple_flow, tmp_project):
-        """--update inserts content between markers."""
+    def test_agent_help_empty_json(self, tmp_project):
+        """No flows in JSON → empty array."""
+        code, output = _capture_stdout([
+            "--project-dir", str(tmp_project),
+            "agent-help",
+            "--format", "json",
+        ])
+
+        assert code == EXIT_SUCCESS
+        data = json.loads(output)
+        assert data["flows"] == []
+        assert data["count"] == 0
+
+    def test_agent_help_update_uses_full_format(self, simple_flow, tmp_project):
+        """--update implies full format for readability in docs."""
         target = tmp_project / "CLAUDE.md"
         target.write_text("# My Project\n\nSome content.\n")
 
@@ -456,6 +501,7 @@ class TestAgentHelp:
         assert "<!-- stepwise-agent-help -->" in text
         assert "<!-- /stepwise-agent-help -->" in text
         assert "# My Project" in text  # original content preserved
+        assert "# Stepwise Flows" in text  # full format header
         assert "simple" in text
 
     def test_agent_help_update_replaces(self, simple_flow, tmp_project):
@@ -478,30 +524,6 @@ class TestAgentHelp:
         assert "OLD CONTENT" not in text
         assert "simple" in text
         assert "# Other" in text  # preserved
-
-    def test_agent_help_output_shapes(self, simple_flow, tmp_project):
-        """Agent help includes expected output shapes."""
-        code, output = _capture_stdout([
-            "--project-dir", str(tmp_project),
-            "agent-help",
-        ])
-
-        assert code == EXIT_SUCCESS
-        assert '"status": "completed"' in output
-        assert '"status": "failed"' in output
-        assert '"status": "timeout"' in output
-
-    def test_agent_help_exit_codes(self, simple_flow, tmp_project):
-        """Agent help includes exit code documentation."""
-        code, output = _capture_stdout([
-            "--project-dir", str(tmp_project),
-            "agent-help",
-        ])
-
-        assert code == EXIT_SUCCESS
-        assert "## Exit Codes" in output
-        assert "0: completed" in output
-        assert "3: timeout" in output
 
     def test_agent_help_flows_dir(self, tmp_project):
         """--flows-dir overrides discovery path."""

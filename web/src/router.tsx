@@ -9,7 +9,7 @@ import { JobDashboard } from "@/pages/JobDashboard";
 import { JobDetailPage } from "@/pages/JobDetailPage";
 import { JobEventsPage } from "@/pages/JobEventsPage";
 import { JobTreePage } from "@/pages/JobTreePage";
-import { BuilderPage } from "@/pages/BuilderPage";
+import { EditorPage } from "@/pages/EditorPage";
 
 // Root route
 const rootRoute = createRootRoute({
@@ -53,18 +53,18 @@ const jobTreeRoute = createRoute({
   component: JobTreePage,
 });
 
-// Builder
-const builderRoute = createRoute({
+// Editor
+const editorRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/builder",
-  component: BuilderPage,
+  path: "/editor",
+  component: EditorPage,
 });
 
-// Builder with template
-const builderTemplateRoute = createRoute({
+// Editor with flow name
+const editorFlowRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/builder/$templateName",
-  component: BuilderPage,
+  path: "/editor/$flowName",
+  component: EditorPage,
 });
 
 // Route tree
@@ -74,8 +74,8 @@ const routeTree = rootRoute.addChildren([
   jobDetailRoute,
   jobEventsRoute,
   jobTreeRoute,
-  builderRoute,
-  builderTemplateRoute,
+  editorRoute,
+  editorFlowRoute,
 ]);
 
 export const router = createRouter({ routeTree });

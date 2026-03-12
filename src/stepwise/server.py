@@ -99,6 +99,7 @@ _engine: Engine | None = None
 _ws_clients: set[WebSocket] = set()
 _tick_task: asyncio.Task | None = None
 _templates_dir: Path = Path("templates")
+_project_dir: Path = Path(".")
 _last_snapshot: dict[str, Any] = {}
 _stream_tasks: dict[str, asyncio.Task] = {}
 
@@ -264,13 +265,14 @@ async def _tick_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _engine, _tick_task, _templates_dir
+    global _engine, _tick_task, _templates_dir, _project_dir
 
     db_path = os.environ.get("STEPWISE_DB", "stepwise.db")
     tmpl_dir = os.environ.get("STEPWISE_TEMPLATES", "templates")
     jobs_dir = os.environ.get("STEPWISE_JOBS_DIR", "jobs")
     _templates_dir = Path(tmpl_dir)
     _templates_dir.mkdir(parents=True, exist_ok=True)
+    _project_dir = Path(os.environ.get("STEPWISE_PROJECT_DIR", ".")).resolve()
 
     store = ThreadSafeStore(db_path)
 
@@ -683,6 +685,680 @@ def set_api_key(req: SetApiKeyRequest):
     cfg.openrouter_api_key = req.api_key
     save_config(cfg)
     return {"status": "updated"}
+
+
+# ── Editor (flow listing / loading / saving) ─────────────────────────
+
+
+class ParseYAMLRequest(BaseModel):
+    yaml: str
+
+
+class SaveYAMLRequest(BaseModel):
+    yaml: str
+
+
+def _build_flow_graph(yaml_content: str) -> dict:
+    """Build a graph structure from YAML for DAG visualization.
+
+    Returns {nodes: [...], edges: [...]}.
+    """
+    import yaml as yaml_lib
+
+    try:
+        data = yaml_lib.safe_load(yaml_content)
+    except Exception:
+        return {"nodes": [], "edges": []}
+
+    if not isinstance(data, dict):
+        return {"nodes": [], "edges": []}
+
+    steps = data.get("steps", {})
+    nodes = []
+    edges = []
+    seen_edges: set[tuple[str, str, bool]] = set()
+
+    for step_name, step_def in steps.items():
+        if not isinstance(step_def, dict):
+            continue
+
+        # Determine executor type
+        if step_def.get("for_each"):
+            executor = "for_each"
+        elif step_def.get("routes"):
+            executor = "route"
+        elif step_def.get("run"):
+            executor = "script"
+        elif step_def.get("executor"):
+            executor = step_def["executor"]
+        else:
+            executor = "unknown"
+
+        outputs = step_def.get("outputs", [])
+
+        # Check for exit rules / loops
+        exits = step_def.get("exits", [])
+        loop_targets = []
+        for ex in exits:
+            if isinstance(ex, dict) and ex.get("action") == "loop" and ex.get("target"):
+                loop_targets.append(ex["target"])
+
+        # Build detail fields
+        detail_fields: dict = {}
+        for key in ("model", "system", "prompt", "temperature", "max_tokens",
+                     "run", "for_each", "as", "on_error", "limits"):
+            if key in step_def:
+                detail_fields[key] = step_def[key]
+        if step_def.get("inputs"):
+            detail_fields["inputs"] = step_def["inputs"]
+        if exits:
+            detail_fields["exits"] = exits
+
+        node: dict = {
+            "id": step_name,
+            "label": step_name.replace("-", " ").replace("_", " ").title(),
+            "executor_type": executor,
+            "outputs": outputs,
+            "details": detail_fields,
+        }
+        nodes.append(node)
+
+        # Input binding edges
+        inputs = step_def.get("inputs", {})
+        for _key, value in inputs.items():
+            if isinstance(value, str) and "." in value and not value.startswith("$job"):
+                dep_step = value.split(".")[0]
+                if dep_step in steps:
+                    edge_key = (dep_step, step_name, False)
+                    if edge_key not in seen_edges:
+                        field_name = value.split(".", 1)[1] if "." in value else None
+                        edge: dict = {"source": dep_step, "target": step_name}
+                        if field_name:
+                            edge["label"] = field_name
+                        edges.append(edge)
+                        seen_edges.add(edge_key)
+
+        # Sequencing edges
+        sequencing = step_def.get("sequencing", [])
+        if isinstance(sequencing, str):
+            sequencing = [sequencing]
+        for seq_dep in sequencing:
+            if seq_dep in steps:
+                edge_key = (seq_dep, step_name, False)
+                if edge_key not in seen_edges:
+                    edges.append({"source": seq_dep, "target": step_name})
+                    seen_edges.add(edge_key)
+
+        # For-each source edge
+        fe_source = step_def.get("for_each")
+        if isinstance(fe_source, str) and "." in fe_source:
+            dep_step = fe_source.split(".")[0]
+            if dep_step in steps:
+                edge_key = (dep_step, step_name, False)
+                if edge_key not in seen_edges:
+                    edges.append({"source": dep_step, "target": step_name})
+                    seen_edges.add(edge_key)
+
+        # Loop back-edges
+        for target in loop_targets:
+            if target in steps:
+                edges.append({
+                    "source": step_name,
+                    "target": target,
+                    "is_loop": True,
+                })
+
+    return {"nodes": nodes, "edges": edges}
+
+
+@app.get("/api/local-flows")
+def list_local_flows():
+    """List all flows discoverable in the project directory."""
+    from stepwise.flow_resolution import discover_flows
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+    flows = discover_flows(_project_dir)
+    result = []
+    for flow_info in flows:
+        # Get file mtime
+        stat_path = flow_info.path
+        if flow_info.is_directory:
+            # For directory flows, use the FLOW.yaml mtime
+            stat_path = flow_info.path
+        try:
+            mtime = stat_path.stat().st_mtime
+            modified_at = datetime.fromtimestamp(mtime).isoformat()
+        except OSError:
+            modified_at = ""
+
+        # Parse lightly to get step count
+        steps_count = 0
+        try:
+            wf = load_workflow_yaml(flow_info.path)
+            steps_count = len(wf.steps)
+        except (YAMLLoadError, Exception):
+            pass
+
+        # Compute relative path from project dir
+        try:
+            rel_path = str(flow_info.path.relative_to(_project_dir))
+        except ValueError:
+            rel_path = str(flow_info.path)
+
+        result.append({
+            "path": rel_path,
+            "name": flow_info.name,
+            "steps_count": steps_count,
+            "modified_at": modified_at,
+            "is_directory": flow_info.is_directory,
+        })
+
+    return result
+
+
+@app.get("/api/flows/local/{path:path}")
+def load_local_flow(path: str):
+    """Load a specific flow by its relative path."""
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+    abs_path = (_project_dir / path).resolve()
+
+    # Security: ensure the resolved path is within the project directory
+    try:
+        abs_path.relative_to(_project_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path escapes project directory")
+
+    # If path is a directory, look for FLOW.yaml inside it
+    if abs_path.is_dir():
+        abs_path = abs_path / "FLOW.yaml"
+
+    if not abs_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Flow not found: {path}")
+
+    raw_yaml = abs_path.read_text()
+
+    try:
+        workflow = load_workflow_yaml(abs_path)
+    except YAMLLoadError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid flow YAML: {'; '.join(e.errors)}")
+
+    graph = _build_flow_graph(raw_yaml)
+
+    # Determine if this is a directory flow
+    is_directory = abs_path.name == "FLOW.yaml"
+    flow_dir = str(abs_path.parent)
+
+    try:
+        rel_path = str(abs_path.relative_to(_project_dir))
+    except ValueError:
+        rel_path = path
+
+    return {
+        "path": rel_path,
+        "name": workflow.metadata.name or abs_path.stem,
+        "raw_yaml": raw_yaml,
+        "flow": workflow.to_dict(),
+        "graph": graph,
+        "is_directory": is_directory,
+        "flow_dir": flow_dir,
+    }
+
+
+@app.post("/api/flows/parse")
+def parse_flow_yaml(req: ParseYAMLRequest):
+    """Parse a YAML string and return the flow + graph structure."""
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+    if not req.yaml or not req.yaml.strip():
+        return {"flow": None, "graph": None, "errors": ["Empty YAML input"]}
+
+    try:
+        workflow = load_workflow_yaml(req.yaml)
+    except YAMLLoadError as e:
+        return {"flow": None, "graph": None, "errors": e.errors}
+    except Exception as e:
+        return {"flow": None, "graph": None, "errors": [str(e)]}
+
+    graph = _build_flow_graph(req.yaml)
+    return {
+        "flow": workflow.to_dict(),
+        "graph": graph,
+        "errors": [],
+    }
+
+
+@app.put("/api/flows/local/{path:path}")
+def save_local_flow(path: str, req: SaveYAMLRequest):
+    """Save YAML to a flow file. Validates first, creates .bak backup."""
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+    abs_path = (_project_dir / path).resolve()
+
+    # Security: ensure the resolved path is within the project directory
+    try:
+        abs_path.relative_to(_project_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path escapes project directory")
+
+    # If path is a directory, target FLOW.yaml inside it
+    if abs_path.is_dir():
+        abs_path = abs_path / "FLOW.yaml"
+
+    # Validate the YAML first
+    try:
+        workflow = load_workflow_yaml(req.yaml)
+    except YAMLLoadError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid YAML: {'; '.join(e.errors)}",
+        )
+
+    # Create .bak backup if file already exists
+    if abs_path.is_file():
+        bak_path = abs_path.with_suffix(abs_path.suffix + ".bak")
+        bak_path.write_bytes(abs_path.read_bytes())
+
+    # Atomic write: write to .tmp then rename
+    tmp_path = abs_path.with_suffix(abs_path.suffix + ".tmp")
+    abs_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path.write_text(req.yaml)
+    tmp_path.rename(abs_path)
+
+    graph = _build_flow_graph(req.yaml)
+
+    is_directory = abs_path.name == "FLOW.yaml"
+    flow_dir = str(abs_path.parent)
+
+    try:
+        rel_path = str(abs_path.relative_to(_project_dir))
+    except ValueError:
+        rel_path = path
+
+    return {
+        "path": rel_path,
+        "name": workflow.metadata.name or abs_path.stem,
+        "raw_yaml": req.yaml,
+        "flow": workflow.to_dict(),
+        "graph": graph,
+        "is_directory": is_directory,
+        "flow_dir": flow_dir,
+    }
+
+
+# ── Visual Editing (M12b) ──────────────────────────────────────────────
+
+
+class StepPatchRequest(BaseModel):
+    """Field-level patches to a step's YAML. Keys are YAML field names."""
+    flow_path: str
+    step_name: str
+    changes: dict[str, Any]
+
+
+class AddStepRequest(BaseModel):
+    flow_path: str
+    name: str
+    executor: str = "script"
+
+
+class DeleteStepRequest(BaseModel):
+    flow_path: str
+    step_name: str
+
+
+def _resolve_flow_path(path: str) -> Path:
+    """Resolve a flow path within the project dir, with security check."""
+    abs_path = (_project_dir / path).resolve()
+    try:
+        abs_path.relative_to(_project_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path escapes project directory")
+    if abs_path.is_dir():
+        abs_path = abs_path / "FLOW.yaml"
+    return abs_path
+
+
+def _ruamel_load_and_patch(
+    file_path: Path,
+    step_name: str,
+    changes: dict[str, Any],
+) -> str:
+    """Load YAML with ruamel.yaml round-trip, apply patches, return updated YAML."""
+    from ruamel.yaml import YAML
+    from io import StringIO
+
+    ryaml = YAML()
+    ryaml.preserve_quotes = True
+
+    raw = file_path.read_text()
+    data = ryaml.load(raw)
+
+    if "steps" not in data or step_name not in data["steps"]:
+        raise HTTPException(
+            status_code=404, detail=f"Step '{step_name}' not found"
+        )
+
+    step = data["steps"][step_name]
+    for key, value in changes.items():
+        step[key] = value
+
+    buf = StringIO()
+    ryaml.dump(data, buf)
+    return buf.getvalue()
+
+
+@app.post("/api/flows/patch-step")
+def patch_step(req: StepPatchRequest):
+    """Apply field-level edits to a step via ruamel.yaml round-trip."""
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+    abs_path = _resolve_flow_path(req.flow_path)
+    if not abs_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Flow not found: {req.flow_path}")
+
+    new_yaml = _ruamel_load_and_patch(abs_path, req.step_name, req.changes)
+
+    # Validate the result
+    try:
+        workflow = load_workflow_yaml(new_yaml)
+    except YAMLLoadError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid after patch: {'; '.join(e.errors)}")
+
+    # Write atomically
+    tmp_path = abs_path.with_suffix(abs_path.suffix + ".tmp")
+    tmp_path.write_text(new_yaml)
+    tmp_path.rename(abs_path)
+
+    graph = _build_flow_graph(new_yaml)
+    return {
+        "raw_yaml": new_yaml,
+        "flow": workflow.to_dict(),
+        "graph": graph,
+        "errors": [],
+    }
+
+
+@app.post("/api/flows/add-step")
+def add_step(req: AddStepRequest):
+    """Add a minimal new step to the flow."""
+    from ruamel.yaml import YAML
+    from io import StringIO
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+    abs_path = _resolve_flow_path(req.flow_path)
+    if not abs_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Flow not found: {req.flow_path}")
+
+    ryaml = YAML()
+    ryaml.preserve_quotes = True
+    data = ryaml.load(abs_path.read_text())
+
+    if "steps" not in data:
+        raise HTTPException(status_code=400, detail="Flow has no steps mapping")
+
+    if req.name in data["steps"]:
+        raise HTTPException(status_code=409, detail=f"Step '{req.name}' already exists")
+
+    # Create minimal step definition based on executor type
+    if req.executor == "script":
+        new_step = {"run": "echo hello", "outputs": ["result"]}
+    elif req.executor in ("llm", "agent"):
+        new_step = {"executor": req.executor, "prompt": "TODO", "outputs": ["result"]}
+    elif req.executor == "human":
+        new_step = {"executor": "human", "prompt": "TODO", "outputs": ["result"]}
+    else:
+        new_step = {"executor": req.executor, "outputs": ["result"]}
+
+    data["steps"][req.name] = new_step
+
+    buf = StringIO()
+    ryaml.dump(data, buf)
+    new_yaml = buf.getvalue()
+
+    # Validate
+    try:
+        workflow = load_workflow_yaml(new_yaml)
+    except YAMLLoadError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid after adding step: {'; '.join(e.errors)}")
+
+    # Write atomically
+    tmp_path = abs_path.with_suffix(abs_path.suffix + ".tmp")
+    tmp_path.write_text(new_yaml)
+    tmp_path.rename(abs_path)
+
+    graph = _build_flow_graph(new_yaml)
+    return {
+        "raw_yaml": new_yaml,
+        "flow": workflow.to_dict(),
+        "graph": graph,
+        "errors": [],
+    }
+
+
+@app.post("/api/flows/delete-step")
+def delete_step(req: DeleteStepRequest):
+    """Delete a step and clean up references from other steps."""
+    from ruamel.yaml import YAML
+    from io import StringIO
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+    abs_path = _resolve_flow_path(req.flow_path)
+    if not abs_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Flow not found: {req.flow_path}")
+
+    ryaml = YAML()
+    ryaml.preserve_quotes = True
+    data = ryaml.load(abs_path.read_text())
+
+    if "steps" not in data or req.step_name not in data["steps"]:
+        raise HTTPException(status_code=404, detail=f"Step '{req.step_name}' not found")
+
+    del data["steps"][req.step_name]
+
+    # Cascade: remove input bindings and sequencing refs to the deleted step
+    for other_name, other_step in data["steps"].items():
+        if isinstance(other_step, dict):
+            # Clean inputs
+            inputs = other_step.get("inputs")
+            if isinstance(inputs, dict):
+                to_remove = [
+                    k for k, v in inputs.items()
+                    if isinstance(v, str) and v.startswith(f"{req.step_name}.")
+                ]
+                for k in to_remove:
+                    del inputs[k]
+
+            # Clean sequencing
+            seq = other_step.get("sequencing")
+            if isinstance(seq, list):
+                other_step["sequencing"] = [s for s in seq if s != req.step_name]
+                if not other_step["sequencing"]:
+                    del other_step["sequencing"]
+
+    buf = StringIO()
+    ryaml.dump(data, buf)
+    new_yaml = buf.getvalue()
+
+    # Validate (may still fail if structure is broken)
+    try:
+        workflow = load_workflow_yaml(new_yaml)
+    except YAMLLoadError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid after delete: {'; '.join(e.errors)}")
+
+    # Write atomically
+    tmp_path = abs_path.with_suffix(abs_path.suffix + ".tmp")
+    tmp_path.write_text(new_yaml)
+    tmp_path.rename(abs_path)
+
+    graph = _build_flow_graph(new_yaml)
+    return {
+        "raw_yaml": new_yaml,
+        "flow": workflow.to_dict(),
+        "graph": graph,
+        "errors": [],
+    }
+
+
+@app.get("/api/flows/mtime")
+def get_flow_mtime(flow_path: str = Query(..., alias="path")):
+    """Get the file modification time for change detection."""
+    abs_path = _resolve_flow_path(flow_path)
+    if not abs_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Flow not found: {flow_path}")
+    mtime = abs_path.stat().st_mtime
+    return {"mtime": mtime, "modified_at": datetime.fromtimestamp(mtime).isoformat()}
+
+
+# ── Registry Proxy ────────────────────────────────────────────────────
+
+
+class InstallRequest(BaseModel):
+    slug: str
+    target: str = "project"  # "project" only for now
+
+
+@app.get("/api/registry/search")
+def registry_search(
+    q: str = "",
+    tag: str | None = None,
+    sort: str = "downloads",
+    limit: int = 20,
+    offset: int = 0,
+):
+    """Proxy search to stepwise.run registry."""
+    from stepwise.registry_client import search_flows, RegistryError
+
+    try:
+        result = search_flows(query=q, tag=tag, sort=sort, limit=limit)
+        return result
+    except RegistryError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Registry unavailable: {e}")
+
+
+@app.get("/api/registry/flow/{slug}")
+def registry_flow_detail(slug: str):
+    """Fetch flow detail from stepwise.run registry."""
+    from stepwise.registry_client import fetch_flow, RegistryError
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+    try:
+        data = fetch_flow(slug)
+        # Build graph and parse flow from the YAML for DAG preview
+        if data.get("yaml"):
+            data["graph"] = _build_flow_graph(data["yaml"])
+            try:
+                workflow = load_workflow_yaml(data["yaml"])
+                data["flow"] = workflow.to_dict()
+            except (YAMLLoadError, Exception):
+                data["flow"] = None
+        else:
+            data["graph"] = {"nodes": [], "edges": []}
+            data["flow"] = None
+        return data
+    except RegistryError as e:
+        status = e.status_code or 502
+        raise HTTPException(status_code=status, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Registry unavailable: {e}")
+
+
+@app.post("/api/registry/install")
+def registry_install(req: InstallRequest):
+    """Install a flow from the registry into the local project."""
+    from stepwise.registry_client import fetch_flow, RegistryError
+
+    try:
+        data = fetch_flow(req.slug, use_cache=False)
+    except RegistryError as e:
+        status = e.status_code or 502
+        raise HTTPException(status_code=status, detail=str(e))
+
+    yaml_content = data.get("yaml")
+    if not yaml_content:
+        raise HTTPException(status_code=502, detail="Registry returned no YAML content")
+
+    # Install as directory flow: flows/<slug>/FLOW.yaml
+    flows_dir = _project_dir / "flows"
+    flow_dir = flows_dir / req.slug
+    if flow_dir.exists():
+        raise HTTPException(
+            status_code=409,
+            detail=f"Flow directory already exists: flows/{req.slug}/",
+        )
+
+    flow_dir.mkdir(parents=True)
+    flow_file = flow_dir / "FLOW.yaml"
+    flow_file.write_text(yaml_content)
+
+    # Write provenance metadata
+    origin = {
+        "registry": "stepwise.run",
+        "slug": data.get("slug", req.slug),
+        "author": data.get("author"),
+        "version": data.get("version"),
+        "installed_at": _now().isoformat(),
+    }
+    (flow_dir / ".origin.json").write_text(json.dumps(origin, indent=2) + "\n")
+
+    # Parse and return same format as local flow detail
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+    try:
+        flow_def = load_workflow_yaml(yaml_content)
+        flow_dict = flow_def.to_dict()
+        graph = _build_flow_graph(yaml_content)
+        errors: list[str] = []
+    except YAMLLoadError as exc:
+        flow_dict = None
+        graph = {"nodes": [], "edges": []}
+        errors = exc.errors
+    except Exception as exc:
+        flow_dict = None
+        graph = {"nodes": [], "edges": []}
+        errors = [str(exc)]
+
+    rel_path = f"flows/{req.slug}/FLOW.yaml"
+    return {
+        "path": rel_path,
+        "name": data.get("name", req.slug),
+        "raw_yaml": yaml_content,
+        "flow": flow_dict,
+        "graph": graph,
+        "errors": errors,
+        "is_directory": True,
+        "flow_dir": f"flows/{req.slug}",
+    }
+
+
+# ── Editor LLM Chat ───────────────────────────────────────────────────
+
+
+class EditorChatRequest(BaseModel):
+    message: str
+    history: list[dict[str, str]] = []
+    current_yaml: str | None = None
+    selected_step: str | None = None
+
+
+@app.post("/api/editor/chat")
+async def editor_chat(req: EditorChatRequest):
+    """Stream LLM-assisted flow editing responses as NDJSON."""
+    from starlette.responses import StreamingResponse
+    from stepwise.editor_llm import chat_stream
+
+    def generate():
+        for chunk in chat_stream(
+            user_message=req.message,
+            history=req.history,
+            current_yaml=req.current_yaml,
+            selected_step=req.selected_step,
+        ):
+            yield json.dumps(chunk) + "\n"
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")
 
 
 # ── WebSocket ─────────────────────────────────────────────────────────

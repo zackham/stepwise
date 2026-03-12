@@ -151,7 +151,10 @@ stepwise agent-help                  # Generate agent instructions
 stepwise self-update                 # Upgrade to latest version
 stepwise templates                   # List available templates
 stepwise config set <key> <value>    # Configure (API keys, models)
-stepwise flow get <url>              # Download a flow from registry
+stepwise get <name-or-url>           # Download a flow from registry
+stepwise share <flow>                # Publish a flow to registry
+stepwise search <query>              # Search the registry
+stepwise new <name>                  # Create a new flow
 ```
 
 See [`docs/cli.md`](docs/cli.md) for the full reference with all flags, examples, and exit codes.
@@ -235,7 +238,7 @@ make build-web
 | [YAML Format](docs/yaml-format.md) | Complete `.flow.yaml` schema reference |
 | [CLI Reference](docs/cli.md) | All commands, flags, examples, exit codes |
 | [API Reference](docs/api.md) | REST endpoints, WebSocket protocol, error handling |
-| [Flow Sharing](docs/flow-sharing.md) | Registry and `stepwise flow` commands |
+| [Flow Sharing](docs/flow-sharing.md) | Registry commands (`get`, `share`, `search`, `info`) |
 
 ## License
 

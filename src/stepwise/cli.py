@@ -2,16 +2,20 @@
 
 Usage:
     stepwise init                          Create .stepwise/ in cwd
-    stepwise run <file> [flags]            Run a flow
+    stepwise run <flow> [flags]            Run a flow
+    stepwise new <name>                    Create a new flow
     stepwise serve [flags]                 Persistent server
-    stepwise flow get|share|search         Flow sharing
+    stepwise share <flow> [--author]       Publish a flow to the registry
+    stepwise get <target>                  Download a flow (URL, @author:name, or slug)
+    stepwise search [query] [--tag]        Search the flow registry
+    stepwise info <name>                   Show flow details
     stepwise jobs [flags]                  List jobs
     stepwise status <job-id>               Show job detail
     stepwise cancel <job-id>               Cancel running job
-    stepwise validate <file>               Validate flow syntax
+    stepwise validate <flow>               Validate flow syntax
     stepwise templates                     List templates
     stepwise config get|set [key] [value]  Manage configuration
-    stepwise schema <file>                 Generate JSON tool contract
+    stepwise schema <flow>                 Generate JSON tool contract
     stepwise output <job-id> [--scope]     Retrieve job outputs
     stepwise fulfill <run-id> '<json>'     Satisfy a suspended human step (or --stdin)
     stepwise agent-help [--update <file>]  Generate agent instructions
@@ -62,19 +66,173 @@ def _find_project_or_exit(args: argparse.Namespace) -> StepwiseProject:
         sys.exit(EXIT_PROJECT_ERROR)
 
 
+def _project_dir(args: argparse.Namespace) -> Path | None:
+    """Return explicit --project-dir or None (let resolve_flow use cwd)."""
+    return Path(args.project_dir) if getattr(args, "project_dir", None) else None
+
+
 # ── Command handlers ─────────────────────────────────────────────────
 
 
 def cmd_init(args: argparse.Namespace) -> int:
     target = Path(args.project_dir) if args.project_dir else None
+    root = (target or Path.cwd()).resolve()
+
     try:
         project = init_project(target, force=args.force)
         print(f"Initialized Stepwise project in {project.dot_dir}")
         print(f"  Run 'stepwise run <flow.yaml>' to execute a flow.")
+    except FileExistsError:
+        if args.no_skill:
+            print(f"Project already initialized in {root / DOT_DIR_NAME}. "
+                  f"Use --force to reinitialize.", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+        # .stepwise/ exists but we can still handle skill installation
+        print(f"Project already initialized in {root / DOT_DIR_NAME}.")
+
+    # Agent skill installation
+    if args.no_skill:
         return EXIT_SUCCESS
-    except FileExistsError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return EXIT_USAGE_ERROR
+
+    _handle_skill_install(root, args.skill)
+    return EXIT_SUCCESS
+
+
+def _handle_skill_install(root: Path, skill_target: str | None) -> None:
+    """Detect agent frameworks and install/update the stepwise skill."""
+    from stepwise.project import (
+        AGENT_FRAMEWORK_DIRS,
+        SKILL_NAME,
+        detect_agent_skill_locations,
+        install_agent_skill,
+    )
+
+    detection = detect_agent_skill_locations(root)
+
+    # If explicit --skill target given, just do it
+    if skill_target:
+        target_dir = root / skill_target
+        if not target_dir.exists():
+            target_dir.mkdir(parents=True, exist_ok=True)
+        installed = install_agent_skill(target_dir)
+        print(f"  Installed agent skill in {installed}")
+        return
+
+    # Report symlink detection
+    for group in detection.symlinked_groups:
+        names = " and ".join(loc.framework_dir for loc in group)
+        print(f"  Note: {names} are symlinked (same directory)")
+
+    # Check if already installed and current
+    if detection.any_installed and detection.all_current:
+        installed_in = [loc for loc in detection.locations if loc.has_skill]
+        dirs = ", ".join(loc.framework_dir for loc in installed_in)
+        print(f"  Agent skill already up to date in {dirs}")
+        return
+
+    # Check if installed but outdated
+    outdated = [loc for loc in detection.locations if loc.has_skill and not loc.skill_current]
+    if outdated:
+        for loc in outdated:
+            print(f"  Agent skill in {loc.framework_dir} is outdated, updating...")
+            install_agent_skill(loc.path)
+            print(f"  Updated {loc.framework_dir}/skills/stepwise/")
+        # If all installed locations are now handled, done
+        if detection.any_installed:
+            return
+
+    # Find candidate dirs to install into (existing framework dirs without skill)
+    # Deduplicate by resolved path to handle symlinks
+    candidates: list[tuple[str, Path]] = []
+    seen_resolved: set[Path] = set()
+
+    for framework_dir, label in AGENT_FRAMEWORK_DIRS:
+        candidate = root / framework_dir
+        if not candidate.exists():
+            continue
+        resolved = candidate.resolve()
+        if resolved in seen_resolved:
+            continue
+        seen_resolved.add(resolved)
+
+        skill_dir = candidate / "skills" / SKILL_NAME
+        if not (skill_dir.is_dir() and (skill_dir / "SKILL.md").exists()):
+            candidates.append((framework_dir, candidate))
+
+    if not candidates:
+        # No framework dirs exist — ask what to create
+        _prompt_create_framework_dir(root)
+        return
+
+    if len(candidates) == 1:
+        framework_dir, candidate = candidates[0]
+        answer = _prompt(
+            f"  Install agent skill in {framework_dir}/skills/stepwise/? [Y/n] "
+        )
+        if answer.lower() not in ("n", "no"):
+            installed = install_agent_skill(candidate)
+            print(f"  Installed agent skill in {installed}")
+        return
+
+    # Multiple candidates
+    print("  Agent skill can be installed in:")
+    for i, (framework_dir, _) in enumerate(candidates, 1):
+        print(f"    [{i}] {framework_dir}/skills/stepwise/")
+    print(f"    [a] All of the above")
+    print(f"    [s] Skip")
+
+    answer = _prompt("  Install to: ").strip().lower()
+    if answer == "s":
+        return
+    if answer == "a":
+        for framework_dir, candidate in candidates:
+            installed = install_agent_skill(candidate)
+            print(f"  Installed agent skill in {installed}")
+        return
+    try:
+        idx = int(answer) - 1
+        if 0 <= idx < len(candidates):
+            framework_dir, candidate = candidates[idx]
+            installed = install_agent_skill(candidate)
+            print(f"  Installed agent skill in {installed}")
+        else:
+            print("  Skipped agent skill installation.")
+    except ValueError:
+        print("  Skipped agent skill installation.")
+
+
+def _prompt_create_framework_dir(root: Path) -> None:
+    """No agent framework dirs exist. Ask user what to create."""
+    print("  No agent framework directory found (.claude/ or .agents/).")
+    print("  Install agent skill for:")
+    print("    [1] Claude Code  (.claude/skills/stepwise/)")
+    print("    [2] Agents       (.agents/skills/stepwise/)")
+    print("    [3] Both")
+    print("    [s] Skip")
+
+    answer = _prompt("  Choice: ").strip().lower()
+    if answer == "s":
+        return
+
+    from stepwise.project import install_agent_skill
+
+    targets = []
+    if answer in ("1", "3"):
+        targets.append(root / ".claude")
+    if answer in ("2", "3"):
+        targets.append(root / ".agents")
+
+    for target in targets:
+        installed = install_agent_skill(target)
+        print(f"  Installed agent skill in {installed}")
+
+
+def _prompt(message: str) -> str:
+    """Read user input, or return empty string if not interactive."""
+    try:
+        return input(message)
+    except (EOFError, KeyboardInterrupt):
+        return ""
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
@@ -109,11 +267,13 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
+    from stepwise.flow_resolution import FlowResolutionError, resolve_flow
     from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
 
-    flow_path = Path(args.file)
-    if not flow_path.exists():
-        print(f"Error: File not found: {flow_path}", file=sys.stderr)
+    try:
+        flow_path = resolve_flow(args.flow, _project_dir(args))
+    except FlowResolutionError as e:
+        print(f"Error: {e}", file=sys.stderr)
         return EXIT_USAGE_ERROR
 
     try:
@@ -144,6 +304,45 @@ def cmd_validate(args: argparse.Namespace) -> int:
     except Exception as e:
         print(f"✗ {flow_path}: {e}", file=sys.stderr)
         return EXIT_JOB_FAILED
+
+
+def cmd_new(args: argparse.Namespace) -> int:
+    """Create a new flow directory with a minimal template."""
+    from stepwise.flow_resolution import FLOW_DIR_MARKER, FLOW_NAME_PATTERN
+
+    name = args.name
+    if not FLOW_NAME_PATTERN.match(name):
+        print(
+            f"Error: Invalid flow name: '{name}'. "
+            f"Flow names must match [a-zA-Z0-9_-]+",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE_ERROR
+
+    project_dir = Path(args.project_dir).resolve() if args.project_dir else Path.cwd().resolve()
+    flows_dir = project_dir / "flows"
+    flow_dir = flows_dir / name
+
+    if flow_dir.exists():
+        print(f"Error: Directory already exists: {flow_dir}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    flow_dir.mkdir(parents=True)
+    template = (
+        f"name: {name}\n"
+        f"description: \"\"\n"
+        f"\n"
+        f"steps:\n"
+        f"  hello:\n"
+        f"    run: 'echo \"{{\\\"message\\\": \\\"hello from {name}\\\"}}\"'\n"
+        f"    outputs: [message]\n"
+    )
+    (flow_dir / FLOW_DIR_MARKER).write_text(template)
+
+    print(f"Created flows/{name}/{FLOW_DIR_MARKER}")
+    print(f"  Edit: {flow_dir / FLOW_DIR_MARKER}")
+    print(f"  Run:  stepwise run {name}")
+    return EXIT_SUCCESS
 
 
 def cmd_templates(args: argparse.Namespace) -> int:
@@ -246,10 +445,21 @@ def cmd_config(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    from stepwise.flow_resolution import FlowResolutionError, resolve_flow
     from stepwise.runner import run_flow, parse_vars, load_vars_file
 
     project = _find_project_or_exit(args)
-    flow_path = Path(args.file)
+
+    # Resolve flow name/path early
+    try:
+        flow_path = resolve_flow(args.flow, _project_dir(args))
+    except FlowResolutionError as e:
+        if getattr(args, "wait", False) or getattr(args, "async_mode", False):
+            from stepwise.runner import _json_error
+            _json_error(2, str(e))
+            return EXIT_USAGE_ERROR
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
 
     # Parse input variables (shared across all modes)
     inputs: dict = {}
@@ -601,25 +811,10 @@ def _relative_time(dt) -> str:
         return f"{days} days ago"
 
 
-def cmd_flow(args: argparse.Namespace) -> int:
-    action = args.flow_action
-
-    if action == "get":
-        return _flow_get(args)
-    elif action == "share":
-        return _flow_share(args)
-    elif action == "search":
-        return _flow_search(args)
-    elif action == "info":
-        return _flow_info(args)
-    else:
-        print("Error: flow requires 'get', 'share', 'search', or 'info' action", file=sys.stderr)
-        return EXIT_USAGE_ERROR
-
-
-def _flow_get(args: argparse.Namespace) -> int:
+def cmd_get(args: argparse.Namespace) -> int:
     """Download a flow by URL or registry name."""
-    from stepwise.registry_client import fetch_flow, RegistryError
+    from stepwise.bundle import unpack_bundle
+    from stepwise.registry_client import fetch_flow, get_registry_url, RegistryError
 
     target = args.target
     if not target:
@@ -646,34 +841,62 @@ def _flow_get(args: argparse.Namespace) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return EXIT_USAGE_ERROR
 
-    filename = f"{slug}.flow.yaml"
-    target_path = Path(filename)
-    if target_path.exists() and not force:
-        print(f"Error: {target_path} already exists (use --force to overwrite)", file=sys.stderr)
-        return EXIT_USAGE_ERROR
-
-    target_path.write_text(data["yaml"])
+    bundle_files = data.get("files")
     steps = data.get("steps", "?")
     author = data.get("author", "unknown")
     downloads = data.get("downloads", 0)
-    print(f"✓ Downloaded {filename} ({steps} steps, by {author}, {downloads:,} downloads)")
-    print(f"  Run: stepwise run {filename}")
+
+    # Determine install location
+    flows_dir = Path("flows")
+    target_dir = flows_dir / slug
+
+    if target_dir.exists() and not force:
+        print(f"Error: {target_dir} already exists (use --force to overwrite)", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    # Build origin metadata
+    import hashlib
+    from datetime import datetime, timezone
+
+    origin = {
+        "registry": get_registry_url(),
+        "author": author,
+        "slug": slug,
+        "version": data.get("version", 1),
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "content_hash": hashlib.sha256(data["yaml"].encode()).hexdigest(),
+    }
+
+    flow_path = unpack_bundle(
+        target_dir=target_dir,
+        yaml_content=data["yaml"],
+        files=bundle_files,
+        origin=origin,
+    )
+
+    file_count = len(bundle_files) if bundle_files else 0
+    file_msg = f" + {file_count} file(s)" if file_count else ""
+    print(f"✓ Downloaded {target_dir}/{file_msg} ({steps} steps, by {author}, {downloads:,} downloads)")
+    print(f"  Run: stepwise run {flow_path}")
     return EXIT_SUCCESS
 
 
-def _flow_share(args: argparse.Namespace) -> int:
+def cmd_share(args: argparse.Namespace) -> int:
     """Publish a flow to the registry."""
+    from stepwise.bundle import BundleError, collect_bundle
+    from stepwise.flow_resolution import FlowResolutionError, resolve_flow
     from stepwise.registry_client import publish_flow, update_flow, RegistryError
     from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
 
-    flow_file = args.file
-    if not flow_file:
-        print("Error: flow share requires a file path", file=sys.stderr)
+    flow_arg = args.flow
+    if not flow_arg:
+        print("Error: share requires a flow name or file path", file=sys.stderr)
         return EXIT_USAGE_ERROR
 
-    flow_path = Path(flow_file)
-    if not flow_path.exists():
-        print(f"Error: File not found: {flow_path}", file=sys.stderr)
+    try:
+        flow_path = resolve_flow(flow_arg, _project_dir(args))
+    except FlowResolutionError as e:
+        print(f"Error: {e}", file=sys.stderr)
         return EXIT_USAGE_ERROR
 
     # Validate first
@@ -690,6 +913,26 @@ def _flow_share(args: argparse.Namespace) -> int:
 
     print(f"Validating {flow_path}... ✓ ({len(wf.steps)} steps)")
 
+    # Collect bundle files if this is a directory flow
+    bundle_files: dict[str, str] | None = None
+    is_dir_flow = flow_path.name == "FLOW.yaml"
+    if is_dir_flow:
+        try:
+            bundle_files = collect_bundle(flow_path.parent)
+        except BundleError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+
+        if bundle_files:
+            print(f"Bundling {len(bundle_files)} co-located file(s):")
+            for rel_path in sorted(bundle_files):
+                size = len(bundle_files[rel_path].encode("utf-8"))
+                print(f"  {rel_path} ({size:,} bytes)")
+            answer = _prompt("Proceed? [Y/n] ")
+            if answer.strip().lower() in ("n", "no"):
+                print("Cancelled.")
+                return EXIT_SUCCESS
+
     try:
         if do_update:
             import yaml as yaml_lib
@@ -700,11 +943,12 @@ def _flow_share(args: argparse.Namespace) -> int:
             result = update_flow(slug, yaml_content)
             print(f"✓ Updated: {result.get('url', slug)}")
         else:
-            result = publish_flow(yaml_content, author=author)
+            result = publish_flow(yaml_content, author=author, files=bundle_files)
             slug = result.get("slug", "")
+            file_msg = f" + {len(bundle_files)} file(s)" if bundle_files else ""
             print(f"Publishing as \"{result.get('name', '')}\" by {result.get('author', 'anonymous')}...")
-            print(f"✓ Published: {result.get('url', '')}")
-            print(f"  Get: stepwise flow get {slug}")
+            print(f"✓ Published: {result.get('url', '')}{file_msg}")
+            print(f"  Get: stepwise get {slug}")
             if result.get("update_token"):
                 print(f"  Token saved to ~/.config/stepwise/tokens.json")
     except RegistryError as e:
@@ -714,7 +958,7 @@ def _flow_share(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
-def _flow_search(args: argparse.Namespace) -> int:
+def cmd_search(args: argparse.Namespace) -> int:
     """Search the flow registry."""
     from stepwise.registry_client import search_flows, RegistryError
 
@@ -750,7 +994,7 @@ def _flow_search(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
-def _flow_info(args: argparse.Namespace) -> int:
+def cmd_info(args: argparse.Namespace) -> int:
     """Show details about a published flow."""
     from stepwise.registry_client import fetch_flow, RegistryError
 
@@ -816,12 +1060,14 @@ def _flow_get_url(url: str) -> int:
 
 def cmd_schema(args: argparse.Namespace) -> int:
     """Generate JSON tool contract from a flow file."""
+    from stepwise.flow_resolution import FlowResolutionError, resolve_flow
     from stepwise.schema import generate_schema
     from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
 
-    flow_path = Path(args.file)
-    if not flow_path.exists():
-        print(f"Error: File not found: {flow_path}", file=sys.stderr)
+    try:
+        flow_path = resolve_flow(args.flow, _project_dir(args))
+    except FlowResolutionError as e:
+        print(f"Error: {e}", file=sys.stderr)
         return EXIT_USAGE_ERROR
 
     try:
@@ -945,8 +1191,13 @@ def cmd_agent_help(args: argparse.Namespace) -> int:
 
     project_dir = Path(args.project_dir) if args.project_dir else Path.cwd()
     flows_dir = Path(args.flows_dir) if args.flows_dir else None
+    fmt = getattr(args, "format", "compact")
 
-    content = generate_agent_help(project_dir, flows_dir=flows_dir)
+    # --update implies full format unless explicitly overridden
+    if args.update and fmt == "compact":
+        fmt = "full"
+
+    content = generate_agent_help(project_dir, flows_dir=flows_dir, fmt=fmt)
 
     if args.update:
         target = Path(args.update)
@@ -1054,6 +1305,10 @@ def build_parser() -> argparse.ArgumentParser:
     # init
     p_init = sub.add_parser("init", help="Create .stepwise/ in current directory")
     p_init.add_argument("--force", action="store_true", help="Reinitialize existing project")
+    p_init.add_argument("--no-skill", action="store_true",
+                        help="Skip agent skill installation")
+    p_init.add_argument("--skill", metavar="DIR",
+                        help="Install agent skill to specific directory (e.g., .claude or .agents)")
 
     # serve
     p_serve = sub.add_parser("serve", help="Start persistent server with web UI")
@@ -1063,7 +1318,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # run
     p_run = sub.add_parser("run", help="Run a flow")
-    p_run.add_argument("file", help="Path to .flow.yaml file")
+    p_run.add_argument("flow", help="Flow name or path to .flow.yaml file")
     p_run.add_argument("--watch", action="store_true", help="Ephemeral server + browser UI")
     p_run.add_argument("--wait", action="store_true", help="Block until completion, JSON output on stdout")
     p_run.add_argument("--async", action="store_true", dest="async_mode",
@@ -1085,7 +1340,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # validate
     p_validate = sub.add_parser("validate", help="Validate a flow file")
-    p_validate.add_argument("file", help="Path to flow file")
+    p_validate.add_argument("flow", help="Flow name or path to .flow.yaml file")
 
     # templates
     sub.add_parser("templates", help="List available templates")
@@ -1098,27 +1353,31 @@ def build_parser() -> argparse.ArgumentParser:
     p_config.add_argument("--stdin", action="store_true", help="Read value from stdin")
     p_config.add_argument("--unmask", action="store_true", help="Show full values")
 
-    # flow
-    p_flow = sub.add_parser("flow", help="Flow sharing commands")
-    flow_sub = p_flow.add_subparsers(dest="flow_action")
+    # new
+    p_new = sub.add_parser("new", help="Create a new flow")
+    p_new.add_argument("name", help="Flow name (alphanumeric, hyphens, underscores)")
 
-    p_flow_get = flow_sub.add_parser("get", help="Download a flow")
-    p_flow_get.add_argument("target", help="URL or flow name")
-    p_flow_get.add_argument("--force", action="store_true", help="Overwrite existing file")
+    # share
+    p_share = sub.add_parser("share", help="Publish a flow to the registry")
+    p_share.add_argument("flow", nargs="?", help="Flow name or path to share")
+    p_share.add_argument("--author", help="Author name (default: from git config)")
+    p_share.add_argument("--update", action="store_true", help="Update existing flow")
 
-    p_flow_share = flow_sub.add_parser("share", help="Publish a flow")
-    p_flow_share.add_argument("file", nargs="?", help="Flow file to share")
-    p_flow_share.add_argument("--author", help="Author name (default: from git config)")
-    p_flow_share.add_argument("--update", action="store_true", help="Update existing flow")
+    # get
+    p_get = sub.add_parser("get", help="Download a flow")
+    p_get.add_argument("target", help="URL, @author:name, or flow slug")
+    p_get.add_argument("--force", action="store_true", help="Overwrite existing file")
 
-    p_flow_search = flow_sub.add_parser("search", help="Search flows")
-    p_flow_search.add_argument("query", nargs="*", help="Search query")
-    p_flow_search.add_argument("--tag", help="Filter by tag")
-    p_flow_search.add_argument("--sort", choices=["downloads", "newest", "name"], default="downloads")
-    p_flow_search.add_argument("--output", choices=["table", "json"], default="table")
+    # search
+    p_search = sub.add_parser("search", help="Search the flow registry")
+    p_search.add_argument("query", nargs="*", help="Search query")
+    p_search.add_argument("--tag", help="Filter by tag")
+    p_search.add_argument("--sort", choices=["downloads", "newest", "name"], default="downloads")
+    p_search.add_argument("--output", choices=["table", "json"], default="table")
 
-    p_flow_info = flow_sub.add_parser("info", help="Show flow details")
-    p_flow_info.add_argument("name", help="Flow name")
+    # info
+    p_info = sub.add_parser("info", help="Show flow details")
+    p_info.add_argument("name", help="Flow name")
 
     # jobs
     p_jobs = sub.add_parser("jobs", help="List jobs")
@@ -1138,7 +1397,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # schema
     p_schema = sub.add_parser("schema", help="Generate JSON tool contract from a flow file")
-    p_schema.add_argument("file", help="Path to .flow.yaml file")
+    p_schema.add_argument("flow", help="Flow name or path to .flow.yaml file")
 
     # output
     p_output = sub.add_parser("output", help="Retrieve job outputs")
@@ -1157,9 +1416,12 @@ def build_parser() -> argparse.ArgumentParser:
     # agent-help
     p_agent_help = sub.add_parser("agent-help", help="Generate agent instructions for available flows")
     p_agent_help.add_argument("--update", metavar="FILE",
-                              help="Update a file in-place between markers")
+                              help="Update a file in-place between markers (uses 'full' format)")
     p_agent_help.add_argument("--flows-dir", metavar="DIR",
                               help="Override flow discovery directory")
+    p_agent_help.add_argument("--format", choices=["compact", "json", "full"],
+                              default="compact",
+                              help="Output format: compact (default), json, or full")
 
     # self-update
     sub.add_parser("self-update", help="Upgrade stepwise to the latest version")
@@ -1183,10 +1445,14 @@ def main(argv: list[str] | None = None) -> int:
         "init": cmd_init,
         "serve": cmd_serve,
         "run": cmd_run,
+        "new": cmd_new,
         "validate": cmd_validate,
         "templates": cmd_templates,
         "config": cmd_config,
-        "flow": cmd_flow,
+        "share": cmd_share,
+        "get": cmd_get,
+        "search": cmd_search,
+        "info": cmd_info,
         "jobs": cmd_jobs,
         "status": cmd_status,
         "cancel": cmd_cancel,

@@ -59,9 +59,27 @@ Stepwise commands search upward from cwd for `.stepwise/` (like git searches for
 
 ---
 
+## `stepwise new`
+
+Create a new flow directory with a minimal `FLOW.yaml` template.
+
+```bash
+stepwise new my-flow
+```
+
+```
+Created flows/my-flow/FLOW.yaml
+```
+
+Creates `flows/<name>/FLOW.yaml` in the current project. The name must match `[a-zA-Z0-9_-]+`. Fails if the directory already exists.
+
+---
+
 ## `stepwise run`
 
-Execute a flow file. The primary command — three modes depending on flags.
+Execute a flow. The primary command — three modes depending on flags.
+
+The `<flow>` argument accepts flow names (e.g., `my-flow`), file paths (e.g., `flows/my-flow.flow.yaml`), or directory paths (e.g., `flows/my-flow/`). Names are resolved across the project root, `flows/`, and `.stepwise/flows/`.
 
 ### Headless (default)
 
@@ -332,18 +350,16 @@ stepwise config get default_model                 # anthropic/claude-sonnet-4
 
 ---
 
-## `stepwise flow`
+## `stepwise get`
 
-Flow sharing commands. Download flows from the registry, publish your flows, or search for community flows.
-
-### Download a flow
+Download a flow from the registry or a URL.
 
 ```bash
 # By registry name
-stepwise flow get code-review
+stepwise get code-review
 
 # By URL (direct download)
-stepwise flow get https://example.com/code-review.flow.yaml
+stepwise get https://example.com/code-review.flow.yaml
 ```
 
 ```
@@ -356,10 +372,12 @@ Saves to the current directory. Fails if a file with the same name already exist
 Flags:
 - `--force` — overwrite existing file
 
-### Share a flow
+## `stepwise share`
+
+Publish a flow to the registry.
 
 ```bash
-stepwise flow share my-pipeline.flow.yaml
+stepwise share my-pipeline.flow.yaml
 ```
 
 ```
@@ -367,7 +385,7 @@ Validating my-pipeline.flow.yaml... ✓ (3 steps)
 Publishing as "my-pipeline"...
 
 ✓ Published: https://stepwise.run/flows/my-pipeline
-  Get: stepwise flow get my-pipeline
+  Get: stepwise get my-pipeline
   Token saved to ~/.config/stepwise/tokens.json
 ```
 
@@ -377,11 +395,13 @@ Flags:
 - `--author <name>` — override author (default: from YAML or git config)
 - `--update` — update a previously published flow (uses stored token)
 
-### Search the registry
+## `stepwise search`
+
+Search the flow registry.
 
 ```bash
-stepwise flow search "code review"
-stepwise flow search --tag agent --sort downloads
+stepwise search "code review"
+stepwise search --tag agent --sort downloads
 ```
 
 ```
@@ -395,10 +415,12 @@ Flags:
 - `--sort <field>` — sort by `downloads` (default), `name`, `newest`
 - `--output json` — machine-readable output
 
-### Flow info
+## `stepwise info`
+
+Show details about a published flow.
 
 ```bash
-stepwise flow info code-review
+stepwise info code-review
 ```
 
 Shows metadata for a published flow without downloading it (name, author, description, tags, step count, downloads).

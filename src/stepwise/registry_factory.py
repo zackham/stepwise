@@ -38,6 +38,7 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
     registry.register("script", lambda cfg: ScriptExecutor(
         command=cfg.get("command", "echo '{}'"),
         working_dir=cfg.get("working_dir"),
+        flow_dir=cfg.get("flow_dir"),
     ))
 
     registry.register("human", lambda cfg: HumanExecutor(

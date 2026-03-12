@@ -379,7 +379,7 @@ Feature cards with icons, not walls of text.
   - For_each config, children for sub-flows
   - Empty state: "Click on any node in the graph above to view its configuration."
 - **Mini log panel** — floating overlay (bottom-left, 350×200px glass) during Run Demo, timestamped entries
-- **CTA:** `stepwise flow get {slug}` command with copy button (top right)
+- **CTA:** `stepwise get {slug}` command with copy button (top right)
 - **YAML viewer:** raw YAML in code block with copy button
 
 ### Docs Index

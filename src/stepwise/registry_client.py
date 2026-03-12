@@ -157,22 +157,26 @@ def search_flows(
 def publish_flow(
     yaml_content: str,
     author: str | None = None,
+    files: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Publish a flow to the registry.
 
     Returns the flow metadata dict including update_token on first publish.
+    If files dict is present, includes bundled co-located files in the payload.
     """
     url = get_registry_url()
     payload: dict[str, Any] = {"yaml": yaml_content, "source": "cli"}
     if author:
         payload["author"] = author
+    if files:
+        payload["files"] = files
 
     with _client() as client:
         resp = client.post(f"{url}/api/flows", json=payload)
 
     if resp.status_code == 409:
         raise RegistryError(
-            f"Flow already exists. Use 'stepwise flow share --update' to update.",
+            f"Flow already exists. Use 'stepwise share --update' to update.",
             409,
         )
     if resp.status_code not in (200, 201):

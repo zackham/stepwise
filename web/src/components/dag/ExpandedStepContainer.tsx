@@ -3,14 +3,14 @@ import { JobStatusBadge } from "@/components/StatusBadge";
 import { StepNode } from "./StepNode";
 import { DagEdges } from "./DagEdges";
 import type { HierarchicalDagLayout, HierarchicalDagNode } from "@/lib/dag-layout";
-import type { WorkflowDefinition, StepRun, JobTreeNode, JobStatus } from "@/lib/types";
+import type { FlowDefinition, StepRun, JobTreeNode, JobStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface ExpandedStepContainerProps {
   node: HierarchicalDagNode;
   stepName: string;
   childLayout: HierarchicalDagLayout;
-  childWorkflow: WorkflowDefinition;
+  childWorkflow: FlowDefinition;
   childRuns: StepRun[];
   childJobTree: JobTreeNode;
   childStatus: JobStatus;

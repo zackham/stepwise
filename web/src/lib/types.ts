@@ -65,9 +65,9 @@ export interface StepDefinition {
   limits: StepLimits | null;
 }
 
-// ── Workflow Definition ────────────────────────────────────────────────
+// ── Flow Definition ───────────────────────────────────────────────────
 
-export interface WorkflowDefinition {
+export interface FlowDefinition {
   steps: Record<string, StepDefinition>;
 }
 
@@ -102,7 +102,7 @@ export interface WatchSpec {
 
 export interface SubJobDefinition {
   objective: string;
-  workflow: WorkflowDefinition;
+  workflow: FlowDefinition;
   config: JobConfig | null;
 }
 
@@ -149,7 +149,7 @@ export interface JobConfig {
 export interface Job {
   id: string;
   objective: string;
-  workflow: WorkflowDefinition;
+  workflow: FlowDefinition;
   status: JobStatus;
   inputs: Record<string, unknown>;
   parent_job_id: string | null;
@@ -181,10 +181,10 @@ export interface JobTreeNode {
 
 // ── Template ───────────────────────────────────────────────────────────
 
-export interface WorkflowTemplate {
+export interface FlowTemplate {
   name: string;
   description: string;
-  workflow: WorkflowDefinition;
+  workflow: FlowDefinition;
   created_at: string;
 }
 
@@ -219,6 +219,78 @@ export interface TickMessage {
 }
 
 export type WebSocketMessage = TickMessage | AgentOutputMessage;
+
+// ── Editor / Local Flow ──────────────────────────────────────────────
+
+export interface LocalFlow {
+  path: string;
+  name: string;
+  steps_count: number;
+  modified_at: string;
+  is_directory: boolean;
+}
+
+export interface FlowGraphNode {
+  id: string;
+  label: string;
+  executor_type: string;
+  outputs: string[];
+  details: Record<string, unknown>;
+}
+
+export interface FlowGraphEdge {
+  source: string;
+  target: string;
+  label?: string;
+  is_loop?: boolean;
+}
+
+export interface FlowGraph {
+  nodes: FlowGraphNode[];
+  edges: FlowGraphEdge[];
+}
+
+export interface LocalFlowDetail {
+  path: string;
+  name: string;
+  raw_yaml: string;
+  flow: FlowDefinition;
+  graph: FlowGraph;
+  is_directory: boolean;
+  flow_dir: string;
+}
+
+export interface ParseResult {
+  flow: FlowDefinition | null;
+  graph: FlowGraph | null;
+  errors: string[];
+  raw_yaml?: string;
+}
+
+// ── Registry ──────────────────────────────────────────────────────────
+
+export interface RegistryFlow {
+  name: string;
+  slug: string;
+  author: string;
+  version: number;
+  description: string;
+  tags: string[];
+  yaml?: string;
+  steps: number;
+  loops: number;
+  has_for_each: boolean;
+  executor_types: string[];
+  downloads: number;
+  featured: boolean;
+  graph?: FlowGraph;
+  flow?: FlowDefinition | null;
+}
+
+export interface RegistrySearchResult {
+  flows: RegistryFlow[];
+  total: number;
+}
 
 // ── Event type constants ───────────────────────────────────────────────
 

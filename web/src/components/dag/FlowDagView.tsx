@@ -3,10 +3,10 @@ import { computeHierarchicalLayout } from "@/lib/dag-layout";
 import { StepNode } from "./StepNode";
 import { DagEdges } from "./DagEdges";
 import { ExpandedStepContainer } from "./ExpandedStepContainer";
-import type { WorkflowDefinition, StepRun, JobTreeNode } from "@/lib/types";
+import type { FlowDefinition, StepRun, JobTreeNode } from "@/lib/types";
 
-interface WorkflowDagViewProps {
-  workflow: WorkflowDefinition;
+interface FlowDagViewProps {
+  workflow: FlowDefinition;
   runs: StepRun[];
   jobTree: JobTreeNode | null;
   expandedSteps: Set<string>;
@@ -15,7 +15,7 @@ interface WorkflowDagViewProps {
   onSelectStep: (stepName: string | null) => void;
 }
 
-export function WorkflowDagView({
+export function FlowDagView({
   workflow,
   runs,
   jobTree,
@@ -23,7 +23,7 @@ export function WorkflowDagView({
   onToggleExpand,
   selectedStep,
   onSelectStep,
-}: WorkflowDagViewProps) {
+}: FlowDagViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const transformRef = useRef({ x: 0, y: 0, scale: 1 });
@@ -214,7 +214,7 @@ export function WorkflowDagView({
   if (Object.keys(workflow.steps).length === 0) {
     return (
       <div className="flex items-center justify-center h-full text-zinc-500">
-        No steps in workflow
+        No steps in flow
       </div>
     );
   }

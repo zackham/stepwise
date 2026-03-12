@@ -1,7 +1,7 @@
 import { Outlet, Link, useRouter } from "@tanstack/react-router";
 import { useStepwiseWebSocket } from "@/hooks/useStepwiseWebSocket";
 import { useEngineStatus } from "@/hooks/useStepwise";
-import { Workflow, LayoutGrid, Hammer, Zap } from "lucide-react";
+import { Workflow, LayoutGrid, FileCode, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export function AppLayout() {
@@ -12,7 +12,7 @@ export function AppLayout() {
   const currentPath = router.state.location.pathname;
   const isJobsActive =
     currentPath === "/jobs" || currentPath.startsWith("/jobs/");
-  const isBuilderActive = currentPath.startsWith("/builder");
+  const isEditorActive = currentPath.startsWith("/editor");
 
   return (
     <div className="h-screen flex flex-col bg-background text-foreground dark">
@@ -39,16 +39,16 @@ export function AppLayout() {
             Jobs
           </Link>
           <Link
-            to="/builder"
+            to="/editor"
             className={cn(
               "px-3 py-1.5 text-sm rounded-md transition-colors",
-              isBuilderActive
+              isEditorActive
                 ? "bg-zinc-800 text-foreground"
                 : "text-zinc-500 hover:text-foreground hover:bg-zinc-800/50"
             )}
           >
-            <Hammer className="w-3.5 h-3.5 inline mr-1.5" />
-            Builder
+            <FileCode className="w-3.5 h-3.5 inline mr-1.5" />
+            Editor
           </Link>
         </nav>
 

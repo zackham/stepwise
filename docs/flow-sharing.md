@@ -1,13 +1,13 @@
 # Flow Sharing
 
-Stepwise flows are self-contained `.flow.yaml` files. Sharing is built around this: publish a file, download a file, browse what's available. No accounts, no tokens, no package managers.
+Stepwise flows can be single `.flow.yaml` files or directory flows (a directory containing `FLOW.yaml` with co-located scripts and prompts). Both formats can be shared. Directory flows are published as bundles — the YAML plus all co-located files. No accounts, no package managers.
 
 ## How It Works
 
 ```
 author                          stepwise.run                       consumer
 ──────                          ────────────                       ────────
-stepwise flow share my.flow.yaml
+stepwise share my.flow.yaml
   → validates flow
   → reads metadata
   → uploads YAML            →  stores flow
@@ -15,24 +15,24 @@ stepwise flow share my.flow.yaml
                                 renders DAG preview
                                 tracks downloads
 
-                                                          stepwise flow get code-review
+                                                          stepwise get code-review
                                                             → resolves name
                                                           ← downloads YAML
                                                             → saves to cwd
 
-                                                          stepwise flow search "agent review"
+                                                          stepwise search "agent review"
                                                             → queries registry
                                                           ← prints matches
 ```
 
 ## CLI Commands
 
-### `stepwise flow share <file>`
+### `stepwise share <file>`
 
 Publish a flow to the registry.
 
 ```bash
-stepwise flow share my-pipeline.flow.yaml
+stepwise share my-pipeline.flow.yaml
 ```
 
 ```
@@ -40,7 +40,7 @@ Validating my-pipeline.flow.yaml... ✓ (3 steps, 1 loop)
 Publishing as "my-pipeline" by zack...
 
 ✓ Published: https://stepwise.run/flows/my-pipeline
-  Run: stepwise flow get my-pipeline
+  Run: stepwise get my-pipeline
 ```
 
 What happens:
@@ -54,18 +54,18 @@ Flags:
 - `--name <name>` — override the flow name (default: from YAML `name` field or filename)
 - `--unlisted` — publish but don't index in search results (accessible by direct URL/name)
 
-### `stepwise flow get <name-or-url>`
+### `stepwise get <name-or-url>`
 
 Download a flow.
 
 ```bash
 # By name (from registry)
-stepwise flow get code-review
+stepwise get code-review
 # → saves code-review.flow.yaml to cwd
 
 # By URL (direct download)
-stepwise flow get https://stepwise.run/flows/code-review/raw
-stepwise flow get https://example.com/my-flow.flow.yaml
+stepwise get https://stepwise.run/flows/code-review/raw
+stepwise get https://example.com/my-flow.flow.yaml
 ```
 
 ```
@@ -83,12 +83,12 @@ Flags:
 - `--output <path>` — save to a specific path instead of cwd
 - `--force` — overwrite if file already exists
 
-### `stepwise flow search <query>`
+### `stepwise search <query>`
 
 Search the registry.
 
 ```bash
-stepwise flow search "code review agent"
+stepwise search "code review agent"
 ```
 
 ```
@@ -104,12 +104,12 @@ Flags:
 - `--limit <n>` — max results (default: 20)
 - `--output json` — machine-readable output
 
-### `stepwise flow info <name>`
+### `stepwise info <name>`
 
 Show details about a published flow without downloading it.
 
 ```bash
-stepwise flow info code-review
+stepwise info code-review
 ```
 
 ```
@@ -284,8 +284,43 @@ Each published flow gets a page at `stepwise.run/flows/{name}` showing:
 2. **DAG preview** — static render of the step graph (reuses dagre layout from the Stepwise web UI)
 3. **Step list** — executor types, outputs, exit rules summarized
 4. **YAML source** — syntax-highlighted, copyable
-5. **Download button** → `stepwise flow get {name}`
-6. **Run command** — copy-pasteable `stepwise flow get {name} && stepwise run {name}.flow.yaml`
+5. **Download button** → `stepwise get {name}`
+6. **Run command** — copy-pasteable `stepwise get {name} && stepwise run {name}.flow.yaml`
+
+---
+
+## Directory Flow Bundles
+
+When sharing a directory flow, `stepwise share` bundles the `FLOW.yaml` with all co-located files (scripts, prompts, data). On `stepwise get`, the bundle is unpacked into a directory.
+
+### Bundle Limits
+
+| Limit | Value |
+|-------|-------|
+| Total size | 500KB |
+| Max files | 20 |
+| File types | Text only — `.py`, `.sh`, `.bash`, `.md`, `.txt`, `.yaml`, `.yml`, `.json`, `.prompt` |
+
+### Blocked Files
+
+These files cause a publish error if found in the flow directory: `.env`, `.pem`, `id_rsa`, `credentials.json`, `.DS_Store`. Directories like `.git`, `__pycache__`, `node_modules`, `.venv` are skipped automatically.
+
+Binary files and files with non-allowed extensions are silently excluded.
+
+### Provenance Tracking
+
+When downloading a directory flow, Stepwise writes `.origin.json` inside the flow directory:
+
+```json
+{
+  "name": "code-review",
+  "author": "alice",
+  "registry": "https://stepwise.run",
+  "downloaded_at": "2026-03-15T10:30:00Z"
+}
+```
+
+This tracks where the flow came from. It is excluded from bundles when re-sharing.
 
 ---
 
@@ -293,13 +328,12 @@ Each published flow gets a page at `stepwise.run/flows/{name}` showing:
 
 Shared flows must be **self-contained**. This means:
 
-1. **No external script references** — use inline commands, not `run: scripts/deploy.sh`
-2. **No local file dependencies** — everything is in the YAML
-3. **Job inputs for configuration** — use `$job.field` for values the consumer provides
-4. **Meaningful metadata** — `name`, `description`, and `tags` are required for publishing
+1. **No external dependencies** — for single-file flows, avoid `run: scripts/deploy.sh` (the consumer won't have it). For directory flows, all referenced scripts must be co-located in the flow directory.
+2. **Job inputs for configuration** — use `$job.field` for values the consumer provides
+3. **Meaningful metadata** — `name`, `description`, and `tags` are required for publishing
 
 ```yaml
-# Good: self-contained, configurable via job inputs
+# Good: single-file, self-contained, configurable via job inputs
 name: code-review
 description: AI-powered PR review with human approval gate
 author: zack
@@ -314,16 +348,24 @@ steps:
       pr_url: $job.pr_url
 ```
 
+```
+# Good: directory flow with co-located scripts (bundled on share)
+code-review/
+  FLOW.yaml
+  analyze.py               # run: analyze.py works — bundled with the flow
+  prompts/review-system.md # prompt_file: prompts/review-system.md works
+```
+
 ```yaml
-# Bad: depends on external scripts
+# Bad: single-file flow depending on external scripts
 steps:
   analyze:
     run: scripts/analyze.sh    # consumer won't have this file
     outputs: [result]
 ```
 
-The `stepwise flow share` command validates this constraint before publishing. It warns on:
-- `run:` commands referencing relative paths (files that won't exist on the consumer's machine)
+The `stepwise share` command validates this constraint before publishing. It warns on:
+- Single-file flows with `run:` commands referencing relative paths
 - Missing `name`, `description`, or `tags` in metadata
 - Missing `author` (auto-populated from git config, but warns if empty)
 
@@ -371,4 +413,4 @@ Flows have a single mutable version. When you update a published flow:
 - Download count persists
 - Consumers who previously downloaded get the old version (no auto-update)
 
-Future: `stepwise flow update` could check if a newer version exists and prompt to re-download. Not needed for v1.
+Future: `stepwise update` could check if a newer version exists and prompt to re-download. Not needed for v1.

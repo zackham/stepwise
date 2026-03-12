@@ -1,5 +1,5 @@
 import dagre from "dagre";
-import type { WorkflowDefinition, JobTreeNode, StepRun } from "./types";
+import type { FlowDefinition, JobTreeNode, StepRun } from "./types";
 
 export interface DagNode {
   id: string;
@@ -55,7 +55,7 @@ const CONTAINER_HEADER = 44;
 const CONTAINER_PAD_X = 24;
 const CONTAINER_PAD_BOTTOM = 16;
 
-export function computeDagLayout(workflow: WorkflowDefinition): DagLayout {
+export function computeDagLayout(workflow: FlowDefinition): DagLayout {
   const g = new dagre.graphlib.Graph();
   g.setGraph({
     rankdir: "TB",
@@ -219,7 +219,7 @@ function buildSubJobMap(
  * layout uses inflated node dimensions for expanded nodes.
  */
 export function computeHierarchicalLayout(
-  workflow: WorkflowDefinition,
+  workflow: FlowDefinition,
   expandedSteps: Set<string>,
   jobTree: JobTreeNode | null,
   depth: number = 0,

@@ -4,7 +4,7 @@ import {
   useStepwiseMutations,
   useTemplates,
 } from "@/hooks/useStepwise";
-import { WorkflowDagView } from "@/components/dag/WorkflowDagView";
+import { FlowDagView } from "@/components/dag/FlowDagView";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -32,11 +32,11 @@ import type {
   StepDefinition,
   InputBinding,
   ExitRule,
-  WorkflowDefinition,
+  FlowDefinition,
 } from "@/lib/types";
 
-interface WorkflowBuilderProps {
-  initialWorkflow?: WorkflowDefinition;
+interface FlowBuilderProps {
+  initialWorkflow?: FlowDefinition;
   initialName?: string;
   onJobCreated?: (jobId: string) => void;
 }
@@ -54,11 +54,11 @@ function emptyStep(name: string, executorType: string): StepDefinition {
   };
 }
 
-export function WorkflowBuilder({
+export function FlowBuilder({
   initialWorkflow,
   initialName = "",
   onJobCreated,
-}: WorkflowBuilderProps) {
+}: FlowBuilderProps) {
   const { data: executorData } = useExecutors();
   const mutations = useStepwiseMutations();
   const executorTypes = executorData?.executors ?? ["script", "human", "mock_llm"];
@@ -75,7 +75,7 @@ export function WorkflowBuilder({
   const [newStepName, setNewStepName] = useState("");
   const [newStepExecutor, setNewStepExecutor] = useState(executorTypes[0] ?? "script");
 
-  const workflow: WorkflowDefinition = useMemo(
+  const workflow: FlowDefinition = useMemo(
     () => ({ steps }),
     [steps]
   );
@@ -170,7 +170,7 @@ export function WorkflowBuilder({
       <div className="w-[380px] border-r border-border flex flex-col">
         <div className="p-3 border-b border-border">
           <h2 className="text-sm font-semibold text-foreground mb-2">
-            Workflow Builder
+            Flow Builder
           </h2>
 
           {/* Add step */}
@@ -283,7 +283,7 @@ export function WorkflowBuilder({
                   value={templateName}
                   onChange={(e) => setTemplateName(e.target.value)}
                   className="h-8 text-sm"
-                  placeholder="my-workflow"
+                  placeholder="my-flow"
                 />
               </div>
               <div className="space-y-2">
@@ -342,7 +342,7 @@ export function WorkflowBuilder({
 
       {/* Right: DAG preview */}
       <div className="flex-1 p-4">
-        <WorkflowDagView
+        <FlowDagView
           workflow={workflow}
           runs={[]}
           jobTree={null}

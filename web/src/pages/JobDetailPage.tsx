@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from "@tanstack/react-router";
 import { useJob, useRuns, useJobTree } from "@/hooks/useStepwise";
 import { JobList } from "@/components/jobs/JobList";
 import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
-import { WorkflowDagView } from "@/components/dag/WorkflowDagView";
+import { FlowDagView } from "@/components/dag/FlowDagView";
 import { StepDetailPanel } from "@/components/jobs/StepDetailPanel";
 import { HumanControls } from "@/components/jobs/HumanControls";
 import { JobStatusBadge } from "@/components/StatusBadge";
@@ -167,7 +167,7 @@ export function JobDetailPage() {
 
         {/* DAG */}
         <div className="flex-1 overflow-hidden">
-          <WorkflowDagView
+          <FlowDagView
             workflow={job.workflow}
             runs={runs}
             jobTree={jobTree ?? null}
