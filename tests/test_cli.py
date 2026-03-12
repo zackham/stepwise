@@ -230,11 +230,11 @@ class TestFlowStubs:
 
 
 class TestSelfUpdate:
-    def test_self_update_subparser_registered(self):
+    def test_update_subparser_registered(self):
         parser = build_parser()
         # Should parse without error
-        args = parser.parse_args(["self-update"])
-        assert args.command == "self-update"
+        args = parser.parse_args(["update"])
+        assert args.command == "update"
 
     def test_detect_install_method_uv_path(self, monkeypatch):
         monkeypatch.setattr("shutil.which", lambda _: "/home/user/.local/share/uv/tools/stepwise/bin/stepwise")
@@ -262,12 +262,12 @@ class TestSelfUpdate:
         monkeypatch.setattr("subprocess.run", lambda *a, **kw: (_ for _ in ()).throw(FileNotFoundError()))
         assert _detect_install_method() == "pip"
 
-    def test_self_update_handler_in_main(self, capsys):
-        """self-update is wired into the handler dict."""
-        # We can't fully run self-update without side effects, but we can
+    def test_update_handler_in_main(self, capsys):
+        """update is wired into the handler dict."""
+        # We can't fully run update without side effects, but we can
         # confirm the command dispatches (it will fail trying to run uv/pip,
         # which is fine for this test)
-        rc = main(["self-update"])
+        rc = main(["update"])
         # Any return code is acceptable — we just verify it dispatches
         assert isinstance(rc, int)
 

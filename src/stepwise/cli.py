@@ -19,7 +19,7 @@ Usage:
     stepwise output <job-id> [--scope]     Retrieve job outputs
     stepwise fulfill <run-id> '<json>'     Satisfy a suspended human step (or --stdin)
     stepwise agent-help [--update <file>]  Generate agent instructions
-    stepwise self-update                   Upgrade to the latest version
+    stepwise update                   Upgrade to the latest version
 """
 
 from __future__ import annotations
@@ -157,7 +157,7 @@ def _check_for_upgrade() -> str | None:
     if not remote:
         return None
     if _parse_version(remote) > _parse_version(current):
-        return f"Update available: {current} → {remote}  (run: stepwise self-update)"
+        return f"Update available: {current} → {remote}  (run: stepwise update)"
     return None
 
 
@@ -1565,8 +1565,8 @@ def build_parser() -> argparse.ArgumentParser:
                               default="compact",
                               help="Output format: compact (default), json, or full")
 
-    # self-update
-    sub.add_parser("self-update", help="Upgrade stepwise to the latest version")
+    # update
+    sub.add_parser("update", help="Upgrade stepwise to the latest version")
 
     return parser
 
@@ -1602,7 +1602,7 @@ def main(argv: list[str] | None = None) -> int:
         "output": cmd_output,
         "fulfill": cmd_fulfill,
         "agent-help": cmd_agent_help,
-        "self-update": cmd_self_update,
+        "update": cmd_self_update,
     }
 
     handler = handlers.get(args.command)

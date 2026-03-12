@@ -47,7 +47,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic V
 - **Route Steps (M8)** — conditional sub-flow dispatch with `routes:` block, first-match semantics, file ref cycle detection, output contract validation
 - **Flow Sharing (M9)** — `stepwise share/get/search/info`, registry client with disk cache and token management, parse-time `@author:name` resolution
 - `install.sh` — universal `curl | sh` installer
-- `stepwise self-update` — upgrade to latest version
+- `stepwise update` — upgrade to latest version
 - 640+ Python tests, 77+ frontend tests
 
 ## [0.0.1] — 2026-03-08

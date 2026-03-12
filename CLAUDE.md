@@ -4,7 +4,7 @@ Portable workflow orchestration for agents and humans.
 Package: `stepwise-run` (not `stepwise` — that's taken on PyPI). CLI command: `stepwise`.
 Entry point: `stepwise.cli:cli_main` (defined in `pyproject.toml` `[project.scripts]`).
 
-**Push to master = users get it on next `stepwise self-update`.** There is no staging branch.
+**Push to master = users get it on next `stepwise update`.** There is no staging branch.
 
 ---
 
@@ -236,7 +236,7 @@ Other patterns:
 3. **No `fetch()` outside `web/src/lib/api.ts`** in the frontend.
 4. **`httpx` stays in core `[project.dependencies]`** — not optional extras.
 5. **All model dataclasses must have `to_dict()`/`from_dict()` pair.**
-6. **Push to master = immediate user release** via `stepwise self-update`. Tests must pass first: `uv run pytest tests/`
+6. **Push to master = immediate user release** via `stepwise update`. Tests must pass first: `uv run pytest tests/`
 7. **No ORM or repository abstraction** — the store uses raw SQL intentionally.
 8. **No CSS files or inline styles in web** — Tailwind classes and shadcn/ui components only.
 9. **Dark mode only** — no light/color theme toggle.
@@ -321,7 +321,7 @@ curl -fsSL https://raw.githubusercontent.com/zackham/stepwise/master/install.sh 
 uv tool install stepwise-run@git+https://github.com/zackham/stepwise.git
 ```
 
-No PyPI publishing. The install script and `self-update` both pull from `master`.
+No PyPI publishing. The install script and `update` both pull from `master`.
 
 ### Release workflow
 
@@ -342,7 +342,7 @@ Every push to master is a release — but only version bumps trigger user-visibl
 
 **How upgrades surface to users:**
 - `stepwise serve` prints a one-liner on startup if a newer version exists (cached check, once/day, non-blocking)
-- `stepwise self-update` shows "Already up to date" or installs + prints the changelog diff between old and new version
+- `stepwise update` shows "Already up to date" or installs + prints the changelog diff between old and new version
 - Version check fetches `pyproject.toml` from GitHub raw, caches in `~/.cache/stepwise/version-check.json`
 
 **Key files:** `_get_version()`, `_fetch_remote_version()`, `_check_for_upgrade()`, `_fetch_changelog_sections()` in `cli.py`. `CHANGELOG.md` must use `## [X.Y.Z]` headers for the diff parser to work.

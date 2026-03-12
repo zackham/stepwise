@@ -25,4 +25,4 @@ Stepwise distributes from GitHub, not PyPI. Publishing means: bump version, upda
    git tag vX.Y.Z
    git push && git push --tags
    ```
-8. Print confirmation: users will get the update on next `stepwise self-update`
+8. Print confirmation: users will get the update on next `stepwise update`

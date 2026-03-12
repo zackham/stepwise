@@ -521,12 +521,12 @@ The `--update` flag finds `<!-- stepwise-agent-help -->` / `<!-- /stepwise-agent
 
 ---
 
-## `stepwise self-update`
+## `stepwise update`
 
 Upgrade stepwise to the latest version. Automatically detects the install method (uv, pipx, or pip) and runs the appropriate upgrade command.
 
 ```bash
-stepwise self-update
+stepwise update
 ```
 
 ```

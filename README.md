@@ -148,7 +148,7 @@ stepwise fulfill <run-id> '{...}'    # Satisfy a human step
 stepwise schema <flow>               # Input/output schema (JSON)
 stepwise output <job-id>             # Retrieve job outputs
 stepwise agent-help                  # Generate agent instructions
-stepwise self-update                 # Upgrade to latest version
+stepwise update                 # Upgrade to latest version
 stepwise templates                   # List available templates
 stepwise config set <key> <value>    # Configure (API keys, models)
 stepwise get <name-or-url>           # Download a flow from registry
