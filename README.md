@@ -1,37 +1,32 @@
-# Stepwise
+<p align="center">
+  <img src="brand/stepwise-mark.svg" width="80" alt="Stepwise logo" />
+</p>
 
-**Step into your flow.** Portable workflow orchestration for agents and humans.
+<h1 align="center">Stepwise</h1>
 
-Stepwise is a workflow engine that coordinates multi-step jobs where steps can be scripts, LLM calls, autonomous AI agents, or human decisions. Define your workflow as a YAML file, run it from the command line, and optionally watch it execute in a real-time visual UI.
+<p align="center">
+  <strong>Step into your flow.</strong><br/>
+  Portable workflow orchestration for agents and humans.
+</p>
 
-## Documentation
+<p align="center">
+  <a href="docs/quickstart.md">Quickstart</a> · <a href="docs/concepts.md">Concepts</a> · <a href="docs/cli.md">CLI Reference</a> · <a href="docs/api.md">API Reference</a> · <a href="docs/agent-integration.md">Agent Integration</a>
+</p>
 
-| Doc | Description |
-|-----|-------------|
-| [Quickstart](docs/quickstart.md) | Install, first flow, loops, human gates — 5 minutes |
-| [Agent Integration](docs/agent-integration.md) | Make agents call flows: discovery, execution, human steps, async |
-| [Why Stepwise](docs/why-stepwise.md) | Motivation, design philosophy, competitive positioning |
-| [Concepts](docs/concepts.md) | Mental model: jobs, steps, executors, dependencies, loops, for-each |
-| [Executors](docs/executors.md) | Deep dive on all 4 executor types + decorators |
-| [YAML Format](docs/yaml-format.md) | Complete `.flow.yaml` schema reference |
-| [CLI Reference](docs/cli.md) | All commands, flags, examples, exit codes |
-| [API Reference](docs/api.md) | REST endpoints, WebSocket protocol, error handling |
-| [Flow Sharing](docs/flow-sharing.md) | Registry, `stepwise flow` commands |
+---
 
-## Install
+Stepwise is a workflow engine that coordinates multi-step jobs where each step can be a **shell script**, an **LLM call**, an **autonomous AI agent**, or a **human decision**. Define your workflow as a YAML file, run it from the CLI, and optionally watch it execute in a real-time web UI.
 
 ```bash
-pip install stepwise          # core (scripts, agents, human steps)
+pip install stepwise          # core engine
 pip install "stepwise[llm]"   # + LLM steps via OpenRouter
 ```
 
-## Quick Start
+## Get started in 30 seconds
 
 ```bash
-# Initialize a project
-stepwise init
+stepwise init                          # set up a .stepwise/ project
 
-# Create a flow
 cat > hello.flow.yaml << 'EOF'
 name: hello-world
 steps:
@@ -40,71 +35,17 @@ steps:
     outputs: [message]
 EOF
 
-# Validate it
-stepwise validate hello.flow.yaml
-
-# Run it headless
-stepwise run hello.flow.yaml
-
-# Or run with the live web UI
-stepwise run hello.flow.yaml --watch
+stepwise run hello.flow.yaml           # headless
+stepwise run hello.flow.yaml --watch   # live web UI
 ```
 
-`--watch` starts an ephemeral server on a random port and opens the web UI. Steps execute automatically — agents stream output in real time, human steps pause and wait for your input.
+`--watch` opens a browser with a real-time DAG visualization. Steps execute automatically — agents stream output live, human steps pause and wait for your input.
 
-## CLI Commands
+## How it works
 
-```
-stepwise init                        # Create .stepwise/ project
-stepwise run <flow.yaml>             # Headless execution
-stepwise run <flow.yaml> --watch     # Live web UI
-stepwise run <flow.yaml> --wait      # Block, JSON output (for agents)
-stepwise run <flow.yaml> --async     # Fire-and-forget background run
-stepwise run <flow.yaml> --var K=V   # Pass inputs
-stepwise schema <flow.yaml>          # Input/output schema (JSON)
-stepwise output <job-id>             # Retrieve job outputs
-stepwise fulfill <run-id> '{...}'    # Satisfy a human step
-stepwise agent-help                  # Generate agent instructions
-stepwise validate <flow.yaml>        # Check a flow for errors
-stepwise jobs                        # List jobs (--output json, --status, --limit)
-stepwise status <job-id>             # Step-by-step detail
-stepwise cancel <job-id>             # Cancel a running job
-stepwise serve                       # Persistent server mode
-stepwise templates                   # List available templates
-stepwise config set <key> <value>    # Configure (API keys, models)
-stepwise config get <key>            # Read config (masks secrets)
-stepwise flow get <url>              # Download a flow from URL
-stepwise --version                   # Print version
-```
+You write a `.flow.yaml` file describing your steps and their dependencies. Stepwise builds a DAG, figures out what can run in parallel, and executes everything in the right order. When a step needs human input, the whole job pauses until you respond.
 
-See [`docs/cli.md`](docs/cli.md) for full command reference with all flags and examples.
-
-## Agent Integration
-
-Stepwise flows are callable as tools by external agents (Claude Code, Codex, etc.) via CLI. No MCP servers, no protocol layers — just bash commands that return JSON.
-
-```bash
-# Agent runs a flow and gets structured JSON back
-stepwise run council.flow.yaml --wait --var question="Should we use Postgres?"
-# → {"status": "completed", "job_id": "job-...", "outputs": [{...}]}
-
-# Generate instructions for CLAUDE.md
-stepwise agent-help --update CLAUDE.md
-```
-
-The `agent-help` command scans your project for flows and generates a markdown block with per-flow usage, expected output shapes, and a CLI quick reference. Paste it into your agent's instructions file and it can call your flows.
-
-Key design principles:
-- **Stdout purity**: `--wait` prints ONLY JSON to stdout. Zero logging, zero progress noise.
-- **Actionable errors**: Missing inputs? The error message includes the exact `--var` flags to fix it.
-- **No server required**: `--async` spawns a detached background process. No `stepwise serve` prerequisite.
-- **Exit codes**: 0=success, 1=failed, 2=input error, 3=timeout, 4=cancelled.
-
-## Defining Flows
-
-Flows are `.flow.yaml` files. Steps run in dependency order — if step B consumes an output from step A, B waits for A. Steps with no data dependencies run in parallel.
-
-### Simple pipeline
+### A simple pipeline
 
 ```yaml
 name: deploy-pipeline
@@ -126,6 +67,8 @@ steps:
       artifact: build.artifact
       version: build.version
 ```
+
+`test` waits for `build` because it needs `build.artifact`. `deploy` waits for both. Steps with no data dependencies run in parallel automatically.
 
 ### Loops and human review
 
@@ -165,91 +108,98 @@ steps:
     sequencing: [review]
 ```
 
-When the reviewer selects "revise", the engine loops back to `draft` with the feedback. After 5 attempts, it escalates. On "approve", it advances to `publish`.
+The reviewer picks "revise" and the engine loops back to `draft` with the feedback attached. After 5 attempts it escalates. On "approve" it advances to `publish`.
 
-### Flow metadata
+## Executor types
 
-Flows support optional metadata for discovery and sharing:
+| Type | What it does |
+|------|-------------|
+| **script** | Runs any shell command, parses JSON from stdout |
+| **llm** | Single LLM call via OpenRouter with structured output |
+| **agent** | Autonomous AI agent via [ACP](https://agentclientprotocol.com) with real-time streaming |
+| **human** | Pauses the job and waits for input (web UI or stdin) |
 
-```yaml
-name: pr-review
-description: AI-powered pull request review with human approval gate
-author: zack
-version: "1.0"
-tags: [code-review, agent, human-in-the-loop]
-steps:
-  # ...
+## Calling flows from agents
+
+Stepwise flows are callable as tools by AI agents (Claude Code, Codex, etc.) via plain CLI. No MCP servers, no protocol layers — just bash commands that return JSON.
+
+```bash
+# Run a flow and get structured output
+stepwise run council.flow.yaml --wait --var question="Should we use Postgres?"
+# → {"status": "completed", "job_id": "job-...", "outputs": [{...}]}
+
+# Generate per-flow instructions for your agent
+stepwise agent-help --update CLAUDE.md
 ```
 
-If `name` is omitted, it defaults from the filename (`my-flow.flow.yaml` → `my-flow`). The `author` field can be auto-populated from `git config user.name`.
+`--wait` prints **only** JSON to stdout — zero logging, zero progress noise. Missing an input? The error tells you exactly which `--var` flags to add.
 
-See [`docs/yaml-format.md`](docs/yaml-format.md) for the complete format reference, or [`docs/concepts.md`](docs/concepts.md) for the mental model.
+## CLI at a glance
 
-## Executor Types
+```
+stepwise init                        # Create .stepwise/ project
+stepwise run <flow> [--watch|--wait|--async]  # Run a flow
+stepwise run <flow> --var K=V        # Pass inputs
+stepwise serve                       # Persistent server mode
+stepwise validate <flow>             # Check for errors
+stepwise jobs                        # List jobs
+stepwise status <job-id>             # Step-by-step detail
+stepwise cancel <job-id>             # Cancel a running job
+stepwise fulfill <run-id> '{...}'    # Satisfy a human step
+stepwise schema <flow>               # Input/output schema (JSON)
+stepwise output <job-id>             # Retrieve job outputs
+stepwise agent-help                  # Generate agent instructions
+stepwise templates                   # List available templates
+stepwise config set <key> <value>    # Configure (API keys, models)
+stepwise flow get <url>              # Download a flow from registry
+```
 
-| Type | Description | Execution |
-|------|-------------|-----------|
-| **script** | Run any shell command. Outputs parsed from stdout JSON. | Synchronous |
-| **llm** | Single LLM call via OpenRouter. Structured output extraction. | Synchronous |
-| **agent** | Autonomous AI agent via [ACP](https://agentclientprotocol.com). Real-time streaming. | Async (polled) |
-| **human** | Pauses the job and waits for input (web UI or stdin). | Suspended |
-| **mock_llm** | Deterministic mock for testing. | Synchronous |
+See [`docs/cli.md`](docs/cli.md) for the full reference with all flags, examples, and exit codes.
 
 ## Features
 
-- **DAG-based engine** with conditional loops, exit rules, and expression-based branching
-- **Progressive CLI** — headless `run`, ephemeral `--watch` UI, persistent `serve`
-- **Project-local `.stepwise/`** directory (like `.git/`) with SQLite DB, jobs, templates
-- **Real-time streaming** of agent output (text + tool calls) via WebSocket
-- **Human-in-the-loop** — stdin prompts in headless mode, web UI in watch mode
-- **Expression exit rules** for dynamic control flow (`outputs.score >= 0.8`, `attempt < 5`)
-- **YAML workflow format** — self-contained, shareable `.flow.yaml` files
-- **Context chains** — session continuity across agent steps via compiled conversation transcripts
-- **Cost tracking and step limits** — cap spend, duration, or iterations per step
-- **Signal handling** — Ctrl+C cleanly cancels active runs
+- **DAG engine** — automatic parallelism, conditional loops, expression-based branching
+- **Three CLI modes** — headless `run`, ephemeral `--watch` UI, persistent `serve`
+- **Human-in-the-loop** — stdin prompts in headless mode, web form in watch mode
+- **Real-time streaming** — agent output (text + tool calls) via WebSocket
+- **Context chains** — session continuity across agent steps via compiled transcripts
+- **Expression exit rules** — `outputs.score >= 0.8`, `attempt < 5`, etc.
+- **Cost tracking** — cap spend, duration, or iterations per step
+- **Decorators** — timeout, retry, fallback, notification (composable per step)
 - **SQLite persistence** with WAL mode and crash recovery
-- **Decorators** — timeout, retry, fallback, notification (composable per-step)
-- **Template library** for reusable workflows
-- **Sub-job delegation** for hierarchical workflows
+- **Project-local `.stepwise/`** directory (like `.git/`)
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                     Web UI (React)                       │
-│  DAG Visualization  ·  Step Panels  ·  Agent Streaming   │
-└──────────────────────────┬──────────────────────────────┘
-                           │ WebSocket + REST
-┌──────────────────────────┴──────────────────────────────┐
-│                   FastAPI Server                          │
-│  /api/jobs  ·  /api/runs  ·  /api/templates  ·  /ws      │
-├──────────────────────────┬──────────────────────────────┤
-│         Engine           │        SQLite Store           │
-│  DAG resolution          │  Jobs, steps, runs, events    │
-│  Exit rule evaluation    │  Crash recovery               │
-│  Loop management         │  Agent output streams         │
-│  Cost enforcement        │                               │
-├──────────┬───────┬───────┴──┬────────────┐              │
-│  Script  │  LLM  │  Agent   │   Human    │  ← Executors │
-│          │       │  (ACP)   │            │              │
-└──────────┴───────┴──────────┴────────────┘
+┌────────────────────────────────────────────────────────┐
+│                   Web UI (React)                       │
+│  DAG Visualization · Step Panels · Agent Streaming     │
+└───────────────────────┬────────────────────────────────┘
+                        │ WebSocket + REST
+┌───────────────────────┴────────────────────────────────┐
+│                  FastAPI Server                         │
+│  /api/jobs · /api/runs · /api/templates · /ws          │
+├───────────────────────┬────────────────────────────────┤
+│       Engine          │       SQLite Store             │
+│  DAG resolution       │  Jobs, steps, runs, events     │
+│  Exit rule eval       │  Crash recovery                │
+│  Loop management      │  Agent output streams          │
+├─────────┬──────┬──────┴───┬───────────┐               │
+│ Script  │ LLM  │  Agent   │  Human    │  ← Executors  │
+│         │      │  (ACP)   │           │               │
+└─────────┴──────┴──────────┴───────────┘
 ```
 
 ## Configuration
 
 ```bash
-# Set OpenRouter API key for LLM steps
 stepwise config set openrouter_api_key sk-or-...
-
-# Set default model
 stepwise config set default_model anthropic/claude-sonnet-4-20250514
-
-# View config (secrets masked by default)
 stepwise config get openrouter_api_key       # **********xyz
-stepwise config get openrouter_api_key --unmask  # sk-or-...
 ```
 
-Config is stored in `~/.config/stepwise/config.json`.
+Config lives in `~/.config/stepwise/config.json`.
 
 ## Development
 
@@ -259,13 +209,13 @@ cd stepwise
 
 # Backend
 uv sync
-uv run pytest tests/           # 407 Python tests
+uv run pytest tests/
 
 # Frontend
 cd web
 npm install
-npm run dev                    # dev server at :5173, proxies to :8340
-npm test                       # frontend tests
+npm run dev        # dev server at :5173, proxies to :8340
+npm test
 
 # Build web assets into package
 make build-web
@@ -273,42 +223,19 @@ make build-web
 
 **Requirements:** Python 3.12+, Node 20+ (for frontend development)
 
-**Project structure:**
+## Docs
 
-```
-src/stepwise/
-  cli.py          # CLI entry point (14 subcommands)
-  runner.py       # Headless execution, terminal reporter, signal handling
-  project.py      # .stepwise/ directory management
-  engine.py       # Core DAG engine, tick loop, exit rule evaluation
-  models.py       # Job, Step, ExitRule, FlowMetadata, etc.
-  executors.py    # Script, LLM, Human, Mock executors
-  agent.py        # Agent executor (ACP protocol) + transcript capture
-  context.py      # Context chain compilation (M7a)
-  server.py       # FastAPI REST + WebSocket server
-  store.py        # SQLite persistence layer
-  yaml_loader.py  # YAML → WorkflowDefinition parser
-  registry_factory.py  # Shared executor registration
-  config.py       # Configuration management
-  decorators.py   # Timeout, retry, fallback, notification
-web/              # React frontend (Vite, TanStack, Tailwind, shadcn/ui)
-```
-
-## API
-
-The server (`stepwise serve`) runs at `http://localhost:8340` by default. 27 REST endpoints + WebSocket.
-
-| Category | Key Endpoints |
-|----------|--------------|
-| **Jobs** | `GET /api/jobs`, `POST /api/jobs`, `POST /api/jobs/{id}/start`, `POST /api/jobs/{id}/cancel` |
-| **Runs** | `POST /api/runs/{id}/fulfill`, `GET /api/runs/{id}/agent-output`, `GET /api/runs/{id}/cost` |
-| **Engine** | `GET /api/status`, `POST /api/tick`, `GET /api/executors` |
-| **Config** | `GET /api/config`, `PUT /api/config/api-key`, `PUT /api/config/models` |
-| **WebSocket** | `ws://localhost:8340/ws` — tick updates + agent output streaming |
-
-**Swagger UI:** `http://localhost:8340/docs`
-
-See [`docs/api.md`](docs/api.md) for full endpoint documentation, request/response schemas, WebSocket protocol, and examples.
+| Doc | Description |
+|-----|-------------|
+| [Quickstart](docs/quickstart.md) | Install, first flow, loops, human gates — 5 minutes |
+| [Agent Integration](docs/agent-integration.md) | End-to-end guide for agent callers |
+| [Why Stepwise](docs/why-stepwise.md) | Motivation and design philosophy |
+| [Concepts](docs/concepts.md) | Jobs, steps, executors, dependencies, loops, for-each |
+| [Executors](docs/executors.md) | Deep dive on all executor types + decorators |
+| [YAML Format](docs/yaml-format.md) | Complete `.flow.yaml` schema reference |
+| [CLI Reference](docs/cli.md) | All commands, flags, examples, exit codes |
+| [API Reference](docs/api.md) | REST endpoints, WebSocket protocol, error handling |
+| [Flow Sharing](docs/flow-sharing.md) | Registry and `stepwise flow` commands |
 
 ## License
 
