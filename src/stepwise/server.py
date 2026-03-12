@@ -631,7 +631,7 @@ def list_suspended_jobs(
         suspended = engine.store.suspended_runs(job.id)
         for run in suspended:
             step_def = job.workflow.steps.get(run.step_name)
-            age = (now - run.updated_at).total_seconds() if run.updated_at else 0
+            age = (now - run.started_at).total_seconds() if run.started_at else 0
 
             if since:
                 max_age = _parse_server_duration(since)
@@ -648,7 +648,7 @@ def list_suspended_jobs(
                 "step_name": run.step_name,
                 "prompt": run.watch.config.get("prompt") if run.watch else None,
                 "expected_outputs": run.watch.fulfillment_outputs if run.watch else [],
-                "suspended_at": run.updated_at.isoformat() if run.updated_at else None,
+                "suspended_at": run.started_at.isoformat() if run.started_at else None,
                 "age_seconds": round(age, 1),
                 "fulfill_command": f"stepwise fulfill {run.id} '<json>'",
             })
