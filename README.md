@@ -18,7 +18,7 @@
 Stepwise is a workflow engine that coordinates multi-step jobs where each step can be a **shell script**, an **LLM call**, an **autonomous AI agent**, or a **human decision**. Define your workflow as a YAML file, run it from the CLI, and optionally watch it execute in a real-time web UI.
 
 ```bash
-curl -fsSL https://stepwise.run/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zackham/stepwise/master/install.sh | sh
 ```
 
 Or install directly with your preferred tool:

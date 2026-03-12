@@ -5,7 +5,7 @@ Get from zero to a running workflow in under 5 minutes.
 ## Install
 
 ```bash
-curl -fsSL https://stepwise.run/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zackham/stepwise/master/install.sh | sh
 ```
 
 Or install directly: `uv tool install stepwise` / `pipx install stepwise` / `pip install stepwise`.

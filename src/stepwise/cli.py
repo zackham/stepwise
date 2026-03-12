@@ -864,7 +864,7 @@ def cmd_self_update(args: argparse.Namespace) -> int:
         if method == "pip":
             print(
                 "\nTip: if pip is blocked by your OS, install with:\n"
-                "  curl -fsSL https://stepwise.run/install.sh | sh",
+                "  curl -fsSL https://raw.githubusercontent.com/zackham/stepwise/master/install.sh | sh",
                 file=sys.stderr,
             )
         return EXIT_JOB_FAILED
