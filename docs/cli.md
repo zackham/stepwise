@@ -10,6 +10,8 @@ Stepwise is a CLI-first tool. All commands are available via `stepwise <command>
 | `-v, --verbose` | Verbose output |
 | `-q, --quiet` | Suppress non-essential output |
 | `--project-dir PATH` | Use a specific project directory instead of searching from cwd |
+| `--standalone` | Force direct SQLite mode (skip server detection) |
+| `--server URL` | Force API mode with specified server URL |
 
 ## Exit Codes
 
@@ -20,6 +22,7 @@ Stepwise is a CLI-first tool. All commands are available via `stepwise <command>
 | `2` | Usage error (bad arguments, missing file) |
 | `3` | Configuration error |
 | `4` | Project error (no `.stepwise/` found) |
+| `5` | Suspended (flow blocked by human steps) |
 
 **`--wait` mode exit codes** (override codes 3-4 for agent callers):
 
@@ -30,6 +33,7 @@ Stepwise is a CLI-first tool. All commands are available via `stepwise <command>
 | `2` | Input validation error |
 | `3` | Timeout (`--timeout` exceeded) |
 | `4` | Cancelled |
+| `5` | Suspended (all progress blocked by human steps) |
 
 ---
 
@@ -49,7 +53,11 @@ This creates the project structure:
   db/stepwise.db      # SQLite job store
   jobs/                # job workspace directories
   templates/           # project-local templates
+  hooks/               # event hook scripts (on-suspend, on-complete, on-fail)
+  logs/                # hook failure logs
 ```
+
+Hook scripts are scaffolded with commented examples. See [Project Hooks](#project-hooks) for details.
 
 Stepwise commands search upward from cwd for `.stepwise/` (like git searches for `.git/`).
 
@@ -141,7 +149,9 @@ stepwise run deploy.flow.yaml --wait --timeout 300 --var repo=/path --var branch
 stepwise run review.flow.yaml --wait --var-file spec=spec.md
 ```
 
-Exit codes for `--wait`: 0=success, 1=failed, 2=input error, 3=timeout, 4=cancelled.
+Exit codes for `--wait`: 0=success, 1=failed, 2=input error, 3=timeout, 4=cancelled, 5=suspended.
+
+When a flow has human steps and `--wait` is used, the command returns exit code 5 with a JSON response containing `suspended_steps` — each with `run_id`, `prompt`, and `fields`. Use `stepwise fulfill <run-id> '{...}' --wait` to satisfy the step and continue blocking.
 
 ### Async mode (--async)
 
@@ -275,6 +285,8 @@ Steps:
 
 Status icons: `✓` completed, `✗` failed, `⠋` running, `◆` suspended (waiting for human), `↗` delegated (sub-job), `○` pending.
 
+**JSON output** provides a full resolved flow status (DAG view) with per-step costs, outputs, suspension details, route decisions, and sub-jobs.
+
 | Flag | Description |
 |------|-------------|
 | `--output {table,json}` | Output format (default: table) |
@@ -287,13 +299,62 @@ Cancel a running or paused job. Active agent processes are killed.
 
 ```bash
 stepwise cancel job-e5f6g7h8
+stepwise cancel job-e5f6g7h8 --output json
 ```
 
 ```
 ✓ Cancelled job-e5f6g7h8
 ```
 
+**JSON output** returns `{job_id, status, completed_steps, cancelled_steps, remaining_steps}` where `remaining_steps` includes prompts/descriptions from the workflow definition.
+
 Returns an error if the job is already completed, failed, or cancelled.
+
+| Flag | Description |
+|------|-------------|
+| `--output {table,json}` | Output format (default: table) |
+
+---
+
+## `stepwise list`
+
+List items across the project. Currently supports the `--suspended` flag for a global suspension inbox.
+
+```bash
+stepwise list --suspended --output json
+stepwise list --suspended --since 24h
+stepwise list --suspended --flow meeting-ingest
+```
+
+Returns all suspended steps across all active jobs — the "inbox" of human steps awaiting fulfillment.
+
+Each item includes: `job_id`, `flow_name`, `run_id`, `step_name`, `prompt`, `expected_outputs`, `suspended_at`, `age_seconds`, `fulfill_command`.
+
+| Flag | Description |
+|------|-------------|
+| `--suspended` | Show suspended steps across all active jobs |
+| `--output {table,json}` | Output format (default: table) |
+| `--since DURATION` | Filter by age (e.g., `24h`, `7d`, `30m`) |
+| `--flow NAME` | Filter by flow name |
+
+---
+
+## `stepwise wait`
+
+Block until an existing job reaches a terminal state or all progress is blocked by suspensions.
+
+```bash
+stepwise wait job-a1b2c3d4
+stepwise wait job-a1b2c3d4 --timeout 300
+```
+
+Returns the same JSON format as `stepwise run --wait`. Exit code 0 for completion, 1 for failure, 5 for suspension.
+
+Useful for attaching to a job started with `--async` or for re-checking a job after fulfilling a step without using `fulfill --wait`.
+
+| Flag | Description |
+|------|-------------|
+| `--timeout INT` | Timeout in seconds |
 
 ---
 
@@ -466,13 +527,25 @@ For flows with human steps, includes the step name, prompt, and required fields:
 Retrieve job outputs after completion (or partial outputs for running/failed jobs).
 
 ```bash
-stepwise output job-a1b2c3d4                   # terminal outputs only
-stepwise output job-a1b2c3d4 --scope full      # per-step details + cost + events
+stepwise output job-a1b2c3d4                          # terminal outputs only
+stepwise output job-a1b2c3d4 --scope full             # per-step details + cost + events
+stepwise output job-a1b2c3d4 --step build,test        # specific step outputs
+stepwise output job-a1b2c3d4 --step review --inputs   # step inputs instead of outputs
+stepwise output --run run-abc12345                     # direct run access by ID
 ```
+
+**Per-step mode** (`--step`): Returns a JSON object keyed by step name. Steps not yet completed have `null` values with a `_status` field. Non-existent steps have an `_error` field.
+
+**Input mode** (`--inputs`): Returns the inputs that were fed to the step instead of its outputs.
+
+**Direct run mode** (`--run`): Access any run's output by its global run ID, without needing the job ID.
 
 | Flag | Description |
 |------|-------------|
 | `--scope {default,full}` | Output scope (default: terminal outputs only) |
+| `--step NAMES` | Comma-separated step names for per-step output |
+| `--inputs` | Return step inputs instead of outputs (with `--step`) |
+| `--run RUN_ID` | Retrieve output for a specific run by ID |
 
 ---
 
@@ -486,17 +559,25 @@ stepwise fulfill run-abc12345 '{"approved": true, "reason": "looks good"}'
 # Read payload from stdin (useful for large payloads or piping)
 echo '{"approved": true}' | stepwise fulfill run-abc12345 --stdin
 cat payload.json | stepwise fulfill run-abc12345 -
+
+# Fulfill and wait for the job to complete or suspend again
+stepwise fulfill run-abc12345 '{"approved": true}' --wait
 ```
 
 ```json
 {"status": "fulfilled", "run_id": "run-abc12345"}
 ```
 
-The run ID comes from `stepwise output` (which shows `suspended_steps` for running jobs) or from a `--wait --timeout` response.
+The run ID comes from `--wait` responses (which include `suspended_steps`), `stepwise list --suspended`, or `stepwise status --output json`.
+
+**`--wait` mode:** After fulfilling, enters a blocking wait loop on the parent job. Returns the same JSON format as `stepwise run --wait` (completed, failed, or suspended again with new `suspended_steps`). This is the primary mediation pattern for agents.
+
+**Idempotent:** If a step is already fulfilled (e.g., by a concurrent hook), returns an error JSON but doesn't corrupt state. With `--wait`, it still blocks on the job.
 
 | Flag | Description |
 |------|-------------|
 | `--stdin` | Read JSON payload from stdin instead of positional argument |
+| `--wait` | After fulfilling, block until job completes or suspends again |
 
 **Note:** You can also pass `-` as the payload argument to read from stdin.
 
@@ -540,6 +621,50 @@ If already on the latest version:
 Upgrading via uv...
 Already up to date (0.2.0).
 ```
+
+---
+
+## Project Hooks
+
+Hook scripts in `.stepwise/hooks/` are fired by the engine on key events. Each hook receives a JSON payload on stdin.
+
+| Hook | Event | Trigger |
+|------|-------|---------|
+| `on-suspend` | `step.suspended` | A step is suspended (awaiting human input) |
+| `on-complete` | `job.completed` | A job completes successfully |
+| `on-fail` | `job.failed`, `step.failed` | A job or step fails |
+
+**Payload fields:**
+- All hooks: `event`, `hook`, `job_id`, `timestamp`
+- `on-suspend` additionally: `step`, `run_id`, `watch_mode`, `prompt`, `fulfill_command`
+- `on-fail` additionally: `step` (if step failure), `error`, `reason`
+
+Hooks are fire-and-forget with a 30-second timeout. Failures are logged to `.stepwise/logs/hooks.log`. Hooks are scaffolded by `stepwise init` with commented examples.
+
+**Example: Slack notification on suspension**
+
+```sh
+#!/bin/sh
+# .stepwise/hooks/on-suspend
+payload=$(cat)
+step=$(echo "$payload" | jq -r '.step')
+cmd=$(echo "$payload" | jq -r '.fulfill_command')
+curl -s -X POST "$SLACK_WEBHOOK" -d "{\"text\":\"Step '$step' needs input: $cmd\"}"
+```
+
+---
+
+## Server-Aware CLI
+
+When `stepwise serve` is running, CLI commands can automatically route through the server API instead of accessing SQLite directly. This prevents database locking conflicts.
+
+**Detection:** The CLI checks `.stepwise/server.pid` and probes the health endpoint.
+
+**Override flags:**
+- `--standalone` — force direct SQLite mode (skip server detection)
+- `--server URL` — force API mode with a specific server URL
+
+The server writes `.stepwise/server.pid` on startup and removes it on clean shutdown.
 
 ---
 

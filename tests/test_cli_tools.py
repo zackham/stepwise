@@ -600,19 +600,19 @@ class TestWaitTimeout:
     """Test --wait --timeout behavior."""
 
     def test_timeout_on_human_step(self, human_flow, tmp_project):
-        """--wait --timeout returns timeout status when human step blocks."""
+        """--wait returns suspended status when human step blocks (before timeout)."""
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
             "run", str(human_flow),
             "--wait",
-            "--timeout", "1",  # 1 second timeout
+            "--timeout", "5",  # generous timeout — suspension detected first
             "--var", "repo=/tmp/test",
         ])
 
-        assert code == 3  # EXIT_TIMEOUT
+        assert code == 5  # EXIT_SUSPENDED
         result = json.loads(output)
-        assert result["status"] == "timeout"
-        assert result["timeout_seconds"] == 1
+        assert result["status"] == "suspended"
+        assert "suspended_steps" in result
         assert "job_id" in result
 
 

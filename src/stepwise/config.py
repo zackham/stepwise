@@ -40,6 +40,7 @@ class ModelEntry:
 class StepwiseConfig:
     """Runtime configuration for Stepwise."""
     openrouter_api_key: str | None = None
+    anthropic_api_key: str | None = None
     model_registry: list[ModelEntry] = field(default_factory=list)
     default_model: str | None = None
 
@@ -70,6 +71,7 @@ class StepwiseConfig:
     def to_dict(self) -> dict:
         return {
             "openrouter_api_key": self.openrouter_api_key,
+            "anthropic_api_key": self.anthropic_api_key,
             "model_registry": [m.to_dict() for m in self.model_registry],
             "default_model": self.default_model,
         }
@@ -78,6 +80,7 @@ class StepwiseConfig:
     def from_dict(d: dict) -> StepwiseConfig:
         return StepwiseConfig(
             openrouter_api_key=d.get("openrouter_api_key"),
+            anthropic_api_key=d.get("anthropic_api_key"),
             model_registry=[ModelEntry.from_dict(m) for m in d.get("model_registry", [])],
             default_model=d.get("default_model"),
         )

@@ -120,50 +120,103 @@ def generate_agent_help(
 def _format_compact(entries: list[dict]) -> str:
     """Tight, self-sufficient output for agent consumption.
 
-    Includes flow catalog + CLI reference so an agent can run and manage
-    jobs with no other context needed.
+    Includes 5-mode interaction model, flow catalog, and CLI reference
+    so an agent can run and manage flows with no other context needed.
     """
     lines: list[str] = []
 
-    # Flow catalog
-    for entry in entries:
-        name = entry["name"]
-        desc = entry.get("description", "")
-
-        header = f"**{name}**"
-        if desc:
-            header += f" — {desc}"
-        lines.append(header)
-
-        lines.append(f"  `{entry['run']}`")
-
-        parts = []
-        if entry["inputs"]:
-            parts.append(f"in: {', '.join(entry['inputs'])}")
-        if entry["outputs"]:
-            parts.append(f"out: {', '.join(entry['outputs'])}")
-        if entry.get("human_steps"):
-            step_names = [hs["step"] for hs in entry["human_steps"]]
-            parts.append(f"human: {', '.join(step_names)}")
-        if parts:
-            lines.append(f"  {' | '.join(parts)}")
-
-        lines.append("")
-
-    # CLI reference — everything an agent needs to run and manage flows
+    # 5-mode interaction model
     lines.extend([
-        "---",
-        "CLI: `stepwise run <flow> --wait --var k=v` returns JSON to stdout.",
-        "`--wait` blocks until done. `--async` returns job_id immediately.",
-        "`stepwise status <job-id>` — check progress.",
-        "`stepwise output <job-id>` — retrieve outputs after completion.",
-        "`stepwise fulfill <run-id> '{\"field\": \"value\"}'` — satisfy a human step.",
-        "`stepwise schema <flow>` — JSON schema (inputs, outputs, human steps).",
+        "# Stepwise Agent Instructions",
+        "",
+        "## Interaction Modes",
+        "",
+        "**Automated** — Run a flow end-to-end, get structured output.",
+        "  `stepwise run <flow> --wait --var k=v`",
+        "",
+        "**Mediated** — Run a flow with human steps; fulfill them interactively.",
+        "  `stepwise run <flow> --wait` → exit 5 = suspended → read prompt →",
+        "  `stepwise fulfill <run-id> '{...}' --wait` → resume until done.",
+        "",
+        "**Monitoring** — Check job progress and suspension inbox.",
+        "  `stepwise status <job-id> --output json` — full DAG view.",
+        "  `stepwise list --suspended --output json` — global inbox.",
+        "",
+        "**Data Grab** — Retrieve specific outputs from completed steps.",
+        "  `stepwise output <job-id> --step name1,name2` — per-step outputs.",
+        "  `stepwise output <job-id> --step name --inputs` — step inputs.",
+        "",
+        "**Takeover** — Cancel and inspect a running job.",
+        "  `stepwise cancel <job-id> --output json` — cancel with remaining step info.",
+        "  `stepwise wait <job-id>` — block on an existing job.",
+        "",
+    ])
+
+    # Flow catalog
+    if entries:
+        lines.extend(["## Flows", ""])
+        for entry in entries:
+            name = entry["name"]
+            desc = entry.get("description", "")
+
+            header = f"**{name}**"
+            if desc:
+                header += f" — {desc}"
+            lines.append(header)
+
+            lines.append(f"  `{entry['run']}`")
+
+            parts = []
+            if entry["inputs"]:
+                parts.append(f"in: {', '.join(entry['inputs'])}")
+            if entry["outputs"]:
+                parts.append(f"out: {', '.join(entry['outputs'])}")
+            if entry.get("human_steps"):
+                step_names = [hs["step"] for hs in entry["human_steps"]]
+                parts.append(f"human: {', '.join(step_names)}")
+            if parts:
+                lines.append(f"  {' | '.join(parts)}")
+
+            lines.append("")
+
+    # CLI reference
+    lines.extend([
+        "## CLI Reference",
+        "",
+        "`stepwise run <flow> --wait --var k=v` — run and block for JSON result.",
+        "`stepwise run <flow> --async` — fire-and-forget, returns job_id.",
+        "`stepwise status <job-id> --output json` — resolved flow status (DAG view).",
+        "`stepwise output <job-id>` — terminal outputs after completion.",
+        "`stepwise output <job-id> --step a,b` — per-step outputs.",
+        "`stepwise output <job-id> --step a --inputs` — step inputs.",
+        "`stepwise output --run <run-id>` — direct run output.",
+        "`stepwise fulfill <run-id> '{...}'` — satisfy a human step.",
+        "`stepwise fulfill <run-id> '{...}' --wait` — fulfill then block on job.",
+        "`stepwise list --suspended --output json` — global suspension inbox.",
+        "`stepwise wait <job-id>` — block until completion or suspension.",
+        "`stepwise cancel <job-id> --output json` — cancel with step details.",
+        "`stepwise schema <flow>` — JSON tool contract (inputs, outputs, humanSteps).",
         "`stepwise validate <flow>` — syntax check a .flow.yaml file.",
         "",
-        "Exit codes: 0=success, 1=failed, 2=input error, 3=timeout, 4=cancelled.",
-        "--wait JSON: `{\"status\": \"completed\", \"job_id\": \"...\", \"outputs\": [...], \"cost_usd\": N}`",
-        "On failure: `{\"status\": \"failed\", \"error\": \"...\", \"failed_step\": \"...\"}`",
+        "Exit codes: 0=success, 1=failed, 2=input error, 3=timeout, 4=cancelled, 5=suspended.",
+        "",
+        "**--wait JSON responses:**",
+        "  Success: `{\"status\": \"completed\", \"job_id\": \"...\", \"outputs\": {...}, \"cost_usd\": N}`",
+        "  Failure: `{\"status\": \"failed\", \"error\": \"...\", \"failed_step\": \"...\"}`",
+        "  Suspended: `{\"status\": \"suspended\", \"suspended_steps\": [{\"step\": \"...\", \"run_id\": \"...\", \"prompt\": \"...\", \"fields\": [...]}]}`",
+        "",
+        "**Mediation example:**",
+        "```",
+        "# 1. Start flow — blocks until suspended",
+        "result=$(stepwise run meeting-ingest.flow.yaml --wait --var audio=rec.mp3)",
+        "# exit=5, result has suspended_steps with run_id and prompt",
+        "",
+        "# 2. Read the prompt, prepare your response",
+        "run_id=$(echo $result | jq -r '.suspended_steps[0].run_id')",
+        "",
+        "# 3. Fulfill and wait for completion",
+        "stepwise fulfill $run_id '{\"approved\": true, \"notes\": \"looks good\"}' --wait",
+        "```",
         "",
     ])
 

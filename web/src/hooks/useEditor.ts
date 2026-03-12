@@ -85,6 +85,60 @@ export function useDeleteStep() {
   });
 }
 
+// ── Flow Files ───────────────────────────────────────────────────────
+
+export function useFlowFiles(flowPath: string | undefined) {
+  return useQuery({
+    queryKey: ["flowFiles", flowPath],
+    queryFn: () => api.fetchFlowFiles(flowPath!),
+    enabled: !!flowPath,
+    staleTime: 5000,
+  });
+}
+
+export function useFlowFile(flowPath: string | undefined, filePath: string | undefined) {
+  return useQuery({
+    queryKey: ["flowFile", flowPath, filePath],
+    queryFn: () => api.readFlowFile(flowPath!, filePath!),
+    enabled: !!flowPath && !!filePath,
+  });
+}
+
+export function useWriteFlowFile() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      flowPath,
+      filePath,
+      content,
+    }: {
+      flowPath: string;
+      filePath: string;
+      content: string;
+    }) => api.writeFlowFile(flowPath, filePath, content),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["flowFiles", variables.flowPath] });
+      queryClient.invalidateQueries({ queryKey: ["flowFile", variables.flowPath, variables.filePath] });
+    },
+  });
+}
+
+export function useDeleteFlowFile() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      flowPath,
+      filePath,
+    }: {
+      flowPath: string;
+      filePath: string;
+    }) => api.deleteFlowFile(flowPath, filePath),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["flowFiles", variables.flowPath] });
+    },
+  });
+}
+
 // ── Registry ──────────────────────────────────────────────────────────
 
 export function useRegistrySearch(query: string, sort: string = "downloads") {

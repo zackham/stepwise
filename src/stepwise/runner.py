@@ -32,6 +32,7 @@ EXIT_SUCCESS = 0
 EXIT_JOB_FAILED = 1
 EXIT_USAGE_ERROR = 2
 EXIT_CONFIG_ERROR = 3
+EXIT_SUSPENDED = 5
 
 
 @dataclass
@@ -222,7 +223,7 @@ def run_flow(
 
     store = SQLiteStore(str(project.db_path))
     registry = create_default_registry(config)
-    engine = Engine(store, registry, jobs_dir=str(project.jobs_dir))
+    engine = Engine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir)
 
     # 3. Create and start job
     flow_name = objective or flow_path.stem
@@ -404,7 +405,7 @@ def run_wait(
     """Run a flow in blocking mode with JSON output on stdout.
 
     All logging goes to stderr. Stdout contains ONLY the JSON payload.
-    Returns exit codes: 0=success, 1=failed, 2=input error, 3=timeout, 4=cancelled.
+    Returns exit codes: 0=success, 1=failed, 2=input error, 3=timeout, 4=cancelled, 5=suspended.
     """
     import json as json_mod
     import logging
@@ -462,7 +463,7 @@ def run_wait(
 
     store = SQLiteStore(str(project.db_path))
     registry = create_default_registry(config)
-    engine = Engine(store, registry, jobs_dir=str(project.jobs_dir))
+    engine = Engine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir)
 
     # Create and start job
     flow_name = objective or flow_path.stem
@@ -472,7 +473,25 @@ def run_wait(
         inputs=inputs or {},
         workspace_path=workspace,
     )
+    engine.start_job(job.id)
 
+    try:
+        return wait_for_job(engine, store, job.id, timeout=timeout)
+    finally:
+        store.close()
+
+
+def wait_for_job(
+    engine: Engine,
+    store: SQLiteStore,
+    job_id: str,
+    timeout: int | None = None,
+) -> int:
+    """Block until a job reaches terminal state or suspension.
+
+    Returns exit code: 0=completed, 1=failed, 3=timeout, 4=cancelled, 5=suspended.
+    Outputs JSON to stdout.
+    """
     # Signal handling
     shutdown_requested = False
     original_sigint = signal.getsignal(signal.SIGINT)
@@ -488,15 +507,13 @@ def run_wait(
     start_time = time.time()
 
     try:
-        engine.start_job(job.id)
-
         while True:
             if shutdown_requested:
-                engine.cancel_job(job.id)
+                engine.cancel_job(job_id)
                 result = {
                     "status": "cancelled",
-                    "job_id": job.id,
-                    "completed_outputs": engine.completed_outputs(job.id),
+                    "job_id": job_id,
+                    "completed_outputs": engine.completed_outputs(job_id),
                     "duration_seconds": round(time.time() - start_time, 1),
                 }
                 _json_stdout(result)
@@ -504,13 +521,13 @@ def run_wait(
 
             # Check timeout
             if timeout and (time.time() - start_time) > timeout:
-                job = engine.get_job(job.id)
-                suspended = engine.suspended_step_details(job.id)
+                job = engine.get_job(job_id)
+                suspended = engine.suspended_step_details(job_id)
                 result = {
                     "status": "timeout",
-                    "job_id": job.id,
+                    "job_id": job_id,
                     "timeout_seconds": timeout,
-                    "completed_outputs": engine.completed_outputs(job.id),
+                    "completed_outputs": engine.completed_outputs(job_id),
                     "duration_seconds": round(time.time() - start_time, 1),
                 }
                 if suspended:
@@ -522,16 +539,16 @@ def run_wait(
                 _json_stdout(result)
                 return 3  # EXIT_TIMEOUT
 
-            job = engine.get_job(job.id)
+            job = engine.get_job(job_id)
 
             # Check terminal states
             if job.status == JobStatus.COMPLETED:
                 duration = round(time.time() - start_time, 1)
-                cost = engine.job_cost(job.id)
+                cost = engine.job_cost(job_id)
                 result = {
                     "status": "completed",
-                    "job_id": job.id,
-                    "outputs": engine.terminal_outputs(job.id),
+                    "job_id": job_id,
+                    "outputs": engine.terminal_outputs(job_id),
                     "cost_usd": round(cost, 4) if cost else 0,
                     "duration_seconds": duration,
                 }
@@ -540,11 +557,11 @@ def run_wait(
 
             elif job.status in (JobStatus.FAILED, JobStatus.CANCELLED):
                 duration = round(time.time() - start_time, 1)
-                cost = engine.job_cost(job.id)
+                cost = engine.job_cost(job_id)
                 # Find the failed step
                 failed_step = None
                 error_msg = None
-                for run in engine.get_runs(job.id):
+                for run in engine.get_runs(job_id):
                     if run.status == StepRunStatus.FAILED:
                         failed_step = run.step_name
                         error_msg = run.error
@@ -552,15 +569,41 @@ def run_wait(
 
                 result = {
                     "status": "failed",
-                    "job_id": job.id,
+                    "job_id": job_id,
                     "error": error_msg or "Unknown error",
                     "failed_step": failed_step,
-                    "completed_outputs": engine.completed_outputs(job.id),
+                    "completed_outputs": engine.completed_outputs(job_id),
                     "cost_usd": round(cost, 4) if cost else 0,
                     "duration_seconds": duration,
                 }
                 _json_stdout(result)
                 return EXIT_JOB_FAILED
+
+            # Check for suspension: all progress blocked by suspended steps
+            if _is_blocked_by_suspension(engine, job_id):
+                duration = round(time.time() - start_time, 1)
+                cost = engine.job_cost(job_id)
+                suspended_details = engine.suspended_step_details(job_id)
+                # Enrich with inputs and suspended_at
+                for detail in suspended_details:
+                    run = store.load_run(detail["run_id"])
+                    detail["inputs"] = run.inputs or {}
+                    detail["suspended_at"] = run.started_at.isoformat() if run.started_at else None
+
+                completed_steps = [
+                    r.step_name for r in engine.get_runs(job_id)
+                    if r.status == StepRunStatus.COMPLETED
+                ]
+                result = {
+                    "status": "suspended",
+                    "job_id": job_id,
+                    "suspended_steps": suspended_details,
+                    "completed_steps": completed_steps,
+                    "cost_usd": round(cost, 4) if cost else 0,
+                    "duration_seconds": duration,
+                }
+                _json_stdout(result)
+                return EXIT_SUSPENDED
 
             # Tick
             time.sleep(0.1)
@@ -569,9 +612,9 @@ def run_wait(
             except Exception as e:
                 result = {
                     "status": "failed",
-                    "job_id": job.id,
+                    "job_id": job_id,
                     "error": f"Engine error: {type(e).__name__}: {e}",
-                    "completed_outputs": engine.completed_outputs(job.id),
+                    "completed_outputs": engine.completed_outputs(job_id),
                     "duration_seconds": round(time.time() - start_time, 1),
                 }
                 _json_stdout(result)
@@ -580,7 +623,22 @@ def run_wait(
     finally:
         signal.signal(signal.SIGINT, original_sigint)
         signal.signal(signal.SIGTERM, original_sigterm)
-        store.close()
+
+
+def _is_blocked_by_suspension(engine: Engine, job_id: str) -> bool:
+    """Check if all forward progress is blocked by suspended steps.
+
+    Returns True when there are suspended runs AND no running/delegated runs.
+    """
+    runs = engine.get_runs(job_id)
+    has_suspended = False
+    has_active = False
+    for run in runs:
+        if run.status == StepRunStatus.SUSPENDED:
+            has_suspended = True
+        elif run.status in (StepRunStatus.RUNNING, StepRunStatus.DELEGATED):
+            has_active = True
+    return has_suspended and not has_active
 
 
 def run_async(
@@ -623,7 +681,7 @@ def run_async(
     store = SQLiteStore(str(project.db_path))
     try:
         registry = create_default_registry(config)
-        engine = Engine(store, registry, jobs_dir=str(project.jobs_dir))
+        engine = Engine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir)
 
         flow_name = objective or flow_path.stem
         job = engine.create_job(
@@ -642,6 +700,7 @@ def run_async(
         "--db", str(project.db_path),
         "--jobs-dir", str(project.jobs_dir),
         "--job-id", job_id,
+        "--project-dir", str(project.dot_dir),
     ]
 
     # Detach: new session, no stdin/stdout/stderr inheritance

@@ -279,7 +279,8 @@ async def lifespan(app: FastAPI):
     from stepwise.registry_factory import create_default_registry
     registry = create_default_registry()
 
-    _engine = Engine(store, registry, jobs_dir=jobs_dir)
+    dot_dir = _project_dir / ".stepwise"
+    _engine = Engine(store, registry, jobs_dir=jobs_dir, project_dir=dot_dir if dot_dir.is_dir() else None)
     _tick_task = asyncio.create_task(_tick_loop())
 
     # --watch mode: auto-create and start a job if env var is set
@@ -350,6 +351,15 @@ def create_job(req: CreateJobRequest):
         return _serialize_job(job)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/jobs/suspended")
+def list_suspended_jobs_route(
+    since: str | None = Query(default=None, description="Duration like '24h', '7d'"),
+    flow: str | None = Query(default=None),
+):
+    """Global suspension inbox across all active jobs."""
+    return list_suspended_jobs(since=since, flow=flow)
 
 
 @app.get("/api/jobs/{job_id}")
@@ -455,8 +465,12 @@ def rerun_step(job_id: str, step_name: str):
 def fulfill_watch(run_id: str, req: FulfillWatchRequest):
     engine = _get_engine()
     try:
-        engine.fulfill_watch(run_id, req.payload)
-        return {"status": "fulfilled"}
+        result = engine.fulfill_watch(run_id, req.payload)
+        # Idempotent: already fulfilled returns a dict
+        if result is not None:
+            return result
+        run = engine.store.load_run(run_id)
+        return {"status": "fulfilled", "run_id": run_id, "job_id": run.job_id}
     except (KeyError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -552,6 +566,117 @@ def get_events(job_id: str, since: str | None = None):
         return [e.to_dict() for e in events]
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+
+
+# ── Agent Ergonomics Endpoints ────────────────────────────────────────
+
+
+@app.get("/api/jobs/{job_id}/status")
+def get_job_status(job_id: str):
+    """Resolved flow status — full DAG view with per-step costs, statuses, suspension details."""
+    engine = _get_engine()
+    try:
+        return engine.resolved_flow_status(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+
+
+@app.get("/api/jobs/{job_id}/output")
+def get_job_output(
+    job_id: str,
+    step: str | None = Query(default=None, description="Comma-separated step names"),
+    inputs: bool = Query(default=False),
+):
+    """Get job outputs, optionally per-step."""
+    engine = _get_engine()
+    try:
+        job = engine.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+
+    if step:
+        step_names = [s.strip() for s in step.split(",")]
+        result = {}
+        for name in step_names:
+            if name not in job.workflow.steps:
+                result[name] = {"_error": f"Step '{name}' not in workflow"}
+                continue
+            if inputs:
+                run = engine.store.latest_run(job_id, name)
+                result[name] = run.inputs if run else None
+            else:
+                run = engine.store.latest_completed_run(job_id, name)
+                if run and run.result:
+                    result[name] = run.result.artifact
+                else:
+                    result[name] = None
+        return result
+
+    # Default: terminal outputs
+    outputs = engine.terminal_outputs(job_id)
+    return outputs or {}
+
+
+def list_suspended_jobs(
+    since: str | None = None,
+    flow: str | None = None,
+):
+    """Global suspension inbox across all active jobs."""
+    from datetime import timezone
+    engine = _get_engine()
+    now = datetime.now(timezone.utc)
+
+    items = []
+    for job in engine.store.active_jobs():
+        suspended = engine.store.suspended_runs(job.id)
+        for run in suspended:
+            step_def = job.workflow.steps.get(run.step_name)
+            age = (now - run.updated_at).total_seconds() if run.updated_at else 0
+
+            if since:
+                max_age = _parse_server_duration(since)
+                if max_age and age > max_age:
+                    continue
+
+            if flow and job.objective != flow:
+                continue
+
+            items.append({
+                "job_id": job.id,
+                "flow_name": job.objective,
+                "run_id": run.id,
+                "step_name": run.step_name,
+                "prompt": run.watch.config.get("prompt") if run.watch else None,
+                "expected_outputs": run.watch.fulfillment_outputs if run.watch else [],
+                "suspended_at": run.updated_at.isoformat() if run.updated_at else None,
+                "age_seconds": round(age, 1),
+                "fulfill_command": f"stepwise fulfill {run.id} '<json>'",
+            })
+
+    return {"count": len(items), "suspended_steps": items}
+
+
+@app.get("/api/health")
+def health_check():
+    """Health check endpoint for server detection."""
+    engine = _get_engine()
+    return {
+        "status": "ok",
+        "active_jobs": len(engine.store.active_jobs()),
+    }
+
+
+def _parse_server_duration(s: str) -> float | None:
+    """Parse duration string like '24h', '7d', '30m' to seconds."""
+    if not s:
+        return None
+    unit = s[-1].lower()
+    try:
+        value = float(s[:-1])
+    except ValueError:
+        return None
+    multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    return value * multipliers.get(unit, 1)
 
 
 # ── Engine ────────────────────────────────────────────────────────────
@@ -1382,6 +1507,9 @@ class EditorChatRequest(BaseModel):
     history: list[dict[str, str]] = []
     current_yaml: str | None = None
     selected_step: str | None = None
+    agent: str = "claude"
+    session_id: str | None = None
+    flow_path: str | None = None
 
 
 @app.post("/api/editor/chat")
@@ -1396,10 +1524,163 @@ async def editor_chat(req: EditorChatRequest):
             history=req.history,
             current_yaml=req.current_yaml,
             selected_step=req.selected_step,
+            project_dir=_project_dir,
+            agent=req.agent,
+            session_id=req.session_id,
+            flow_path=req.flow_path,
         ):
             yield json.dumps(chunk) + "\n"
 
     return StreamingResponse(generate(), media_type="application/x-ndjson")
+
+
+@app.post("/api/editor/clear-session")
+async def editor_clear_session(data: dict):
+    """Clear a chat session."""
+    from stepwise.editor_llm import clear_session
+    sid = data.get("session_id", "")
+    if sid:
+        clear_session(sid)
+    return {"status": "ok"}
+
+
+# ── Flow Directory Files ─────────────────────────────────────────────
+
+ALLOWED_EXTENSIONS = {".yaml", ".yml", ".py", ".sh", ".txt", ".md", ".j2", ".json", ".toml"}
+MAX_FILE_SIZE = 100 * 1024  # 100KB
+
+
+def _resolve_flow_dir(flow_path: str) -> Path:
+    """Resolve the flow directory from a flow path. Raises HTTPException on errors."""
+    full = (_project_dir / flow_path).resolve()
+    # If path points to FLOW.yaml, use parent dir
+    if full.name == "FLOW.yaml":
+        flow_dir = full.parent
+    elif full.is_dir():
+        flow_dir = full
+    else:
+        # Single-file flow — use parent dir
+        flow_dir = full.parent
+
+    # Security: must be within project
+    try:
+        flow_dir.resolve().relative_to(_project_dir.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path escapes project directory")
+
+    if not flow_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Flow directory not found")
+
+    return flow_dir
+
+
+def _resolve_file_in_flow(flow_dir: Path, file_path: str) -> Path:
+    """Resolve a file path within a flow directory. Raises HTTPException on escape."""
+    full = (flow_dir / file_path).resolve()
+
+    # Security: resolve symlinks and check containment
+    try:
+        full.relative_to(flow_dir.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path escapes flow directory")
+
+    return full
+
+
+@app.get("/api/flows/local/{flow_path:path}/files")
+async def list_flow_files(flow_path: str):
+    """List all files in a flow directory (recursive tree)."""
+    flow_dir = _resolve_flow_dir(flow_path)
+    skip = {".git", "__pycache__", ".venv", "node_modules", ".stepwise"}
+
+    files = []
+    for item in sorted(flow_dir.rglob("*")):
+        if any(part in skip for part in item.parts):
+            continue
+        if item.name.startswith("."):
+            continue
+        if not item.is_file():
+            continue
+        rel = str(item.relative_to(flow_dir))
+        files.append({
+            "path": rel,
+            "size": item.stat().st_size,
+            "is_yaml": item.suffix in {".yaml", ".yml"},
+        })
+
+    return {"flow_dir": str(flow_dir.relative_to(_project_dir)), "files": files}
+
+
+@app.get("/api/flows/local/{flow_path:path}/files/{file_path:path}")
+async def read_flow_file(flow_path: str, file_path: str):
+    """Read a file from within a flow directory."""
+    flow_dir = _resolve_flow_dir(flow_path)
+    full = _resolve_file_in_flow(flow_dir, file_path)
+
+    if not full.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+
+    try:
+        content = full.read_text(errors="replace")
+    except Exception:
+        raise HTTPException(status_code=500, detail="Could not read file")
+
+    if len(content) > MAX_FILE_SIZE:
+        content = content[:MAX_FILE_SIZE] + f"\n\n[truncated — {len(content)} bytes total]"
+
+    return {"path": file_path, "content": content}
+
+
+class FlowFileWriteRequest(BaseModel):
+    content: str
+
+
+@app.post("/api/flows/local/{flow_path:path}/files/{file_path:path}")
+async def write_flow_file(flow_path: str, file_path: str, req: FlowFileWriteRequest):
+    """Create or update a file within a flow directory."""
+    flow_dir = _resolve_flow_dir(flow_path)
+    full = _resolve_file_in_flow(flow_dir, file_path)
+
+    # Extension whitelist
+    suffix = Path(file_path).suffix.lower()
+    if suffix and suffix not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File extension '{suffix}' not allowed. Allowed: {sorted(ALLOWED_EXTENSIONS)}",
+        )
+
+    # Size limit
+    if len(req.content.encode("utf-8")) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail=f"File too large (max {MAX_FILE_SIZE // 1024}KB)")
+
+    # Create parent directories
+    full.parent.mkdir(parents=True, exist_ok=True)
+
+    existed = full.exists()
+    full.write_text(req.content)
+
+    return {
+        "path": file_path,
+        "created": not existed,
+        "size": len(req.content.encode("utf-8")),
+    }
+
+
+@app.delete("/api/flows/local/{flow_path:path}/files/{file_path:path}")
+async def delete_flow_file(flow_path: str, file_path: str):
+    """Delete a file from a flow directory."""
+    flow_dir = _resolve_flow_dir(flow_path)
+    full = _resolve_file_in_flow(flow_dir, file_path)
+
+    if not full.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+
+    # Don't allow deleting FLOW.yaml
+    if full.name == "FLOW.yaml":
+        raise HTTPException(status_code=400, detail="Cannot delete FLOW.yaml")
+
+    full.unlink()
+    return {"status": "deleted", "path": file_path}
 
 
 # ── WebSocket ─────────────────────────────────────────────────────────

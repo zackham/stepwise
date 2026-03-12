@@ -23,6 +23,7 @@ def main() -> int:
     parser.add_argument("--db", required=True)
     parser.add_argument("--jobs-dir", required=True)
     parser.add_argument("--job-id", required=True)
+    parser.add_argument("--project-dir", default=None)
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -35,7 +36,9 @@ def main() -> int:
     config = load_config()
     store = SQLiteStore(args.db)
     registry = create_default_registry(config)
-    engine = Engine(store, registry, jobs_dir=args.jobs_dir)
+    from pathlib import Path
+    project_dir = Path(args.project_dir) if args.project_dir else None
+    engine = Engine(store, registry, jobs_dir=args.jobs_dir, project_dir=project_dir)
 
     try:
         engine.start_job(args.job_id)

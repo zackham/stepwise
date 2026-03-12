@@ -317,14 +317,67 @@ export function installFlow(
   });
 }
 
+// ── Flow Directory Files ─────────────────────────────────────────
+
+export interface FlowFile {
+  path: string;
+  size: number;
+  is_yaml: boolean;
+}
+
+export function fetchFlowFiles(
+  flowPath: string
+): Promise<{ flow_dir: string; files: FlowFile[] }> {
+  return request(`/flows/local/${flowPath}/files`);
+}
+
+export function readFlowFile(
+  flowPath: string,
+  filePath: string
+): Promise<{ path: string; content: string }> {
+  return request(`/flows/local/${flowPath}/files/${filePath}`);
+}
+
+export function writeFlowFile(
+  flowPath: string,
+  filePath: string,
+  content: string
+): Promise<{ path: string; created: boolean; size: number }> {
+  return request(`/flows/local/${flowPath}/files/${filePath}`, {
+    method: "POST",
+    body: JSON.stringify({ content }),
+  });
+}
+
+export function deleteFlowFile(
+  flowPath: string,
+  filePath: string
+): Promise<{ status: string; path: string }> {
+  return request(`/flows/local/${flowPath}/files/${filePath}`, {
+    method: "DELETE",
+  });
+}
+
 // ── Editor LLM Chat ──────────────────────────────────────────────────
 
 export interface ChatChunk {
-  type: "text" | "yaml" | "done" | "error";
+  type: "text" | "yaml" | "done" | "error" | "tool_use" | "tool_result" | "file_block" | "session";
   content?: string;
   apply_id?: string;
   model?: string;
   cost_usd?: number | null;
+  // Agent tool use fields
+  tool_name?: string;
+  tool_input?: Record<string, string>;
+  tool_use_id?: string;
+  tool_output?: string;
+  is_error?: boolean;
+  input_tokens?: number;
+  output_tokens?: number;
+  // File block fields
+  path?: string;
+  // Session persistence
+  session_id?: string;
 }
 
 export async function* streamEditorChat(
@@ -332,6 +385,9 @@ export async function* streamEditorChat(
   history: Array<{ role: string; content: string }>,
   currentYaml?: string,
   selectedStep?: string,
+  agent?: string,
+  sessionId?: string,
+  flowPath?: string,
 ): AsyncGenerator<ChatChunk> {
   const res = await fetch(`${BASE_URL}/editor/chat`, {
     method: "POST",
@@ -341,6 +397,9 @@ export async function* streamEditorChat(
       history,
       current_yaml: currentYaml ?? null,
       selected_step: selectedStep ?? null,
+      agent: agent ?? "claude",
+      session_id: sessionId ?? null,
+      flow_path: flowPath ?? null,
     }),
   });
 

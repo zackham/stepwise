@@ -11,13 +11,15 @@ Usage:
     stepwise info <name>                   Show flow details
     stepwise jobs [flags]                  List jobs
     stepwise status <job-id>               Show job detail
-    stepwise cancel <job-id>               Cancel running job
+    stepwise cancel <job-id> [--output]     Cancel running job
+    stepwise list --suspended [--output]   List suspended steps across jobs
+    stepwise wait <job-id>                 Block until job completes or suspends
     stepwise validate <flow>               Validate flow syntax
     stepwise templates                     List templates
     stepwise config get|set [key] [value]  Manage configuration
     stepwise schema <flow>                 Generate JSON tool contract
-    stepwise output <job-id> [--scope]     Retrieve job outputs
-    stepwise fulfill <run-id> '<json>'     Satisfy a suspended human step (or --stdin)
+    stepwise output <job-id> [--step] [--run] Retrieve job/step outputs
+    stepwise fulfill <run-id> '<json>'     Satisfy a suspended human step (or --stdin, --wait)
     stepwise agent-help [--update <file>]  Generate agent instructions
     stepwise update                   Upgrade to the latest version
 """
@@ -44,6 +46,7 @@ EXIT_SUCCESS = 0
 EXIT_JOB_FAILED = 1
 EXIT_USAGE_ERROR = 2
 EXIT_CONFIG_ERROR = 3
+EXIT_SUSPENDED = 5
 EXIT_PROJECT_ERROR = 4
 
 
@@ -174,6 +177,50 @@ def _find_project_or_exit(args: argparse.Namespace) -> StepwiseProject:
 def _project_dir(args: argparse.Namespace) -> Path | None:
     """Return explicit --project-dir or None (let resolve_flow use cwd)."""
     return Path(args.project_dir) if getattr(args, "project_dir", None) else None
+
+
+def _detect_server_url(args: argparse.Namespace) -> str | None:
+    """Detect server URL from flags or project pidfile.
+
+    Priority: --standalone (force off) > --server URL (force on) > auto-detect.
+    """
+    if getattr(args, "standalone", False):
+        return None
+    if getattr(args, "server", None):
+        return args.server
+
+    # Auto-detect from project
+    try:
+        project = _find_project_or_exit(args)
+        from stepwise.server_detect import detect_server
+        return detect_server(project.dot_dir)
+    except SystemExit:
+        return None
+
+
+def _try_server(args: argparse.Namespace, fn):
+    """Try routing a request through the server API.
+
+    Returns (data, exit_code) on success/API error, or (None, None) for
+    fallback to direct SQLite mode (server unavailable).
+    """
+    server_url = _detect_server_url(args)
+    if not server_url:
+        return None, None
+
+    from stepwise.api_client import StepwiseClient, StepwiseAPIError
+
+    client = StepwiseClient(server_url)
+    try:
+        return fn(client), EXIT_SUCCESS
+    except StepwiseAPIError as e:
+        if e.status == 0:  # connection failed
+            print(
+                f"Warning: Server at {server_url} unreachable, falling back to direct mode",
+                file=sys.stderr,
+            )
+            return None, None
+        return {"status": "error", "error": e.detail}, EXIT_JOB_FAILED
 
 
 # ── Command handlers ─────────────────────────────────────────────────
@@ -371,12 +418,19 @@ def cmd_serve(args: argparse.Namespace) -> int:
     if not args.no_open:
         _open_browser(f"http://{host}:{port}")
 
-    uvicorn.run(
-        "stepwise.server:app",
-        host=host,
-        port=port,
-        log_level="warning",
-    )
+    # Write pidfile for CLI server detection
+    from stepwise.server_detect import write_pidfile, remove_pidfile
+    os.environ["STEPWISE_PROJECT_DIR"] = str(project.root)
+    write_pidfile(project.dot_dir, port)
+    try:
+        uvicorn.run(
+            "stepwise.server:app",
+            host=host,
+            port=port,
+            log_level="warning",
+        )
+    finally:
+        remove_pidfile(project.dot_dir)
     return EXIT_SUCCESS
 
 
@@ -520,6 +574,8 @@ def cmd_config(args: argparse.Namespace) -> int:
 
         if args.key == "openrouter_api_key":
             config.openrouter_api_key = value
+        elif args.key == "anthropic_api_key":
+            config.anthropic_api_key = value
         elif args.key == "default_model":
             config.default_model = value
         else:
@@ -539,13 +595,15 @@ def cmd_config(args: argparse.Namespace) -> int:
 
         if args.key == "openrouter_api_key":
             val = config.openrouter_api_key or ""
+        elif args.key == "anthropic_api_key":
+            val = config.anthropic_api_key or ""
         elif args.key == "default_model":
             val = config.default_model or ""
         else:
             print(f"Error: Unknown config key '{args.key}'", file=sys.stderr)
             return EXIT_USAGE_ERROR
 
-        if val and not args.unmask and args.key in ("openrouter_api_key",):
+        if val and not args.unmask and args.key in ("openrouter_api_key", "anthropic_api_key"):
             # Mask all but last 3 chars
             masked = "*" * max(0, len(val) - 3) + val[-3:]
             print(masked)
@@ -747,6 +805,15 @@ def _find_free_port() -> int:
 
 
 def cmd_jobs(args: argparse.Namespace) -> int:
+    # Server routing (JSON mode only)
+    if args.output == "json":
+        data, code = _try_server(
+            args, lambda c: c.jobs(status=args.status)
+        )
+        if code is not None:
+            print(json.dumps(data, indent=2, default=str))
+            return code
+
     project = _find_project_or_exit(args)
 
     from stepwise.models import JobStatus
@@ -769,7 +836,6 @@ def cmd_jobs(args: argparse.Namespace) -> int:
             jobs = jobs[-args.limit:]
 
         if args.output == "json":
-            import json
             print(json.dumps([_job_summary(j) for j in jobs], indent=2, default=str))
             return EXIT_SUCCESS
 
@@ -793,6 +859,13 @@ def cmd_jobs(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
+    # Server routing (JSON mode only)
+    if getattr(args, "output", None) == "json":
+        data, code = _try_server(args, lambda c: c.status(args.job_id))
+        if code is not None:
+            print(json.dumps(data, indent=2, default=str))
+            return code
+
     project = _find_project_or_exit(args)
 
     from stepwise.store import SQLiteStore
@@ -808,9 +881,10 @@ def cmd_status(args: argparse.Namespace) -> int:
         runs = store.runs_for_job(job.id)
 
         if args.output == "json":
-            import json
-            data = _job_summary(job)
-            data["runs"] = [r.to_dict() for r in runs]
+            from stepwise.engine import Engine
+            from stepwise.registry_factory import create_default_registry
+            engine = Engine(store, create_default_registry(), jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir)
+            data = engine.resolved_flow_status(args.job_id)
             print(json.dumps(data, indent=2, default=str))
             return EXIT_SUCCESS
 
@@ -864,6 +938,13 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_cancel(args: argparse.Namespace) -> int:
+    # Server routing (JSON mode only)
+    if getattr(args, "output", None) == "json":
+        data, code = _try_server(args, lambda c: c.cancel(args.job_id))
+        if code is not None:
+            print(json.dumps(data, indent=2, default=str))
+            return code
+
     project = _find_project_or_exit(args)
 
     from stepwise.engine import Engine
@@ -875,18 +956,52 @@ def cmd_cancel(args: argparse.Namespace) -> int:
         try:
             job = store.load_job(args.job_id)
         except KeyError:
-            print(f"Error: Job not found: {args.job_id}", file=sys.stderr)
+            if getattr(args, "output", None) == "json":
+                print(json.dumps({"status": "error", "error": f"Job not found: {args.job_id}"}))
+            else:
+                print(f"Error: Job not found: {args.job_id}", file=sys.stderr)
             return EXIT_JOB_FAILED
 
-        from stepwise.models import JobStatus
+        from stepwise.models import JobStatus, StepRunStatus
         if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
-            print(f"Error: Job already {job.status.value}", file=sys.stderr)
+            if getattr(args, "output", None) == "json":
+                print(json.dumps({"status": "error", "error": f"Job already {job.status.value}"}))
+            else:
+                print(f"Error: Job already {job.status.value}", file=sys.stderr)
             return EXIT_USAGE_ERROR
 
         registry = create_default_registry()
-        engine = Engine(store, registry, jobs_dir=str(project.jobs_dir))
-        engine.cancel_job(args.job_id)
-        print(f"✓ Cancelled {args.job_id}")
+        engine = Engine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir)
+
+        # Capture pre-cancel state for JSON output
+        if getattr(args, "output", None) == "json":
+            runs = store.runs_for_job(args.job_id)
+            completed_steps = [r.step_name for r in runs if r.status == StepRunStatus.COMPLETED]
+            cancelled_steps = [r.step_name for r in runs
+                               if r.status in (StepRunStatus.RUNNING, StepRunStatus.SUSPENDED,
+                                               StepRunStatus.DELEGATED)]
+            ran_names = {r.step_name for r in runs}
+            remaining_steps = []
+            for step_name, step_def in job.workflow.steps.items():
+                if step_name not in ran_names:
+                    info: dict = {"name": step_name, "type": step_def.executor.type}
+                    prompt = (step_def.executor.config or {}).get("prompt")
+                    if prompt:
+                        info["prompt"] = prompt
+                    remaining_steps.append(info)
+
+            engine.cancel_job(args.job_id)
+            print(json.dumps({
+                "job_id": args.job_id,
+                "status": "cancelled",
+                "completed_steps": completed_steps,
+                "cancelled_steps": cancelled_steps,
+                "remaining_steps": remaining_steps,
+            }, indent=2, default=str))
+        else:
+            engine.cancel_job(args.job_id)
+            print(f"✓ Cancelled {args.job_id}")
+
         return EXIT_SUCCESS
     finally:
         store.close()
@@ -923,6 +1038,119 @@ def _relative_time(dt) -> str:
     else:
         days = int(seconds / 86400)
         return f"{days} days ago"
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    """List suspended steps across all active jobs."""
+    # Server routing (JSON mode only)
+    if getattr(args, "output", None) == "json":
+        data, code = _try_server(
+            args,
+            lambda c: c.list_suspended(
+                since=getattr(args, "since", None),
+                flow=getattr(args, "flow", None),
+            ),
+        )
+        if code is not None:
+            print(json.dumps(data, indent=2, default=str))
+            return code
+
+    project = _find_project_or_exit(args)
+
+    from stepwise.models import JobStatus, StepRunStatus
+    from stepwise.store import SQLiteStore
+    from datetime import datetime, timezone
+
+    store = SQLiteStore(str(project.db_path))
+    try:
+        now = datetime.now(timezone.utc)
+        items: list[dict] = []
+
+        # Get all active jobs (running/paused)
+        jobs = store.all_jobs(top_level_only=True)
+        for job in jobs:
+            if job.status not in (JobStatus.RUNNING, JobStatus.PAUSED):
+                continue
+
+            # Apply --flow filter
+            if getattr(args, "flow", None) and args.flow != job.objective:
+                continue
+
+            runs = store.suspended_runs(job.id)
+            for run in runs:
+                if not run.watch:
+                    continue
+
+                suspended_at = run.started_at
+                age_seconds = 0
+                if suspended_at:
+                    if suspended_at.tzinfo is None:
+                        suspended_at = suspended_at.replace(tzinfo=timezone.utc)
+                    age_seconds = int((now - suspended_at).total_seconds())
+
+                # Apply --since filter
+                if getattr(args, "since", None):
+                    since_str = args.since
+                    # Parse duration like "24h", "7d", "30m"
+                    max_age = _parse_duration(since_str)
+                    if max_age and age_seconds > max_age:
+                        continue
+
+                items.append({
+                    "job_id": job.id,
+                    "flow_name": job.objective,
+                    "run_id": run.id,
+                    "step_name": run.step_name,
+                    "prompt": (run.watch.config or {}).get("prompt", ""),
+                    "expected_outputs": run.watch.fulfillment_outputs,
+                    "suspended_at": suspended_at.isoformat() if suspended_at else None,
+                    "age_seconds": age_seconds,
+                    "fulfill_command": f"stepwise fulfill {run.id}",
+                })
+
+        if getattr(args, "output", None) == "json":
+            print(json.dumps({"suspended_steps": items, "count": len(items)}, indent=2, default=str))
+        else:
+            if not items:
+                print("No suspended steps.")
+            else:
+                print(f"{'RUN ID':<16} {'FLOW':<20} {'STEP':<16} {'AGE'}")
+                for item in items:
+                    age = _format_age(item["age_seconds"])
+                    print(f"{item['run_id']:<16} {item['flow_name']:<20} {item['step_name']:<16} {age}")
+
+        return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def _parse_duration(s: str) -> int | None:
+    """Parse a duration string like '24h', '7d', '30m' into seconds."""
+    import re
+    m = re.match(r'^(\d+)([hdm])$', s)
+    if not m:
+        return None
+    value = int(m.group(1))
+    unit = m.group(2)
+    if unit == 'h':
+        return value * 3600
+    elif unit == 'd':
+        return value * 86400
+    elif unit == 'm':
+        return value * 60
+    return None
+
+
+def _format_age(seconds: int) -> str:
+    """Format age in seconds to human-readable."""
+    if seconds < 60:
+        return f"{seconds}s"
+    elif seconds < 3600:
+        return f"{seconds // 60}m"
+    elif seconds < 86400:
+        return f"{seconds // 3600}h"
+    else:
+        return f"{seconds // 86400}d"
 
 
 def cmd_get(args: argparse.Namespace) -> int:
@@ -1197,6 +1425,21 @@ def cmd_schema(args: argparse.Namespace) -> int:
 
 def cmd_output(args: argparse.Namespace) -> int:
     """Retrieve job outputs after completion."""
+    # Server routing (always JSON — route all modes)
+    if not getattr(args, "run_id", None):
+        # --run mode uses run_id, not job_id — skip server routing for it
+        data, code = _try_server(
+            args,
+            lambda c: c.output(
+                args.job_id,
+                step=getattr(args, "step", None),
+                inputs=getattr(args, "inputs", False),
+            ),
+        )
+        if code is not None:
+            print(json.dumps(data, indent=2, default=str))
+            return code
+
     project = _find_project_or_exit(args)
 
     from stepwise.engine import Engine
@@ -1206,14 +1449,56 @@ def cmd_output(args: argparse.Namespace) -> int:
 
     store = SQLiteStore(str(project.db_path))
     try:
+        # --run mode: direct run access by run_id
+        if getattr(args, "run_id", None):
+            try:
+                run = store.load_run(args.run_id)
+            except KeyError:
+                print(json.dumps({"status": "error", "error": f"Run not found: {args.run_id}"}))
+                return EXIT_JOB_FAILED
+            artifact = run.result.artifact if run.result else None
+            print(json.dumps(artifact, indent=2, default=str))
+            return EXIT_SUCCESS
+
         try:
-            engine = Engine(store, create_default_registry(), jobs_dir=str(project.jobs_dir))
+            engine = Engine(store, create_default_registry(), jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir)
             job = engine.get_job(args.job_id)
         except KeyError:
             print(json.dumps({"status": "error", "error": f"Job not found: {args.job_id}"}))
             return EXIT_JOB_FAILED
 
-        result: dict = {"status": job.status.value}
+        # --step mode: per-step output access
+        if getattr(args, "step", None):
+            step_names = [s.strip() for s in args.step.split(",")]
+            result: dict = {}
+            show_inputs = getattr(args, "inputs", False)
+
+            for step_name in step_names:
+                if step_name not in job.workflow.steps:
+                    result[step_name] = {"_error": f"Step '{step_name}' does not exist in this flow"}
+                    continue
+
+                if show_inputs:
+                    run = store.latest_run(job.id, step_name)
+                    if run and run.inputs is not None:
+                        result[step_name] = run.inputs
+                    else:
+                        result[step_name] = None
+                        result[f"{step_name}_status"] = run.status.value if run else "pending"
+                else:
+                    run = store.latest_completed_run(job.id, step_name)
+                    if run and run.result:
+                        result[step_name] = run.result.artifact
+                    else:
+                        result[step_name] = None
+                        latest = store.latest_run(job.id, step_name)
+                        result[f"{step_name}_status"] = latest.status.value if latest else "pending"
+
+            print(json.dumps(result, indent=2, default=str))
+            return EXIT_SUCCESS
+
+        # Default mode: job-level outputs
+        result = {"status": job.status.value}
 
         if job.status == JobStatus.COMPLETED:
             result["outputs"] = engine.terminal_outputs(job.id)
@@ -1248,6 +1533,52 @@ def cmd_output(args: argparse.Namespace) -> int:
 
 def cmd_fulfill(args: argparse.Namespace) -> int:
     """Satisfy a suspended human step from the command line."""
+    # Server routing (always JSON)
+    server_url = _detect_server_url(args)
+    if server_url:
+        from stepwise.api_client import StepwiseClient, StepwiseAPIError
+
+        # Parse payload first (shared with direct path)
+        raw_payload = args.payload
+        if raw_payload == "-" or (raw_payload is None and getattr(args, "stdin", False)):
+            raw_payload = sys.stdin.read().strip()
+        elif raw_payload is None:
+            print(json.dumps({"status": "error", "error": "No payload provided."}))
+            return EXIT_USAGE_ERROR
+        try:
+            payload = json.loads(raw_payload)
+        except json.JSONDecodeError as e:
+            print(json.dumps({"status": "error", "error": f"Invalid JSON: {e}"}))
+            return EXIT_USAGE_ERROR
+        if not isinstance(payload, dict):
+            print(json.dumps({"status": "error", "error": "Payload must be a JSON object"}))
+            return EXIT_USAGE_ERROR
+
+        client = StepwiseClient(server_url)
+        try:
+            result = client.fulfill(args.run_id, payload)
+            if getattr(args, "wait", False):
+                # Fulfill succeeded, now wait via API
+                job_id = result.get("job_id")
+                if job_id:
+                    wait_result = client.wait(job_id)
+                    print(json.dumps(wait_result, indent=2, default=str))
+                    if wait_result.get("status") == "failed":
+                        return EXIT_JOB_FAILED
+                    return EXIT_SUCCESS
+            print(json.dumps(result, indent=2, default=str))
+            return EXIT_SUCCESS
+        except StepwiseAPIError as e:
+            if e.status == 0:
+                print(
+                    f"Warning: Server at {server_url} unreachable, falling back to direct mode",
+                    file=sys.stderr,
+                )
+                # Fall through to direct path
+            else:
+                print(json.dumps({"status": "error", "error": e.detail}))
+                return EXIT_JOB_FAILED
+
     project = _find_project_or_exit(args)
 
     from stepwise.engine import Engine
@@ -1256,7 +1587,7 @@ def cmd_fulfill(args: argparse.Namespace) -> int:
 
     store = SQLiteStore(str(project.db_path))
     try:
-        engine = Engine(store, create_default_registry(), jobs_dir=str(project.jobs_dir))
+        engine = Engine(store, create_default_registry(), jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir)
 
         # Read payload from stdin or argv
         raw_payload = args.payload
@@ -1288,13 +1619,82 @@ def cmd_fulfill(args: argparse.Namespace) -> int:
             return EXIT_USAGE_ERROR
 
         try:
-            engine.fulfill_watch(args.run_id, payload)
+            result = engine.fulfill_watch(args.run_id, payload)
         except (ValueError, KeyError) as e:
             print(json.dumps({"status": "error", "error": str(e)}))
             return EXIT_USAGE_ERROR
 
+        # Idempotent: already fulfilled
+        if result is not None:
+            if getattr(args, "wait", False):
+                # Still enter wait loop on the job even if already fulfilled
+                print(json.dumps(result), file=sys.stderr)
+                from stepwise.runner import wait_for_job
+                return wait_for_job(engine, store, result["job_id"])
+            print(json.dumps(result))
+            return EXIT_SUCCESS
+
+        # Get the job_id from the run
+        run = store.load_run(args.run_id)
+
+        if getattr(args, "wait", False):
+            # Enter wait loop on the parent job
+            from stepwise.runner import wait_for_job
+            return wait_for_job(engine, store, run.job_id)
+
         print(json.dumps({"status": "fulfilled", "run_id": args.run_id}))
         return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def cmd_wait(args: argparse.Namespace) -> int:
+    """Block until a job reaches terminal state or suspension."""
+    # Server routing (always JSON)
+    server_url = _detect_server_url(args)
+    if server_url:
+        from stepwise.api_client import StepwiseClient, StepwiseAPIError
+
+        client = StepwiseClient(server_url)
+        try:
+            timeout = getattr(args, "timeout", None)
+            result = client.wait(args.job_id, timeout=timeout)
+            print(json.dumps(result, indent=2, default=str))
+            status = result.get("status", "")
+            if status == "failed":
+                return EXIT_JOB_FAILED
+            if result.get("timeout"):
+                return EXIT_CONFIG_ERROR  # exit 3 for timeout in --wait mode
+            return EXIT_SUCCESS
+        except StepwiseAPIError as e:
+            if e.status == 0:
+                print(
+                    f"Warning: Server at {server_url} unreachable, falling back to direct mode",
+                    file=sys.stderr,
+                )
+                # Fall through to direct path
+            else:
+                print(json.dumps({"status": "error", "error": e.detail}))
+                return EXIT_JOB_FAILED
+
+    project = _find_project_or_exit(args)
+
+    from stepwise.engine import Engine
+    from stepwise.registry_factory import create_default_registry
+    from stepwise.runner import wait_for_job
+    from stepwise.store import SQLiteStore
+
+    store = SQLiteStore(str(project.db_path))
+    try:
+        try:
+            store.load_job(args.job_id)
+        except KeyError:
+            print(json.dumps({"status": "error", "error": f"Job not found: {args.job_id}"}))
+            return EXIT_JOB_FAILED
+
+        engine = Engine(store, create_default_registry(), jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir)
+        timeout = getattr(args, "timeout", None)
+        return wait_for_job(engine, store, args.job_id, timeout=timeout)
     finally:
         store.close()
 
@@ -1438,6 +1838,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     parser.add_argument("-q", "--quiet", action="store_true", help="Suppress non-essential output")
     parser.add_argument("--project-dir", help="Use specified project directory instead of cwd")
+    parser.add_argument("--standalone", action="store_true",
+                        help="Force direct SQLite mode (skip server detection)")
+    parser.add_argument("--server", metavar="URL",
+                        help="Force API mode with specified server URL")
 
     sub = parser.add_subparsers(dest="command")
 
@@ -1533,6 +1937,8 @@ def build_parser() -> argparse.ArgumentParser:
     # cancel
     p_cancel = sub.add_parser("cancel", help="Cancel a running job")
     p_cancel.add_argument("job_id", help="Job ID")
+    p_cancel.add_argument("--output", choices=["table", "json"], default="table",
+                          help="Output format")
 
     # schema
     p_schema = sub.add_parser("schema", help="Generate JSON tool contract from a flow file")
@@ -1540,9 +1946,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     # output
     p_output = sub.add_parser("output", help="Retrieve job outputs")
-    p_output.add_argument("job_id", help="Job ID")
+    p_output.add_argument("job_id", nargs="?", default=None, help="Job ID")
     p_output.add_argument("--scope", choices=["default", "full"], default="default",
                           help="Output scope (default: terminal outputs only)")
+    p_output.add_argument("--step", help="Comma-separated step names to retrieve")
+    p_output.add_argument("--inputs", action="store_true",
+                          help="Return step inputs instead of outputs (use with --step)")
+    p_output.add_argument("--run", dest="run_id", help="Retrieve output by run ID directly")
+
+    # list
+    p_list = sub.add_parser("list", help="List suspended steps or other items")
+    p_list.add_argument("--suspended", action="store_true",
+                        help="Show suspended steps across all active jobs")
+    p_list.add_argument("--output", choices=["table", "json"], default="table")
+    p_list.add_argument("--since", help="Filter by age (e.g., 24h, 7d, 30m)")
+    p_list.add_argument("--flow", help="Filter by flow name")
+
+    # wait
+    p_wait = sub.add_parser("wait", help="Block until job completes or suspends")
+    p_wait.add_argument("job_id", help="Job ID to wait on")
+    p_wait.add_argument("--timeout", type=int, help="Timeout in seconds")
 
     # fulfill
     p_fulfill = sub.add_parser("fulfill", help="Satisfy a suspended human step")
@@ -1551,6 +1974,8 @@ def build_parser() -> argparse.ArgumentParser:
                            help="JSON payload with field values (use --stdin or '-' to read from stdin)")
     p_fulfill.add_argument("--stdin", action="store_true",
                            help="Read JSON payload from stdin")
+    p_fulfill.add_argument("--wait", action="store_true",
+                           help="After fulfilling, block until next suspension or completion")
 
     # agent-help
     p_agent_help = sub.add_parser("agent-help", help="Generate agent instructions for available flows")
@@ -1595,6 +2020,8 @@ def main(argv: list[str] | None = None) -> int:
         "jobs": cmd_jobs,
         "status": cmd_status,
         "cancel": cmd_cancel,
+        "list": cmd_list,
+        "wait": cmd_wait,
         "schema": cmd_schema,
         "output": cmd_output,
         "fulfill": cmd_fulfill,

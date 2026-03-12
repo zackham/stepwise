@@ -126,8 +126,8 @@ class TestStatus:
         assert rc == EXIT_SUCCESS
         out = capsys.readouterr().out
         data = json.loads(out)
-        assert data["id"] == job_id
-        assert "runs" in data
+        assert data["job_id"] == job_id
+        assert "steps" in data
 
     def test_status_nonexistent_job(self, tmp_path, capsys, monkeypatch):
         init_project(tmp_path)

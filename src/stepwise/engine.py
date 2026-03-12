@@ -59,6 +59,7 @@ from stepwise.models import (
     _gen_id,
     _now,
 )
+from stepwise.hooks import fire_hook_for_event
 from stepwise.store import SQLiteStore
 
 
@@ -70,10 +71,12 @@ class Engine:
         store: SQLiteStore,
         registry: ExecutorRegistry | None = None,
         jobs_dir: str | None = None,
+        project_dir: Path | None = None,
     ) -> None:
         self.store = store
         self.registry = registry or ExecutorRegistry()
         self.jobs_dir = jobs_dir or "jobs"
+        self.project_dir = project_dir  # .stepwise/ dir for hooks
         self._injected_contexts: dict[str, list[str]] = {}  # job_id -> contexts
 
     # ── Job Lifecycle ─────────────────────────────────────────────────────
@@ -218,10 +221,24 @@ class Engine:
         run = self._launch(job, step_name)
         return run
 
-    def fulfill_watch(self, run_id: str, payload: dict) -> None:
-        """Complete a suspended step's watch with the provided payload."""
+    def fulfill_watch(self, run_id: str, payload: dict) -> dict | None:
+        """Complete a suspended step's watch with the provided payload.
+
+        Returns None on success. Returns error dict if already fulfilled
+        (idempotent — does not corrupt state on double-fulfill).
+        """
         run = self.store.load_run(run_id)
         if run.status != StepRunStatus.SUSPENDED:
+            # Idempotent: if already completed, return structured error instead of raising
+            if run.status == StepRunStatus.COMPLETED:
+                job = self.store.load_job(run.job_id)
+                return {
+                    "error": "already_fulfilled",
+                    "run_id": run_id,
+                    "fulfilled_at": run.completed_at.isoformat() if run.completed_at else None,
+                    "job_id": run.job_id,
+                    "job_status": job.status.value,
+                }
             raise ValueError(f"Run {run_id} is not suspended (status: {run.status.value})")
         if not run.watch:
             raise ValueError(f"Run {run_id} has no watch spec")
@@ -255,6 +272,7 @@ class Engine:
         })
 
         self._process_completion(job, run)
+        return None
 
     def inject_context(self, job_id: str, context: str) -> None:
         """Append context to job's event log for future step executions."""
@@ -347,6 +365,104 @@ class Engine:
             if cost:
                 total += cost
         return total
+
+    def resolved_flow_status(self, job_id: str) -> dict:
+        """Full resolved execution DAG with per-step statuses, costs, and metadata.
+
+        Used by `status --output json` to give agents a complete picture of a job.
+        """
+        job = self.store.load_job(job_id)
+        all_runs = self.store.runs_for_job(job_id)
+
+        # Index runs by step name (latest run per step)
+        latest_runs: dict[str, StepRun] = {}
+        for run in all_runs:
+            existing = latest_runs.get(run.step_name)
+            if existing is None or run.attempt > existing.attempt:
+                latest_runs[run.step_name] = run
+
+        steps: list[dict] = []
+        route_decisions: dict[str, str] = {}
+        sub_jobs: list[dict] = []
+
+        for step_name, step_def in job.workflow.steps.items():
+            run = latest_runs.get(step_name)
+
+            step_info: dict = {
+                "name": step_name,
+                "type": step_def.executor.type,
+            }
+
+            if run:
+                step_info["status"] = run.status.value
+                step_info["attempt"] = run.attempt
+                step_info["cost_usd"] = round(self.store.accumulated_cost(run.id), 4)
+
+                if run.status == StepRunStatus.COMPLETED and run.result:
+                    step_info["outputs"] = list(run.result.artifact.keys())
+
+                if run.status == StepRunStatus.SUSPENDED and run.watch:
+                    step_info["suspended_at"] = run.started_at.isoformat() if run.started_at else None
+                    step_info["prompt"] = (run.watch.config or {}).get("prompt", "")
+                    step_info["expected_outputs"] = run.watch.fulfillment_outputs
+                    step_info["run_id"] = run.id
+
+                if run.status == StepRunStatus.FAILED:
+                    step_info["error"] = run.error
+
+                # Track sub-jobs
+                if run.sub_job_id:
+                    try:
+                        sub_job = self.store.load_job(run.sub_job_id)
+                        sub_jobs.append({
+                            "parent_step": step_name,
+                            "job_id": run.sub_job_id,
+                            "status": sub_job.status.value,
+                        })
+                    except KeyError:
+                        pass
+
+                # For-each sub-jobs
+                es = run.executor_state or {}
+                if es.get("for_each"):
+                    for i, sid in enumerate(es.get("sub_job_ids", [])):
+                        try:
+                            sub_job = self.store.load_job(sid)
+                            sub_jobs.append({
+                                "parent_step": step_name,
+                                "index": i,
+                                "job_id": sid,
+                                "status": sub_job.status.value,
+                            })
+                        except KeyError:
+                            pass
+
+                # Route decisions
+                if step_def.route_def and es.get("matched_route"):
+                    route_decisions[step_name] = es["matched_route"]
+            else:
+                step_info["status"] = "pending"
+                # Show dependencies for pending steps
+                deps = []
+                for binding in step_def.inputs:
+                    if binding.source_step and binding.source_step != "$job":
+                        if binding.source_step not in deps:
+                            deps.append(binding.source_step)
+                if deps:
+                    step_info["depends_on"] = deps
+
+            steps.append(step_info)
+
+        return {
+            "job_id": job.id,
+            "status": job.status.value,
+            "flow": job.objective,
+            "created_at": job.created_at.isoformat() if job.created_at else None,
+            "cost_usd": round(self.job_cost(job_id), 4),
+            "steps": steps,
+            "route_decisions": route_decisions,
+            "sub_jobs": sub_jobs,
+        }
 
     # ── Tick Loop ─────────────────────────────────────────────────────────
 
@@ -809,7 +925,9 @@ class Engine:
                 self.store.save_run(run)
                 self._emit(job.id, STEP_SUSPENDED, {
                     "step": step_name,
+                    "run_id": run.id,
                     "watch_mode": result.watch.mode if result.watch else None,
+                    "prompt": result.watch.config.get("prompt") if result.watch else None,
                 })
 
             case "async":
@@ -1729,6 +1847,8 @@ class Engine:
             is_effector=is_effector,
         )
         self.store.save_event(event)
+        # Fire project hooks for relevant events
+        fire_hook_for_event(event_type, event.data, job_id, self.project_dir)
 
     def _emit_effector_events(self, job_id: str, envelope: HandoffEnvelope | None) -> None:
         """Check executor_meta for effector_events and emit them."""

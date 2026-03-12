@@ -9,6 +9,8 @@ import { AddStepDialog } from "@/components/editor/AddStepDialog";
 import { RegistryBrowser } from "@/components/editor/RegistryBrowser";
 import { FlowInfoPanel } from "@/components/editor/FlowInfoPanel";
 import { ChatPanel } from "@/components/editor/ChatPanel";
+import { FlowFileTree } from "@/components/editor/FlowFileTree";
+import { FlowFileViewer } from "@/components/editor/FlowFileViewer";
 import {
   useLocalFlows,
   useLocalFlow,
@@ -20,6 +22,7 @@ import {
   useDeleteStep,
   useRegistryFlow,
   useInstallFlow,
+  useFlowFiles,
 } from "@/hooks/useEditor";
 import { FileCode, FolderOpen, Globe, Sparkles, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -57,6 +60,11 @@ export function EditorPage() {
   // Load selected flow detail
   const { data: flowDetail } = useLocalFlow(selectedFlow?.path);
 
+  // Load flow files for directory flows
+  const isDirectoryFlow = selectedFlow?.is_directory ?? false;
+  const { data: flowFilesData, refetch: refetchFiles, isFetching: isRefetchingFiles } =
+    useFlowFiles(isDirectoryFlow ? selectedFlow?.path : undefined);
+
   // Editor state
   const [yamlContent, setYamlContent] = useState("");
   const [savedYaml, setSavedYaml] = useState("");
@@ -65,6 +73,7 @@ export function EditorPage() {
   const [selectedStep, setSelectedStep] = useState<string | null>(null);
   const [addStepOpen, setAddStepOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [viewingFile, setViewingFile] = useState<string | null>(null);
 
   // Registry state
   const [selectedRegistryFlow, setSelectedRegistryFlow] = useState<RegistryFlow | null>(null);
@@ -90,6 +99,7 @@ export function EditorPage() {
       setParsedFlow(flowDetail.flow);
       setParseErrors([]);
       setSelectedStep(null);
+      setViewingFile(null);
     }
   }, [flowDetail]);
 
@@ -403,12 +413,26 @@ export function EditorPage() {
 
         {/* Tab content */}
         {sidebarTab === "local" ? (
-          <FlowFileList
-            flows={flows}
-            selectedName={flowName}
-            onSelect={handleSelectFlow}
-            dirtyFlows={dirtyFlows}
-          />
+          <div className="flex-1 flex flex-col min-h-0 overflow-y-auto">
+            <FlowFileList
+              flows={flows}
+              selectedName={flowName}
+              onSelect={handleSelectFlow}
+              dirtyFlows={dirtyFlows}
+            />
+            {/* Flow file tree for directory flows */}
+            {isDirectoryFlow && flowFilesData?.files && (
+              <div className="border-t border-border mt-1 pt-1">
+                <FlowFileTree
+                  files={flowFilesData.files}
+                  selectedFile={viewingFile}
+                  onSelectFile={setViewingFile}
+                  onRefresh={() => refetchFiles()}
+                  isRefreshing={isRefetchingFiles}
+                />
+              </div>
+            )}
+          </div>
         ) : (
           <RegistryBrowser
             selectedSlug={selectedRegistryFlow?.slug}
@@ -471,17 +495,25 @@ export function EditorPage() {
                   onSave={handleSave}
                 />
               </div>
-              {/* DAG View */}
+              {/* DAG View or File Viewer */}
               <div className="flex-1 min-w-0">
-                <FlowDagView
-                  workflow={dagWorkflow}
-                  runs={EMPTY_RUNS}
-                  jobTree={null}
-                  expandedSteps={EMPTY_SET}
-                  onToggleExpand={() => {}}
-                  selectedStep={selectedStep}
-                  onSelectStep={setSelectedStep}
-                />
+                {viewingFile && selectedFlow?.path ? (
+                  <FlowFileViewer
+                    flowPath={selectedFlow.path}
+                    filePath={viewingFile}
+                    onClose={() => setViewingFile(null)}
+                  />
+                ) : (
+                  <FlowDagView
+                    workflow={dagWorkflow}
+                    runs={EMPTY_RUNS}
+                    jobTree={null}
+                    expandedSteps={EMPTY_SET}
+                    onToggleExpand={() => {}}
+                    selectedStep={selectedStep}
+                    onSelectStep={setSelectedStep}
+                  />
+                )}
               </div>
               {/* Right panel: Step editor or AI chat */}
               {selectedStepDef ? (
@@ -498,7 +530,9 @@ export function EditorPage() {
                   <ChatPanel
                     currentYaml={yamlContent}
                     selectedStep={selectedStep}
+                    flowPath={selectedFlow?.path ?? null}
                     onApplyYaml={handleApplyChat}
+                    onFileApplied={() => refetchFiles()}
                     onClose={() => setChatOpen(false)}
                   />
                 </div>

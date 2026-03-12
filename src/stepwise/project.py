@@ -76,6 +76,12 @@ def init_project(target: Path | None = None, force: bool = False) -> StepwisePro
     dot.mkdir(exist_ok=True)
     (dot / "jobs").mkdir(exist_ok=True)
     (dot / "templates").mkdir(exist_ok=True)
+    (dot / "hooks").mkdir(exist_ok=True)
+    (dot / "logs").mkdir(exist_ok=True)
+
+    # Scaffold example hook scripts
+    from stepwise.hooks import scaffold_hooks
+    scaffold_hooks(dot)
 
     # Self-ignoring safety net
     gitignore_inner = dot / ".gitignore"

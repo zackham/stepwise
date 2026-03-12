@@ -315,18 +315,31 @@ stepwise run council.flow.yaml --wait --var question="Should we use Postgres?"
 stepwise agent-help --update CLAUDE.md
 ```
 
-Key mechanics:
+### Five Interaction Modes
 
-- **`--wait`** blocks until the flow reaches a terminal state. If a human step suspends the flow, `--wait` keeps blocking. Use `--timeout` for flows with human steps.
+Agents interact with flows in five modes, all using the same flow definition:
+
+1. **Automated** — Run end-to-end, get structured output. `stepwise run <flow> --wait`
+2. **Mediated** — Run with human steps; agent fulfills them interactively. `--wait` returns exit 5 on suspension; `fulfill --wait` resumes.
+3. **Monitoring** — Check job progress and suspension inbox. `status --output json`, `list --suspended`.
+4. **Data Grab** — Retrieve specific outputs from completed steps. `output --step a,b`, `output --step a --inputs`.
+5. **Takeover** — Cancel and inspect a running job. `cancel --output json`, `wait <job-id>`.
+
+### Key Mechanics
+
+- **`--wait`** blocks until the flow completes or all progress is blocked by human steps (exit 5). Returns JSON with `suspended_steps` including `run_id`, `prompt`, and `fields`.
 - **`--async`** spawns a detached background process — no `stepwise serve` required. Poll with `stepwise status`, retrieve with `stepwise output`.
+- **`stepwise fulfill <run-id> '{...}' --wait`** satisfies a human step and continues blocking until the next suspension or completion.
+- **`stepwise list --suspended --output json`** shows all pending human steps across all active jobs — the agent's "inbox."
 - **`stepwise schema`** generates a JSON tool contract: inputs, outputs, human steps.
-- **`stepwise fulfill`** satisfies a suspended human step from the command line.
-- **`stepwise agent-help`** generates markdown instructions that tell agents how to use your flows. Self-documenting, zero infrastructure.
+- **`stepwise agent-help`** generates markdown instructions with the 5-mode interaction model. Self-documenting, zero infrastructure.
 
-The design prioritizes reliability for agent callers:
+### Design for Agents
 
 - **Stdout purity**: `--wait` prints ONLY the JSON payload to stdout. Zero logging, zero progress noise.
 - **Actionable errors**: Every error includes the fix. `Missing required input 'question'. Usage: --var question="..."`.
-- **Explicit exit codes**: 0=success, 1=failed, 2=input error, 3=timeout, 4=cancelled.
+- **Explicit exit codes**: 0=success, 1=failed, 2=input error, 3=timeout, 4=cancelled, 5=suspended.
 - **Partial outputs on failure**: Steps that completed before the failure are included in the response.
 - **`--var-file key=path`**: Agents write long inputs to a temp file and pass the path — no shell escaping needed.
+- **Idempotent fulfill**: Double-fulfilling a step returns an error but doesn't corrupt state.
+- **Project hooks**: `.stepwise/hooks/on-suspend` fires when steps suspend — agents and hooks can race safely.
