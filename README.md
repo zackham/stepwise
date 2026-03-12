@@ -9,6 +9,7 @@ Stepwise is a workflow engine that coordinates multi-step jobs where steps can b
 | Doc | Description |
 |-----|-------------|
 | [Quickstart](docs/quickstart.md) | Install, first flow, loops, human gates — 5 minutes |
+| [Agent Integration](docs/agent-integration.md) | Make agents call flows: discovery, execution, human steps, async |
 | [Why Stepwise](docs/why-stepwise.md) | Motivation, design philosophy, competitive positioning |
 | [Concepts](docs/concepts.md) | Mental model: jobs, steps, executors, dependencies, loops, for-each |
 | [Executors](docs/executors.md) | Deep dive on all 4 executor types + decorators |
