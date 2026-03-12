@@ -53,7 +53,112 @@ def _get_version() -> str:
         from importlib.metadata import version
         return version("stepwise-run")
     except Exception:
-        return "0.1.0"
+        return "0.0.0"
+
+
+def _parse_version(v: str) -> tuple[int, ...]:
+    """Parse version string into comparable tuple."""
+    try:
+        return tuple(int(x) for x in v.split("."))
+    except (ValueError, AttributeError):
+        return (0, 0, 0)
+
+
+def _fetch_remote_version() -> str | None:
+    """Fetch the latest version from GitHub (cached once per day)."""
+    import json
+    import time
+    from pathlib import Path
+
+    cache_dir = Path.home() / ".cache" / "stepwise"
+    cache_file = cache_dir / "version-check.json"
+
+    # Check cache first (max age: 24 hours)
+    try:
+        if cache_file.exists():
+            data = json.loads(cache_file.read_text())
+            if time.time() - data.get("ts", 0) < 86400:
+                return data.get("version")
+    except Exception:
+        pass
+
+    # Fetch pyproject.toml from GitHub to read version
+    try:
+        import httpx
+        resp = httpx.get(
+            "https://raw.githubusercontent.com/zackham/stepwise/master/pyproject.toml",
+            timeout=5.0,
+        )
+        if resp.status_code == 200:
+            for line in resp.text.splitlines():
+                if line.startswith("version"):
+                    ver = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    # Cache result
+                    try:
+                        cache_dir.mkdir(parents=True, exist_ok=True)
+                        cache_file.write_text(json.dumps({"version": ver, "ts": time.time()}))
+                    except Exception:
+                        pass
+                    return ver
+    except Exception:
+        pass
+    return None
+
+
+def _fetch_changelog_sections(old_ver: str, new_ver: str) -> str | None:
+    """Fetch changelog entries between old_ver and new_ver from GitHub."""
+    try:
+        import httpx
+        resp = httpx.get(
+            "https://raw.githubusercontent.com/zackham/stepwise/master/CHANGELOG.md",
+            timeout=5.0,
+        )
+        if resp.status_code != 200:
+            return None
+    except Exception:
+        return None
+
+    old_tuple = _parse_version(old_ver)
+    new_tuple = _parse_version(new_ver)
+
+    # Parse changelog into version sections
+    import re
+    sections: list[tuple[str, str]] = []
+    current_ver = None
+    current_lines: list[str] = []
+
+    for line in resp.text.splitlines():
+        match = re.match(r"^## \[(\d+\.\d+\.\d+)\]", line)
+        if match:
+            if current_ver:
+                sections.append((current_ver, "\n".join(current_lines)))
+            current_ver = match.group(1)
+            current_lines = [line]
+        elif current_ver:
+            current_lines.append(line)
+
+    if current_ver:
+        sections.append((current_ver, "\n".join(current_lines)))
+
+    # Filter sections: old_ver < section_ver <= new_ver
+    relevant = []
+    for ver_str, content in sections:
+        ver_tuple = _parse_version(ver_str)
+        if old_tuple < ver_tuple <= new_tuple:
+            relevant.append(content)
+
+    return "\n\n".join(relevant) if relevant else None
+
+
+def _check_for_upgrade() -> str | None:
+    """Check if an upgrade is available. Returns message string or None."""
+    current = _get_version()
+    remote = _fetch_remote_version()
+    if not remote:
+        return None
+    if _parse_version(remote) > _parse_version(current):
+        return f"Update available: {current} → {remote}  (run: stepwise self-update)"
+    return None
 
 
 def _find_project_or_exit(args: argparse.Namespace) -> StepwiseProject:
@@ -253,7 +358,16 @@ def cmd_serve(args: argparse.Namespace) -> int:
         port = _find_free_port()
         print(f"Port 8340 in use, using {port}", file=sys.stderr)
 
-    print(f"Stepwise server running at http://{host}:{port}")
+    print(f"Stepwise v{_get_version()} — http://{host}:{port}")
+
+    # Non-blocking upgrade check (fail silently)
+    try:
+        upgrade_msg = _check_for_upgrade()
+        if upgrade_msg:
+            print(f"  ↑ {upgrade_msg}")
+    except Exception:
+        pass
+
     if not args.no_open:
         _open_browser(f"http://{host}:{port}")
 
@@ -1241,6 +1355,13 @@ def cmd_self_update(args: argparse.Namespace) -> int:
     import subprocess
 
     old_version = _get_version()
+
+    # Check if there's actually an update before installing
+    remote_ver = _fetch_remote_version()
+    if remote_ver and _parse_version(remote_ver) <= _parse_version(old_version):
+        print(f"Already up to date (v{old_version}).")
+        return EXIT_SUCCESS
+
     method = _detect_install_method()
 
     GIT_URL = "stepwise-run@git+https://github.com/zackham/stepwise.git"
@@ -1274,7 +1395,28 @@ def cmd_self_update(args: argparse.Namespace) -> int:
     )
     new_version = ver_result.stdout.strip().removeprefix("stepwise ") if ver_result.returncode == 0 else "unknown"
 
-    print(f"Updated to {new_version}.")
+    # Invalidate version check cache so serve doesn't show stale upgrade notice
+    try:
+        import json
+        from pathlib import Path
+        cache_file = Path.home() / ".cache" / "stepwise" / "version-check.json"
+        if cache_file.exists():
+            cache_file.unlink()
+    except Exception:
+        pass
+
+    print(f"\nUpdated: v{old_version} → v{new_version}\n")
+
+    # Show what changed
+    changelog = _fetch_changelog_sections(old_version, new_version)
+    if changelog:
+        print("What's new:")
+        print("─" * 60)
+        print(changelog)
+        print("─" * 60)
+    elif old_version != new_version:
+        print("Run `stepwise changelog` or see CHANGELOG.md for details.")
+
     return EXIT_SUCCESS
 
 

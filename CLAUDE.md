@@ -311,7 +311,7 @@ registry.register("http", lambda cfg: HttpExecutor(url=cfg["url"]))
 3. Build `WorkflowDefinition` inline (see test example above), create job, tick engine, assert on `runs[].result.artifact`
 4. For executor-specific tests: subclass `Executor` inline or use `register_step_fn()`
 
-### Distribution
+### Distribution & Releases
 
 ```bash
 # How users install
@@ -322,3 +322,27 @@ uv tool install stepwise-run@git+https://github.com/zackham/stepwise.git
 ```
 
 No PyPI publishing. The install script and `self-update` both pull from `master`.
+
+### Release workflow
+
+Every push to master is a release — but only version bumps trigger user-visible upgrade notifications.
+
+**When to bump version:**
+- New features or milestones → bump **minor** (0.2.0 → 0.3.0)
+- Bug fixes or polish → bump **patch** (0.2.0 → 0.2.1)
+- Pre-1.0: no major bumps yet. 1.0.0 = stable API commitment.
+
+**Release steps:**
+1. Ensure all tests pass: `uv run pytest tests/` + `cd web && npm run test`
+2. Update `version` in `pyproject.toml`
+3. Add a `## [X.Y.Z] — YYYY-MM-DD` section to `CHANGELOG.md` (above `[Unreleased]`)
+4. Commit: `git commit -m "release: vX.Y.Z"`
+5. Tag: `git tag vX.Y.Z`
+6. Push: `git push origin master --tags`
+
+**How upgrades surface to users:**
+- `stepwise serve` prints a one-liner on startup if a newer version exists (cached check, once/day, non-blocking)
+- `stepwise self-update` shows "Already up to date" or installs + prints the changelog diff between old and new version
+- Version check fetches `pyproject.toml` from GitHub raw, caches in `~/.cache/stepwise/version-check.json`
+
+**Key files:** `_get_version()`, `_fetch_remote_version()`, `_check_for_upgrade()`, `_fetch_changelog_sections()` in `cli.py`. `CHANGELOG.md` must use `## [X.Y.Z]` headers for the diff parser to work.
