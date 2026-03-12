@@ -87,8 +87,12 @@ def cmd_serve(args: argparse.Namespace) -> int:
     os.environ["STEPWISE_TEMPLATES"] = str(project.templates_dir)
     os.environ["STEPWISE_JOBS_DIR"] = str(project.jobs_dir)
 
-    port = args.port or 8340
     host = args.host or "127.0.0.1"
+    port = args.port or 8340
+
+    if not args.port and not _port_available(host, port):
+        port = _find_free_port()
+        print(f"Port 8340 in use, using {port}", file=sys.stderr)
 
     print(f"Stepwise server running at http://{host}:{port}")
     if not args.no_open:
@@ -396,6 +400,17 @@ def _run_watch(
         log_level="warning",
     )
     return EXIT_SUCCESS
+
+
+def _port_available(host: str, port: int) -> bool:
+    """Check if a port is available to bind."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind((host, port))
+            return True
+        except OSError:
+            return False
 
 
 def _find_free_port() -> int:
