@@ -630,8 +630,15 @@ def _flow_get(args: argparse.Namespace) -> int:
     if target.startswith("http://") or target.startswith("https://"):
         return _flow_get_url(target)
 
-    # Registry name lookup
-    slug = target
+    # Registry name lookup — parse @author:name format
+    if target.startswith("@"):
+        ref_body = target.lstrip("@")
+        if ":" in ref_body:
+            _author, slug = ref_body.split(":", 1)
+        else:
+            slug = ref_body
+    else:
+        slug = target
     force = getattr(args, "force", False)
     try:
         data = fetch_flow(slug)
