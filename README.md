@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="brand/stepwise-mark.svg" width="80" alt="Stepwise logo" />
+  <img src="brand/stepwise-icon.png" width="120" alt="Stepwise logo" />
 </p>
 
 <h1 align="center">Stepwise</h1>
