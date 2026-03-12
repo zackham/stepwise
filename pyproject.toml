@@ -17,10 +17,8 @@ dependencies = [
     "uvicorn[standard]>=0.34.0",
     "websockets>=14.0",
     "pyyaml>=6.0",
+    "httpx>=0.28.1",
 ]
-
-[project.optional-dependencies]
-llm = ["httpx>=0.28.1"]
 
 [project.scripts]
 stepwise = "stepwise.cli:cli_main"

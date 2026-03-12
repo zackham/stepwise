@@ -452,6 +452,28 @@ The `--update` flag finds `<!-- stepwise-agent-help -->` / `<!-- /stepwise-agent
 
 ---
 
+## `stepwise self-update`
+
+Upgrade stepwise to the latest version. Automatically detects the install method (uv, pipx, or pip) and runs the appropriate upgrade command.
+
+```bash
+stepwise self-update
+```
+
+```
+Upgrading via uv...
+Updated: 0.1.0 → 0.2.0
+```
+
+If already on the latest version:
+
+```
+Upgrading via uv...
+Already up to date (0.2.0).
+```
+
+---
+
 ## Signal Handling
 
 `Ctrl+C` during `stepwise run` cleanly cancels the active job. Running agent processes are killed, the job is marked as cancelled, and the process exits. In `--watch` mode, Ctrl+C stops the ephemeral server.

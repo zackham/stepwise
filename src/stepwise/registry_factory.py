@@ -100,6 +100,6 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
 
             registry.register("llm", _create_llm_executor)
         except ImportError:
-            pass  # httpx not installed — LLM executor unavailable
+            pass  # httpx should always be available
 
     return registry

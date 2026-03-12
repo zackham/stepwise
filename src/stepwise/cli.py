@@ -15,6 +15,7 @@ Usage:
     stepwise output <job-id> [--scope]     Retrieve job outputs
     stepwise fulfill <run-id> '<json>'     Satisfy a suspended human step (or --stdin)
     stepwise agent-help [--update <file>]  Generate agent instructions
+    stepwise self-update                   Upgrade to the latest version
 """
 
 from __future__ import annotations
@@ -816,6 +817,72 @@ def cmd_agent_help(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
+def _detect_install_method() -> str:
+    """Detect how stepwise was installed: 'uv', 'pipx', or 'pip'."""
+    import shutil
+    import subprocess
+
+    # Check the executable path for signatures
+    exe = shutil.which("stepwise") or ""
+    if "/uv/" in exe:
+        return "uv"
+    if "/pipx/" in exe:
+        return "pipx"
+
+    # Probe tool lists
+    for tool, cmd in [("uv", ["uv", "tool", "list"]), ("pipx", ["pipx", "list", "--short"])]:
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if out.returncode == 0 and "stepwise" in out.stdout:
+                return tool
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            continue
+
+    return "pip"
+
+
+def cmd_self_update(args: argparse.Namespace) -> int:
+    """Upgrade stepwise to the latest version."""
+    import subprocess
+
+    old_version = _get_version()
+    method = _detect_install_method()
+
+    upgrade_cmds = {
+        "uv": ["uv", "tool", "upgrade", "stepwise"],
+        "pipx": ["pipx", "upgrade", "stepwise"],
+        "pip": [sys.executable, "-m", "pip", "install", "--upgrade", "stepwise"],
+    }
+
+    cmd = upgrade_cmds[method]
+    print(f"Upgrading via {method}...")
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"Upgrade failed (exit {result.returncode}):", file=sys.stderr)
+        print(result.stderr.strip(), file=sys.stderr)
+        if method == "pip":
+            print(
+                "\nTip: if pip is blocked by your OS, install with:\n"
+                "  curl -fsSL https://stepwise.run/install.sh | sh",
+                file=sys.stderr,
+            )
+        return EXIT_JOB_FAILED
+
+    # Get the new version from a fresh subprocess (avoids stale importlib cache)
+    ver_result = subprocess.run(
+        ["stepwise", "--version"], capture_output=True, text=True
+    )
+    new_version = ver_result.stdout.strip().removeprefix("stepwise ") if ver_result.returncode == 0 else "unknown"
+
+    if new_version == old_version:
+        print(f"Already up to date ({old_version}).")
+    else:
+        print(f"Updated: {old_version} → {new_version}")
+
+    return EXIT_SUCCESS
+
+
 def _open_browser(url: str) -> None:
     """Open URL in default browser (best-effort, non-blocking)."""
     try:
@@ -941,6 +1008,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_agent_help.add_argument("--flows-dir", metavar="DIR",
                               help="Override flow discovery directory")
 
+    # self-update
+    sub.add_parser("self-update", help="Upgrade stepwise to the latest version")
+
     return parser
 
 
@@ -971,6 +1041,7 @@ def main(argv: list[str] | None = None) -> int:
         "output": cmd_output,
         "fulfill": cmd_fulfill,
         "agent-help": cmd_agent_help,
+        "self-update": cmd_self_update,
     }
 
     handler = handlers.get(args.command)

@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="docs/quickstart.md">Quickstart</a> · <a href="docs/concepts.md">Concepts</a> · <a href="docs/cli.md">CLI Reference</a> · <a href="docs/api.md">API Reference</a> · <a href="docs/agent-integration.md">Agent Integration</a>
+  <a href="https://stepwise.run"><strong>Homepage</strong></a> · <a href="docs/quickstart.md">Quickstart</a> · <a href="docs/concepts.md">Concepts</a> · <a href="docs/cli.md">CLI Reference</a> · <a href="docs/api.md">API Reference</a> · <a href="docs/agent-integration.md">Agent Integration</a>
 </p>
 
 ---
@@ -18,8 +18,15 @@
 Stepwise is a workflow engine that coordinates multi-step jobs where each step can be a **shell script**, an **LLM call**, an **autonomous AI agent**, or a **human decision**. Define your workflow as a YAML file, run it from the CLI, and optionally watch it execute in a real-time web UI.
 
 ```bash
-pip install stepwise          # core engine
-pip install "stepwise[llm]"   # + LLM steps via OpenRouter
+curl -fsSL https://stepwise.run/install.sh | sh
+```
+
+Or install directly with your preferred tool:
+
+```bash
+uv tool install stepwise      # recommended
+pipx install stepwise          # alternative
+pip install stepwise           # if neither is available
 ```
 
 ## Get started in 30 seconds
@@ -149,6 +156,7 @@ stepwise fulfill <run-id> '{...}'    # Satisfy a human step
 stepwise schema <flow>               # Input/output schema (JSON)
 stepwise output <job-id>             # Retrieve job outputs
 stepwise agent-help                  # Generate agent instructions
+stepwise self-update                 # Upgrade to latest version
 stepwise templates                   # List available templates
 stepwise config set <key> <value>    # Configure (API keys, models)
 stepwise flow get <url>              # Download a flow from registry
@@ -158,7 +166,7 @@ See [`docs/cli.md`](docs/cli.md) for the full reference with all flags, examples
 
 ## Features
 
-- **DAG engine** — automatic parallelism, conditional loops, expression-based branching
+- **DAG engine** — automatic parallelism, conditional loops, route steps, expression-based branching
 - **Three CLI modes** — headless `run`, ephemeral `--watch` UI, persistent `serve`
 - **Human-in-the-loop** — stdin prompts in headless mode, web form in watch mode
 - **Real-time streaming** — agent output (text + tool calls) via WebSocket
@@ -230,7 +238,7 @@ make build-web
 | [Quickstart](docs/quickstart.md) | Install, first flow, loops, human gates — 5 minutes |
 | [Agent Integration](docs/agent-integration.md) | End-to-end guide for agent callers |
 | [Why Stepwise](docs/why-stepwise.md) | Motivation and design philosophy |
-| [Concepts](docs/concepts.md) | Jobs, steps, executors, dependencies, loops, for-each |
+| [Concepts](docs/concepts.md) | Jobs, steps, executors, dependencies, loops, for-each, route steps |
 | [Executors](docs/executors.md) | Deep dive on all executor types + decorators |
 | [YAML Format](docs/yaml-format.md) | Complete `.flow.yaml` schema reference |
 | [CLI Reference](docs/cli.md) | All commands, flags, examples, exit codes |

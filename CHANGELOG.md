@@ -4,7 +4,30 @@ All notable changes to Stepwise are documented here. Versions are tagged milesto
 
 ## [Unreleased]
 
+- `httpx` is now a core dependency (the `[llm]` extra has been removed)
+- `install.sh` — universal `curl | sh` installer that bootstraps `uv` + `stepwise`
+- `stepwise self-update` — upgrade to the latest version (auto-detects uv/pipx/pip)
 - `stepwise serve` auto-picks a random port when 8340 is already in use
+
+## [M8] — 2026-03-12
+
+**Route Steps** — conditional sub-flow dispatch.
+
+### Added
+- `routes:` block on step definitions — dispatch to different sub-flows based on upstream output
+- First-match semantics with `when:` expressions and optional `default` route
+- Three flow source types: inline blocks, local file paths (loaded at parse time), registry refs (`@author:name`, M9)
+- File ref cycle detection using immutable set branching (sibling routes can share files)
+- Output contract validation — every terminal step of each sub-flow must independently cover declared outputs
+- `attempt` available in route `when:` expressions (from `store.next_attempt()`)
+- Route events: `route.matched`, `route.no_match`, `route.eval_error`
+- Expression errors fail the step immediately (no fallthrough to next route)
+- Try/except around sub-job creation to prevent orphaned DELEGATED runs
+- For-each steps now also support file path flow references
+- `RouteSpec`, `RouteDefinition` data model classes
+- `_launch_route()`, `_resolve_flow_ref()` engine methods
+- `load_workflow_yaml()` now accepts `base_dir` and `loading_files` params for recursive loading
+- 46 new tests (parsing, validation, cycle detection, execution, serialization, events)
 
 ## [M7b] — 2026-03-11
 

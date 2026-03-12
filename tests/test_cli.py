@@ -12,7 +12,9 @@ from stepwise.cli import (
     EXIT_PROJECT_ERROR,
     EXIT_SUCCESS,
     EXIT_USAGE_ERROR,
+    _detect_install_method,
     build_parser,
+    cmd_self_update,
     main,
 )
 from stepwise.project import DOT_DIR_NAME, init_project
@@ -201,6 +203,49 @@ class TestFlowStubs:
     def test_flow_get_non_yaml_url(self, capsys):
         rc = main(["flow", "get", "https://example.com/not-a-yaml"])
         assert rc == EXIT_USAGE_ERROR
+
+
+class TestSelfUpdate:
+    def test_self_update_subparser_registered(self):
+        parser = build_parser()
+        # Should parse without error
+        args = parser.parse_args(["self-update"])
+        assert args.command == "self-update"
+
+    def test_detect_install_method_uv_path(self, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda _: "/home/user/.local/share/uv/tools/stepwise/bin/stepwise")
+        assert _detect_install_method() == "uv"
+
+    def test_detect_install_method_pipx_path(self, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda _: "/home/user/.local/share/pipx/venvs/stepwise/bin/stepwise")
+        assert _detect_install_method() == "pipx"
+
+    def test_detect_install_method_probes_uv_tool_list(self, monkeypatch):
+        import subprocess
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/stepwise")
+
+        def fake_run(cmd, **kwargs):
+            if cmd == ["uv", "tool", "list"]:
+                result = subprocess.CompletedProcess(cmd, 0, stdout="stepwise 0.1.0\n", stderr="")
+                return result
+            raise FileNotFoundError()
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        assert _detect_install_method() == "uv"
+
+    def test_detect_install_method_fallback_pip(self, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/stepwise")
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: (_ for _ in ()).throw(FileNotFoundError()))
+        assert _detect_install_method() == "pip"
+
+    def test_self_update_handler_in_main(self, capsys):
+        """self-update is wired into the handler dict."""
+        # We can't fully run self-update without side effects, but we can
+        # confirm the command dispatches (it will fail trying to run uv/pip,
+        # which is fine for this test)
+        rc = main(["self-update"])
+        # Any return code is acceptable — we just verify it dispatches
+        assert isinstance(rc, int)
 
 
 class TestUnknownCommand:

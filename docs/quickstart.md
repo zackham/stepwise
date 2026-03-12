@@ -5,8 +5,10 @@ Get from zero to a running workflow in under 5 minutes.
 ## Install
 
 ```bash
-pip install stepwise
+curl -fsSL https://stepwise.run/install.sh | sh
 ```
+
+Or install directly: `uv tool install stepwise` / `pipx install stepwise` / `pip install stepwise`.
 
 ## Initialize a Project
 
