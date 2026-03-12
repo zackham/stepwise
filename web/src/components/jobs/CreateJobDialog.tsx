@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useStepwiseMutations, useTemplates } from "@/hooks/useStepwise";
 import { useLocalFlows } from "@/hooks/useEditor";
 import { fetchLocalFlow } from "@/lib/api";
@@ -24,9 +24,21 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Plus } from "lucide-react";
 import type { FlowDefinition } from "@/lib/types";
+
+/** Extract unique $job input field names from a flow definition. */
+function extractJobInputs(flow: FlowDefinition): string[] {
+  const fields = new Set<string>();
+  for (const step of Object.values(flow.steps)) {
+    for (const binding of step.inputs ?? []) {
+      if (binding.source_step === "$job") {
+        fields.add(binding.source_field);
+      }
+    }
+  }
+  return [...fields].sort();
+}
 
 interface CreateJobDialogProps {
   onCreated?: (jobId: string) => void;
@@ -34,26 +46,35 @@ interface CreateJobDialogProps {
 
 export function CreateJobDialog({ onCreated }: CreateJobDialogProps) {
   const [open, setOpen] = useState(false);
-  const [objective, setObjective] = useState("");
-  const [workflowJson, setWorkflowJson] = useState("");
-  const [inputsJson, setInputsJson] = useState("{}");
   const [selectedItem, setSelectedItem] = useState<string>("");
+  const [workflow, setWorkflow] = useState<FlowDefinition | null>(null);
+  const [workflowJson, setWorkflowJson] = useState("");
+  const [inputValues, setInputValues] = useState<Record<string, string>>({});
   const [workspacePath, setWorkspacePath] = useState("");
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [mode, setMode] = useState<"flow" | "json">("flow");
 
   const { data: templates = [] } = useTemplates();
   const { data: localFlows = [] } = useLocalFlows();
   const mutations = useStepwiseMutations();
 
+  // Derive required inputs from the selected flow
+  const jobInputFields = useMemo(
+    () => (workflow ? extractJobInputs(workflow) : []),
+    [workflow]
+  );
+
   const handleSelect = async (value: string) => {
     setSelectedItem(value);
     setJsonError(null);
+    setInputValues({});
 
     if (value.startsWith("template:")) {
       const name = value.slice("template:".length);
       const tmpl = templates.find((t) => t.name === name);
       if (tmpl) {
+        setWorkflow(tmpl.workflow);
         setWorkflowJson(JSON.stringify(tmpl.workflow, null, 2));
       }
     } else if (value.startsWith("flow:")) {
@@ -61,6 +82,7 @@ export function CreateJobDialog({ onCreated }: CreateJobDialogProps) {
       setLoading(true);
       try {
         const detail = await fetchLocalFlow(path);
+        setWorkflow(detail.flow);
         setWorkflowJson(JSON.stringify(detail.flow, null, 2));
       } catch (e) {
         setJsonError(e instanceof Error ? e.message : "Failed to load flow");
@@ -70,32 +92,58 @@ export function CreateJobDialog({ onCreated }: CreateJobDialogProps) {
     }
   };
 
+  const handleInputChange = (field: string, value: string) => {
+    setInputValues((prev) => ({ ...prev, [field]: value }));
+  };
+
   const handleSubmit = () => {
     try {
-      const workflow: FlowDefinition = JSON.parse(workflowJson);
-      const inputs = JSON.parse(inputsJson);
+      let wf: FlowDefinition;
+      let inputs: Record<string, unknown>;
+
+      if (mode === "json") {
+        wf = JSON.parse(workflowJson);
+        inputs = {};
+      } else {
+        if (!workflow) return;
+        wf = workflow;
+        // Build inputs from form fields
+        inputs = {};
+        for (const field of jobInputFields) {
+          const val = inputValues[field]?.trim();
+          if (val) inputs[field] = val;
+        }
+      }
+
       setJsonError(null);
 
+      // Use flow name as objective (or first input value, or generic)
+      const flowName = selectedItem.replace(/^(flow:|template:)/, "").split("/").pop() ?? "job";
+      const objective = inputValues[jobInputFields[0]] || flowName;
+
       mutations.createJob.mutate(
-        { objective, workflow, inputs, workspace_path: workspacePath || undefined },
+        { objective, workflow: wf, inputs, workspace_path: workspacePath || undefined },
         {
           onSuccess: (job) => {
             setOpen(false);
-            setObjective("");
-            setWorkflowJson("");
-            setInputsJson("{}");
             setSelectedItem("");
+            setWorkflow(null);
+            setWorkflowJson("");
+            setInputValues({});
             setWorkspacePath("");
             onCreated?.(job.id);
           },
         }
       );
     } catch (e) {
-      setJsonError(
-        e instanceof Error ? e.message : "Invalid JSON"
-      );
+      setJsonError(e instanceof Error ? e.message : "Invalid JSON");
     }
   };
+
+  const canSubmit =
+    mode === "json"
+      ? !!workflowJson && !mutations.createJob.isPending && !loading
+      : !!workflow && !mutations.createJob.isPending && !loading;
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -109,83 +157,121 @@ export function CreateJobDialog({ onCreated }: CreateJobDialogProps) {
         <DialogHeader>
           <DialogTitle>Create Job</DialogTitle>
           <DialogDescription>
-            Create a new job from a flow, template, or JSON definition.
+            Run a flow with inputs.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="space-y-2">
-            <Label>Objective</Label>
-            <Input
-              value={objective}
-              onChange={(e) => setObjective(e.target.value)}
-              placeholder="What should this job accomplish?"
-            />
+          {/* Mode toggle */}
+          <div className="flex gap-1 p-0.5 bg-zinc-900 rounded-md">
+            <button
+              onClick={() => setMode("flow")}
+              className={`flex-1 py-1.5 text-xs font-medium rounded transition-colors ${
+                mode === "flow"
+                  ? "bg-zinc-700 text-foreground"
+                  : "text-zinc-500 hover:text-zinc-300"
+              }`}
+            >
+              From Flow
+            </button>
+            <button
+              onClick={() => setMode("json")}
+              className={`flex-1 py-1.5 text-xs font-medium rounded transition-colors ${
+                mode === "json"
+                  ? "bg-zinc-700 text-foreground"
+                  : "text-zinc-500 hover:text-zinc-300"
+              }`}
+            >
+              JSON
+            </button>
           </div>
 
-          <Tabs defaultValue="flow">
-            <TabsList className="w-full">
-              <TabsTrigger value="flow" className="flex-1">
-                From Flow
-              </TabsTrigger>
-              <TabsTrigger value="json" className="flex-1">
-                JSON
-              </TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="flow" className="space-y-2">
-              <Label>Flow</Label>
-              <Select
-                value={selectedItem}
-                onValueChange={(v) => { if (v !== null) handleSelect(v); }}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a flow" />
-                </SelectTrigger>
-                <SelectContent>
-                  {localFlows.length > 0 && (
-                    <SelectGroup>
-                      <SelectLabel>Local Flows</SelectLabel>
-                      {localFlows.map((f) => (
-                        <SelectItem key={`flow:${f.path}`} value={`flow:${f.path}`}>
-                          {f.name}
-                          <span className="text-zinc-500 ml-2">
-                            {f.steps_count} step{f.steps_count !== 1 ? "s" : ""}
-                          </span>
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  )}
-                  {templates.length > 0 && (
-                    <SelectGroup>
-                      <SelectLabel>Templates</SelectLabel>
-                      {templates.map((t) => (
-                        <SelectItem key={`template:${t.name}`} value={`template:${t.name}`}>
-                          {t.name}
-                          {t.description && (
+          {mode === "flow" ? (
+            <>
+              {/* Flow selector */}
+              <div className="space-y-2">
+                <Label>Flow</Label>
+                <Select
+                  value={selectedItem}
+                  onValueChange={(v) => { if (v !== null) handleSelect(v); }}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a flow" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {localFlows.length > 0 && (
+                      <SelectGroup>
+                        <SelectLabel>Local Flows</SelectLabel>
+                        {localFlows.map((f) => (
+                          <SelectItem key={`flow:${f.path}`} value={`flow:${f.path}`}>
+                            {f.name}
                             <span className="text-zinc-500 ml-2">
-                              — {t.description}
+                              {f.steps_count} step{f.steps_count !== 1 ? "s" : ""}
                             </span>
-                          )}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  )}
-                </SelectContent>
-              </Select>
-              {loading && (
-                <p className="text-xs text-zinc-500">Loading flow...</p>
-              )}
-              {selectedItem && workflowJson && !loading && (
-                <Textarea
-                  value={workflowJson}
-                  onChange={(e) => setWorkflowJson(e.target.value)}
-                  className="font-mono text-xs min-h-[200px]"
-                />
-              )}
-            </TabsContent>
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    )}
+                    {templates.length > 0 && (
+                      <SelectGroup>
+                        <SelectLabel>Templates</SelectLabel>
+                        {templates.map((t) => (
+                          <SelectItem key={`template:${t.name}`} value={`template:${t.name}`}>
+                            {t.name}
+                            {t.description && (
+                              <span className="text-zinc-500 ml-2">
+                                — {t.description}
+                              </span>
+                            )}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    )}
+                  </SelectContent>
+                </Select>
+                {loading && (
+                  <p className="text-xs text-zinc-500">Loading flow...</p>
+                )}
+              </div>
 
-            <TabsContent value="json" className="space-y-2">
+              {/* Dynamic input fields from $job references */}
+              {jobInputFields.length > 0 && (
+                <div className="space-y-3">
+                  <Label className="text-zinc-400">Inputs</Label>
+                  {jobInputFields.map((field) => (
+                    <div key={field} className="space-y-1">
+                      <label className="text-xs font-medium text-zinc-300">
+                        {field}
+                      </label>
+                      {field.includes("prompt") || field.includes("question") || field.includes("description") || field.includes("context") ? (
+                        <Textarea
+                          value={inputValues[field] ?? ""}
+                          onChange={(e) => handleInputChange(field, e.target.value)}
+                          placeholder={field}
+                          className="text-xs min-h-[60px] bg-zinc-900 border-zinc-700"
+                        />
+                      ) : (
+                        <Input
+                          value={inputValues[field] ?? ""}
+                          onChange={(e) => handleInputChange(field, e.target.value)}
+                          placeholder={field}
+                          className="text-xs bg-zinc-900 border-zinc-700"
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {workflow && jobInputFields.length === 0 && (
+                <p className="text-xs text-zinc-500">
+                  This flow has no job-level inputs.
+                </p>
+              )}
+            </>
+          ) : (
+            /* JSON mode */
+            <div className="space-y-2">
               <Label>Flow JSON</Label>
               <Textarea
                 value={workflowJson}
@@ -196,21 +282,8 @@ export function CreateJobDialog({ onCreated }: CreateJobDialogProps) {
                 className="font-mono text-xs min-h-[200px]"
                 placeholder='{"steps": {...}}'
               />
-            </TabsContent>
-          </Tabs>
-
-          <div className="space-y-2">
-            <Label>Initial Inputs (JSON)</Label>
-            <Textarea
-              value={inputsJson}
-              onChange={(e) => {
-                setInputsJson(e.target.value);
-                setJsonError(null);
-              }}
-              className="font-mono text-xs min-h-[80px]"
-              placeholder="{}"
-            />
-          </div>
+            </div>
+          )}
 
           <div className="space-y-2">
             <Label>Workspace Path <span className="text-zinc-500 font-normal">(optional)</span></Label>
@@ -233,13 +306,9 @@ export function CreateJobDialog({ onCreated }: CreateJobDialogProps) {
           </Button>
           <Button
             onClick={handleSubmit}
-            disabled={
-              !objective || !workflowJson || mutations.createJob.isPending || loading
-            }
+            disabled={!canSubmit}
           >
-            {mutations.createJob.isPending
-              ? "Creating..."
-              : "Create Job"}
+            {mutations.createJob.isPending ? "Creating..." : "Run"}
           </Button>
         </DialogFooter>
       </DialogContent>
