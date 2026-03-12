@@ -11,6 +11,10 @@ Usage:
     stepwise validate <file>               Validate flow syntax
     stepwise templates                     List templates
     stepwise config get|set [key] [value]  Manage configuration
+    stepwise schema <file>                 Generate JSON tool contract
+    stepwise output <job-id> [--scope]     Retrieve job outputs
+    stepwise fulfill <run-id> '<json>'     Satisfy a suspended human step (or --stdin)
+    stepwise agent-help [--update <file>]  Generate agent instructions
 """
 
 from __future__ import annotations
@@ -240,17 +244,17 @@ def cmd_run(args: argparse.Namespace) -> int:
     from stepwise.runner import run_flow, parse_vars, load_vars_file
 
     project = _find_project_or_exit(args)
-
     flow_path = Path(args.file)
-    if not flow_path.exists():
-        print(f"Error: File not found: {flow_path}", file=sys.stderr)
-        return EXIT_USAGE_ERROR
 
-    # Parse input variables
+    # Parse input variables (shared across all modes)
     inputs: dict = {}
     try:
         inputs.update(parse_vars(args.vars))
     except ValueError as e:
+        if getattr(args, "wait", False) or getattr(args, "async_mode", False):
+            from stepwise.runner import _json_error
+            _json_error(2, str(e))
+            return EXIT_USAGE_ERROR
         print(f"Error: {e}", file=sys.stderr)
         return EXIT_USAGE_ERROR
 
@@ -258,13 +262,68 @@ def cmd_run(args: argparse.Namespace) -> int:
         try:
             inputs.update(load_vars_file(args.vars_file))
         except (FileNotFoundError, Exception) as e:
+            if getattr(args, "wait", False) or getattr(args, "async_mode", False):
+                from stepwise.runner import _json_error
+                _json_error(2, str(e))
+                return EXIT_USAGE_ERROR
             print(f"Error: {e}", file=sys.stderr)
             return EXIT_USAGE_ERROR
+
+    # --var-file key=path: read file contents as variable value
+    if args.var_files:
+        for item in args.var_files:
+            if "=" not in item:
+                msg = f"Invalid --var-file format: '{item}' (expected KEY=PATH)"
+                if getattr(args, "wait", False) or getattr(args, "async_mode", False):
+                    from stepwise.runner import _json_error
+                    _json_error(2, msg)
+                    return EXIT_USAGE_ERROR
+                print(f"Error: {msg}", file=sys.stderr)
+                return EXIT_USAGE_ERROR
+            key, fpath = item.split("=", 1)
+            try:
+                inputs[key] = Path(fpath).read_text()
+            except FileNotFoundError:
+                msg = f"--var-file path not found: {fpath}"
+                if getattr(args, "wait", False) or getattr(args, "async_mode", False):
+                    from stepwise.runner import _json_error
+                    _json_error(2, msg)
+                    return EXIT_USAGE_ERROR
+                print(f"Error: {msg}", file=sys.stderr)
+                return EXIT_USAGE_ERROR
+
+    # --async mode: fire-and-forget (handles own errors as JSON)
+    if getattr(args, "async_mode", False):
+        from stepwise.runner import run_async
+        return run_async(
+            flow_path=flow_path,
+            project=project,
+            objective=args.objective,
+            inputs=inputs if inputs else None,
+            workspace=args.workspace,
+        )
+
+    # --wait mode: blocking JSON output (handles own errors as JSON)
+    if getattr(args, "wait", False):
+        from stepwise.runner import run_wait
+        return run_wait(
+            flow_path=flow_path,
+            project=project,
+            objective=args.objective,
+            inputs=inputs if inputs else None,
+            workspace=args.workspace,
+            timeout=args.timeout,
+        )
+
+    # Everything below uses stderr for errors
+    if not flow_path.exists():
+        print(f"Error: File not found: {flow_path}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
 
     if args.watch:
         return _run_watch(args, project, flow_path, inputs)
 
-    # Headless mode
+    # Headless mode (default)
     return run_flow(
         flow_path=flow_path,
         project=project,
@@ -272,6 +331,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         inputs=inputs if inputs else None,
         workspace=args.workspace,
         quiet=args.quiet,
+        report=args.report,
+        report_output=args.report_output,
+        output_json=getattr(args, "output_format", None) == "json",
     )
 
 
@@ -592,6 +654,153 @@ def _flow_get_url(url: str) -> int:
         return EXIT_USAGE_ERROR
 
 
+def cmd_schema(args: argparse.Namespace) -> int:
+    """Generate JSON tool contract from a flow file."""
+    from stepwise.schema import generate_schema
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+    flow_path = Path(args.file)
+    if not flow_path.exists():
+        print(f"Error: File not found: {flow_path}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    try:
+        wf = load_workflow_yaml(str(flow_path))
+    except YAMLLoadError as e:
+        print(f"Error: {'; '.join(e.errors)}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    schema = generate_schema(wf)
+    print(json.dumps(schema, indent=2))
+    return EXIT_SUCCESS
+
+
+def cmd_output(args: argparse.Namespace) -> int:
+    """Retrieve job outputs after completion."""
+    project = _find_project_or_exit(args)
+
+    from stepwise.engine import Engine
+    from stepwise.models import JobStatus
+    from stepwise.registry_factory import create_default_registry
+    from stepwise.store import SQLiteStore
+
+    store = SQLiteStore(str(project.db_path))
+    try:
+        try:
+            engine = Engine(store, create_default_registry(), jobs_dir=str(project.jobs_dir))
+            job = engine.get_job(args.job_id)
+        except KeyError:
+            print(json.dumps({"status": "error", "error": f"Job not found: {args.job_id}"}))
+            return EXIT_JOB_FAILED
+
+        result: dict = {"status": job.status.value}
+
+        if job.status == JobStatus.COMPLETED:
+            result["outputs"] = engine.terminal_outputs(job.id)
+        elif job.status in (JobStatus.FAILED, JobStatus.CANCELLED):
+            result["outputs"] = []
+            result["completed_outputs"] = engine.completed_outputs(job.id)
+        elif job.status in (JobStatus.RUNNING, JobStatus.PAUSED):
+            result["outputs"] = []
+            suspended = engine.suspended_step_details(job.id)
+            if suspended:
+                result["suspended_steps"] = suspended
+
+        if args.scope == "full":
+            # Include per-step details
+            runs = engine.get_runs(job.id)
+            steps: dict = {}
+            for run in runs:
+                steps[run.step_name] = {
+                    "status": run.status.value,
+                    "outputs": run.result.artifact if run.result else None,
+                }
+            result["steps"] = steps
+            result["cost_usd"] = round(engine.job_cost(job.id), 4)
+            events = engine.get_events(job.id)
+            result["event_count"] = len(events)
+
+        print(json.dumps(result, indent=2, default=str))
+        return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def cmd_fulfill(args: argparse.Namespace) -> int:
+    """Satisfy a suspended human step from the command line."""
+    project = _find_project_or_exit(args)
+
+    from stepwise.engine import Engine
+    from stepwise.registry_factory import create_default_registry
+    from stepwise.store import SQLiteStore
+
+    store = SQLiteStore(str(project.db_path))
+    try:
+        engine = Engine(store, create_default_registry(), jobs_dir=str(project.jobs_dir))
+
+        # Read payload from stdin or argv
+        raw_payload = args.payload
+        if raw_payload == "-" or (raw_payload is None and args.stdin):
+            raw_payload = sys.stdin.read().strip()
+        elif raw_payload is None:
+            print(json.dumps({
+                "status": "error",
+                "error": "No payload provided. Pass JSON as argument or use --stdin.",
+            }))
+            return EXIT_USAGE_ERROR
+
+        # Parse JSON payload
+        try:
+            payload = json.loads(raw_payload)
+        except json.JSONDecodeError as e:
+            print(json.dumps({
+                "status": "error",
+                "error": f"Invalid JSON payload: {e}. "
+                         f"Usage: stepwise fulfill {args.run_id} '{{\"field\": \"value\"}}'",
+            }))
+            return EXIT_USAGE_ERROR
+
+        if not isinstance(payload, dict):
+            print(json.dumps({
+                "status": "error",
+                "error": "Payload must be a JSON object, not " + type(payload).__name__,
+            }))
+            return EXIT_USAGE_ERROR
+
+        try:
+            engine.fulfill_watch(args.run_id, payload)
+        except (ValueError, KeyError) as e:
+            print(json.dumps({"status": "error", "error": str(e)}))
+            return EXIT_USAGE_ERROR
+
+        print(json.dumps({"status": "fulfilled", "run_id": args.run_id}))
+        return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def cmd_agent_help(args: argparse.Namespace) -> int:
+    """Generate agent-readable instructions for available flows."""
+    from stepwise.agent_help import generate_agent_help, update_file
+
+    project_dir = Path(args.project_dir) if args.project_dir else Path.cwd()
+    flows_dir = Path(args.flows_dir) if args.flows_dir else None
+
+    content = generate_agent_help(project_dir, flows_dir=flows_dir)
+
+    if args.update:
+        target = Path(args.update)
+        replaced = update_file(target, content)
+        if replaced:
+            print(f"✓ Updated {target} (replaced existing section)", file=sys.stderr)
+        else:
+            print(f"✓ Updated {target} (appended new section)", file=sys.stderr)
+    else:
+        print(content)
+
+    return EXIT_SUCCESS
+
+
 def _open_browser(url: str) -> None:
     """Open URL in default browser (best-effort, non-blocking)."""
     try:
@@ -630,12 +839,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_run = sub.add_parser("run", help="Run a flow")
     p_run.add_argument("file", help="Path to .flow.yaml file")
     p_run.add_argument("--watch", action="store_true", help="Ephemeral server + browser UI")
+    p_run.add_argument("--wait", action="store_true", help="Block until completion, JSON output on stdout")
+    p_run.add_argument("--async", action="store_true", dest="async_mode",
+                       help="Fire-and-forget, returns job_id immediately")
+    p_run.add_argument("--output", choices=["json"], dest="output_format",
+                       help="Output format (currently only json)")
+    p_run.add_argument("--timeout", type=int, help="Timeout in seconds (for --wait)")
     p_run.add_argument("--var", action="append", dest="vars", metavar="KEY=VALUE",
                        help="Pass input variable (repeatable)")
+    p_run.add_argument("--var-file", action="append", dest="var_files", metavar="KEY=PATH",
+                       help="Pass input variable from file contents (repeatable)")
     p_run.add_argument("--vars-file", help="Load variables from YAML/JSON file")
     p_run.add_argument("--port", type=int, help="Override port (for --watch)")
     p_run.add_argument("--objective", help="Set job objective (defaults to flow name)")
     p_run.add_argument("--workspace", help="Override workspace directory")
+    p_run.add_argument("--report", action="store_true", help="Generate HTML report after completion")
+    p_run.add_argument("--report-output", help="Report output path (default: <flow>-report.html)")
     p_run.add_argument("--no-open", action="store_true", help="Don't auto-open browser (for --watch)")
 
     # validate
@@ -682,6 +901,31 @@ def build_parser() -> argparse.ArgumentParser:
     p_cancel = sub.add_parser("cancel", help="Cancel a running job")
     p_cancel.add_argument("job_id", help="Job ID")
 
+    # schema
+    p_schema = sub.add_parser("schema", help="Generate JSON tool contract from a flow file")
+    p_schema.add_argument("file", help="Path to .flow.yaml file")
+
+    # output
+    p_output = sub.add_parser("output", help="Retrieve job outputs")
+    p_output.add_argument("job_id", help="Job ID")
+    p_output.add_argument("--scope", choices=["default", "full"], default="default",
+                          help="Output scope (default: terminal outputs only)")
+
+    # fulfill
+    p_fulfill = sub.add_parser("fulfill", help="Satisfy a suspended human step")
+    p_fulfill.add_argument("run_id", help="Run ID of the suspended step")
+    p_fulfill.add_argument("payload", nargs="?", default=None,
+                           help="JSON payload with field values (use --stdin or '-' to read from stdin)")
+    p_fulfill.add_argument("--stdin", action="store_true",
+                           help="Read JSON payload from stdin")
+
+    # agent-help
+    p_agent_help = sub.add_parser("agent-help", help="Generate agent instructions for available flows")
+    p_agent_help.add_argument("--update", metavar="FILE",
+                              help="Update a file in-place between markers")
+    p_agent_help.add_argument("--flows-dir", metavar="DIR",
+                              help="Override flow discovery directory")
+
     return parser
 
 
@@ -708,6 +952,10 @@ def main(argv: list[str] | None = None) -> int:
         "jobs": cmd_jobs,
         "status": cmd_status,
         "cancel": cmd_cancel,
+        "schema": cmd_schema,
+        "output": cmd_output,
+        "fulfill": cmd_fulfill,
+        "agent-help": cmd_agent_help,
     }
 
     handler = handlers.get(args.command)

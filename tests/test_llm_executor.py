@@ -317,10 +317,17 @@ class TestExecutorMeta:
 
 
 class TestCheckStatusCancel:
+    def test_check_status_empty_is_running(self):
+        """Empty state means executor hasn't set state yet (synchronous call in progress)."""
+        client = MockLLMClient()
+        ex = _executor(client)
+        assert ex.check_status({}).state == "running"
+        assert ex.check_status(None).state == "running"
+
     def test_check_status_completed(self):
         client = MockLLMClient()
         ex = _executor(client)
-        assert ex.check_status({}).state == "completed"
+        assert ex.check_status({"completed": True}).state == "completed"
 
     def test_check_status_failed(self):
         client = MockLLMClient()

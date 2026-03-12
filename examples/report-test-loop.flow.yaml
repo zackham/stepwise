@@ -1,0 +1,33 @@
+name: quality-loop
+description: Step that loops until quality threshold met (tests exit rules in report)
+author: zack
+tags: [test, loop, exit-rules]
+
+steps:
+  generate:
+    run: |
+      python3 -c "
+      import json, random
+      random.seed(42 + int('${attempt:-1}'))
+      score = round(random.uniform(0.4, 0.95), 2)
+      print(json.dumps({'content': f'Draft attempt with score {score}', 'quality_score': score}))
+      "
+    outputs: [content, quality_score]
+    exits:
+      - name: good_enough
+        when: "float(outputs.get('quality_score', 0)) >= 0.8"
+        action: advance
+      - name: max_attempts
+        when: "attempt >= 5"
+        action: advance
+      - name: retry
+        when: "True"
+        action: loop
+        target: generate
+
+  publish:
+    run: |
+      echo '{"published": true, "url": "https://example.com/article/draft-final"}'
+    inputs:
+      content: generate.content
+    outputs: [published, url]

@@ -36,6 +36,7 @@ class ExecutionContext:
     objective: str = ""
     timeout_minutes: int | None = None
     injected_context: list[str] | None = None
+    chain_context: str | None = None  # M7a: compiled prior-context XML block
 
 
 # ── Executor Result ────────────────────────────────────────────────────
@@ -148,7 +149,16 @@ class ScriptExecutor(Executor):
             **os.environ,
             "JOB_ENGINE_INPUTS": str(input_file),
             "JOB_ENGINE_WORKSPACE": str(workspace),
+            "STEPWISE_STEP_IO": str(step_io_dir),
         }
+        # Pass inputs as environment variables for convenience
+        for k, v in inputs.items():
+            if isinstance(v, str):
+                env[k] = v
+            elif isinstance(v, (dict, list)):
+                env[k] = json.dumps(v)
+            elif v is not None:
+                env[k] = str(v)
         cwd = self.working_dir or workspace
 
         try:
@@ -385,10 +395,13 @@ class LLMExecutor(Executor):
         self.max_tokens = max_tokens
 
     def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
+        import logging
+        logger = logging.getLogger("stepwise.llm")
         workspace = context.workspace_path or ""
 
         # Render prompt
         prompt = self._render_prompt(inputs, context)
+        logger.info(f"LLM step={context.step_name} model={self.model} prompt_len={len(prompt)} output_fields={getattr(self, '_output_fields', [])}")
 
         # Build messages
         messages: list[dict[str, str]] = []
@@ -401,6 +414,7 @@ class LLMExecutor(Executor):
         # We get them from the step definition via the context
         output_fields = self._get_output_fields(context)
         tools = self._build_output_tool(output_fields) if output_fields else None
+        logger.info(f"LLM step={context.step_name} tools={'yes' if tools else 'no'} msgs={len(messages)}")
 
         # Call LLM
         try:
@@ -411,7 +425,9 @@ class LLMExecutor(Executor):
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
             )
+            logger.info(f"LLM step={context.step_name} response: content={response.content is not None} tool_calls={response.tool_calls is not None} usage={response.usage}")
         except Exception as e:
+            logger.error(f"LLM step={context.step_name} API error: {e}")
             return ExecutorResult(
                 type="data",
                 envelope=HandoffEnvelope(
@@ -431,9 +447,11 @@ class LLMExecutor(Executor):
 
         # Parse output
         artifact, parse_method = self._parse_output(response, output_fields)
+        logger.info(f"LLM step={context.step_name} parse: method={parse_method} artifact_keys={list(artifact.keys()) if artifact else None}")
 
         if artifact is None:
             # Parse failure
+            logger.error(f"LLM step={context.step_name} PARSE FAILED: content_len={len(response.content) if response.content else 0} tool_calls={response.tool_calls}")
             return ExecutorResult(
                 type="data",
                 envelope=HandoffEnvelope(
@@ -508,8 +526,20 @@ class LLMExecutor(Executor):
     def _render_prompt(self, inputs: dict, context: ExecutionContext) -> str:
         """Render the prompt template with step inputs."""
         # Convert all input values to strings for template substitution
-        str_inputs = {k: str(v) if not isinstance(v, str) else v for k, v in inputs.items()}
+        # Use JSON for complex types so LLMs get clean, parseable data
+        str_inputs = {}
+        for k, v in inputs.items():
+            if isinstance(v, str):
+                str_inputs[k] = v
+            elif isinstance(v, (dict, list)):
+                str_inputs[k] = json.dumps(v, indent=2)
+            else:
+                str_inputs[k] = str(v)
         prompt = Template(self.prompt_template).safe_substitute(str_inputs)
+
+        # M7a: Prepend chain context (prior conversation history) if present
+        if context.chain_context:
+            prompt = context.chain_context + "\n\n" + prompt
 
         # Append injected context if present
         if context.injected_context:
@@ -560,10 +590,12 @@ class LLMExecutor(Executor):
         # 2. Try parsing content as JSON
         if response.content:
             content = response.content.strip()
-            # Strip markdown code fences if present
-            if content.startswith("```"):
-                lines = content.split("\n")
-                # Remove first and last lines (fences)
+            # Strip markdown code fences — find first/last ``` and extract between
+            fence_start = content.find("```")
+            fence_end = content.rfind("```")
+            if fence_start != -1 and fence_end > fence_start:
+                inner = content[fence_start:fence_end + 3]
+                lines = inner.split("\n")
                 if len(lines) >= 3:
                     content = "\n".join(lines[1:-1]).strip()
 
@@ -574,6 +606,17 @@ class LLMExecutor(Executor):
             except (json.JSONDecodeError, ValueError):
                 pass
 
+            # Extract JSON object from mixed content (prose + JSON)
+            import re
+            match = re.search(r'\{[\s\S]*\}', content)
+            if match:
+                try:
+                    parsed = json.loads(match.group())
+                    if isinstance(parsed, dict):
+                        return parsed, "json_content"
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
         # 3. Single-field shortcut
         if len(output_fields) == 1 and response.content:
             return {output_fields[0]: response.content.strip()}, "single_field"
@@ -581,9 +624,16 @@ class LLMExecutor(Executor):
         return None, "none"
 
     def check_status(self, state: dict) -> ExecutorStatus:
-        if state and state.get("failed"):
+        # LLM executor is synchronous — start() blocks and returns the result
+        # directly. If polled before start() returns, state is empty/None;
+        # report "running" to prevent the tick loop from treating it as done.
+        if not state:
+            return ExecutorStatus(state="running")
+        if state.get("failed"):
             return ExecutorStatus(state="failed", message=state.get("error"))
-        return ExecutorStatus(state="completed")
+        if state.get("completed"):
+            return ExecutorStatus(state="completed")
+        return ExecutorStatus(state="running")
 
     def cancel(self, state: dict) -> None:
         pass

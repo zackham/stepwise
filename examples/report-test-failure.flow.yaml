@@ -1,0 +1,25 @@
+name: failing-pipeline
+description: Flow where a step fails (tests error rendering in report)
+author: zack
+tags: [test, failure, error-handling]
+
+steps:
+  setup:
+    run: |
+      echo '{"ready": true, "config": {"target": "production", "dry_run": false}}'
+    outputs: [ready, config]
+
+  deploy:
+    run: |
+      echo "ERROR: Connection refused to production server at 10.0.1.42:443" >&2
+      exit 1
+    inputs:
+      config: setup.config
+    outputs: [deployed, url]
+
+  verify:
+    run: |
+      echo '{"healthy": true}'
+    inputs:
+      url: deploy.url
+    outputs: [healthy]

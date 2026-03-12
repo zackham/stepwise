@@ -31,3 +31,7 @@ STEP_CANCELLED = "step.cancelled"
 FOR_EACH_STARTED = "for_each.started"
 FOR_EACH_ITEM_COMPLETED = "for_each.item_completed"
 FOR_EACH_COMPLETED = "for_each.completed"
+
+# M7a: Context chain events
+CHAIN_CONTEXT_COMPILED = "chain.context_compiled"
+CHAIN_TRANSCRIPT_CAPTURED = "chain.transcript_captured"

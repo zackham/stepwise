@@ -1,0 +1,25 @@
+name: data-pipeline
+description: Three-step linear pipeline for report testing
+author: zack
+tags: [test, pipeline, script]
+
+steps:
+  fetch:
+    run: |
+      echo '{"records": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}, {"id": 3, "name": "Charlie"}], "count": 3, "source": "mock-api"}'
+    outputs: [records, count, source]
+
+  transform:
+    run: |
+      echo '{"cleaned": [{"id": 1, "name": "ALICE"}, {"id": 2, "name": "BOB"}, {"id": 3, "name": "CHARLIE"}], "dropped": 0, "transformations": ["uppercase_names", "validate_ids"]}'
+    inputs:
+      data: fetch.records
+    outputs: [cleaned, dropped, transformations]
+
+  summarize:
+    run: |
+      echo '{"summary": "Processed 3 records with 0 dropped. Applied 2 transformations: uppercase_names, validate_ids.", "status": "success"}'
+    inputs:
+      cleaned: transform.cleaned
+      stats: transform.transformations
+    outputs: [summary, status]

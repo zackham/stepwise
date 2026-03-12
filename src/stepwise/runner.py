@@ -172,6 +172,7 @@ def run_flow(
     output_stream: TextIO | None = None,
     report: bool = False,
     report_output: str | None = None,
+    output_json: bool = False,
 ) -> int:
     """Run a flow headlessly. Returns exit code.
 
@@ -313,11 +314,38 @@ def run_flow(
             if job.status == JobStatus.COMPLETED:
                 total_time = time.time() - start_time
                 reporter.on_flow_completed(job, steps_completed, total_time)
+                if output_json:
+                    cost = engine.job_cost(job.id)
+                    _json_stdout({
+                        "status": "completed",
+                        "job_id": job.id,
+                        "outputs": engine.terminal_outputs(job.id),
+                        "cost_usd": round(cost, 4) if cost else 0,
+                        "duration_seconds": round(total_time, 1),
+                    })
                 if report:
                     _generate_report(job, store, flow_path, report_output, output_stream)
                 return EXIT_SUCCESS
             elif job.status in (JobStatus.FAILED, JobStatus.CANCELLED):
                 reporter.on_flow_failed(job)
+                if output_json:
+                    cost = engine.job_cost(job.id)
+                    failed_step = None
+                    error_msg = None
+                    for run in engine.get_runs(job.id):
+                        if run.status == StepRunStatus.FAILED:
+                            failed_step = run.step_name
+                            error_msg = run.error
+                            break
+                    _json_stdout({
+                        "status": "failed",
+                        "job_id": job.id,
+                        "error": error_msg or "Unknown error",
+                        "failed_step": failed_step,
+                        "completed_outputs": engine.completed_outputs(job.id),
+                        "cost_usd": round(cost, 4) if cost else 0,
+                        "duration_seconds": round(time.time() - start_time, 1),
+                    })
                 if report:
                     _generate_report(job, store, flow_path, report_output, output_stream)
                 return EXIT_JOB_FAILED
@@ -362,6 +390,289 @@ def _generate_report(
         out = output_stream or sys.stderr
         out.write(f"\nWarning: Failed to generate report: {e}\n")
         out.flush()
+
+
+def run_wait(
+    flow_path: Path,
+    project: StepwiseProject,
+    objective: str | None = None,
+    inputs: dict | None = None,
+    workspace: str | None = None,
+    timeout: int | None = None,
+    config: StepwiseConfig | None = None,
+) -> int:
+    """Run a flow in blocking mode with JSON output on stdout.
+
+    All logging goes to stderr. Stdout contains ONLY the JSON payload.
+    Returns exit codes: 0=success, 1=failed, 2=input error, 3=timeout, 4=cancelled.
+    """
+    import json as json_mod
+    import logging
+
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(name)s %(levelname)s: %(message)s",
+        stream=sys.stderr,
+        force=True,
+    )
+
+    # Load and validate flow
+    if not flow_path.exists():
+        _json_error(2, f"File not found: {flow_path}. Check the path and try again.")
+        return EXIT_USAGE_ERROR
+
+    try:
+        workflow = load_workflow_yaml(str(flow_path))
+    except YAMLLoadError as e:
+        _json_error(2, f"Invalid flow YAML: {'; '.join(e.errors)}")
+        return EXIT_USAGE_ERROR
+    except Exception as e:
+        _json_error(2, f"Error loading flow: {e}")
+        return EXIT_USAGE_ERROR
+
+    errors = workflow.validate()
+    if errors:
+        _json_error(2, f"Invalid flow: {'; '.join(errors)}")
+        return EXIT_USAGE_ERROR
+
+    # Validate required inputs
+    required_inputs = set()
+    for step in workflow.steps.values():
+        for binding in step.inputs:
+            if binding.source_step == "$job":
+                required_inputs.add(binding.source_field)
+
+    provided = set((inputs or {}).keys())
+    missing = required_inputs - provided
+    if missing:
+        missing_list = ", ".join(sorted(missing))
+        usage = " ".join(f'--var {f}="..."' for f in sorted(missing))
+        _json_error(
+            2,
+            f"Missing required input(s): {missing_list}. "
+            f"Usage: stepwise run {flow_path} --wait --output json {usage}",
+        )
+        return EXIT_USAGE_ERROR
+
+    # Create engine
+    if config is None:
+        config = load_config()
+
+    from stepwise.registry_factory import create_default_registry
+
+    store = SQLiteStore(str(project.db_path))
+    registry = create_default_registry(config)
+    engine = Engine(store, registry, jobs_dir=str(project.jobs_dir))
+
+    # Create and start job
+    flow_name = objective or flow_path.stem
+    job = engine.create_job(
+        objective=flow_name,
+        workflow=workflow,
+        inputs=inputs or {},
+        workspace_path=workspace,
+    )
+
+    # Signal handling
+    shutdown_requested = False
+    original_sigint = signal.getsignal(signal.SIGINT)
+    original_sigterm = signal.getsignal(signal.SIGTERM)
+
+    def _shutdown_handler(signum, frame):
+        nonlocal shutdown_requested
+        shutdown_requested = True
+
+    signal.signal(signal.SIGINT, _shutdown_handler)
+    signal.signal(signal.SIGTERM, _shutdown_handler)
+
+    start_time = time.time()
+
+    try:
+        engine.start_job(job.id)
+
+        while True:
+            if shutdown_requested:
+                engine.cancel_job(job.id)
+                result = {
+                    "status": "cancelled",
+                    "job_id": job.id,
+                    "completed_outputs": engine.completed_outputs(job.id),
+                    "duration_seconds": round(time.time() - start_time, 1),
+                }
+                _json_stdout(result)
+                return 4  # EXIT_CANCELLED
+
+            # Check timeout
+            if timeout and (time.time() - start_time) > timeout:
+                job = engine.get_job(job.id)
+                suspended = engine.suspended_step_details(job.id)
+                result = {
+                    "status": "timeout",
+                    "job_id": job.id,
+                    "timeout_seconds": timeout,
+                    "completed_outputs": engine.completed_outputs(job.id),
+                    "duration_seconds": round(time.time() - start_time, 1),
+                }
+                if suspended:
+                    result["suspended_at_step"] = suspended[0]["step"]
+                    result["resume_hint"] = (
+                        f"Job is still running. Resume with: "
+                        f"stepwise fulfill {suspended[0]['run_id']} '{{...}}'"
+                    )
+                _json_stdout(result)
+                return 3  # EXIT_TIMEOUT
+
+            job = engine.get_job(job.id)
+
+            # Check terminal states
+            if job.status == JobStatus.COMPLETED:
+                duration = round(time.time() - start_time, 1)
+                cost = engine.job_cost(job.id)
+                result = {
+                    "status": "completed",
+                    "job_id": job.id,
+                    "outputs": engine.terminal_outputs(job.id),
+                    "cost_usd": round(cost, 4) if cost else 0,
+                    "duration_seconds": duration,
+                }
+                _json_stdout(result)
+                return EXIT_SUCCESS
+
+            elif job.status in (JobStatus.FAILED, JobStatus.CANCELLED):
+                duration = round(time.time() - start_time, 1)
+                cost = engine.job_cost(job.id)
+                # Find the failed step
+                failed_step = None
+                error_msg = None
+                for run in engine.get_runs(job.id):
+                    if run.status == StepRunStatus.FAILED:
+                        failed_step = run.step_name
+                        error_msg = run.error
+                        break
+
+                result = {
+                    "status": "failed",
+                    "job_id": job.id,
+                    "error": error_msg or "Unknown error",
+                    "failed_step": failed_step,
+                    "completed_outputs": engine.completed_outputs(job.id),
+                    "cost_usd": round(cost, 4) if cost else 0,
+                    "duration_seconds": duration,
+                }
+                _json_stdout(result)
+                return EXIT_JOB_FAILED
+
+            # Tick
+            time.sleep(0.1)
+            try:
+                engine.tick()
+            except Exception as e:
+                result = {
+                    "status": "failed",
+                    "job_id": job.id,
+                    "error": f"Engine error: {type(e).__name__}: {e}",
+                    "completed_outputs": engine.completed_outputs(job.id),
+                    "duration_seconds": round(time.time() - start_time, 1),
+                }
+                _json_stdout(result)
+                return EXIT_JOB_FAILED
+
+    finally:
+        signal.signal(signal.SIGINT, original_sigint)
+        signal.signal(signal.SIGTERM, original_sigterm)
+        store.close()
+
+
+def run_async(
+    flow_path: Path,
+    project: StepwiseProject,
+    objective: str | None = None,
+    inputs: dict | None = None,
+    workspace: str | None = None,
+    config: StepwiseConfig | None = None,
+) -> int:
+    """Fire-and-forget flow execution. Spawns a detached background process.
+
+    Prints {"job_id": "...", "status": "running"} to stdout, exits immediately.
+    """
+    import json as json_mod
+    import subprocess as sp
+
+    # Validate flow first (fail fast on bad input)
+    if not flow_path.exists():
+        _json_error(2, f"File not found: {flow_path}. Check the path and try again.")
+        return EXIT_USAGE_ERROR
+
+    try:
+        workflow = load_workflow_yaml(str(flow_path))
+    except YAMLLoadError as e:
+        _json_error(2, f"Invalid flow YAML: {'; '.join(e.errors)}")
+        return EXIT_USAGE_ERROR
+
+    errors = workflow.validate()
+    if errors:
+        _json_error(2, f"Invalid flow: {'; '.join(errors)}")
+        return EXIT_USAGE_ERROR
+
+    # Create the job in the store so we have a job_id
+    if config is None:
+        config = load_config()
+
+    from stepwise.registry_factory import create_default_registry
+
+    store = SQLiteStore(str(project.db_path))
+    try:
+        registry = create_default_registry(config)
+        engine = Engine(store, registry, jobs_dir=str(project.jobs_dir))
+
+        flow_name = objective or flow_path.stem
+        job = engine.create_job(
+            objective=flow_name,
+            workflow=workflow,
+            inputs=inputs or {},
+            workspace_path=workspace,
+        )
+        job_id = job.id
+    finally:
+        store.close()
+
+    # Spawn detached background process
+    cmd = [
+        sys.executable, "-m", "stepwise.runner_bg",
+        "--db", str(project.db_path),
+        "--jobs-dir", str(project.jobs_dir),
+        "--job-id", job_id,
+    ]
+
+    # Detach: new session, no stdin/stdout/stderr inheritance
+    sp.Popen(
+        cmd,
+        stdin=sp.DEVNULL,
+        stdout=sp.DEVNULL,
+        stderr=sp.DEVNULL,
+        start_new_session=True,
+    )
+
+    _json_stdout({"job_id": job_id, "status": "running"})
+    return EXIT_SUCCESS
+
+
+def _json_stdout(data: dict) -> None:
+    """Print JSON to stdout (machine-readable output)."""
+    import json as json_mod
+    sys.stdout.write(json_mod.dumps(data, default=str) + "\n")
+    sys.stdout.flush()
+
+
+def _json_error(exit_code: int, message: str) -> None:
+    """Print structured error JSON to stdout."""
+    import json as json_mod
+    sys.stdout.write(json_mod.dumps({
+        "status": "error",
+        "exit_code": exit_code,
+        "error": message,
+    }) + "\n")
+    sys.stdout.flush()
 
 
 def _err(msg: str, stream: TextIO | None = None) -> None:

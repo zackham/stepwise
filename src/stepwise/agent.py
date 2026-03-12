@@ -212,12 +212,102 @@ class AcpxBackend:
                 cost_usd=cost,
             )
 
+        # M7a: Capture session transcript for chain context
+        self._capture_transcript(process)
+
         return AgentStatus(
             state="completed",
             exit_code=0,
             session_id=session_id,
             cost_usd=cost,
         )
+
+    def _capture_transcript(self, process: AgentProcess) -> None:
+        """Capture the full agent session conversation for chain context.
+
+        Calls `acpx sessions show` to retrieve the structured conversation,
+        normalizes it, and saves as a transcript file that downstream chain
+        members can load.
+        """
+        import logging
+        logger = logging.getLogger("stepwise.agent")
+
+        if not process.session_name:
+            return
+
+        try:
+            session_data = self.get_session_messages(process)
+            if not session_data:
+                return
+
+            messages_raw = session_data.get("result", {}).get("messages", [])
+            if not messages_raw:
+                return
+
+            from stepwise.context import (
+                Transcript,
+                estimate_token_count,
+                normalize_acpx_messages,
+                save_transcript,
+            )
+
+            # Normalize with thinking included — compile-time filtering decides what to show
+            normalized = normalize_acpx_messages(messages_raw, include_thinking=True)
+
+            # Use actual token count from acpx if available, else estimate
+            usage = session_data.get("result", {}).get("cumulative_token_usage", {})
+            actual_tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+            token_count = actual_tokens if actual_tokens > 0 else estimate_token_count(normalized)
+
+            # Parse step_name and attempt from session_name (format: "step-{name}-{attempt}")
+            step_name, attempt = self._parse_session_name(process.session_name)
+
+            transcript = Transcript(
+                step=step_name,
+                attempt=attempt,
+                chain="",   # Set during collection by context module
+                label="",   # Set during collection by context module
+                token_count=token_count,
+                messages=normalized,
+            )
+            save_transcript(process.working_dir, transcript)
+            logger.debug(
+                f"Captured transcript for {step_name} attempt {attempt} "
+                f"({token_count} tokens, {len(normalized)} messages)"
+            )
+        except Exception:
+            logger.warning("Failed to capture transcript for chain context", exc_info=True)
+
+    @staticmethod
+    def _parse_session_name(session_name: str) -> tuple[str, int]:
+        """Parse step name and attempt from session name format 'step-{name}-{attempt}'."""
+        name_part = session_name.removeprefix("step-")
+        parts = name_part.rsplit("-", 1)
+        if len(parts) == 2:
+            try:
+                return parts[0], int(parts[1])
+            except ValueError:
+                pass
+        return session_name, 1
+
+    def get_session_messages(self, process: AgentProcess) -> dict | None:
+        """Retrieve the full session conversation via acpx sessions show."""
+        if not process.session_name:
+            return None
+        try:
+            env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+            result = subprocess.run(
+                [self.acpx_path, "--format", "json",
+                 self.default_agent, "sessions", "show",
+                 "--name", process.session_name],
+                cwd=process.working_dir,
+                capture_output=True, text=True, timeout=30, env=env,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return json.loads(result.stdout)
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
+            pass
+        return None
 
     def _extract_session_id(self, output_path: str) -> str | None:
         """Extract sessionId from ACP NDJSON output."""
@@ -420,6 +510,12 @@ class AgentExecutor(Executor):
         self.config = config
 
     def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
+        # For file output mode, generate step-specific output filename to prevent
+        # collisions when multiple agent steps share the same workspace.
+        output_file = self.output_path
+        if self.output_mode == "file" and not output_file:
+            output_file = f"{context.step_name}-output.json"
+
         prompt = self._render_prompt(inputs, context)
         process = self.backend.spawn(prompt, self.config, context)
 
@@ -433,7 +529,7 @@ class AgentExecutor(Executor):
                 "session_id": process.session_id,
                 "session_name": process.session_name,
                 "output_mode": self.output_mode,
-                "output_file": self.output_path,
+                "output_file": output_file,
             },
         )
 
@@ -486,13 +582,32 @@ class AgentExecutor(Executor):
         self.backend.cancel(process)
 
     def _render_prompt(self, inputs: dict, context: ExecutionContext) -> str:
-        str_inputs = {k: str(v) if not isinstance(v, str) else v for k, v in inputs.items()}
+        str_inputs = {}
+        for k, v in inputs.items():
+            if isinstance(v, str):
+                str_inputs[k] = v
+            elif isinstance(v, (dict, list)):
+                str_inputs[k] = json.dumps(v, indent=2)
+            else:
+                str_inputs[k] = str(v)
         # Always make objective and workspace available for prompt templates
         str_inputs.setdefault("objective", context.objective or "")
         str_inputs.setdefault("workspace", context.workspace_path or "")
         prompt = Template(self.prompt_template).safe_substitute(str_inputs)
+
+        # M7a: Prepend chain context (prior conversation history) if present
+        if context.chain_context:
+            prompt = context.chain_context + "\n\n" + prompt
+
         if context.injected_context:
             prompt += "\n\nAdditional context:\n" + "\n".join(context.injected_context)
+
+        # For file output mode, replace generic "output.json" references with
+        # the step-specific filename to prevent collisions in shared workspace.
+        if self.output_mode == "file":
+            step_output_file = self.output_path or f"{context.step_name}-output.json"
+            prompt = prompt.replace("output.json", step_output_file)
+
         return prompt
 
     def _extract_output(self, state: dict, output_mode: str,
@@ -508,7 +623,10 @@ class AgentExecutor(Executor):
                     if output_file:
                         file_path = Path(working_dir) / output_file
                     else:
-                        file_path = Path(state["output_path"]).parent / "output.json"
+                        # Look in workspace dir first (where agent writes), then .step-io
+                        file_path = Path(working_dir) / "output.json"
+                        if not file_path.exists():
+                            file_path = Path(state["output_path"]).parent / "output.json"
 
                     try:
                         artifact = json.loads(file_path.read_text())

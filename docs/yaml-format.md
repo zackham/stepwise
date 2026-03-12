@@ -33,7 +33,6 @@ steps:
     outputs: [content, word_count]
     inputs:
       notes: research.notes
-      revision_number: $step.attempt
       prior_feedback: review.feedback
 
   review:
@@ -73,6 +72,8 @@ steps:
 ```yaml
 name: workflow-name          # required, identifier
 description: "..."           # optional, human-readable
+chains:                      # optional, context chain definitions (M7a)
+  chain_name: { ... }
 steps:                       # required, map of step definitions
   step_name: { ... }
 ```
@@ -96,7 +97,6 @@ step_name:
   inputs:
     local_name: source_step.source_field
     job_data: $job.field_name       # from job-level inputs
-    attempt_num: $step.attempt      # current attempt number (magic binding)
 
   # Sequencing (optional) — wait for steps without taking data
   sequencing: [step_a, step_b]
@@ -245,6 +245,65 @@ steps:
       all_results: process_sections.results   # array of sub-flow terminal outputs
 ```
 
+### Context Chains
+
+Context chains give agent steps session continuity across a workflow. Prior chain members' conversations are compiled into an XML context block and prepended to the agent's prompt. This lets multi-step agent workflows build on prior reasoning without sharing mutable state.
+
+```yaml
+name: iterative-research
+chains:
+  research:
+    max_tokens: 80000       # token budget for prior context (default: 80000)
+    overflow: drop_oldest    # "drop_oldest" (default) or "drop_middle"
+    include_thinking: false  # include thinking blocks (default: false)
+    accumulation: full       # "full" (all attempts) or "latest" (most recent only)
+
+steps:
+  gather:
+    executor: agent
+    prompt: "Research $topic thoroughly"
+    outputs: [findings]
+    chain: research
+    chain_label: Research Phase
+    inputs:
+      topic: $job.topic
+
+  analyze:
+    executor: agent
+    prompt: "Analyze the findings and identify key patterns"
+    outputs: [analysis]
+    chain: research
+    chain_label: Analysis Phase
+    inputs:
+      findings: gather.findings
+
+  synthesize:
+    executor: agent
+    prompt: "Synthesize the analysis into a final report"
+    outputs: [report]
+    chain: research
+    chain_label: Synthesis Phase
+    inputs:
+      analysis: analyze.analysis
+```
+
+**Key concepts:**
+- `chains:` defines named chain configurations at the workflow level
+- `chain: name` on a step assigns it to a chain
+- `chain_label: "..."` provides a human-readable label in the context XML (defaults to step name)
+- Steps in a chain receive prior members' conversations as `<prior_context>` XML prepended to their prompt
+- Chains require at least 2 members
+- The first step in a chain gets no prior context (nothing before it)
+- Overflow drops whole transcripts, never truncates mid-conversation
+
+**Overflow strategies:**
+- `drop_oldest`: Remove oldest transcripts first until under budget
+- `drop_middle`: Keep first and last transcripts, remove from the middle
+
+**Accumulation modes:**
+- `full`: Include all completed attempts for each prior step (useful with loops)
+- `latest`: Only include the most recent completed attempt per step
+
 ## How It Maps to the Data Model
 
 | YAML | Data Model |
@@ -260,3 +319,6 @@ steps:
 | `for_each: step.field` + `flow:` | `ForEachSpec(source_step, source_field)` + `StepDefinition.sub_flow` |
 | `as: var_name` | `ForEachSpec.item_var` |
 | `on_error: continue` | `ForEachSpec.on_error` |
+| `chains: {name: {...}}` | `WorkflowDefinition.chains = {name: ChainConfig(...)}` |
+| `chain: chain_name` | `StepDefinition.chain = "chain_name"` |
+| `chain_label: "Label"` | `StepDefinition.chain_label = "Label"` |

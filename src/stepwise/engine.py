@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from stepwise.events import (
+    CHAIN_CONTEXT_COMPILED,
     CONTEXT_INJECTED,
     EXIT_RESOLVED,
     FOR_EACH_COMPLETED,
@@ -293,6 +294,56 @@ class Engine:
             "runs": runs,
             "sub_jobs": sub_jobs,
         }
+
+    def terminal_outputs(self, job_id: str) -> list[dict]:
+        """Collect output artifacts from all terminal steps.
+
+        Returns a list of dicts (one per terminal step that completed).
+        Used by --output json, the output command, and --wait.
+        """
+        job = self.store.load_job(job_id)
+        terminal_names = job.workflow.terminal_steps()
+        outputs: list[dict] = []
+        for name in terminal_names:
+            run = self.store.latest_completed_run(job_id, name)
+            if run and run.result:
+                outputs.append(run.result.artifact)
+        return outputs
+
+    def completed_outputs(self, job_id: str) -> list[dict]:
+        """Collect output artifacts from all completed steps (for partial output on failure)."""
+        runs = self.store.runs_for_job(job_id)
+        outputs: list[dict] = []
+        seen: set[str] = set()
+        for run in runs:
+            if run.status == StepRunStatus.COMPLETED and run.result and run.step_name not in seen:
+                seen.add(run.step_name)
+                outputs.append(run.result.artifact)
+        return outputs
+
+    def suspended_step_details(self, job_id: str) -> list[dict]:
+        """Get details of suspended steps for agent fulfillment."""
+        runs = self.store.runs_for_job(job_id)
+        suspended: list[dict] = []
+        for run in runs:
+            if run.status == StepRunStatus.SUSPENDED and run.watch:
+                suspended.append({
+                    "run_id": run.id,
+                    "step": run.step_name,
+                    "prompt": (run.watch.config or {}).get("prompt", ""),
+                    "fields": run.watch.fulfillment_outputs,
+                })
+        return suspended
+
+    def job_cost(self, job_id: str) -> float:
+        """Total accumulated cost across all runs for a job."""
+        runs = self.store.runs_for_job(job_id)
+        total = 0.0
+        for run in runs:
+            cost = self.store.accumulated_cost(run.id)
+            if cost:
+                total += cost
+        return total
 
     # ── Tick Loop ─────────────────────────────────────────────────────────
 
@@ -617,6 +668,9 @@ class Engine:
         attempt = self.store.next_attempt(job.id, step_name)
         inputs, dep_run_ids = self._resolve_inputs(job, step_def)
 
+        # M7a: Compile chain context for chain members
+        chain_context = self._compile_chain_context(job, step_def, step_name)
+
         run = StepRun(
             id=_gen_id("run"),
             job_id=job.id,
@@ -642,6 +696,7 @@ class Engine:
             objective=job.objective,
             timeout_minutes=job.config.timeout_minutes,
             injected_context=self._injected_contexts.get(job.id),
+            chain_context=chain_context,
         )
 
         # Inject step output fields into executor config for LLM structured output
@@ -786,6 +841,14 @@ class Engine:
             else:
                 source_list = None
                 break
+
+        # LLM executors often return complex values as JSON strings — auto-parse.
+        if isinstance(source_list, str):
+            try:
+                import json
+                source_list = json.loads(source_list)
+            except (json.JSONDecodeError, TypeError):
+                pass
 
         if not isinstance(source_list, list):
             raise ValueError(
@@ -990,6 +1053,60 @@ class Engine:
                 dep_run_ids[seq_step] = latest.id
 
         return inputs, dep_run_ids
+
+    # ── Chain Context (M7a) ──────────────────────────────────────────────
+
+    def _compile_chain_context(
+        self, job: Job, step_def: StepDefinition, step_name: str
+    ) -> str | None:
+        """Compile prior chain member transcripts into an XML context block.
+
+        Returns the compiled prefix string, or None if the step is not
+        in a chain or no prior transcripts exist.
+        """
+        if not step_def.chain or step_def.chain not in job.workflow.chains:
+            return None
+
+        chain_config = job.workflow.chains[step_def.chain]
+
+        from stepwise.context import (
+            apply_overflow,
+            collect_chain_transcripts,
+            compile_chain_prefix,
+        )
+
+        def get_latest_completed(sn: str) -> int | None:
+            run = self.store.latest_completed_run(job.id, sn)
+            return run.attempt if run else None
+
+        transcripts = collect_chain_transcripts(
+            workflow=job.workflow,
+            chain_name=step_def.chain,
+            chain_config=chain_config,
+            current_step=step_name,
+            workspace_path=job.workspace_path,
+            get_latest_completed_attempt=get_latest_completed,
+        )
+
+        if not transcripts:
+            return None
+
+        transcripts = apply_overflow(
+            transcripts, chain_config.max_tokens, chain_config.overflow
+        )
+        prefix = compile_chain_prefix(
+            transcripts, step_def.chain, chain_config.include_thinking
+        )
+
+        if prefix:
+            self._emit(job.id, CHAIN_CONTEXT_COMPILED, {
+                "step": step_name,
+                "chain": step_def.chain,
+                "transcript_count": len(transcripts),
+                "total_tokens": sum(t.token_count for t in transcripts),
+            })
+
+        return prefix or None
 
     # ── Exit Resolution ───────────────────────────────────────────────────
 

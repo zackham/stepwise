@@ -1,0 +1,29 @@
+name: parallel-research
+description: Fan-out to parallel branches then converge (tests parallel rendering in report)
+author: zack
+tags: [test, parallel, fan-out]
+
+steps:
+  web_search:
+    run: |
+      echo '{"findings": "Found 15 articles about AI workflow orchestration. Key themes: automation, human-in-the-loop, DAG-based execution.", "source_count": 15}'
+    outputs: [findings, source_count]
+
+  internal_docs:
+    run: |
+      echo '{"findings": "Internal wiki has 3 relevant pages on orchestration patterns. Team previously evaluated Airflow and Prefect.", "source_count": 3}'
+    outputs: [findings, source_count]
+
+  competitor_scan:
+    run: |
+      echo '{"findings": "Main competitors: Langflow (visual), CrewAI (agent-focused), Flowise (no-code). Gap: none offer portable CLI-first experience.", "competitors": 3}'
+    outputs: [findings, competitors]
+
+  synthesize:
+    run: |
+      echo '{"analysis": "Market opportunity exists for a CLI-first, portable workflow engine. Competitors focus on visual/no-code. Our differentiator: flows as shareable YAML files, progressive disclosure (headless → watch → serve).", "confidence": "high", "recommendations": ["Focus on developer experience", "Lead with flow sharing", "Build community around templates"]}'
+    inputs:
+      web: web_search.findings
+      internal: internal_docs.findings
+      competitors: competitor_scan.findings
+    outputs: [analysis, confidence, recommendations]

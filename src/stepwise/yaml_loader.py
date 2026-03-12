@@ -13,6 +13,7 @@ from typing import Any
 import yaml
 
 from stepwise.models import (
+    ChainConfig,
     DecoratorRef,
     ExecutorRef,
     ExitRule,
@@ -359,6 +360,10 @@ def _parse_step(step_name: str, step_data: dict) -> StepDefinition:
     if isinstance(limits_data, dict):
         limits = StepLimits.from_dict(limits_data)
 
+    # Chain membership (M7a)
+    chain = step_data.get("chain")
+    chain_label = step_data.get("chain_label")
+
     return StepDefinition(
         name=step_name,
         outputs=outputs,
@@ -368,7 +373,25 @@ def _parse_step(step_name: str, step_data: dict) -> StepDefinition:
         exit_rules=exit_rules,
         idempotency=idempotency,
         limits=limits,
+        chain=chain,
+        chain_label=chain_label,
     )
+
+
+def _parse_chains(data: dict) -> dict[str, ChainConfig]:
+    """Parse chain definitions from top-level 'chains' block."""
+    chains_data = data.get("chains")
+    if not chains_data:
+        return {}
+    if not isinstance(chains_data, dict):
+        raise ValueError("'chains' must be a mapping")
+
+    chains: dict[str, ChainConfig] = {}
+    for name, config_data in chains_data.items():
+        if not isinstance(config_data, dict):
+            raise ValueError(f"Chain '{name}': config must be a mapping")
+        chains[name] = ChainConfig.from_dict(config_data)
+    return chains
 
 
 def _parse_metadata(data: dict, source_path: Path | None = None) -> FlowMetadata:
@@ -462,10 +485,20 @@ def load_workflow_yaml(source: str | Path) -> WorkflowDefinition:
     if errors:
         raise YAMLLoadError(errors)
 
+    # Parse chains (M7a)
+    try:
+        chains = _parse_chains(data)
+    except ValueError as e:
+        errors.append(str(e))
+        chains = {}
+
+    if errors:
+        raise YAMLLoadError(errors)
+
     # Parse metadata from top-level fields
     metadata = _parse_metadata(data, source_path)
 
-    workflow = WorkflowDefinition(steps=steps, metadata=metadata)
+    workflow = WorkflowDefinition(steps=steps, metadata=metadata, chains=chains)
 
     # Run the standard workflow validation
     validation_errors = workflow.validate()
@@ -500,10 +533,17 @@ def load_workflow_string(yaml_str: str) -> WorkflowDefinition:
         except ValueError as e:
             errors.append(str(e))
 
+    # Parse chains (M7a)
+    try:
+        chains = _parse_chains(data)
+    except ValueError as e:
+        errors.append(str(e))
+        chains = {}
+
     if errors:
         raise YAMLLoadError(errors)
 
-    workflow = WorkflowDefinition(steps=steps)
+    workflow = WorkflowDefinition(steps=steps, chains=chains)
     validation_errors = workflow.validate()
     if validation_errors:
         raise YAMLLoadError(validation_errors)

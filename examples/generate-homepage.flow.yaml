@@ -1,0 +1,1039 @@
+name: generate-homepage
+description: "Generate a complete project homepage from a repo path and a short spec doc. The workflow ingests the repo, plans the design, writes copy, generates HTML sections in parallel, assembles, reviews, and tests."
+author: zackham
+version: "0.1"
+tags: [meta, homepage, code-generation, showcase]
+
+steps:
+
+  # ─── Phase 1: Ingestion ─────────────────────────────────────────────
+
+  ingest-repo:
+    run: |
+      python3 -c "
+      import json, os, subprocess
+      from pathlib import Path
+
+      repo = os.environ.get('repo_path', '.')
+      spec_path = os.environ.get('spec_path', '')
+      root = Path(repo)
+
+      result = {
+        'readme': '',
+        'docs': {},
+        'install_commands': [],
+        'cli_help': '',
+        'code_stats': {},
+        'dependencies': {},
+        'license': '',
+        'examples': {},
+        'spec': '',
+      }
+
+      # Read README
+      for name in ['README.md', 'readme.md', 'README.rst', 'README']:
+        p = root / name
+        if p.exists():
+          result['readme'] = p.read_text()[:20000]
+          break
+
+      # Read spec
+      if spec_path and Path(spec_path).exists():
+        result['spec'] = Path(spec_path).read_text()
+
+      # Read docs
+      docs_dir = root / 'docs'
+      if docs_dir.is_dir():
+        for f in sorted(docs_dir.rglob('*.md'))[:20]:
+          rel = str(f.relative_to(root))
+          result['docs'][rel] = f.read_text()[:5000]
+
+      # Extract install commands from README
+      import re
+      readme = result['readme']
+      code_blocks = re.findall(r'\x60\x60\x60(?:bash|sh|shell)?\n(.*?)\x60\x60\x60', readme, re.DOTALL)
+      install_cmds = []
+      for block in code_blocks:
+        for line in block.strip().split('\n'):
+          line = line.strip().lstrip('$ ')
+          if any(kw in line for kw in ['pip install', 'npm install', 'brew install', 'cargo install', 'curl', 'stepwise']):
+            install_cmds.append(line)
+      result['install_commands'] = install_cmds[:10]
+
+      # Try CLI help
+      try:
+        r = subprocess.run(['python3', '-m', 'stepwise', '--help'], capture_output=True, text=True, timeout=10, cwd=repo)
+        if r.returncode == 0:
+          result['cli_help'] = r.stdout[:3000]
+      except:
+        pass
+
+      # Code stats
+      extensions = {}
+      total_files = 0
+      total_lines = 0
+      for f in root.rglob('*'):
+        if f.is_file() and not any(p in str(f) for p in ['.git', 'node_modules', '__pycache__', '.stepwise', 'dist', 'build']):
+          ext = f.suffix
+          if ext in ['.py', '.ts', '.tsx', '.js', '.jsx', '.rs', '.go', '.yaml', '.yml']:
+            total_files += 1
+            try:
+              lines = len(f.read_text().splitlines())
+              total_lines += lines
+              extensions[ext] = extensions.get(ext, 0) + lines
+            except:
+              pass
+      result['code_stats'] = {'total_files': total_files, 'total_lines': total_lines, 'by_extension': extensions}
+
+      # Dependencies
+      pyproject = root / 'pyproject.toml'
+      if pyproject.exists():
+        result['dependencies']['pyproject.toml'] = pyproject.read_text()[:3000]
+      pkg_json = root / 'package.json'
+      if pkg_json.exists():
+        result['dependencies']['package.json'] = pkg_json.read_text()[:3000]
+
+      # License
+      for name in ['LICENSE', 'LICENSE.md', 'LICENSE.txt']:
+        p = root / name
+        if p.exists():
+          result['license'] = p.read_text()[:500]
+          break
+
+      # Examples
+      for d in ['examples', 'templates']:
+        edir = root / d
+        if edir.is_dir():
+          for f in sorted(edir.rglob('*.yaml'))[:5]:
+            rel = str(f.relative_to(root))
+            result['examples'][rel] = f.read_text()[:3000]
+          for f in sorted(edir.rglob('*.flow.yaml'))[:5]:
+            rel = str(f.relative_to(root))
+            result['examples'][rel] = f.read_text()[:3000]
+
+      # Write output
+      out_dir = os.environ.get('STEPWISE_STEP_IO', '.')
+      Path(out_dir, 'repo_data.json').write_text(json.dumps(result, indent=2))
+      print(json.dumps({'repo_data': 'repo_data.json', 'project_name': root.name}))
+      "
+    outputs: [repo_data, project_name]
+    inputs:
+      repo_path: $job.repo_path
+      spec_path: $job.spec_path
+
+  # ─── Phase 2: Product Brief ─────────────────────────────────────────
+
+  product-brief:
+    executor: llm
+    model: anthropic/claude-opus-4
+    temperature: 0.3
+    max_tokens: 4096
+    system: |
+      You are a product analyst. Your job is to synthesize raw repository data
+      into a structured product brief that captures what this tool does, who it's
+      for, and why it matters. Be direct and technical. No marketing fluff.
+    prompt: |
+      Analyze this repository and produce a structured product brief.
+
+      ## Repository Data
+      $repo_data
+
+      ## Spec (what the author wants to emphasize)
+      $spec
+
+      ## Output Format
+      Respond with a JSON object:
+      {
+        "name": "project name",
+        "tagline": "one-line description (under 10 words)",
+        "problem": "what pain does this solve? (2-3 sentences)",
+        "audience": "who is this for?",
+        "features": [
+          {"name": "feature name", "description": "what it does", "importance": 1-5}
+        ],
+        "differentiators": ["what makes this unique vs alternatives"],
+        "install_flow": ["step 1", "step 2", ...],
+        "cli_modes": [{"name": "mode", "command": "cmd", "description": "what it does"}],
+        "architecture": "brief technical summary",
+        "stats": {"lines": N, "languages": [...], "license": "..."}
+      }
+
+      Focus on the PROBLEM first, then the solution. If the spec emphasizes
+      certain features, rank those higher. Be specific — use actual command
+      names, actual file formats, actual capabilities from the README.
+    outputs: [brief]
+    inputs:
+      repo_data: ingest-repo.repo_data
+      spec: $job.spec_path
+
+  # ─── Phase 3: Design Planning ───────────────────────────────────────
+
+  plan-design:
+    executor: llm
+    model: anthropic/claude-opus-4
+    temperature: 0.4
+    max_tokens: 8192
+    system: |
+      You are a senior web designer specializing in developer tool landing pages.
+      You produce design specifications that other LLMs will use to generate HTML.
+      Your specifications must be precise enough that a different model can implement
+      them without creative interpretation.
+    prompt: |
+      Create a complete design specification for a homepage based on this product brief.
+
+      ## Product Brief
+      $brief
+
+      ## Design Research (follow these rules strictly)
+
+      TYPOGRAPHY — CRITICAL:
+      - NEVER use Inter, Roboto, Open Sans, Lato, Arial, Space Grotesk, or system fonts
+      - Headers: use Clash Display, Satoshi, or Cabinet Grotesk
+      - Code: JetBrains Mono or Fira Code
+      - Body: IBM Plex Sans or Cabinet Grotesk
+      - Weight contrast: 100-200 vs 800-900 (never 400 vs 600)
+      - Size jumps: 3x minimum (e.g., 16px body → 48px+ headers)
+
+      AESTHETIC:
+      - Dark mode ONLY. Background: #0a0a0f to #111118 range
+      - Dark glassmorphism: backdrop-filter blur(16px), rgba(255,255,255,0.05) backgrounds
+      - Gradient text on main headline: -webkit-background-clip: text
+      - Noise texture overlay: SVG feTurbulence filter
+      - Animated gradient borders on key cards: conic-gradient + rotation
+      - Scroll-triggered reveals via IntersectionObserver
+      - Staggered entrance animations with animation-delay
+
+      LAYOUT (Evil Martians rules from studying 100+ dev tool pages):
+      - No salesy BS — developers detect and reject marketing-speak
+      - Problem-oriented feature storytelling (not function lists)
+      - Centered hero composition
+      - Code snippet or product UI as hero visual
+      - Dual CTA: primary action + secondary "view on GitHub"
+      - Trust block after hero: GitHub stars, download counts, badges
+
+      REFERENCE SITES: Linear (dark charcoal + gradient accents), Cursor (custom fonts,
+      premium minimalism), Supabase (OSS with marketing polish), Bun (terminal aesthetic).
+
+      ## Output Format
+      Respond with a JSON object containing these four artifacts:
+
+      {
+        "design_tokens": {
+          "colors": {
+            "bg_primary": "#hex",
+            "bg_secondary": "#hex",
+            "bg_glass": "rgba(...)",
+            "text_primary": "#hex",
+            "text_secondary": "#hex",
+            "accent_primary": "#hex",
+            "accent_secondary": "#hex",
+            "accent_gradient": "linear-gradient(...)",
+            "border_subtle": "rgba(...)",
+            "code_bg": "#hex"
+          },
+          "typography": {
+            "font_display": "font name",
+            "font_body": "font name",
+            "font_code": "font name",
+            "google_fonts_url": "https://fonts.googleapis.com/...",
+            "scale": {
+              "hero_headline": "clamp(2.5rem, 5vw, 4.5rem)",
+              "section_headline": "clamp(1.8rem, 3vw, 2.5rem)",
+              "body": "1.125rem",
+              "code": "0.875rem",
+              "small": "0.8rem"
+            },
+            "weights": {"thin": 200, "bold": 800}
+          },
+          "spacing": {"section_gap": "value", "content_max_width": "value"},
+          "animation": {
+            "entrance_duration": "0.6s",
+            "entrance_easing": "cubic-bezier(0.16, 1, 0.3, 1)",
+            "stagger_delay": "0.1s",
+            "dag_cycle_duration": "8s"
+          },
+          "effects": {
+            "glassmorphism": "backdrop-filter: blur(16px); background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);",
+            "noise_filter": "<filter id='noise'><feTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter>",
+            "gradient_border": "background: conic-gradient(from var(--angle), accent1, accent2, accent1); animation: rotate 4s linear infinite;"
+          },
+          "css_examples": [
+            {"name": "section header", "html": "<h2>...</h2>", "css": "actual CSS using the tokens above"},
+            {"name": "glass card", "html": "<div>...</div>", "css": "actual CSS using the tokens above"},
+            {"name": "code block", "html": "<pre>...</pre>", "css": "actual CSS using the tokens above"}
+          ]
+        },
+
+        "content_outline": {
+          "sections": [
+            {
+              "id": "hero",
+              "heading": "suggested heading text",
+              "word_budget": 50,
+              "above_fold": true,
+              "notes": "what goes here"
+            }
+          ],
+          "above_fold_budget": "hero + headline + subheadline + install command + CTA only"
+        },
+
+        "responsive_spec": {
+          "breakpoints": {"mobile": "768px", "desktop": "1024px"},
+          "mobile_behavior": {
+            "hero_dag": "simplified vertical flowchart or hide",
+            "gallery_grid": "single column",
+            "code_blocks": "horizontal scroll"
+          }
+        },
+
+        "dag_layout": {
+          "description": "Layout for the animated hero DAG (if spec requests one)",
+          "nodes": [
+            {"id": "node-id", "label": "Display Name", "x_pct": 15, "y_pct": 50}
+          ],
+          "edges": [
+            {"from": "node-a", "to": "node-b"}
+          ],
+          "animation_sequence": [
+            {"time": 0.0, "node": "node-id", "action": "activate"},
+            {"time": 0.8, "node": "node-id", "action": "complete"}
+          ]
+        }
+      }
+
+      Make the design tokens CONCRETE — actual hex values, actual font names, actual CSS.
+      The css_examples must show exactly how to use the tokens (other LLMs will copy these patterns).
+      The DAG layout should match the workflow described in the spec if one is mentioned.
+    outputs: [design]
+    inputs:
+      brief: product-brief.brief
+
+  # ─── Phase 4: Copy Generation ───────────────────────────────────────
+
+  gen-copy:
+    executor: llm
+    model: anthropic/claude-sonnet-4
+    temperature: 0.5
+    max_tokens: 4096
+    system: |
+      You write homepage copy for developer tools. Your voice is direct, technical,
+      and anti-bullshit. You write like the Evil Martians study recommends:
+      problem-oriented, clever-and-simple, no marketing fluff.
+
+      NEVER use: "revolutionary", "game-changing", "seamless", "cutting-edge",
+      "empower", "leverage", "synergy", "paradigm", "unlock", "supercharge".
+
+      DO use: specific technical language, actual command names, concrete benefits.
+    prompt: |
+      Write all homepage copy for this project.
+
+      ## Product Brief
+      $brief
+
+      ## Content Outline
+      $content_outline
+
+      ## Rules
+      - Respect word budgets from the content outline
+      - Problem-oriented: state the pain BEFORE the solution
+      - Include actual CLI commands and code snippets
+      - Dual CTA on hero: primary action (install/run) + secondary (GitHub/docs)
+      - Developer voice: you're talking to someone who reads man pages
+
+      ## Output Format
+      Respond with JSON:
+      {
+        "hero": {
+          "headline": "short, punchy (under 8 words)",
+          "subheadline": "one sentence expanding on the headline",
+          "cta_primary": {"text": "button text", "hint": "e.g., pip install stepwise"},
+          "cta_secondary": {"text": "button text", "url_hint": "github or docs"}
+        },
+        "features": [
+          {
+            "id": "section-id from outline",
+            "headline": "feature section heading",
+            "description": "2-3 sentences, problem-first",
+            "code_snippet": "actual code/command if relevant"
+          }
+        ],
+        "quickstart": {
+          "headline": "heading",
+          "steps": [
+            {"command": "actual command", "description": "what it does"}
+          ]
+        },
+        "gallery": {
+          "headline": "heading for workflow library section",
+          "description": "1-2 sentences"
+        },
+        "meta_story": {
+          "headline": "heading for 'built with' section",
+          "body": "2-3 sentences about the meta-story"
+        },
+        "footer": {
+          "tagline": "short closing line",
+          "links": [{"text": "label", "url_hint": "where it goes"}]
+        }
+      }
+    outputs: [copy]
+    inputs:
+      brief: product-brief.brief
+      content_outline: plan-design.design
+
+  # ─── Phase 5: Parallel Section Generation ───────────────────────────
+  #
+  # Visual sections → Gemini 3.1 Pro (best HTML/CSS generation)
+  # Logic-heavy sections → Claude (better at JS state management)
+  #
+  # Each section gets: design tokens + copy + anti-slop prompt
+  # All classes prefixed with sw-{section}- to prevent collisions
+
+  gen-hero:
+    executor: llm
+    model: google/gemini-3.1-pro
+    temperature: 1.0
+    max_tokens: 65536
+    system: |
+      You generate production-quality HTML sections. Output a single, complete
+      HTML section with all CSS in a <style> block and all JS in a <script> block.
+      Everything must be self-contained — no external imports, no CDN links.
+
+      CRITICAL RULES:
+      - ALL classes prefixed with sw-hero-
+      - ALL colors/sizes MUST use CSS custom properties (provided below)
+      - NO hardcoded colors, font sizes, or spacing values
+      - Include @media (prefers-reduced-motion: reduce) to disable animations
+      - Semantic HTML: <section>, <h1>, <p>, not divs for everything
+      - ARIA labels on interactive elements
+    prompt: |
+      Generate the HERO SECTION for a developer tool homepage.
+
+      ## Design Tokens (use these as CSS custom properties)
+      $design_tokens
+
+      ## Copy (use this text VERBATIM — do not rewrite)
+      $hero_copy
+
+      ## Hero DAG Animation Spec
+      The hero visual is an animated SVG DAG showing workflow steps executing.
+      Node positions and animation timing are provided — generate the SVG and
+      CSS animations to match.
+
+      $dag_layout
+
+      ## DAG Animation Instructions
+      Generate an SVG with:
+      - Nodes at the specified percentage positions (responsive via viewBox)
+      - Each node: rounded rect or circle with glassmorphism effect
+      - Label text inside each node
+      - Edges as SVG <path> elements connecting nodes
+      - CSS @keyframes for the activation sequence:
+        - Inactive: dim (opacity 0.3, muted color)
+        - Activating: glow pulse (box-shadow or filter), scale to 1.05
+        - Complete: full opacity, accent color fill
+        - Edge pulse: stroke-dashoffset animation traveling source→target
+      - The full cycle plays once then loops after a pause
+
+      ## Layout
+      - Full-width dark background
+      - Centered content: headline, subheadline, CTA buttons
+      - DAG visualization below the text (or to the right on wide screens)
+      - Above the fold: headline + subheadline + CTAs + top of DAG only
+      - Mobile: DAG below content, simplified or hidden
+
+      ## Anti-Slop Checklist (verify before outputting)
+      - [ ] No Inter, Roboto, Arial, system fonts — using font from design tokens
+      - [ ] No purple gradient on white background
+      - [ ] Font weight contrast ≥ 3x (e.g., 200 vs 800)
+      - [ ] Gradient text on headline using -webkit-background-clip: text
+      - [ ] Noise texture overlay
+      - [ ] Entrance animations with staggered delays
+
+      Wrap your complete HTML in ```html fences.
+    outputs: [html, section_id]
+    inputs:
+      design_tokens: plan-design.design
+      hero_copy: gen-copy.copy
+      dag_layout: plan-design.design
+
+  gen-features:
+    executor: llm
+    model: google/gemini-3.1-pro
+    temperature: 1.0
+    max_tokens: 65536
+    system: |
+      You generate production-quality HTML sections. Output a single, complete
+      HTML section with all CSS in a <style> block and all JS in a <script> block.
+      Everything must be self-contained — no external imports, no CDN links.
+
+      CRITICAL RULES:
+      - ALL classes prefixed with sw-features-
+      - ALL colors/sizes MUST use CSS custom properties (provided below)
+      - NO hardcoded colors, font sizes, or spacing values
+      - Include @media (prefers-reduced-motion: reduce) to disable animations
+      - Semantic HTML elements
+      - ARIA labels on interactive elements
+    prompt: |
+      Generate the FEATURES SECTION for a developer tool homepage.
+
+      ## Design Tokens
+      $design_tokens
+
+      ## Copy (use VERBATIM)
+      $features_copy
+
+      ## Layout Options (pick the best fit):
+      - Bento grid: information-dense, modern feel, good for 4-6 features
+      - Chess layout: alternating image/text, good visual rhythm
+      - Step-by-step: perfect for progressive disclosure (CLI modes)
+
+      For code snippets in features: use a dark code block with the code font
+      from design tokens, syntax highlighting via CSS (not a library).
+
+      ## Anti-Slop Checklist
+      - [ ] No generic fonts
+      - [ ] Font weight contrast ≥ 3x
+      - [ ] Glassmorphism cards for feature items
+      - [ ] Scroll-triggered reveal animations (IntersectionObserver)
+      - [ ] Code snippets with proper syntax highlighting colors
+
+      Wrap your complete HTML in ```html fences.
+    outputs: [html, section_id]
+    inputs:
+      design_tokens: plan-design.design
+      features_copy: gen-copy.copy
+
+  gen-quickstart:
+    executor: llm
+    model: google/gemini-3.1-pro
+    temperature: 1.0
+    max_tokens: 65536
+    system: |
+      You generate production-quality HTML sections. Output a single, complete
+      HTML section with all CSS in a <style> block and all JS in a <script> block.
+      Everything must be self-contained — no external imports, no CDN links.
+
+      CRITICAL RULES:
+      - ALL classes prefixed with sw-quickstart-
+      - ALL colors/sizes MUST use CSS custom properties
+      - NO hardcoded values
+      - Semantic HTML, ARIA labels
+    prompt: |
+      Generate the QUICKSTART / INSTALL section for a developer tool homepage.
+
+      ## Design Tokens
+      $design_tokens
+
+      ## Copy (use VERBATIM)
+      $quickstart_copy
+
+      ## Install Commands (from the actual repo)
+      $install_commands
+
+      ## Visual Direction
+      - Terminal aesthetic: dark background, monospace font, green/cyan prompt character
+      - Each step is a numbered card or terminal window
+      - Copy-to-clipboard button on each command (vanilla JS, no dependencies)
+      - The progression should feel like: install → create → run → see results
+      - Show the actual terminal output the user would see
+
+      ## Anti-Slop Checklist
+      - [ ] Terminal blocks use the code font from design tokens
+      - [ ] Copy buttons work (navigator.clipboard.writeText)
+      - [ ] Numbered steps with clear visual progression
+      - [ ] Glassmorphism terminal windows
+
+      Wrap your complete HTML in ```html fences.
+    outputs: [html, section_id]
+    inputs:
+      design_tokens: plan-design.design
+      quickstart_copy: gen-copy.copy
+      install_commands: product-brief.brief
+
+  gen-gallery:
+    executor: llm
+    model: anthropic/claude-sonnet-4
+    temperature: 0.4
+    max_tokens: 8192
+    system: |
+      You generate production-quality HTML with working JavaScript.
+      This section has interactive logic (search, filter, state) so correctness
+      matters more than visual flourish. All code must be self-contained.
+
+      CRITICAL RULES:
+      - ALL classes prefixed with sw-gallery-
+      - ALL colors/sizes MUST use CSS custom properties
+      - NO external dependencies — vanilla JS only
+      - Working search and filter logic
+    prompt: |
+      Generate the WORKFLOW GALLERY section for a developer tool homepage.
+      This is a browsable, searchable grid of community-contributed workflows.
+
+      ## Design Tokens
+      $design_tokens
+
+      ## Copy (use VERBATIM)
+      $gallery_copy
+
+      ## Requirements
+      - Grid of workflow cards (responsive: 3 columns → 2 → 1)
+      - Each card shows: name, description, author, tag pills, step count, download count
+      - Featured workflows have a subtle badge/highlight
+      - Search bar: filters cards by name/description/tags (vanilla JS)
+      - Tag filter: click a tag to filter by it
+      - "Run this workflow" CTA on each card that copies a CLI command to clipboard:
+        `stepwise flow get <workflow-name>`
+      - Cards should feel clickable (hover states, subtle scale)
+
+      ## Mock Data
+      Generate 6-8 realistic mock workflows with varied tags and descriptions.
+      Include 2 featured workflows. Make the data a JS array at the top of the
+      script block so it's easy to replace with real API data later.
+
+      ## Anti-Slop Checklist
+      - [ ] Search actually works (filters on keyup)
+      - [ ] Tag filtering works
+      - [ ] Clipboard copy works with user feedback ("Copied!")
+      - [ ] Cards use glassmorphism from design tokens
+      - [ ] Responsive grid
+
+      Wrap your complete HTML in ```html fences.
+    outputs: [html, section_id]
+    inputs:
+      design_tokens: plan-design.design
+      gallery_copy: gen-copy.copy
+
+  gen-meta:
+    executor: llm
+    model: google/gemini-3.1-pro
+    temperature: 1.0
+    max_tokens: 32768
+    system: |
+      You generate production-quality HTML sections. Self-contained, no external imports.
+
+      CRITICAL RULES:
+      - ALL classes prefixed with sw-meta-
+      - ALL colors/sizes MUST use CSS custom properties
+      - Semantic HTML, ARIA labels
+    prompt: |
+      Generate the "BUILT WITH" META-STORY section for a developer tool homepage.
+      This section explains that the entire homepage was generated by the tool itself.
+
+      ## Design Tokens
+      $design_tokens
+
+      ## Copy (use VERBATIM)
+      $meta_copy
+
+      ## Visual Direction
+      - This is the "aha moment" — the visitor realizes the page they're looking at
+        was built by the tool they're reading about
+      - Show a small version of the workflow DAG that generated this page
+      - Use a slightly different visual treatment to set it apart (maybe a subtle
+        background shift or a border that says "meta")
+      - Include a CTA: "View this workflow" or "Run it yourself"
+      - Keep it concise — the meta-story should be a delightful surprise, not a lecture
+
+      ## Anti-Slop Checklist
+      - [ ] Design tokens used throughout
+      - [ ] The tone is clever, not self-congratulatory
+      - [ ] CTA copies the CLI command to clipboard
+
+      Wrap your complete HTML in ```html fences.
+    outputs: [html, section_id]
+    inputs:
+      design_tokens: plan-design.design
+      meta_copy: gen-copy.copy
+
+  # ─── Phase 6: Per-Section Review ────────────────────────────────────
+  #
+  # Claude reviews each section independently.
+  # Cross-model review catches blind spots.
+
+  review-hero:
+    executor: llm
+    model: anthropic/claude-sonnet-4
+    temperature: 0.2
+    max_tokens: 4096
+    system: "You are a code reviewer specializing in frontend quality. Be specific and actionable."
+    prompt: |
+      Review this HTML section against the design specification.
+
+      ## Generated HTML
+      $html
+
+      ## Design Tokens (check all values reference these)
+      $design_tokens
+
+      ## Review Checklist
+      1. TOKEN COMPLIANCE: Are ALL colors, fonts, sizes using CSS custom properties? Flag any hardcoded values.
+      2. ANTI-SLOP: No Inter/Roboto/Arial? Font weight contrast ≥ 3x? No purple gradients on white?
+      3. RESPONSIVE: Mobile breakpoints present? Content reflows correctly?
+      4. ACCESSIBILITY: Semantic HTML? ARIA labels? Contrast ratios? reduced-motion media query?
+      5. CLASS NAMING: All classes prefixed with sw-hero-?
+      6. ANIMATIONS: Entrance animations with stagger? No janky layout-triggering properties?
+      7. SELF-CONTAINED: No external imports, CDN links, or hallucinated resources?
+      8. COPY: Does the text match what was provided, or did the model rewrite it?
+
+      ## Output Format
+      {
+        "score": 0.0-1.0,
+        "pass": true/false,
+        "issues": [
+          {"severity": "critical|major|minor", "description": "what's wrong", "fix": "how to fix it"}
+        ],
+        "feedback": "concise summary for the fix step"
+      }
+    outputs: [score, pass, issues, feedback]
+    inputs:
+      html: gen-hero.html
+      design_tokens: plan-design.design
+    exits:
+      - name: passed
+        when: "outputs.pass == True"
+        action: advance
+      - name: needs_fix
+        when: "outputs.pass == False and attempt < 3"
+        action: loop
+        target: gen-hero
+      - name: give_up
+        when: "attempt >= 3"
+        action: advance
+
+  review-features:
+    executor: llm
+    model: anthropic/claude-sonnet-4
+    temperature: 0.2
+    max_tokens: 4096
+    system: "You are a code reviewer specializing in frontend quality. Be specific and actionable."
+    prompt: |
+      Review this HTML features section against the design specification.
+
+      ## Generated HTML
+      $html
+
+      ## Design Tokens
+      $design_tokens
+
+      ## Review Checklist
+      Same as hero review: token compliance, anti-slop, responsive, accessibility,
+      class naming (sw-features-), animations, self-contained, copy accuracy.
+
+      Output JSON: {"score": 0-1, "pass": bool, "issues": [...], "feedback": "..."}
+    outputs: [score, pass, issues, feedback]
+    inputs:
+      html: gen-features.html
+      design_tokens: plan-design.design
+    exits:
+      - name: passed
+        when: "outputs.pass == True"
+        action: advance
+      - name: needs_fix
+        when: "outputs.pass == False and attempt < 3"
+        action: loop
+        target: gen-features
+      - name: give_up
+        when: "attempt >= 3"
+        action: advance
+
+  review-quickstart:
+    executor: llm
+    model: anthropic/claude-sonnet-4
+    temperature: 0.2
+    max_tokens: 4096
+    system: "You are a code reviewer specializing in frontend quality. Be specific and actionable."
+    prompt: |
+      Review this HTML quickstart section.
+
+      ## Generated HTML
+      $html
+
+      ## Design Tokens
+      $design_tokens
+
+      ## Additional Checks
+      - Do the copy-to-clipboard buttons work?
+      - Are the install commands accurate?
+      - Does the terminal aesthetic use the code font?
+
+      Output JSON: {"score": 0-1, "pass": bool, "issues": [...], "feedback": "..."}
+    outputs: [score, pass, issues, feedback]
+    inputs:
+      html: gen-quickstart.html
+      design_tokens: plan-design.design
+    exits:
+      - name: passed
+        when: "outputs.pass == True"
+        action: advance
+      - name: needs_fix
+        when: "outputs.pass == False and attempt < 3"
+        action: loop
+        target: gen-quickstart
+      - name: give_up
+        when: "attempt >= 3"
+        action: advance
+
+  review-gallery:
+    executor: llm
+    model: anthropic/claude-sonnet-4
+    temperature: 0.2
+    max_tokens: 4096
+    system: "You are a code reviewer specializing in frontend quality and JavaScript correctness."
+    prompt: |
+      Review this HTML gallery section. This section has interactive JS logic.
+
+      ## Generated HTML
+      $html
+
+      ## Design Tokens
+      $design_tokens
+
+      ## Additional Checks (logic-heavy section)
+      - Does search actually filter cards on keyup?
+      - Does tag filtering work?
+      - Does clipboard copy work with feedback?
+      - Is the mock data realistic and well-structured?
+      - Are there any JS errors (undefined vars, missing event listeners)?
+
+      Output JSON: {"score": 0-1, "pass": bool, "issues": [...], "feedback": "..."}
+    outputs: [score, pass, issues, feedback]
+    inputs:
+      html: gen-gallery.html
+      design_tokens: plan-design.design
+    exits:
+      - name: passed
+        when: "outputs.pass == True"
+        action: advance
+      - name: needs_fix
+        when: "outputs.pass == False and attempt < 3"
+        action: loop
+        target: gen-gallery
+      - name: give_up
+        when: "attempt >= 3"
+        action: advance
+
+  review-meta:
+    executor: llm
+    model: anthropic/claude-sonnet-4
+    temperature: 0.2
+    max_tokens: 4096
+    system: "You are a code reviewer specializing in frontend quality."
+    prompt: |
+      Review this HTML meta-story section.
+
+      ## Generated HTML
+      $html
+
+      ## Design Tokens
+      $design_tokens
+
+      Output JSON: {"score": 0-1, "pass": bool, "issues": [...], "feedback": "..."}
+    outputs: [score, pass, issues, feedback]
+    inputs:
+      html: gen-meta.html
+      design_tokens: plan-design.design
+    exits:
+      - name: passed
+        when: "outputs.pass == True"
+        action: advance
+      - name: needs_fix
+        when: "outputs.pass == False and attempt < 3"
+        action: loop
+        target: gen-meta
+      - name: give_up
+        when: "attempt >= 3"
+        action: advance
+
+  # ─── Phase 7: Assembly ──────────────────────────────────────────────
+
+  assemble:
+    executor: llm
+    model: anthropic/claude-sonnet-4
+    temperature: 0.2
+    max_tokens: 65536
+    system: |
+      You are a frontend build engineer. You assemble HTML sections into a single
+      complete page. You deduplicate CSS, coordinate animations, and ensure everything
+      works together. Output one complete, valid HTML document.
+    prompt: |
+      Assemble these sections into a single, complete HTML page.
+
+      ## Design Tokens
+      $design_tokens
+
+      ## Sections (in page order)
+
+      ### Hero
+      $hero_html
+
+      ### Features
+      $features_html
+
+      ### Quickstart
+      $quickstart_html
+
+      ### Gallery
+      $gallery_html
+
+      ### Meta Story
+      $meta_html
+
+      ## Assembly Instructions
+
+      1. Create a complete HTML5 document with <!DOCTYPE html>, <html>, <head>, <body>
+      2. In <head>: meta charset, viewport, title, Google Fonts link from design tokens
+      3. Consolidate CSS:
+         - First: CSS custom properties (design tokens) in :root
+         - Second: shared utility styles (reset, base typography, scrollbar)
+         - Third: section-specific styles (already namespaced with sw-{section}-)
+         - Deduplicate any repeated rules
+      4. Coordinate animation timing:
+         - Hero entrance: starts immediately
+         - Each subsequent section: IntersectionObserver triggers on scroll
+         - Adjust animation-delay values so reveals flow naturally
+      5. Add navigation:
+         - Fixed top nav bar with links to each section (use section IDs)
+         - Smooth scroll behavior
+         - Active section highlighting on scroll
+      6. Add footer with project links
+      7. Consolidate all JS at the bottom of <body>:
+         - IntersectionObserver for scroll reveals
+         - Navigation active state
+         - Gallery search/filter logic
+         - Clipboard copy handlers
+         - Deduplicate any repeated JS utilities
+      8. Verify all internal links (#section-id) reference real IDs
+      9. Add: <meta name="color-scheme" content="dark">
+      10. Add noise texture SVG filter definition (from design tokens)
+      11. Total output must be ONE valid HTML file — fully self-contained
+
+      ## CRITICAL: Do not rewrite or "improve" the section HTML.
+      Preserve each section's HTML structure exactly. Your job is assembly,
+      not redesign. Only changes allowed: deduplicating CSS, adding nav/footer,
+      coordinating animation timing, and wrapping in a complete document.
+
+      Wrap your complete HTML in ```html fences.
+    outputs: [html, page_title]
+    inputs:
+      design_tokens: plan-design.design
+      hero_html: gen-hero.html
+      features_html: gen-features.html
+      quickstart_html: gen-quickstart.html
+      gallery_html: gen-gallery.html
+      meta_html: gen-meta.html
+    sequencing: [review-hero, review-features, review-quickstart, review-gallery, review-meta]
+
+  # ─── Phase 8: Final Review ──────────────────────────────────────────
+
+  final-review:
+    executor: llm
+    model: anthropic/claude-opus-4
+    temperature: 0.2
+    max_tokens: 4096
+    system: |
+      You are a senior frontend architect doing a final quality review of a
+      complete homepage. Be thorough but pragmatic — flag real issues, not
+      stylistic preferences.
+    prompt: |
+      Final quality review of the assembled homepage.
+
+      ## Complete HTML
+      $html
+
+      ## Design Specification
+      $design_tokens
+
+      ## Quality Rubric (score each 0-1)
+
+      1. ANTI-SLOP: No generic fonts, no purple gradients, no card-layout cliches
+      2. TYPOGRAPHY: Custom fonts loaded, weight contrast, size jumps
+      3. COLOR: Cohesive dark palette, consistent token usage across all sections
+      4. ANIMATION: Staggered entrance, not excessive, performant (transform/opacity only)
+      5. RESPONSIVE: Would work at 375px, 768px, 1440px
+      6. ACCESSIBILITY: WCAG AA contrast, ARIA labels, semantic HTML, reduced-motion
+      7. CONTENT: All sections present, copy matches spec, problem-oriented
+      8. TECHNICAL: Valid HTML, no console errors, no external deps, self-contained
+      9. CROSS-SECTION: No style drift between sections, consistent spacing/rhythm
+      10. WOW: ≥3 of (glassmorphism, gradient text, noise, animated borders, scroll reveals, DAG anim)
+
+      ## Output Format
+      {
+        "overall_score": 0.0-1.0,
+        "pass": true/false (true if overall >= 0.8),
+        "scores": {"anti_slop": 0-1, "typography": 0-1, ...},
+        "critical_issues": ["things that MUST be fixed"],
+        "suggestions": ["nice-to-have improvements"],
+        "feedback": "summary for fix step"
+      }
+    outputs: [overall_score, pass, scores, critical_issues, suggestions, feedback]
+    inputs:
+      html: assemble.html
+      design_tokens: plan-design.design
+    exits:
+      - name: ship_it
+        when: "outputs.pass == True"
+        action: advance
+      - name: needs_fixes
+        when: "outputs.pass == False and attempt < 3"
+        action: loop
+        target: assemble
+      - name: accept_imperfect
+        when: "attempt >= 3"
+        action: advance
+
+  # ─── Phase 9: Human Review ──────────────────────────────────────────
+
+  human-review:
+    executor: human
+    prompt: |
+      The homepage has been generated and reviewed.
+
+      Quality score: (see final-review output)
+
+      Open the generated HTML file in your browser and review it.
+      Approve to proceed to deployment, or provide feedback for another pass.
+    outputs: [decision, feedback]
+    inputs:
+      html: assemble.html
+      review: final-review.feedback
+    exits:
+      - name: approved
+        when: "outputs.decision == 'approve'"
+        action: advance
+      - name: revise
+        when: "outputs.decision == 'revise'"
+        action: loop
+        target: assemble
+
+  # ─── Phase 10: Write Output ─────────────────────────────────────────
+
+  write-output:
+    run: |
+      python3 -c "
+      import os, json
+      from pathlib import Path
+
+      html = os.environ.get('html', '')
+      output_dir = os.environ.get('output_dir', './output')
+      project_name = os.environ.get('project_name', 'homepage')
+
+      out = Path(output_dir)
+      out.mkdir(parents=True, exist_ok=True)
+
+      # Write the HTML file
+      index = out / 'index.html'
+      index.write_text(html)
+
+      print(json.dumps({
+        'output_path': str(index),
+        'size_bytes': len(html.encode()),
+        'message': f'Homepage written to {index}'
+      }))
+      "
+    outputs: [output_path, size_bytes, message]
+    inputs:
+      html: assemble.html
+      output_dir: $job.output_dir
+      project_name: ingest-repo.project_name
+    sequencing: [human-review]

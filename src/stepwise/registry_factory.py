@@ -81,14 +81,22 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
                 from stepwise.executors import LLMExecutor
                 model_ref = cfg.get("model") or config.default_model or "anthropic/claude-sonnet-4-20250514"
                 model_id = config.resolve_model(model_ref)
-                return LLMExecutor(
+                kwargs: dict = {}
+                if cfg.get("system"):
+                    kwargs["system"] = cfg["system"]
+                if cfg.get("temperature") is not None:
+                    kwargs["temperature"] = cfg["temperature"]
+                if cfg.get("max_tokens") is not None:
+                    kwargs["max_tokens"] = cfg["max_tokens"]
+                executor = LLMExecutor(
                     client=llm_client,
                     model=model_id,
-                    system_prompt=cfg.get("system_prompt"),
-                    temperature=cfg.get("temperature"),
-                    max_tokens=cfg.get("max_tokens"),
-                    output_format=cfg.get("output_format"),
+                    prompt=cfg.get("prompt", ""),
+                    **kwargs,
                 )
+                if cfg.get("output_fields"):
+                    executor._output_fields = cfg["output_fields"]
+                return executor
 
             registry.register("llm", _create_llm_executor)
         except ImportError:
