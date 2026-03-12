@@ -113,9 +113,9 @@ export function ChatPanel({
       });
     };
 
-    try {
-      const assistantIdx = messages.length + 1;
+    const assistantIdx = messages.length + 1;
 
+    try {
       setMessages((prev) => [
         ...prev,
         { role: "assistant", content: "", yamlBlocks: [], fileBlocks: [], toolActivities: [] },
@@ -157,6 +157,14 @@ export function ChatPanel({
             toolActivities[idx] = { ...toolActivities[idx], output: chunk.tool_output, done: true };
           }
           updateMsg(assistantIdx);
+        } else if (chunk.type === "done") {
+          // Mark all pending tools as done when stream completes
+          for (let i = 0; i < toolActivities.length; i++) {
+            if (!toolActivities[i].done) {
+              toolActivities[i] = { ...toolActivities[i], done: true };
+            }
+          }
+          updateMsg(assistantIdx);
         } else if (chunk.type === "error") {
           fullContent += `\n\n**Error:** ${chunk.content}`;
           updateMsg(assistantIdx);
@@ -165,6 +173,15 @@ export function ChatPanel({
     } catch {
       // Stream ended or errored
     } finally {
+      // Ensure all tool activities are marked done on stream end
+      for (let i = 0; i < toolActivities.length; i++) {
+        if (!toolActivities[i].done) {
+          toolActivities[i] = { ...toolActivities[i], done: true };
+        }
+      }
+      if (toolActivities.length > 0) {
+        updateMsg(assistantIdx);
+      }
       setIsStreaming(false);
     }
   }, [input, isStreaming, messages, currentYaml, selectedStep, agentMode, sessionId, flowPath]);
