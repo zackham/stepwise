@@ -666,6 +666,165 @@ process_all:
 
 ---
 
+## Route Steps (Conditional Dispatch)
+
+Route steps dispatch to different sub-flows based on upstream output. An upstream step classifies or categorizes, then the route step picks the right pipeline. Think of it as a `switch` statement for workflows.
+
+### YAML Syntax
+
+```yaml
+steps:
+  triage:
+    executor: llm
+    prompt: "Classify this issue as trivial, standard, or complex"
+    outputs: [category, summary]
+
+  run_pipeline:
+    inputs: { category: triage.category, summary: triage.summary }
+    routes:
+      trivial:
+        when: "category == 'trivial'"
+        flow:
+          steps:
+            quick_fix:
+              executor: llm
+              prompt: "Quick fix for: $summary"
+              outputs: [result]
+      standard:
+        when: "category == 'standard'"
+        flow: flows/standard-pipeline.yaml
+      complex:
+        when: "category == 'complex'"
+        flow: flows/complex-pipeline.yaml
+      default:
+        flow: flows/standard-pipeline.yaml
+    outputs: [result]
+```
+
+### Key Concepts
+
+- `routes:` is a mapping of route names to `{when, flow}` entries
+- **First-match semantics** — routes evaluate in YAML declaration order; first `when:` that returns true wins
+- `default:` route may omit `when:` — always matches, always evaluated last regardless of YAML position
+- Non-default routes **must** have a `when:` expression
+- Route steps **must** declare `outputs:`
+- Route steps **cannot** also be for-each steps (mutually exclusive)
+
+### Three Flow Source Types
+
+| Type | Syntax | Resolved |
+|------|--------|----------|
+| **Inline** | dict with `steps:` | Parsed at load time |
+| **File path** | string ending `.yaml`/`.yml` | Loaded and baked at parse time (relative to parent flow dir) |
+| **Registry ref** | string starting `@` (e.g., `@alice:fast-pipeline`) | Resolved at runtime (coming in M9) |
+
+File refs are "baked" at parse time — the resolved workflow is stored inline, so jobs don't depend on the original file at runtime.
+
+### Output Contract
+
+Every terminal step of each sub-flow must independently produce **all** declared `outputs:` of the route step. This prevents false positives when sub-flows branch internally. If the contract fails, validation errors at load time.
+
+### Expression Namespace
+
+Route `when:` expressions use the same safe eval as exit rules, with:
+- All input bindings by name (e.g., `category`, `summary`)
+- `attempt` — starts at 1, increments if the route step is re-executed via loop
+- The name `attempt` is reserved — cannot be used as an input binding name
+- Same safe builtins as exit rules (`any`, `all`, `len`, `min`, `max`, etc.)
+
+### Error Handling
+
+- Expression evaluation errors fail the step immediately (no fallthrough to next route)
+- If no route matches and no `default` exists, the step fails with `route_no_match`
+- Sub-job creation failures mark the run as failed, not orphaned
+
+### Route Patterns
+
+#### Simple category dispatch
+```yaml
+handle:
+  inputs: { type: classify.type }
+  routes:
+    bug:
+      when: "type == 'bug'"
+      flow:
+        steps:
+          fix:
+            executor: agent
+            prompt: "Fix the bug: $description"
+            outputs: [result]
+    feature:
+      when: "type == 'feature'"
+      flow:
+        steps:
+          design:
+            executor: agent
+            prompt: "Design the feature: $description"
+            outputs: [result]
+    default:
+      flow:
+        steps:
+          generic:
+            executor: llm
+            prompt: "Handle: $description"
+            outputs: [result]
+  outputs: [result]
+```
+
+#### Route with file refs
+```yaml
+process:
+  inputs: { tier: evaluate.tier }
+  routes:
+    premium:
+      when: "tier == 'premium'"
+      flow: flows/premium-pipeline.yaml
+    standard:
+      when: "tier == 'standard'"
+      flow: flows/standard-pipeline.yaml
+    default:
+      flow: flows/basic-pipeline.yaml
+  outputs: [result, summary]
+```
+
+#### Route + downstream consumption
+```yaml
+steps:
+  classify:
+    executor: llm
+    prompt: "Classify: $input"
+    outputs: [category]
+
+  dispatch:
+    inputs: { category: classify.category }
+    routes:
+      fast:
+        when: "category == 'simple'"
+        flow:
+          steps:
+            solve:
+              run: scripts/quick.sh
+              outputs: [answer]
+      slow:
+        when: "category == 'complex'"
+        flow:
+          steps:
+            solve:
+              executor: agent
+              prompt: "Deep analysis..."
+              outputs: [answer]
+    outputs: [answer]
+
+  report:
+    executor: llm
+    prompt: "Generate report from: $answer"
+    outputs: [report]
+    inputs:
+      answer: dispatch.answer     # from whichever sub-flow ran
+```
+
+---
+
 ## Template Variables (Prompt Templating)
 
 Prompts use Python `string.Template` syntax: `$variable` or `${variable}`. Rendering uses `safe_substitute`.
@@ -1208,7 +1367,15 @@ YAML uses `exits:` with `when:` conditions. The loader converts these to `expres
 
 The YAML parser requires `target:` when `action: loop`. If you want a self-loop in YAML, set `target` to the step's own name.
 
-### 10. First-iteration null inputs in loops
+### 10. Route expression errors don't fallthrough
+
+If a route's `when:` expression throws an error (bad syntax, undefined variable), the step **fails immediately**. It does NOT skip to the next route. Make sure all variables in `when:` expressions are bound via `inputs:`. Common mistake: referencing a field name that's not in the route step's `inputs` mapping.
+
+### 11. Route file refs are baked at parse time
+
+File path flow references (e.g., `flow: flows/pipeline.yaml`) are loaded and inlined when the flow YAML is parsed. The resolved workflow is stored inline — the original file is not needed at runtime. If you update the referenced file, you must re-parse the parent flow to pick up changes.
+
+### 12. First-iteration null inputs in loops
 
 When a loop step has an input from a step that hasn't run yet (e.g., `draft` takes feedback from `review` on the first iteration), the input resolves to null/empty. Design prompts to handle this gracefully (e.g., "Previous feedback (if any): $feedback").
 
@@ -1234,3 +1401,10 @@ Before outputting a flow, verify:
 14. For-each steps: `for_each` source references a valid step and field that produces a list
 15. For-each steps: sub-flow steps access the iteration variable via `$job.<as_variable>`
 16. For-each steps: downstream steps reference `for_each_step.results` (the collected array)
+17. Route steps: every non-default route has a `when:` expression
+18. Route steps: at most one `default` route (no `when:`)
+19. Route steps: every terminal step of each sub-flow produces all declared `outputs:`
+20. Route steps: `outputs:` is declared (required)
+21. Route steps: not combined with `for_each` on the same step
+22. Route steps: `attempt` is not used as an input binding name (reserved)
+23. Route steps: `when:` expressions use only input bindings, `attempt`, and safe builtins

@@ -245,6 +245,73 @@ steps:
       all_results: process_sections.results   # array of sub-flow terminal outputs
 ```
 
+### Route Steps
+
+Route steps dispatch to different sub-flows based on upstream output. An upstream step classifies or categorizes, then the route step picks the right pipeline.
+
+```yaml
+steps:
+  triage:
+    executor: llm
+    prompt: "Classify this issue as trivial, standard, or complex"
+    outputs: [category, summary]
+
+  run_pipeline:
+    inputs: { category: triage.category, summary: triage.summary }
+    routes:
+      trivial:
+        when: "category == 'trivial'"
+        flow:
+          steps:
+            quick_fix:
+              executor: llm
+              prompt: "Quick fix for: $summary"
+              outputs: [result]
+      standard:
+        when: "category == 'standard'"
+        flow: flows/standard-pipeline.yaml
+      complex:
+        when: "category == 'complex'"
+        flow: flows/complex-pipeline.yaml
+      default:
+        flow: flows/standard-pipeline.yaml
+    outputs: [result]
+```
+
+**Key concepts:**
+- `routes:` is a mapping of route names to `{when, flow}` entries
+- `when:` expressions use the same safe eval as exit rules, with input bindings + `attempt` available
+- **First-match semantics** — routes evaluate in YAML declaration order; first `when:` that returns true wins
+- `default:` route may omit `when:` — always matches, always evaluated last regardless of YAML position
+- Non-default routes **must** have a `when:` expression
+- Route steps **must** declare `outputs:`
+
+**Three flow source types:**
+- **Inline** — a dict with `steps:` (parsed at load time)
+- **File path** — string ending `.yaml`/`.yml` (loaded and baked at parse time, resolved relative to parent flow directory)
+- **Registry ref** — string starting `@` like `@alice:fast-pipeline` (resolved at runtime, coming in M9)
+
+**Output contract:** Every terminal step of each sub-flow must independently produce all declared `outputs:`. This prevents false positives when sub-flows branch internally.
+
+**Expression namespace:**
+- All input bindings by name (e.g., `category`, `summary`)
+- `attempt` — starts at 1, increments if the route step is re-executed via loop
+- The name `attempt` is reserved and cannot be used as an input binding
+
+**Error handling:**
+- Expression evaluation errors fail the step immediately (no fallthrough to next route)
+- If no route matches and no `default` exists, the step fails with `route_no_match`
+- Sub-job creation failures (e.g., depth limit) mark the run as failed, not orphaned
+
+**Downstream access:**
+```yaml
+  consume:
+    run: scripts/next.py
+    outputs: [final]
+    inputs:
+      data: run_pipeline.result   # from whichever sub-flow ran
+```
+
 ### Context Chains
 
 Context chains give agent steps session continuity across a workflow. Prior chain members' conversations are compiled into an XML context block and prepended to the agent's prompt. This lets multi-step agent workflows build on prior reasoning without sharing mutable state.
@@ -322,3 +389,4 @@ steps:
 | `chains: {name: {...}}` | `WorkflowDefinition.chains = {name: ChainConfig(...)}` |
 | `chain: chain_name` | `StepDefinition.chain = "chain_name"` |
 | `chain_label: "Label"` | `StepDefinition.chain_label = "Label"` |
+| `routes: {name: {when, flow}}` | `StepDefinition.route_def = RouteDefinition(routes=[RouteSpec(...)])` |

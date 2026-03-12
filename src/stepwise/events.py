@@ -35,3 +35,8 @@ FOR_EACH_COMPLETED = "for_each.completed"
 # M7a: Context chain events
 CHAIN_CONTEXT_COMPILED = "chain.context_compiled"
 CHAIN_TRANSCRIPT_CAPTURED = "chain.transcript_captured"
+
+# M8: Route events
+ROUTE_MATCHED = "route.matched"
+ROUTE_NO_MATCH = "route.no_match"
+ROUTE_EVAL_ERROR = "route.eval_error"
