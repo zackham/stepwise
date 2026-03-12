@@ -28,7 +28,7 @@ steps:
   llm_step:
     executor: llm
     prompt: "Analyze {{input_var}}"
-    model: anthropic/claude-sonnet-4-20250514
+    model: anthropic/claude-sonnet-4
     outputs: [result]
     inputs:
       input_var: step_name.field1
@@ -112,7 +112,7 @@ def chat_stream(
         yield {"type": "error", "content": "No OpenRouter API key configured. Set it in Settings."}
         return
 
-    model = config.default_model or "anthropic/claude-sonnet-4-20250514"
+    model = config.default_model or "anthropic/claude-sonnet-4"
     model_id = config.resolve_model(model)
 
     messages = _build_messages(
@@ -146,7 +146,8 @@ def chat_stream(
             timeout=120.0,
         ) as resp:
             if resp.status_code != 200:
-                yield {"type": "error", "content": f"OpenRouter error: {resp.status_code}"}
+                body = resp.read().decode(errors="replace")[:500]
+                yield {"type": "error", "content": f"OpenRouter error {resp.status_code}: {body}"}
                 return
 
             full_content = ""
