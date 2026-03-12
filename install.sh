@@ -41,7 +41,7 @@ dim "Using uv at $(command -v uv)"
 
 # ── Install stepwise ──────────────────────────────────────────────────
 info "Installing stepwise..."
-uv tool install stepwise
+uv tool install stepwise-run
 
 # ── Done ──────────────────────────────────────────────────────────────
 echo ""

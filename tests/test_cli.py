@@ -226,7 +226,7 @@ class TestSelfUpdate:
 
         def fake_run(cmd, **kwargs):
             if cmd == ["uv", "tool", "list"]:
-                result = subprocess.CompletedProcess(cmd, 0, stdout="stepwise 0.1.0\n", stderr="")
+                result = subprocess.CompletedProcess(cmd, 0, stdout="stepwise-run 0.1.0\n", stderr="")
                 return result
             raise FileNotFoundError()
 

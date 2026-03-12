@@ -24,9 +24,9 @@ curl -fsSL https://raw.githubusercontent.com/zackham/stepwise/master/install.sh 
 Or install directly with your preferred tool:
 
 ```bash
-uv tool install stepwise      # recommended
-pipx install stepwise          # alternative
-pip install stepwise           # if neither is available
+uv tool install stepwise-run   # recommended
+pipx install stepwise-run      # alternative
+pip install stepwise-run       # if neither is available
 ```
 
 ## Get started in 30 seconds

@@ -47,7 +47,7 @@ def _get_version() -> str:
     """Read version from package metadata."""
     try:
         from importlib.metadata import version
-        return version("stepwise")
+        return version("stepwise-run")
     except Exception:
         return "0.1.0"
 
@@ -833,7 +833,7 @@ def _detect_install_method() -> str:
     for tool, cmd in [("uv", ["uv", "tool", "list"]), ("pipx", ["pipx", "list", "--short"])]:
         try:
             out = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            if out.returncode == 0 and "stepwise" in out.stdout:
+            if out.returncode == 0 and "stepwise-run" in out.stdout:
                 return tool
         except (FileNotFoundError, subprocess.TimeoutExpired):
             continue
@@ -849,9 +849,9 @@ def cmd_self_update(args: argparse.Namespace) -> int:
     method = _detect_install_method()
 
     upgrade_cmds = {
-        "uv": ["uv", "tool", "upgrade", "stepwise"],
-        "pipx": ["pipx", "upgrade", "stepwise"],
-        "pip": [sys.executable, "-m", "pip", "install", "--upgrade", "stepwise"],
+        "uv": ["uv", "tool", "upgrade", "stepwise-run"],
+        "pipx": ["pipx", "upgrade", "stepwise-run"],
+        "pip": [sys.executable, "-m", "pip", "install", "--upgrade", "stepwise-run"],
     }
 
     cmd = upgrade_cmds[method]

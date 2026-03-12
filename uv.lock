@@ -361,7 +361,7 @@ wheels = [
 ]
 
 [[package]]
-name = "stepwise"
+name = "stepwise-run"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
