@@ -605,43 +605,180 @@ def cmd_flow(args: argparse.Namespace) -> int:
     action = args.flow_action
 
     if action == "get":
-        url = args.target
-        if not url:
-            print("Error: flow get requires a URL or name", file=sys.stderr)
-            return EXIT_USAGE_ERROR
-
-        # URL download (starts with http)
-        if url.startswith("http://") or url.startswith("https://"):
-            return _flow_get_url(url)
-
-        # Name-based lookup (stub)
-        print(f"Flow registry coming soon. For now, use a direct URL:")
-        print(f"  stepwise flow get https://example.com/{url}.flow.yaml")
-        return EXIT_SUCCESS
-
+        return _flow_get(args)
     elif action == "share":
-        flow_file = args.file
-        if flow_file:
-            flow_path = Path(flow_file)
-            if not flow_path.exists():
-                print(f"Error: File not found: {flow_path}", file=sys.stderr)
-                return EXIT_USAGE_ERROR
-            print(f"Validating {flow_path}...")
-            print(f"Flow sharing coming soon.")
-        else:
-            print("Flow sharing coming soon.")
-        return EXIT_SUCCESS
-
+        return _flow_share(args)
     elif action == "search":
-        query = " ".join(args.query) if args.query else ""
-        if query:
-            print(f"Searching for '{query}'...")
-        print("Flow registry coming soon.")
+        return _flow_search(args)
+    elif action == "info":
+        return _flow_info(args)
+    else:
+        print("Error: flow requires 'get', 'share', 'search', or 'info' action", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+
+def _flow_get(args: argparse.Namespace) -> int:
+    """Download a flow by URL or registry name."""
+    from stepwise.registry_client import fetch_flow, RegistryError
+
+    target = args.target
+    if not target:
+        print("Error: flow get requires a URL or name", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    # URL download
+    if target.startswith("http://") or target.startswith("https://"):
+        return _flow_get_url(target)
+
+    # Registry name lookup
+    slug = target
+    force = getattr(args, "force", False)
+    try:
+        data = fetch_flow(slug)
+    except RegistryError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    filename = f"{slug}.flow.yaml"
+    target_path = Path(filename)
+    if target_path.exists() and not force:
+        print(f"Error: {target_path} already exists (use --force to overwrite)", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    target_path.write_text(data["yaml"])
+    steps = data.get("steps", "?")
+    author = data.get("author", "unknown")
+    downloads = data.get("downloads", 0)
+    print(f"✓ Downloaded {filename} ({steps} steps, by {author}, {downloads:,} downloads)")
+    print(f"  Run: stepwise run {filename}")
+    return EXIT_SUCCESS
+
+
+def _flow_share(args: argparse.Namespace) -> int:
+    """Publish a flow to the registry."""
+    from stepwise.registry_client import publish_flow, update_flow, RegistryError
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+    flow_file = args.file
+    if not flow_file:
+        print("Error: flow share requires a file path", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    flow_path = Path(flow_file)
+    if not flow_path.exists():
+        print(f"Error: File not found: {flow_path}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    # Validate first
+    try:
+        wf = load_workflow_yaml(str(flow_path))
+        wf.validate()
+    except (YAMLLoadError, ValueError) as e:
+        print(f"Error: Validation failed: {e}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    yaml_content = flow_path.read_text()
+    author = getattr(args, "author", None)
+    do_update = getattr(args, "update", False)
+
+    print(f"Validating {flow_path}... ✓ ({len(wf.steps)} steps)")
+
+    try:
+        if do_update:
+            import yaml as yaml_lib
+            data = yaml_lib.safe_load(yaml_content)
+            name = data.get("name", flow_path.stem.replace(".flow", ""))
+            import re
+            slug = re.sub(r"[^a-z0-9]+", "-", name.lower().strip()).strip("-")
+            result = update_flow(slug, yaml_content)
+            print(f"✓ Updated: {result.get('url', slug)}")
+        else:
+            result = publish_flow(yaml_content, author=author)
+            slug = result.get("slug", "")
+            print(f"Publishing as \"{result.get('name', '')}\" by {result.get('author', 'anonymous')}...")
+            print(f"✓ Published: {result.get('url', '')}")
+            print(f"  Get: stepwise flow get {slug}")
+            if result.get("update_token"):
+                print(f"  Token saved to ~/.config/stepwise/tokens.json")
+    except RegistryError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    return EXIT_SUCCESS
+
+
+def _flow_search(args: argparse.Namespace) -> int:
+    """Search the flow registry."""
+    from stepwise.registry_client import search_flows, RegistryError
+
+    query = " ".join(args.query) if args.query else ""
+    tag = getattr(args, "tag", None)
+    sort = getattr(args, "sort", "downloads")
+    output = getattr(args, "output", "table")
+
+    try:
+        result = search_flows(query=query, tag=tag, sort=sort)
+    except RegistryError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    flows = result.get("flows", [])
+    if not flows:
+        print("No flows found.")
         return EXIT_SUCCESS
 
-    else:
-        print("Error: flow requires 'get', 'share', or 'search' action", file=sys.stderr)
+    if output == "json":
+        print(json.dumps(result, indent=2))
+        return EXIT_SUCCESS
+
+    # Table output
+    print(f"{'NAME':<25} {'AUTHOR':<12} {'STEPS':>5}  {'DOWNLOADS':>9}  TAGS")
+    for f in flows:
+        tags = ", ".join(f.get("tags", []))
+        print(f"{f['slug']:<25} {f.get('author', '?'):<12} {f.get('steps', '?'):>5}  {f.get('downloads', 0):>9,}  {tags}")
+
+    total = result.get("total", len(flows))
+    if total > len(flows):
+        print(f"\nShowing {len(flows)} of {total} flows")
+    return EXIT_SUCCESS
+
+
+def _flow_info(args: argparse.Namespace) -> int:
+    """Show details about a published flow."""
+    from stepwise.registry_client import fetch_flow, RegistryError
+
+    slug = args.name
+    if not slug:
+        print("Error: flow info requires a flow name", file=sys.stderr)
         return EXIT_USAGE_ERROR
+
+    try:
+        data = fetch_flow(slug)
+    except RegistryError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    print(f"Name:        {data.get('name', '?')}")
+    print(f"Author:      {data.get('author', '?')}")
+    print(f"Version:     {data.get('version', '?')}")
+    print(f"Description: {data.get('description', '')}")
+    tags = ", ".join(data.get("tags", []))
+    print(f"Tags:        {tags or '(none)'}")
+    print(f"Downloads:   {data.get('downloads', 0):,}")
+    print(f"Published:   {data.get('created_at', '?')}")
+    print(f"URL:         {data.get('url', '?')}")
+
+    # Show steps summary
+    executors = data.get("executor_types", [])
+    steps = data.get("steps", 0)
+    loops = data.get("loops", 0)
+    print(f"\nSteps:       {steps}")
+    if loops:
+        print(f"Loops:       {loops}")
+    if executors:
+        print(f"Executors:   {', '.join(executors)}")
+
+    return EXIT_SUCCESS
 
 
 def _flow_get_url(url: str) -> int:
@@ -851,7 +988,7 @@ def cmd_self_update(args: argparse.Namespace) -> int:
     upgrade_cmds = {
         "uv": ["uv", "tool", "upgrade", "stepwise-run"],
         "pipx": ["pipx", "upgrade", "stepwise-run"],
-        "pip": [sys.executable, "-m", "pip", "install", "--upgrade", "stepwise-run"],
+        "pip": [sys.executable, "-m", "pip", "install", "--upgrade", "stepwise-run@git+https://github.com/zackham/stepwise.git"],
     }
 
     cmd = upgrade_cmds[method]
@@ -960,12 +1097,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_flow_get = flow_sub.add_parser("get", help="Download a flow")
     p_flow_get.add_argument("target", help="URL or flow name")
+    p_flow_get.add_argument("--force", action="store_true", help="Overwrite existing file")
 
     p_flow_share = flow_sub.add_parser("share", help="Publish a flow")
     p_flow_share.add_argument("file", nargs="?", help="Flow file to share")
+    p_flow_share.add_argument("--author", help="Author name (default: from git config)")
+    p_flow_share.add_argument("--update", action="store_true", help="Update existing flow")
 
     p_flow_search = flow_sub.add_parser("search", help="Search flows")
     p_flow_search.add_argument("query", nargs="*", help="Search query")
+    p_flow_search.add_argument("--tag", help="Filter by tag")
+    p_flow_search.add_argument("--sort", choices=["downloads", "newest", "name"], default="downloads")
+    p_flow_search.add_argument("--output", choices=["table", "json"], default="table")
+
+    p_flow_info = flow_sub.add_parser("info", help="Show flow details")
+    p_flow_info.add_argument("name", help="Flow name")
 
     # jobs
     p_jobs = sub.add_parser("jobs", help="List jobs")

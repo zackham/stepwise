@@ -24,9 +24,14 @@ curl -fsSL https://raw.githubusercontent.com/zackham/stepwise/master/install.sh 
 Or install directly with your preferred tool:
 
 ```bash
-uv tool install stepwise-run   # recommended
-pipx install stepwise-run      # alternative
-pip install stepwise-run       # if neither is available
+uv tool install stepwise-run@git+https://github.com/zackham/stepwise.git
+```
+
+Or with pipx/pip:
+
+```bash
+pipx install git+https://github.com/zackham/stepwise.git
+pip install git+https://github.com/zackham/stepwise.git
 ```
 
 ## Get started in 30 seconds
