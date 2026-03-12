@@ -1161,7 +1161,10 @@ class Engine:
         File paths are baked at parse time, so only @author:name refs reach here.
         """
         if ref.startswith("@"):
-            raise ValueError(f"Registry references not yet supported: {ref} (coming in M9)")
+            raise ValueError(
+                f"Registry references must be resolved at parse time: {ref}. "
+                f"Use load_workflow_yaml() to resolve @author:name refs before execution."
+            )
         # File paths should never reach here — they're baked at parse time
         raise ValueError(
             f"Unexpected file ref at runtime: {ref}. "

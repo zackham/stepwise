@@ -85,7 +85,7 @@ LangGraph is the closest architectural cousin — explicit graph topology, condi
 
 5. **Observable by default.** Every state transition, every input/output handoff, every cost event is logged. The `--report` flag renders it all as an interactive HTML document.
 
-6. **Single machine, zero infrastructure.** SQLite persistence. One Python process. Install with `pip install stepwise`. No servers, no workers, no cloud accounts required.
+6. **Single machine, zero infrastructure.** SQLite persistence. One Python process. Install with `curl -fsSL https://raw.githubusercontent.com/zackham/stepwise/master/install.sh | sh`. No servers, no workers, no cloud accounts required.
 
 ## Who It's For
 
