@@ -1355,13 +1355,6 @@ def cmd_self_update(args: argparse.Namespace) -> int:
     import subprocess
 
     old_version = _get_version()
-
-    # Check if there's actually an update before installing
-    remote_ver = _fetch_remote_version()
-    if remote_ver and _parse_version(remote_ver) <= _parse_version(old_version):
-        print(f"Already up to date (v{old_version}).")
-        return EXIT_SUCCESS
-
     method = _detect_install_method()
 
     GIT_URL = "stepwise-run@git+https://github.com/zackham/stepwise.git"
@@ -1404,6 +1397,10 @@ def cmd_self_update(args: argparse.Namespace) -> int:
             cache_file.unlink()
     except Exception:
         pass
+
+    if new_version == old_version:
+        print(f"Already up to date (v{old_version}).")
+        return EXIT_SUCCESS
 
     print(f"\nUpdated: v{old_version} → v{new_version}\n")
 
