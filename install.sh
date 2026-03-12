@@ -41,7 +41,27 @@ dim "Using uv at $(command -v uv)"
 
 # ── Install stepwise ──────────────────────────────────────────────────
 info "Installing stepwise..."
-uv tool install stepwise-run@git+https://github.com/zackham/stepwise.git
+if ! uv tool install stepwise-run@git+https://github.com/zackham/stepwise.git 2>/tmp/sw-install-err; then
+    if grep -q "already exists" /tmp/sw-install-err; then
+        printf "A 'stepwise' command already exists. Replace it? [y/N] "
+        read -r answer
+        case "$answer" in
+            y|Y|yes|Yes)
+                uv tool install --force stepwise-run@git+https://github.com/zackham/stepwise.git
+                ;;
+            *)
+                echo "Installation cancelled."
+                rm -f /tmp/sw-install-err
+                exit 0
+                ;;
+        esac
+    else
+        cat /tmp/sw-install-err >&2
+        rm -f /tmp/sw-install-err
+        exit 1
+    fi
+    rm -f /tmp/sw-install-err
+fi
 
 # ── Done ──────────────────────────────────────────────────────────────
 echo ""
