@@ -992,10 +992,12 @@ def cmd_self_update(args: argparse.Namespace) -> int:
     old_version = _get_version()
     method = _detect_install_method()
 
+    GIT_URL = "stepwise-run@git+https://github.com/zackham/stepwise.git"
+
     upgrade_cmds = {
-        "uv": ["uv", "tool", "upgrade", "stepwise-run"],
-        "pipx": ["pipx", "upgrade", "stepwise-run"],
-        "pip": [sys.executable, "-m", "pip", "install", "--upgrade", "stepwise-run@git+https://github.com/zackham/stepwise.git"],
+        "uv": ["uv", "tool", "install", "--force", GIT_URL],
+        "pipx": ["pipx", "install", "--force", "git+https://github.com/zackham/stepwise.git"],
+        "pip": [sys.executable, "-m", "pip", "install", "--upgrade", GIT_URL],
     }
 
     cmd = upgrade_cmds[method]
@@ -1004,7 +1006,9 @@ def cmd_self_update(args: argparse.Namespace) -> int:
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"Upgrade failed (exit {result.returncode}):", file=sys.stderr)
-        print(result.stderr.strip(), file=sys.stderr)
+        stderr = result.stderr.strip()
+        if stderr:
+            print(stderr, file=sys.stderr)
         if method == "pip":
             print(
                 "\nTip: if pip is blocked by your OS, install with:\n"
@@ -1019,11 +1023,7 @@ def cmd_self_update(args: argparse.Namespace) -> int:
     )
     new_version = ver_result.stdout.strip().removeprefix("stepwise ") if ver_result.returncode == 0 else "unknown"
 
-    if new_version == old_version:
-        print(f"Already up to date ({old_version}).")
-    else:
-        print(f"Updated: {old_version} → {new_version}")
-
+    print(f"Updated to {new_version}.")
     return EXIT_SUCCESS
 
 
