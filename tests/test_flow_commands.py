@@ -63,13 +63,27 @@ class TestFlowGet:
         err = capsys.readouterr().err
         assert "Failed" in err
 
-    def test_get_name_shows_coming_soon(self, tmp_path, capsys, monkeypatch):
-        """flow get <name> (not URL) shows registry stub."""
+    def test_get_name_not_found(self, tmp_path, capsys, monkeypatch):
+        """flow get <name> (not URL) tries registry, fails if not found."""
         monkeypatch.chdir(tmp_path)
         rc = main(["flow", "get", "pr-review"])
+        assert rc == EXIT_USAGE_ERROR
+        err = capsys.readouterr().err
+        assert "not found" in err.lower()
+
+    def test_get_name_from_registry(self, tmp_path, capsys, monkeypatch):
+        """flow get <name> fetches from registry and saves to disk."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            "stepwise.registry_client.fetch_flow",
+            lambda slug: {"name": "downloaded", "slug": "downloaded", "author": "alice",
+                          "yaml": SIMPLE_FLOW, "steps": 1, "downloads": 42},
+        )
+        rc = main(["flow", "get", "downloaded"])
         assert rc == EXIT_SUCCESS
         out = capsys.readouterr().out
-        assert "coming soon" in out.lower()
+        assert "downloaded" in out.lower()
+        assert (tmp_path / "downloaded.flow.yaml").exists()
 
     def test_get_yml_extension_accepted(self, tmp_path, capsys, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -85,22 +99,39 @@ class TestFlowGet:
 
 
 class TestFlowShare:
-    """flow share prints coming soon stub."""
+    """flow share publishes to registry."""
 
     def test_share_no_args(self, capsys):
         rc = main(["flow", "share"])
-        assert rc == EXIT_SUCCESS
-        out = capsys.readouterr().out
-        assert "coming soon" in out.lower()
+        assert rc == EXIT_USAGE_ERROR
 
     def test_share_with_file(self, tmp_path, capsys, monkeypatch):
         monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("stepwise.registry_client.TOKENS_FILE", tmp_path / "tokens.json")
+        monkeypatch.setattr("stepwise.registry_client.CONFIG_DIR", tmp_path)
+
         flow = tmp_path / "test.flow.yaml"
         flow.write_text(SIMPLE_FLOW)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "slug": "downloaded",
+            "name": "downloaded",
+            "update_token": "stw_tok_abc",
+        }
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.post.return_value = mock_response
+
+        monkeypatch.setattr("stepwise.registry_client._client", lambda: mock_client)
+
         rc = main(["flow", "share", str(flow)])
         assert rc == EXIT_SUCCESS
         out = capsys.readouterr().out
-        assert "coming soon" in out.lower()
+        assert "downloaded" in out.lower()
 
     def test_share_missing_file(self, tmp_path, capsys, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -109,17 +140,39 @@ class TestFlowShare:
 
 
 class TestFlowSearch:
-    """flow search prints coming soon stub."""
+    """flow search queries the registry."""
 
-    def test_search_no_args(self, capsys):
+    def test_search_no_args(self, capsys, monkeypatch):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"flows": [], "total": 0}
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.return_value = mock_response
+
+        monkeypatch.setattr("stepwise.registry_client._client", lambda: mock_client)
+
         rc = main(["flow", "search"])
         assert rc == EXIT_SUCCESS
-        out = capsys.readouterr().out
-        assert "coming soon" in out.lower()
 
-    def test_search_with_query(self, capsys):
+    def test_search_with_query(self, capsys, monkeypatch):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "flows": [{"slug": "pr-review", "author": "alice", "steps": 3, "downloads": 5, "tags": ["code"]}],
+            "total": 1,
+        }
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.return_value = mock_response
+
+        monkeypatch.setattr("stepwise.registry_client._client", lambda: mock_client)
+
         rc = main(["flow", "search", "pr", "review"])
         assert rc == EXIT_SUCCESS
         out = capsys.readouterr().out
-        assert "coming soon" in out.lower()
-        assert "pr review" in out.lower()
+        assert "pr-review" in out.lower()

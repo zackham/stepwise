@@ -241,6 +241,54 @@ def _load_flow_from_file(
     )
 
 
+def _load_flow_from_registry(
+    ref: str,
+    step_name: str,
+    context: str,
+) -> WorkflowDefinition:
+    """Resolve an @author:name registry ref to a WorkflowDefinition.
+
+    Fetches the flow YAML from the registry, parses it, and returns
+    the baked WorkflowDefinition. Uses disk cache when available.
+    """
+    from stepwise.registry_client import fetch_flow_yaml, RegistryError
+
+    # Parse ref: @author:name or just @name
+    ref_body = ref.lstrip("@")
+    if ":" in ref_body:
+        author, name = ref_body.split(":", 1)
+    else:
+        name = ref_body
+        author = None
+
+    slug = name  # Registry lookup is by slug
+
+    try:
+        yaml_content = fetch_flow_yaml(slug)
+    except RegistryError as e:
+        raise ValueError(
+            f"Step '{step_name}' {context}: failed to resolve registry ref '{ref}': {e}"
+        ) from e
+
+    # Parse the fetched YAML into a WorkflowDefinition
+    try:
+        flow = load_workflow_yaml(yaml_content)
+    except YAMLLoadError as e:
+        raise ValueError(
+            f"Step '{step_name}' {context}: registry flow '{ref}' has errors: {e}"
+        ) from e
+
+    # Verify author matches if specified
+    if author and flow.metadata and flow.metadata.author:
+        if flow.metadata.author != author:
+            raise ValueError(
+                f"Step '{step_name}' {context}: registry ref '{ref}' specifies author "
+                f"'{author}' but flow is by '{flow.metadata.author}'"
+            )
+
+    return flow
+
+
 def _parse_for_each(
     step_data: dict,
     step_name: str,
@@ -290,15 +338,21 @@ def _parse_for_each(
             f"Step '{step_name}': for_each requires a 'flow' block"
         )
 
-    # File ref support for for_each
+    # String ref support for for_each (file or registry)
     if isinstance(flow_data, str):
+        if flow_data.startswith("@"):
+            sub_flow = _load_flow_from_registry(
+                flow_data, step_name, "for_each flow"
+            )
+            return for_each_spec, sub_flow
         if flow_data.endswith((".yaml", ".yml")):
             sub_flow = _load_flow_from_file(
                 flow_data, step_name, "for_each flow", base_dir, loading_files
             )
             return for_each_spec, sub_flow
         raise ValueError(
-            f"Step '{step_name}': for_each flow string must be a .yaml/.yml file path"
+            f"Step '{step_name}': for_each flow string must be a .yaml/.yml file path "
+            f"or an @author:name registry ref"
         )
 
     if not isinstance(flow_data, dict):
@@ -403,8 +457,11 @@ def _parse_route(
             flow = WorkflowDefinition(steps=flow_steps)
         elif isinstance(flow_source, str):
             if flow_source.startswith("@"):
-                # Registry ref — store as flow_ref, resolve at runtime (M9)
-                flow_ref = flow_source
+                # Registry ref — resolve at parse time, bake inline
+                flow = _load_flow_from_registry(
+                    flow_source, step_name, f"route '{route_name}'"
+                )
+                flow_ref = flow_source  # Preserve original ref for provenance
             elif flow_source.endswith((".yaml", ".yml")):
                 # File ref — load eagerly, bake inline
                 flow = _load_flow_from_file(

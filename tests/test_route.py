@@ -94,8 +94,20 @@ steps:
         assert step.route_def.routes[1].name == "default"
         assert step.route_def.routes[1].when is None
 
-    def test_parse_registry_ref(self):
-        """@author:name stored as flow_ref only, flow is None."""
+    def test_parse_registry_ref(self, monkeypatch):
+        """@author:name resolved at parse time, flow_ref preserved for provenance."""
+        fast_yaml = "name: fast-pipeline\nauthor: alice\nsteps:\n  go:\n    run: echo fast\n    outputs: [result]\n"
+        default_yaml = "name: default-pipeline\nauthor: bob\nsteps:\n  go:\n    run: echo default\n    outputs: [result]\n"
+
+        def mock_fetch(slug, *, use_cache=True):
+            if slug == "fast-pipeline":
+                return fast_yaml
+            if slug == "default-pipeline":
+                return default_yaml
+            raise Exception(f"Not found: {slug}")
+
+        monkeypatch.setattr("stepwise.registry_client.fetch_flow_yaml", mock_fetch)
+
         w = load_workflow_string("""
 steps:
   classify:
@@ -113,10 +125,12 @@ steps:
     outputs: [result]
 """)
         route_def = w.steps["route"].route_def
-        assert route_def.routes[0].flow is None
+        assert route_def.routes[0].flow is not None
         assert route_def.routes[0].flow_ref == "@alice:fast-pipeline"
-        assert route_def.routes[1].flow is None
+        assert "go" in route_def.routes[0].flow.steps
+        assert route_def.routes[1].flow is not None
         assert route_def.routes[1].flow_ref == "@bob:default-pipeline"
+        assert "go" in route_def.routes[1].flow.steps
 
     def test_parse_default_declared_first(self):
         """Default declared first in YAML still evaluates last."""

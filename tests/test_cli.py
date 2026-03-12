@@ -182,23 +182,21 @@ class TestConfig:
 
 
 class TestFlowStubs:
-    def test_flow_share_stub(self, capsys):
+    def test_flow_share_no_file(self, capsys):
         rc = main(["flow", "share"])
-        assert rc == EXIT_SUCCESS
-        out = capsys.readouterr().out
-        assert "coming soon" in out.lower()
+        assert rc == EXIT_USAGE_ERROR
 
-    def test_flow_search_stub(self, capsys):
+    def test_flow_search_no_results(self, capsys):
         rc = main(["flow", "search", "social", "media"])
         assert rc == EXIT_SUCCESS
         out = capsys.readouterr().out
-        assert "coming soon" in out.lower()
+        assert "no flows found" in out.lower()
 
-    def test_flow_get_name_stub(self, capsys):
+    def test_flow_get_name_not_found(self, capsys):
         rc = main(["flow", "get", "tweet-generator"])
-        assert rc == EXIT_SUCCESS
-        out = capsys.readouterr().out
-        assert "coming soon" in out.lower()
+        assert rc == EXIT_USAGE_ERROR
+        err = capsys.readouterr().err
+        assert "not found" in err.lower()
 
     def test_flow_get_non_yaml_url(self, capsys):
         rc = main(["flow", "get", "https://example.com/not-a-yaml"])

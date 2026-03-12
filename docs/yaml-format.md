@@ -289,7 +289,7 @@ steps:
 **Three flow source types:**
 - **Inline** — a dict with `steps:` (parsed at load time)
 - **File path** — string ending `.yaml`/`.yml` (loaded and baked at parse time, resolved relative to parent flow directory)
-- **Registry ref** — string starting `@` like `@alice:fast-pipeline` (resolved at runtime, coming in M9)
+- **Registry ref** — string starting `@` like `@alice:fast-pipeline` (fetched from registry and baked inline at parse time, like file refs)
 
 **Output contract:** Every terminal step of each sub-flow must independently produce all declared `outputs:`. This prevents false positives when sub-flows branch internally.
 

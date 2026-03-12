@@ -9,6 +9,33 @@ All notable changes to Stepwise are documented here. Versions are tagged milesto
 - `stepwise self-update` — upgrade to the latest version (auto-detects uv/pipx/pip)
 - `stepwise serve` auto-picks a random port when 8340 is already in use
 
+## [M9] — 2026-03-12
+
+**Flow Sharing** — publish, discover, and reuse flows via the stepwise.run registry.
+
+### Added
+- `stepwise flow share <file>` — publish a flow to the registry (validates first, saves update token)
+- `stepwise flow get <name>` — download a flow by registry name (saves to cwd as `<name>.flow.yaml`)
+- `stepwise flow search [query]` — search the registry with optional `--tag` and `--sort` filters
+- `stepwise flow info <name>` — show metadata for a published flow without downloading
+- `--update` flag for `flow share` — update a previously published flow using stored token
+- `--author` flag for `flow share` — override the author name
+- `--force` flag for `flow get` — overwrite existing local file
+- `--output json` flag for `flow search` — machine-readable output
+- `registry_client.py` — full registry client module (fetch, publish, search, update, cache, tokens)
+- Parse-time `@author:name` resolution — registry refs in `routes:` and `for_each:` are fetched and baked inline at YAML load time (engine never sees registry refs)
+- Author verification — `@alice:fast-pipeline` checks that the fetched flow's author matches `alice`
+- `flow_ref` field on `RouteSpec` — preserves the original `@author:name` string for provenance after resolution
+- Disk cache at `~/.cache/stepwise/flows/` — avoids repeated network calls for the same flow
+- Token management at `~/.config/stepwise/tokens.json` (file mode 0600)
+- `STEPWISE_REGISTRY_URL` env var — override the default `https://stepwise.run` registry
+- 22 new tests (client, cache, tokens, parse-time resolution, author mismatch, round-trip serialization)
+
+### Changed
+- `stepwise flow get <url>` unchanged — URLs still download directly
+- Route and for-each flow resolution now tries `@` refs as registry lookups before raising errors
+- Old "coming soon" stubs in CLI replaced with real implementations
+
 ## [M8] — 2026-03-12
 
 **Route Steps** — conditional sub-flow dispatch.
@@ -16,7 +43,7 @@ All notable changes to Stepwise are documented here. Versions are tagged milesto
 ### Added
 - `routes:` block on step definitions — dispatch to different sub-flows based on upstream output
 - First-match semantics with `when:` expressions and optional `default` route
-- Three flow source types: inline blocks, local file paths (loaded at parse time), registry refs (`@author:name`, M9)
+- Three flow source types: inline blocks, local file paths (loaded at parse time), registry refs (`@author:name`, implemented in M9)
 - File ref cycle detection using immutable set branching (sibling routes can share files)
 - Output contract validation — every terminal step of each sub-flow must independently cover declared outputs
 - `attempt` available in route `when:` expressions (from `store.next_attempt()`)
@@ -137,7 +164,7 @@ All notable changes to Stepwise are documented here. Versions are tagged milesto
 - `stepwise validate` — syntax and structural validation
 - `stepwise jobs`, `stepwise status`, `stepwise cancel` — job management
 - `stepwise templates` — list available templates
-- `stepwise flow get/share/search` — flow sharing (registry coming soon)
+- `stepwise flow get/share/search` — flow sharing stubs (fully implemented in M9)
 - `.stepwise/` project directory (like `.git/`) with SQLite DB
 - Signal handling — Ctrl+C cleanly cancels active jobs
 - Flow metadata: name, description, author, version, tags

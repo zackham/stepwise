@@ -716,9 +716,9 @@ steps:
 |------|--------|----------|
 | **Inline** | dict with `steps:` | Parsed at load time |
 | **File path** | string ending `.yaml`/`.yml` | Loaded and baked at parse time (relative to parent flow dir) |
-| **Registry ref** | string starting `@` (e.g., `@alice:fast-pipeline`) | Resolved at runtime (coming in M9) |
+| **Registry ref** | string starting `@` (e.g., `@alice:fast-pipeline`) | Fetched from registry and baked at parse time |
 
-File refs are "baked" at parse time — the resolved workflow is stored inline, so jobs don't depend on the original file at runtime.
+All three types are resolved at parse time — the YAML is fetched/loaded and baked inline, so jobs never depend on external files or network at runtime. Registry refs also verify author match (e.g., `@alice:fast-pipeline` checks the fetched flow's author is `alice`).
 
 ### Output Contract
 

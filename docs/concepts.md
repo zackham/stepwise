@@ -241,7 +241,7 @@ Routes evaluate in declaration order using first-match semantics. The `default` 
 
 Route steps build on the same sub-job infrastructure as for-each: the matched sub-flow runs as a sub-job, the parent step stays in `DELEGATED` status until it completes, and the sub-flow's terminal outputs become the route step's result.
 
-**Flow composition:** Sub-flows can be defined inline, loaded from local files (resolved at parse time), or referenced from a registry (`@author:name`, coming in M9). File refs are "baked" at parse time — the resolved workflow is stored inline, so jobs don't depend on the original file at runtime.
+**Flow composition:** Sub-flows can be defined inline, loaded from local files, or referenced from the registry (`@author:name`). All three are resolved at parse time — the YAML is fetched and baked inline, so jobs never depend on external files or network at runtime.
 
 ## Context Chains
 

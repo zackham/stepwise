@@ -334,27 +334,74 @@ stepwise config get default_model                 # anthropic/claude-sonnet-4
 
 ## `stepwise flow`
 
-Flow sharing commands. Download flows from URLs, share to the registry (coming soon), or search for community flows.
+Flow sharing commands. Download flows from the registry, publish your flows, or search for community flows.
 
 ### Download a flow
 
 ```bash
+# By registry name
+stepwise flow get code-review
+
+# By URL (direct download)
 stepwise flow get https://example.com/code-review.flow.yaml
 ```
 
 ```
-✓ Downloaded code-review.flow.yaml
-  Run 'stepwise run code-review.flow.yaml' to execute.
+✓ Downloaded code-review.flow.yaml (3 steps, by alice, 1,247 downloads)
+  Run: stepwise run code-review.flow.yaml
 ```
 
-Saves the file to the current directory. Fails if a file with the same name already exists.
+Saves to the current directory. Fails if a file with the same name already exists.
 
-### Share and search (coming soon)
+Flags:
+- `--force` — overwrite existing file
+
+### Share a flow
 
 ```bash
-stepwise flow share my-flow.flow.yaml    # publish to registry
-stepwise flow search "agent review"      # search community flows
+stepwise flow share my-pipeline.flow.yaml
 ```
+
+```
+Validating my-pipeline.flow.yaml... ✓ (3 steps)
+Publishing as "my-pipeline"...
+
+✓ Published: https://stepwise.run/flows/my-pipeline
+  Get: stepwise flow get my-pipeline
+  Token saved to ~/.config/stepwise/tokens.json
+```
+
+Validates the flow, reads metadata from the YAML header, and uploads to the registry. The update token is saved locally for future updates.
+
+Flags:
+- `--author <name>` — override author (default: from YAML or git config)
+- `--update` — update a previously published flow (uses stored token)
+
+### Search the registry
+
+```bash
+stepwise flow search "code review"
+stepwise flow search --tag agent --sort downloads
+```
+
+```
+NAME                 AUTHOR     STEPS  DOWNLOADS  TAGS
+code-review          alice      3      1,247      agent, human-in-the-loop
+pr-review-lite       bob        2      892        script, code-review
+```
+
+Flags:
+- `--tag <tag>` — filter by tag
+- `--sort <field>` — sort by `downloads` (default), `name`, `newest`
+- `--output json` — machine-readable output
+
+### Flow info
+
+```bash
+stepwise flow info code-review
+```
+
+Shows metadata for a published flow without downloading it (name, author, description, tags, step count, downloads).
 
 ---
 
