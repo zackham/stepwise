@@ -25,7 +25,7 @@ class TestBuildPrompt:
 
     def test_basic_message(self):
         result = _build_prompt("create a flow", [], None, None)
-        assert SYSTEM_PROMPT in result
+        assert "(no flow selected)" in result
         assert "create a flow" in result
         assert "Current Flow" not in result
 
@@ -43,7 +43,7 @@ class TestBuildPrompt:
 
     def test_selected_step_without_yaml_ignored(self):
         result = _build_prompt("hello", [], None, None)
-        assert "selected" not in result
+        assert "has step" not in result
 
     def test_with_history(self):
         history = [
@@ -66,6 +66,11 @@ class TestBuildPrompt:
         assert "Flow Directory" in result
         assert "FLOW.yaml" in result
         assert "fetch.py" in result
+
+    def test_with_flow_dir_path(self):
+        result = _build_prompt("hello", [], None, None, flow_dir_path="/home/user/flows/my-flow")
+        assert "/home/user/flows/my-flow" in result
+        assert "(no flow selected)" not in result
 
 
 # ── File Block Extraction ─────────────────────────────────────────
@@ -248,14 +253,20 @@ class TestAcpxEventParsing:
         assert any(c["type"] == "tool_use" and c["tool_name"] == "Read file" for c in chunks)
         assert any(c["type"] == "tool_result" and c["tool_use_id"] == "tc-1" for c in chunks)
 
-    def test_file_blocks_extracted(self, tmp_path):
-        text = 'Here:\n```file:FLOW.yaml\nname: test\n```\n```file:scripts/a.py\nprint(1)\n```'
-        lines = [self._make_event("agent_message_chunk", content={"type": "text", "text": text})]
+    def test_files_changed_tracked(self, tmp_path):
+        """Verify file writes are tracked via tool_call_update with kind=edit."""
+        lines = [
+            self._make_event("tool_call", title="Write file", toolCallId="tc-1", kind="edit"),
+            self._make_event(
+                "tool_call_update", toolCallId="tc-1", status="completed",
+                kind="edit", title="Write file",
+                locations=[{"path": "/tmp/flow/FLOW.yaml"}],
+            ),
+        ]
         chunks = self._run(tmp_path, lines)
-        fbs = [c for c in chunks if c["type"] == "file_block"]
-        assert len(fbs) == 2
-        assert fbs[0]["path"] == "FLOW.yaml"
-        assert fbs[1]["path"] == "scripts/a.py"
+        fc = [c for c in chunks if c["type"] == "files_changed"]
+        assert len(fc) == 1
+        assert "/tmp/flow/FLOW.yaml" in fc[0]["paths"]
 
     def test_session_id_emitted(self, tmp_path):
         lines = [self._make_event("agent_message_chunk", content={"type": "text", "text": "hi"})]
@@ -264,8 +275,8 @@ class TestAcpxEventParsing:
         assert len(sessions) == 1
         assert sessions[0]["session_id"]
 
-    def test_approve_reads_in_args(self, tmp_path):
-        """Verify --approve-reads is used, not --approve-all."""
+    def test_approve_all_in_args(self, tmp_path):
+        """Verify --approve-all is used for direct file writing."""
         lines = [self._make_event("agent_message_chunk", content={"type": "text", "text": "hi"})]
 
         mock_proc = MagicMock()
@@ -277,9 +288,8 @@ class TestAcpxEventParsing:
             from stepwise.editor_llm import _acpx_agent_loop
             list(_acpx_agent_loop("/usr/bin/acpx", "claude", "test", None, None, None, tmp_path))
             args = mock_popen.call_args[0][0]
-            assert "--approve-reads" in args
-            assert "--approve-all" not in args
-            assert "--non-interactive-permissions" in args
+            assert "--approve-all" in args
+            assert "--approve-reads" not in args
 
     def _run(self, tmp_path, lines: list[bytes]) -> list[dict]:
         from stepwise.editor_llm import _acpx_agent_loop

@@ -1,21 +1,29 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
   Send, X, Loader2, Check, Sparkles, FileText, Search, FolderOpen,
-  ChevronDown, ChevronRight, RotateCcw, CheckCheck,
+  ChevronDown, ChevronRight, RotateCcw, Info, Pencil, Eye,
+  AlertTriangle, Terminal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { streamEditorChat, writeFlowFile } from "@/lib/api";
+import { streamEditorChat } from "@/lib/api";
 import type { ChatChunk } from "@/lib/api";
 
 type AgentMode = "claude" | "codex" | "simple";
 
 const AGENT_MODES: { value: AgentMode; label: string; subtitle: string }[] = [
-  { value: "claude", label: "Claude", subtitle: "Can read project files" },
-  { value: "codex", label: "Codex", subtitle: "Can read project files" },
+  { value: "claude", label: "Claude", subtitle: "Full read/write access" },
+  { value: "codex", label: "Codex", subtitle: "Full read/write access" },
   { value: "simple", label: "Simple", subtitle: "Current context only" },
 ];
+
+const TOOL_ICONS: Record<string, typeof FileText> = {
+  edit: Pencil,
+  read: Eye,
+  search: Search,
+  command: Terminal,
+};
 
 interface ToolActivity {
   id: string;
@@ -23,21 +31,15 @@ interface ToolActivity {
   input: Record<string, string>;
   output?: string;
   done: boolean;
-}
-
-interface FileBlock {
-  path: string;
-  content: string;
-  apply_id: string;
-  applied?: boolean;
+  kind?: string;
 }
 
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   yamlBlocks?: Array<{ content: string; apply_id: string; applied?: boolean }>;
-  fileBlocks?: FileBlock[];
   toolActivities?: ToolActivity[];
+  filesChanged?: string[];
 }
 
 interface ChatPanelProps {
@@ -45,7 +47,7 @@ interface ChatPanelProps {
   selectedStep: string | null;
   flowPath: string | null;
   onApplyYaml: (yaml: string) => void;
-  onFileApplied?: () => void;
+  onFilesChanged?: () => void;
   onClose: () => void;
 }
 
@@ -54,7 +56,7 @@ export function ChatPanel({
   selectedStep,
   flowPath,
   onApplyYaml,
-  onFileApplied,
+  onFilesChanged,
   onClose,
 }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -63,6 +65,7 @@ export function ChatPanel({
   const [agentMode, setAgentMode] = useState<AgentMode>("claude");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [showModeSelect, setShowModeSelect] = useState(false);
+  const [showDisclosure, setShowDisclosure] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -96,8 +99,8 @@ export function ChatPanel({
 
     let fullContent = "";
     const yamlBlocks: ChatMessage["yamlBlocks"] = [];
-    const fileBlocks: FileBlock[] = [];
     const toolActivities: ToolActivity[] = [];
+    let filesChanged: string[] = [];
 
     const updateMsg = (assistantIdx: number) => {
       setMessages((prev) => {
@@ -106,8 +109,8 @@ export function ChatPanel({
           role: "assistant",
           content: fullContent,
           yamlBlocks: [...yamlBlocks],
-          fileBlocks: [...fileBlocks],
           toolActivities: [...toolActivities],
+          filesChanged: filesChanged.length > 0 ? [...filesChanged] : undefined,
         };
         return updated;
       });
@@ -118,7 +121,7 @@ export function ChatPanel({
     try {
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: "", yamlBlocks: [], fileBlocks: [], toolActivities: [] },
+        { role: "assistant", content: "", yamlBlocks: [], toolActivities: [] },
       ]);
 
       for await (const chunk of streamEditorChat(
@@ -136,27 +139,30 @@ export function ChatPanel({
             apply_id: chunk.apply_id ?? "",
           });
           updateMsg(assistantIdx);
-        } else if (chunk.type === "file_block") {
-          fileBlocks.push({
-            path: chunk.path ?? "",
-            content: chunk.content ?? "",
-            apply_id: chunk.apply_id ?? "",
-          });
-          updateMsg(assistantIdx);
         } else if (chunk.type === "tool_use") {
           toolActivities.push({
             id: chunk.tool_use_id ?? "",
             name: chunk.tool_name ?? "",
             input: chunk.tool_input ?? {},
             done: false,
+            kind: chunk.tool_kind,
           });
           updateMsg(assistantIdx);
         } else if (chunk.type === "tool_result") {
           const idx = toolActivities.findIndex((t) => t.id === chunk.tool_use_id);
           if (idx >= 0) {
-            toolActivities[idx] = { ...toolActivities[idx], output: chunk.tool_output, done: true };
+            toolActivities[idx] = {
+              ...toolActivities[idx],
+              output: chunk.tool_output,
+              done: true,
+              kind: chunk.tool_kind || toolActivities[idx].kind,
+            };
           }
           updateMsg(assistantIdx);
+        } else if (chunk.type === "files_changed") {
+          filesChanged = chunk.paths ?? [];
+          updateMsg(assistantIdx);
+          onFilesChanged?.();
         } else if (chunk.type === "done") {
           // Mark all pending tools as done when stream completes
           for (let i = 0; i < toolActivities.length; i++) {
@@ -165,6 +171,8 @@ export function ChatPanel({
             }
           }
           updateMsg(assistantIdx);
+        } else if (chunk.type === "keepalive") {
+          // Ignore — just keeps the connection alive
         } else if (chunk.type === "error") {
           fullContent += `\n\n**Error:** ${chunk.content}`;
           updateMsg(assistantIdx);
@@ -184,7 +192,7 @@ export function ChatPanel({
       }
       setIsStreaming(false);
     }
-  }, [input, isStreaming, messages, currentYaml, selectedStep, agentMode, sessionId, flowPath]);
+  }, [input, isStreaming, messages, currentYaml, selectedStep, agentMode, sessionId, flowPath, onFilesChanged]);
 
   const handleApplyYaml = useCallback(
     (msgIdx: number, blockIdx: number) => {
@@ -204,43 +212,6 @@ export function ChatPanel({
     [messages, onApplyYaml]
   );
 
-  const handleApplyFile = useCallback(
-    async (msgIdx: number, blockIdx: number) => {
-      const msg = messages[msgIdx];
-      if (!msg?.fileBlocks?.[blockIdx] || !flowPath) return;
-      const block = msg.fileBlocks[blockIdx];
-      try {
-        await writeFlowFile(flowPath, block.path, block.content);
-        setMessages((prev) => {
-          const updated = [...prev];
-          const m = { ...updated[msgIdx] };
-          m.fileBlocks = m.fileBlocks?.map((b, i) =>
-            i === blockIdx ? { ...b, applied: true } : b
-          );
-          updated[msgIdx] = m;
-          return updated;
-        });
-        onFileApplied?.();
-      } catch {
-        // TODO: show error
-      }
-    },
-    [messages, flowPath, onFileApplied]
-  );
-
-  const handleApplyAllFiles = useCallback(
-    async (msgIdx: number) => {
-      const msg = messages[msgIdx];
-      if (!msg?.fileBlocks || !flowPath) return;
-      for (let i = 0; i < msg.fileBlocks.length; i++) {
-        if (!msg.fileBlocks[i].applied) {
-          await handleApplyFile(msgIdx, i);
-        }
-      }
-    },
-    [messages, flowPath, handleApplyFile]
-  );
-
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -249,6 +220,7 @@ export function ChatPanel({
   };
 
   const currentMode = AGENT_MODES.find((m) => m.value === agentMode)!;
+  const isAgentMode = agentMode !== "simple";
 
   const quickActions = selectedStep
     ? [
@@ -295,6 +267,15 @@ export function ChatPanel({
           </div>
         </div>
         <div className="flex items-center gap-1">
+          {isAgentMode && (
+            <button
+              onClick={() => setShowDisclosure((v) => !v)}
+              className={`p-1 transition-colors ${showDisclosure ? "text-amber-400" : "text-zinc-500 hover:text-foreground"}`}
+              title="Agent permissions info"
+            >
+              <Info className="w-3.5 h-3.5" />
+            </button>
+          )}
           {sessionId && (
             <button
               onClick={handleNewConversation}
@@ -310,6 +291,33 @@ export function ChatPanel({
         </div>
       </div>
 
+      {/* Permission disclosure */}
+      {showDisclosure && isAgentMode && (
+        <div className="px-3 py-2 border-b border-amber-900/30 bg-amber-950/20 text-[11px] text-amber-200/80 space-y-1.5">
+          <div className="flex items-start gap-1.5">
+            <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0 text-amber-400" />
+            <div>
+              <p className="font-medium text-amber-300">Agent runs with full tool approval</p>
+              <p className="mt-1 text-amber-200/60">
+                The agent uses Claude Code with <code className="px-1 bg-amber-900/30 rounded">--approve-all</code>,
+                meaning all tool calls (file reads, writes, shell commands) are auto-approved.
+              </p>
+              <p className="mt-1 text-amber-200/60">
+                <strong>Constraint:</strong> The system prompt instructs the agent to only write files
+                inside the flow directory
+                {flowPath && <> (<code className="px-1 bg-amber-900/30 rounded">{flowPath}</code>)</>}.
+                It can read files anywhere to understand the project.
+              </p>
+              <p className="mt-1 text-amber-200/60">
+                <strong>Note:</strong> This is a prompt-level constraint, not a sandbox. The agent
+                technically <em>can</em> write outside the flow directory. Files it writes appear in
+                the file tree and are visible in the workspace.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Messages */}
       <ScrollArea className="flex-1 min-h-0">
         <div ref={scrollRef} className="p-3 space-y-3">
@@ -320,6 +328,17 @@ export function ChatPanel({
                   ? "Ask me to modify this flow, explain steps, or suggest improvements."
                   : "Describe a workflow and I'll generate the YAML and scripts for you."}
               </p>
+              {isAgentMode && (
+                <p className="text-[10px] text-zinc-600">
+                  Agent writes files directly to your flow directory.{" "}
+                  <button
+                    onClick={() => setShowDisclosure(true)}
+                    className="text-amber-500/60 hover:text-amber-400 underline"
+                  >
+                    Learn more
+                  </button>
+                </p>
+              )}
               <div className="space-y-1.5">
                 {quickActions.map((action) => (
                   <button
@@ -348,47 +367,39 @@ export function ChatPanel({
               {/* Tool activities */}
               {msg.toolActivities && msg.toolActivities.length > 0 && (
                 <div className="space-y-1 my-1.5">
-                  {msg.toolActivities.map((tool) => (
-                    <div key={tool.id} className="flex items-center gap-1.5 text-[11px] text-zinc-500">
-                      {tool.done ? (
-                        <Check className="w-3 h-3 text-green-500 shrink-0" />
-                      ) : (
-                        <Loader2 className="w-3 h-3 animate-spin shrink-0" />
-                      )}
-                      <FileText className="w-3 h-3 shrink-0" />
-                      <span className="truncate">{tool.name}</span>
-                    </div>
-                  ))}
+                  {msg.toolActivities.map((tool) => {
+                    const IconComponent = TOOL_ICONS[tool.kind ?? ""] ?? FileText;
+                    return (
+                      <div key={tool.id} className="flex items-center gap-1.5 text-[11px] text-zinc-500">
+                        {tool.done ? (
+                          <Check className="w-3 h-3 text-green-500 shrink-0" />
+                        ) : (
+                          <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+                        )}
+                        <IconComponent className="w-3 h-3 shrink-0" />
+                        <span className="truncate">{tool.name}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
 
-              {/* File blocks */}
-              {msg.fileBlocks && msg.fileBlocks.length > 0 && (
-                <div className="space-y-2 my-1.5">
-                  {/* Apply All button when multiple files */}
-                  {msg.fileBlocks.length > 1 && msg.fileBlocks.some((b) => !b.applied) && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleApplyAllFiles(msgIdx)}
-                      className="h-6 text-xs w-full"
-                    >
-                      <CheckCheck className="w-3 h-3 mr-1" />
-                      Apply All ({msg.fileBlocks.filter((b) => !b.applied).length} files)
-                    </Button>
-                  )}
-                  {msg.fileBlocks.map((block, blockIdx) => (
-                    <FileBlockCard
-                      key={block.apply_id}
-                      block={block}
-                      onApply={() => handleApplyFile(msgIdx, blockIdx)}
-                      canApply={!!flowPath}
-                    />
-                  ))}
+              {/* Files changed notification */}
+              {msg.filesChanged && msg.filesChanged.length > 0 && (
+                <div className="my-1.5 px-2.5 py-1.5 bg-green-950/30 border border-green-900/30 rounded text-[11px] text-green-300/80">
+                  <div className="flex items-center gap-1.5 font-medium text-green-300">
+                    <Pencil className="w-3 h-3" />
+                    {msg.filesChanged.length === 1 ? "1 file written" : `${msg.filesChanged.length} files written`}
+                  </div>
+                  <div className="mt-1 space-y-0.5 text-green-400/60">
+                    {msg.filesChanged.map((path) => (
+                      <div key={path} className="font-mono truncate">{path}</div>
+                    ))}
+                  </div>
                 </div>
               )}
 
-              {/* YAML blocks (legacy) */}
+              {/* YAML blocks (from simple/OpenRouter mode) */}
               {msg.yamlBlocks?.map((block, blockIdx) => (
                 <div
                   key={block.apply_id}
@@ -449,86 +460,6 @@ export function ChatPanel({
             <Send className="w-3.5 h-3.5" />
           </Button>
         </div>
-      </div>
-    </div>
-  );
-}
-
-
-// ── File Block Card ─────────────────────────────────────────────────
-
-function FileBlockCard({
-  block,
-  onApply,
-  canApply,
-}: {
-  block: FileBlock;
-  onApply: () => void;
-  canApply: boolean;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const lines = block.content.split("\n");
-  const isLong = lines.length > 30;
-  const displayContent = expanded ? block.content : lines.slice(0, 30).join("\n");
-
-  // Determine language from extension
-  const ext = block.path.split(".").pop() ?? "";
-  const langMap: Record<string, string> = {
-    py: "python", sh: "bash", yaml: "yaml", yml: "yaml",
-    json: "json", md: "markdown", toml: "toml", j2: "jinja2",
-  };
-
-  return (
-    <div className={`bg-zinc-900 border rounded overflow-hidden ${
-      block.applied ? "border-green-800/50" : "border-zinc-700"
-    }`}>
-      {/* File path header */}
-      <div className="flex items-center justify-between px-2.5 py-1.5 bg-zinc-800/80 border-b border-zinc-700">
-        <div className="flex items-center gap-1.5 text-[11px]">
-          <FileText className="w-3 h-3 text-zinc-400" />
-          <span className="font-mono text-zinc-300">{block.path}</span>
-          <span className="text-zinc-600">{langMap[ext] ?? ext}</span>
-        </div>
-        {isLong && (
-          <button
-            onClick={() => setExpanded(!expanded)}
-            className="text-zinc-500 hover:text-zinc-300"
-          >
-            {expanded
-              ? <ChevronDown className="w-3 h-3" />
-              : <ChevronRight className="w-3 h-3" />
-            }
-          </button>
-        )}
-      </div>
-
-      {/* Content preview */}
-      <pre className="text-[11px] text-zinc-300 p-2 overflow-x-auto max-h-64">
-        <code>{displayContent}</code>
-        {isLong && !expanded && (
-          <span className="text-zinc-600">{`\n... ${lines.length - 30} more lines`}</span>
-        )}
-      </pre>
-
-      {/* Apply button */}
-      <div className="flex items-center gap-1.5 p-1.5 bg-zinc-800/50 border-t border-zinc-700">
-        {block.applied ? (
-          <Button size="sm" variant="ghost" disabled className="h-6 text-xs">
-            <Check className="w-3 h-3 mr-1 text-green-400" />
-            Applied
-          </Button>
-        ) : (
-          <Button
-            size="sm" variant="ghost"
-            onClick={onApply}
-            disabled={!canApply}
-            className="h-6 text-xs"
-            title={canApply ? `Create ${block.path}` : "Load a directory flow first"}
-          >
-            <Check className="w-3 h-3 mr-1" />
-            Apply
-          </Button>
-        )}
       </div>
     </div>
   );

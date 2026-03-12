@@ -22,9 +22,19 @@ from stepwise.config import load_config
 
 SYSTEM_PROMPT = """\
 You are the Stepwise flow-builder agent. You help users create, modify, and \
-understand workflow YAML files. You have read-only access to the project \
-directory via your tools — use them proactively to understand the codebase \
-before generating flows.
+understand workflow YAML files. You have full read/write access to the project \
+directory via your tools.
+
+## Your workspace
+
+You are working on a flow at: `{flow_dir}`
+
+**IMPORTANT: Only write files inside that flow directory.** You can read files \
+anywhere in the project to understand the codebase, but all file writes (Write, Edit) \
+must target paths within the flow directory above. Do not modify files outside it.
+
+Use your Write and Edit tools directly to create and modify files — do not output \
+file contents as fenced code blocks for the user to copy. Just write them.
 
 ## Stepwise YAML format
 
@@ -103,35 +113,10 @@ result = {"data": "value", "count": 42}
 print(json.dumps(result))
 ```
 
-## Proposing file changes
-
-When creating or modifying flows, output each file as a fenced block with a `file:` path header. \
-The path is relative to the flow directory.
-
-Use this exact format:
-
-```file:FLOW.yaml
-name: my-flow
-steps:
-  gather:
-    run: scripts/gather.py
-    outputs: [findings]
-```
-
-```file:scripts/gather.py
-#!/usr/bin/env python3
-import json
-# ... implementation
-print(json.dumps({"findings": results}))
-```
-
-Each `file:` block will be shown to the user as a reviewable card they can apply individually. \
-Always propose FLOW.yaml and all supporting scripts/prompts as separate file blocks.
-
 ## Your behavior
 1. **ALWAYS use tools first** — read CLAUDE.md, existing flows, skills, scripts, or other files before generating.
 2. When converting skills into flows, read the SKILL.md and ALL referenced scripts first.
-3. Propose complete files using the `file:path` block format above.
+3. Write files directly using your Write and Edit tools. Create the directory structure as needed.
 4. Keep flows minimal — don't add unnecessary steps.
 5. Use descriptive step names (snake_case).
 6. If the project has a CLAUDE.md, read it to understand conventions.
@@ -213,9 +198,11 @@ def _build_prompt(
     current_yaml: str | None,
     selected_step: str | None,
     flow_dir_listing: str | None = None,
+    flow_dir_path: str | None = None,
 ) -> str:
     """Build a single prompt string with system context, history, and user message."""
-    parts = [SYSTEM_PROMPT]
+    system = SYSTEM_PROMPT.replace("{flow_dir}", flow_dir_path or "(no flow selected)")
+    parts = [system]
 
     if flow_dir_listing:
         parts.append(f"\n## Current Flow Directory\n```\n{flow_dir_listing}\n```")
@@ -337,10 +324,22 @@ def _acpx_agent_loop(
     # Get or create persistent session
     sid, session_name = get_or_create_session(session_id)
 
+    # Resolve the flow directory path for the system prompt
+    flow_dir_abs = None
+    if flow_path:
+        fp = (project_dir / flow_path).resolve()
+        if fp.name == "FLOW.yaml":
+            flow_dir_abs = str(fp.parent)
+        elif fp.is_dir():
+            flow_dir_abs = str(fp)
+        else:
+            flow_dir_abs = str(fp.parent)
+
     # Build prompt with flow directory context
     flow_listing = _get_flow_dir_listing(project_dir, flow_path)
     prompt = _build_prompt(
-        user_message, history or [], current_yaml, selected_step, flow_listing,
+        user_message, history or [], current_yaml, selected_step,
+        flow_listing, flow_dir_path=flow_dir_abs,
     )
 
     # Write prompt to file (avoids shell escaping issues)
@@ -360,11 +359,13 @@ def _acpx_agent_loop(
             capture_output=True, timeout=30, env=env,
         )
 
-        # Spawn acpx — read-only mode, writes denied without prompting
+        # Spawn acpx — approve-all so the agent can write directly to
+        # the flow directory using Claude's native Write/Edit tools.
+        # The system prompt constrains writes to the flow dir, but
+        # --approve-all means the agent CAN write elsewhere.
         args = [
             acpx_path, "--format", "json",
-            "--approve-reads",
-            "--non-interactive-permissions", "deny",
+            "--approve-all",
             "--cwd", str(project_dir),
             agent, "-s", session_name,
             "--file", str(prompt_file),
@@ -384,8 +385,8 @@ def _acpx_agent_loop(
         # acpx goes silent during long thinking phases — without
         # periodic keepalives the HTTP stream goes idle and browsers
         # or reverse proxies close the connection.
-        full_text = ""
         total_tokens = 0
+        files_written: list[str] = []
         _KEEPALIVE_INTERVAL = 15  # seconds
 
         event_queue: queue.Queue[bytes | None] = queue.Queue()
@@ -428,24 +429,40 @@ def _acpx_agent_loop(
                 if content.get("type") == "text":
                     text = content.get("text", "")
                     if text:
-                        full_text += text
                         yield {"type": "text", "content": text}
 
             elif event_type == "tool_call":
+                tool_id = update.get("toolCallId", "")
+                title = update.get("title", "")
+                kind = update.get("kind", "")
                 yield {
                     "type": "tool_use",
-                    "tool_name": update.get("title", ""),
-                    "tool_use_id": update.get("toolCallId", ""),
+                    "tool_name": title,
+                    "tool_use_id": tool_id,
                     "tool_input": {},
+                    "tool_kind": kind,
                 }
 
             elif event_type == "tool_call_update":
-                if update.get("status") == "completed":
+                tool_id = update.get("toolCallId", "")
+                status = update.get("status")
+                kind = update.get("kind", "")
+                title = update.get("title", "")
+
+                # Track file writes for the files_changed event
+                if kind == "edit" and status == "completed":
+                    for loc in update.get("locations", []):
+                        path = loc.get("path", "")
+                        if path:
+                            files_written.append(path)
+
+                if status in ("completed", "failed"):
                     yield {
                         "type": "tool_result",
-                        "tool_use_id": update.get("toolCallId", ""),
-                        "tool_output": "",
-                        "is_error": False,
+                        "tool_use_id": tool_id,
+                        "tool_output": title,
+                        "is_error": status == "failed",
+                        "tool_kind": kind,
                     }
 
             elif event_type == "usage_update":
@@ -454,20 +471,9 @@ def _acpx_agent_loop(
         reader_thread.join(timeout=5)
         proc.wait()
 
-        # Extract file blocks (new format: ```file:path)
-        file_blocks = _extract_file_blocks(full_text)
-        for i, fb in enumerate(file_blocks):
-            yield {
-                "type": "file_block",
-                "path": fb["path"],
-                "content": fb["content"],
-                "apply_id": f"file-{i}",
-            }
-
-        # Extract legacy YAML blocks (```yaml that aren't file: blocks)
-        yaml_blocks = _extract_yaml_blocks(full_text)
-        for i, block in enumerate(yaml_blocks):
-            yield {"type": "yaml", "content": block, "apply_id": f"yaml-{i}"}
+        # Tell the frontend which files were written so it can refresh
+        if files_written:
+            yield {"type": "files_changed", "paths": files_written}
 
         yield {
             "type": "done",

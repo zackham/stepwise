@@ -532,7 +532,11 @@ export function EditorPage() {
                     selectedStep={selectedStep}
                     flowPath={selectedFlow?.path ?? null}
                     onApplyYaml={handleApplyChat}
-                    onFileApplied={() => refetchFiles()}
+                    onFilesChanged={() => {
+                      refetchFiles();
+                      // Also reload flow detail in case FLOW.yaml was modified
+                      loadedPathRef.current = undefined;
+                    }}
                     onClose={() => setChatOpen(false)}
                   />
                 </div>
