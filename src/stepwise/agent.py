@@ -24,7 +24,80 @@ from stepwise.executors import (
     ExecutorResult,
     ExecutorStatus,
 )
-from stepwise.models import HandoffEnvelope, Sidecar, _now
+from stepwise.models import HandoffEnvelope, Sidecar, SubJobDefinition, _now
+
+
+EMIT_FLOW_FILENAME = "emit.flow.yaml"
+EMIT_FLOW_DIR = ".stepwise"
+
+_EMIT_FLOW_INSTRUCTIONS = """
+
+## Flow Emission
+
+You can delegate complex multi-step work by writing a flow definition to:
+
+    .stepwise/emit.flow.yaml
+
+(relative to your working directory)
+
+When this file exists at the end of your session, it will be launched as a
+sub-workflow. Your current step will wait for the sub-workflow to complete,
+and the sub-workflow's final outputs become your step's outputs.
+
+**When to emit a flow:**
+- The task naturally decomposes into multiple sequential or parallel steps
+- Different parts need different executors (scripts, LLM calls, human review)
+- You want built-in retry, timeout, or fallback behavior on individual steps
+
+**When NOT to emit (just do the work directly):**
+- The task is straightforward and you can complete it in one session
+- The task is purely exploratory/research
+
+### Available executor types
+
+| Type | Usage | Notes |
+|---|---|---|
+| `script` | `run: \\|` shorthand | Shell commands, stdout parsed as JSON |
+| `llm` | `executor: llm` | LLM API call |
+| `human` | `executor: human` | Suspends for human input via web UI |
+| `agent` | `executor: agent` | Spawns another agent session |
+
+### Flow format
+
+```yaml
+name: descriptive-name
+steps:
+  step-one:
+    run: |
+      echo '{"key": "value"}'
+    outputs: [key]
+
+  step-two:
+    executor: llm
+    prompt: "Analyze: $data"
+    inputs:
+      data: step-one.key
+    outputs: [analysis]
+```
+
+### Rules
+
+- Step names must be kebab-case
+- Output field names must be underscore_case
+- Each step's `outputs` list must match the JSON keys produced by that step
+- Steps with no `inputs` referencing other steps run first (entry steps)
+- Steps run as soon as all their dependencies have completed
+- The terminal step's outputs become your parent step's outputs
+- Use `$job.param_name` to reference job-level inputs
+- Use `source-step.field` in inputs to reference upstream step outputs
+
+### Iterative pattern
+
+If this step loops (via exit rules), you can see results from your previous
+iteration via `$prev_result`. On the first iteration, `$prev_result` is None.
+Emit a flow when more decomposed work is needed; return directly when done.
+The `_delegated` marker in outputs indicates the result came from a sub-flow.
+"""
 
 
 # ── Agent Backend Protocol ────────────────────────────────────────────
@@ -627,12 +700,88 @@ class AgentExecutor(Executor):
                 },
             )
 
+        # Check for emitted flow (only if emit_flow enabled in config)
+        if self.config.get("emit_flow"):
+            working_dir = state.get("working_dir", context.workspace_path)
+            emit_path = os.path.join(working_dir, EMIT_FLOW_DIR, EMIT_FLOW_FILENAME)
+            if os.path.exists(emit_path):
+                step_outputs = self.config.get("output_fields", [])
+                return self._build_delegate_result(emit_path, state, context, step_outputs)
+
         # Completed — extract outputs based on mode
         envelope = self._extract_output(state, self.output_mode, agent_status)
         return ExecutorResult(
             type="data",
             envelope=envelope,
             executor_state=state,
+        )
+
+    def _build_delegate_result(
+        self, flow_path: str, state: dict, context: ExecutionContext,
+        step_outputs: list[str],
+    ) -> ExecutorResult:
+        """Build a delegate ExecutorResult from an emitted flow file."""
+        import logging
+        logger = logging.getLogger("stepwise.agent")
+
+        from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+        try:
+            workflow = load_workflow_yaml(flow_path)
+        except (YAMLLoadError, Exception) as e:
+            logger.warning(f"Agent emitted invalid flow: {e}")
+            return ExecutorResult(
+                type="data",
+                envelope=HandoffEnvelope(
+                    artifact={},
+                    sidecar=Sidecar(),
+                    workspace=context.workspace_path,
+                    timestamp=_now(),
+                    executor_meta={"failed": True, "error": f"Invalid emitted flow: {e}"},
+                ),
+                executor_state={**state, "failed": True, "error": f"Invalid emitted flow: {e}"},
+            )
+
+        # Validate terminal steps produce all required outputs
+        if step_outputs:
+            terminal = workflow.terminal_steps()
+            if not terminal:
+                error = "Emitted flow has no terminal steps"
+                return ExecutorResult(
+                    type="data",
+                    envelope=HandoffEnvelope(
+                        artifact={}, sidecar=Sidecar(),
+                        workspace=context.workspace_path, timestamp=_now(),
+                        executor_meta={"failed": True, "error": error},
+                    ),
+                    executor_state={**state, "failed": True, "error": error},
+                )
+            for term_name in terminal:
+                term_outputs = set(workflow.steps[term_name].outputs)
+                missing = [o for o in step_outputs if o not in term_outputs]
+                if missing:
+                    error = (
+                        f"Emitted flow terminal step '{term_name}' missing "
+                        f"outputs {missing} required by parent step"
+                    )
+                    return ExecutorResult(
+                        type="data",
+                        envelope=HandoffEnvelope(
+                            artifact={}, sidecar=Sidecar(),
+                            workspace=context.workspace_path, timestamp=_now(),
+                            executor_meta={"failed": True, "error": error},
+                        ),
+                        executor_state={**state, "failed": True, "error": error},
+                    )
+
+        sub_def = SubJobDefinition(
+            objective=f"Agent-emitted flow from step {context.step_name}",
+            workflow=workflow,
+        )
+        return ExecutorResult(
+            type="delegate",
+            sub_job_def=sub_def,
+            executor_state={**state, "emitted_flow": True},
         )
 
     def check_status(self, state: dict) -> ExecutorStatus:
@@ -707,6 +856,9 @@ class AgentExecutor(Executor):
 
         if context.injected_context:
             prompt += "\n\nAdditional context:\n" + "\n".join(context.injected_context)
+
+        if self.config.get("emit_flow"):
+            prompt += _EMIT_FLOW_INSTRUCTIONS
 
         # For file output mode, replace generic "output.json" references with
         # the step-specific filename to prevent collisions in shared workspace.
