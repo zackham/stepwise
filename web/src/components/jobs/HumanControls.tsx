@@ -134,6 +134,7 @@ export function HumanControls({ job }: HumanControlsProps) {
           size="sm"
           onClick={() => setContextDialogOpen(true)}
           className="text-zinc-400"
+          title="Add context that will be included in future step executions (e.g. corrections, clarifications, or new instructions)"
         >
           <MessageSquare className="w-3.5 h-3.5 mr-1.5" />
           Inject Context
