@@ -1,13 +1,15 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
 import { useJob, useRuns, useJobTree, useJobOutput, useStepwiseMutations } from "@/hooks/useStepwise";
 import { JobList } from "@/components/jobs/JobList";
 import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
 import { FlowDagView } from "@/components/dag/FlowDagView";
 import { StepDetailPanel } from "@/components/jobs/StepDetailPanel";
+import { DataFlowPanel } from "@/components/dag/DataFlowPanel";
 import { HumanControls } from "@/components/jobs/HumanControls";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { JsonView } from "@/components/JsonView";
+import type { DagSelection } from "@/lib/dag-layout";
 import {
   PanelRightClose,
   PanelLeftClose,
@@ -60,7 +62,7 @@ export function JobDetailPage() {
   const { data: parentJob } = useJob(job?.parent_job_id ?? undefined);
   const { data: jobTree } = useJobTree(jobId);
   const { data: runs = [] } = useRuns(jobId);
-  const [selectedStep, setSelectedStep] = useState<string | null>(null);
+  const [selection, setSelection] = useState<DagSelection>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
   const [rightPanelOpen, setRightPanelOpen] = useState<boolean | null>(null);
@@ -69,6 +71,29 @@ export function JobDetailPage() {
   const isTerminal =
     job?.status === "completed" || job?.status === "failed" || job?.status === "cancelled";
   const { data: outputs } = useJobOutput(job?.id, isTerminal);
+
+  // Derive selectedStep from selection for backward compatibility
+  const selectedStep = selection?.kind === "step" ? selection.stepName : null;
+
+  // Build latestRuns map for DataFlowPanel
+  const latestRuns = useMemo(() => {
+    const map: Record<string, (typeof runs)[number]> = {};
+    for (const run of runs) {
+      const existing = map[run.step_name];
+      if (!existing || run.attempt > existing.attempt) {
+        map[run.step_name] = run;
+      }
+    }
+    return map;
+  }, [runs]);
+
+  const handleSelectStep = useCallback((stepName: string | null) => {
+    setSelection(stepName ? { kind: "step", stepName } : null);
+  }, []);
+
+  const handleSelectDataFlow = useCallback((sel: DagSelection) => {
+    setSelection(sel);
+  }, []);
 
   const toggleExpand = useCallback((stepName: string) => {
     setExpandedSteps((prev) => {
@@ -82,7 +107,7 @@ export function JobDetailPage() {
   // Reset state when switching jobs
   useEffect(() => {
     setExpandedSteps(new Set());
-    setSelectedStep(null);
+    setSelection(null);
     setRightPanelOpen(null);
   }, [jobId]);
 
@@ -95,14 +120,14 @@ export function JobDetailPage() {
     }
   }, [job, rightPanelOpen]);
 
-  // Escape key deselects step
+  // Escape key clears any selection
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && selectedStep) setSelectedStep(null);
+      if (e.key === "Escape" && selection) setSelection(null);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [selectedStep]);
+  }, [selection]);
 
   if (isLoading) {
     return (
@@ -130,8 +155,12 @@ export function JobDetailPage() {
   const stale = job.status === "running" && job.created_by !== "server" &&
     (!job.heartbeat_at || Date.now() - new Date(job.heartbeat_at).getTime() > 60_000);
 
-  // Right panel shows step details when a step is selected, otherwise job details
-  const showRightPanel = rightPanelOpen || !!resolvedStep;
+  // Determine what the right panel shows
+  const isDataFlowSelection =
+    selection?.kind === "edge-field" ||
+    selection?.kind === "flow-input" ||
+    selection?.kind === "flow-output";
+  const showRightPanel = rightPanelOpen || !!resolvedStep || isDataFlowSelection;
 
   return (
     <div className="flex h-full">
@@ -256,7 +285,7 @@ export function JobDetailPage() {
             expandedSteps={expandedSteps}
             onToggleExpand={toggleExpand}
             selectedStep={selectedStep}
-            onSelectStep={setSelectedStep}
+            onSelectStep={handleSelectStep}
             onNavigateSubJob={(subJobId) =>
               navigate({ to: "/jobs/$jobId", params: { jobId: subJobId } })
             }
@@ -264,18 +293,28 @@ export function JobDetailPage() {
               mutations.fulfillWatch.mutate({ runId, payload })
             }
             isFulfilling={mutations.fulfillWatch.isPending}
+            selection={selection}
+            onSelectDataFlow={handleSelectDataFlow}
           />
         </div>
       </div>
 
-      {/* Right sidebar: step details or job details */}
+      {/* Right sidebar: step details, data flow, or job details */}
       {showRightPanel && (
         <div className="w-80 border-l border-border shrink-0 flex flex-col overflow-hidden" style={{ maxHeight: 'calc(100vh - 3rem)' }}>
           {resolvedStep ? (
             <StepDetailPanel
               jobId={resolvedStep.jobId}
               stepDef={resolvedStep.stepDef}
-              onClose={() => setSelectedStep(null)}
+              onClose={() => setSelection(null)}
+            />
+          ) : isDataFlowSelection && selection ? (
+            <DataFlowPanel
+              selection={selection}
+              job={job}
+              latestRuns={latestRuns}
+              outputs={outputs ?? null}
+              onClose={() => setSelection(null)}
             />
           ) : (
             <>

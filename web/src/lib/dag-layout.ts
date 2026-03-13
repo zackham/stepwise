@@ -1,6 +1,15 @@
 import dagre from "dagre";
 import type { FlowDefinition, JobTreeNode, StepRun } from "./types";
 
+// ── Selection model ─────────────────────────────────────────────────
+export type DagSelection =
+  | { kind: "step"; stepName: string }
+  | { kind: "edge-field"; fromStep: string; toStep: string; fieldName: string }
+  | { kind: "flow-input"; fieldName: string }
+  | { kind: "flow-output"; stepName: string; fieldName: string }
+  | null;
+
+// ── Layout types ────────────────────────────────────────────────────
 export interface DagNode {
   id: string;
   x: number;
@@ -42,8 +51,21 @@ export interface HierarchicalDagNode extends DagNode {
   containerPadding: { top: number; left: number; right: number; bottom: number };
 }
 
+export interface FlowPortNode {
+  id: string; // "__flow_input__" or "__flow_output__"
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  labels: string[]; // field names
+  type: "input" | "output";
+  /** For output ports, maps field name -> step that produces it */
+  fieldSources?: Record<string, string>;
+}
+
 export interface HierarchicalDagLayout extends DagLayout {
   nodes: HierarchicalDagNode[];
+  flowPorts: FlowPortNode[];
 }
 
 export interface ExpandedNodeData {
@@ -56,6 +78,8 @@ export const NODE_HEIGHT_WITH_DESC = 108;
 const CONTAINER_HEADER = 44;
 const CONTAINER_PAD_X = 24;
 const CONTAINER_PAD_BOTTOM = 16;
+const FLOW_PORT_WIDTH = 160;
+const FLOW_PORT_HEIGHT = 40;
 
 export function nodeHeight(workflow: FlowDefinition, stepName: string): number {
   const step = workflow.steps[stepName];
@@ -312,9 +336,14 @@ export function computeHierarchicalLayout(
   // Add edges (same logic as flat layout)
   const edgeSet = new Set<string>();
   const edgeLabels: Record<string, string[]> = {};
+  // Track which steps consume $job inputs (for flow input port)
+  const jobInputConsumers = new Map<string, Set<string>>(); // stepName -> set of source_field
   for (const [name, step] of Object.entries(workflow.steps)) {
     for (const binding of step.inputs) {
-      if (binding.source_step !== "$job") {
+      if (binding.source_step === "$job") {
+        if (!jobInputConsumers.has(name)) jobInputConsumers.set(name, new Set());
+        jobInputConsumers.get(name)!.add(binding.source_field);
+      } else {
         const key = `${binding.source_step}->${name}`;
         if (!edgeSet.has(key)) {
           g.setEdge(binding.source_step, name);
@@ -330,6 +359,61 @@ export function computeHierarchicalLayout(
         g.setEdge(seq, name);
         edgeSet.add(key);
         edgeLabels[key] = [];
+      }
+    }
+  }
+
+  // Flow port nodes (top-level only)
+  const FLOW_INPUT_ID = "__flow_input__";
+  const FLOW_OUTPUT_ID = "__flow_output__";
+  let hasFlowInput = false;
+  let hasFlowOutput = false;
+  // Collect all unique $job input fields
+  const allJobInputFields = new Set<string>();
+  // Output port: terminal steps and their outputs
+  const terminalStepOutputs = new Map<string, string[]>(); // stepName -> outputs[]
+
+  if (depth === 0) {
+    // Input port: steps that consume $job inputs
+    for (const fields of jobInputConsumers.values()) {
+      for (const f of fields) allJobInputFields.add(f);
+    }
+    if (allJobInputFields.size > 0) {
+      hasFlowInput = true;
+      g.setNode(FLOW_INPUT_ID, { width: FLOW_PORT_WIDTH, height: FLOW_PORT_HEIGHT });
+      // Edge from input port to each consumer step
+      for (const [stepName, fields] of jobInputConsumers) {
+        const key = `${FLOW_INPUT_ID}->${stepName}`;
+        g.setEdge(FLOW_INPUT_ID, stepName);
+        edgeSet.add(key);
+        edgeLabels[key] = [...fields];
+      }
+    }
+
+    // Output port: terminal steps (not referenced as source_step by any other step)
+    const referencedAsSource = new Set<string>();
+    for (const step of Object.values(workflow.steps)) {
+      for (const binding of step.inputs) {
+        if (binding.source_step !== "$job") referencedAsSource.add(binding.source_step);
+      }
+      for (const seq of step.sequencing) referencedAsSource.add(seq);
+    }
+    for (const name of stepNames) {
+      if (!referencedAsSource.has(name)) {
+        const step = workflow.steps[name];
+        if (step.outputs.length > 0) {
+          terminalStepOutputs.set(name, step.outputs);
+        }
+      }
+    }
+    if (terminalStepOutputs.size > 0) {
+      hasFlowOutput = true;
+      g.setNode(FLOW_OUTPUT_ID, { width: FLOW_PORT_WIDTH, height: FLOW_PORT_HEIGHT });
+      for (const [stepName, outputs] of terminalStepOutputs) {
+        const key = `${stepName}->${FLOW_OUTPUT_ID}`;
+        g.setEdge(stepName, FLOW_OUTPUT_ID);
+        edgeSet.add(key);
+        edgeLabels[key] = outputs;
       }
     }
   }
@@ -372,7 +456,46 @@ export function computeHierarchicalLayout(
     });
   }
 
-  // Build edges
+  // Extract flow port nodes
+  const flowPorts: FlowPortNode[] = [];
+  if (hasFlowInput) {
+    const node = g.node(FLOW_INPUT_ID);
+    if (node) {
+      flowPorts.push({
+        id: FLOW_INPUT_ID,
+        x: node.x - FLOW_PORT_WIDTH / 2,
+        y: node.y - FLOW_PORT_HEIGHT / 2,
+        width: FLOW_PORT_WIDTH,
+        height: FLOW_PORT_HEIGHT,
+        labels: [...allJobInputFields],
+        type: "input",
+      });
+    }
+  }
+  if (hasFlowOutput) {
+    const node = g.node(FLOW_OUTPUT_ID);
+    if (node) {
+      // Build field -> source step mapping
+      const fieldSources: Record<string, string> = {};
+      for (const [stepName, outputs] of terminalStepOutputs) {
+        for (const field of outputs) {
+          fieldSources[field] = stepName;
+        }
+      }
+      flowPorts.push({
+        id: FLOW_OUTPUT_ID,
+        x: node.x - FLOW_PORT_WIDTH / 2,
+        y: node.y - FLOW_PORT_HEIGHT / 2,
+        width: FLOW_PORT_WIDTH,
+        height: FLOW_PORT_HEIGHT,
+        labels: Object.keys(fieldSources),
+        type: "output",
+        fieldSources,
+      });
+    }
+  }
+
+  // Build edges (skip synthetic port node edges — they're in flowPorts)
   const edges: DagEdge[] = [];
   for (const e of g.edges()) {
     const edge = g.edge(e);
@@ -431,6 +554,7 @@ export function computeHierarchicalLayout(
     nodes,
     edges,
     loopEdges,
+    flowPorts,
     width: (graphMeta?.width ?? 600) + outerPad + loopExtraWidth,
     height: (graphMeta?.height ?? 400) + outerPad,
   };

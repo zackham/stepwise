@@ -1,8 +1,10 @@
 import { useMemo, useRef, useCallback, useEffect, useLayoutEffect, useState } from "react";
-import { computeHierarchicalLayout, NODE_WIDTH } from "@/lib/dag-layout";
+import { computeHierarchicalLayout } from "@/lib/dag-layout";
+import type { DagSelection } from "@/lib/dag-layout";
 import { StepNode } from "./StepNode";
 import { DagEdges } from "./DagEdges";
 import { ExpandedStepContainer } from "./ExpandedStepContainer";
+import { FlowPortNode } from "./FlowPortNode";
 import { HumanInputPanel, getWatchProps } from "./HumanInputPanel";
 import type { FlowDefinition, StepRun, JobTreeNode } from "@/lib/types";
 
@@ -17,6 +19,8 @@ interface FlowDagViewProps {
   onNavigateSubJob?: (subJobId: string) => void;
   onFulfillWatch?: (runId: string, payload: Record<string, unknown>) => void;
   isFulfilling?: boolean;
+  selection?: DagSelection;
+  onSelectDataFlow?: (selection: DagSelection) => void;
 }
 
 export function FlowDagView({
@@ -30,6 +34,8 @@ export function FlowDagView({
   onNavigateSubJob,
   onFulfillWatch,
   isFulfilling,
+  selection,
+  onSelectDataFlow,
 }: FlowDagViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -234,6 +240,25 @@ export function FlowDagView({
     return map;
   }, [workflow]);
 
+  // Derive selectedLabel from selection for DagEdges highlight
+  const selectedLabel = useMemo(() => {
+    if (!selection || selection.kind !== "edge-field") return null;
+    return {
+      fromStep: selection.fromStep,
+      toStep: selection.toStep,
+      fieldName: selection.fieldName,
+    };
+  }, [selection]);
+
+  // Handle edge label click
+  const handleClickLabel = useCallback(
+    (from: string, to: string, field: string) => {
+      if (!onSelectDataFlow) return;
+      onSelectDataFlow({ kind: "edge-field", fromStep: from, toStep: to, fieldName: field });
+    },
+    [onSelectDataFlow],
+  );
+
   if (Object.keys(workflow.steps).length === 0) {
     return (
       <div className="flex items-center justify-center h-full text-zinc-500">
@@ -279,7 +304,19 @@ export function FlowDagView({
           loopEdges={layout.loopEdges}
           width={layout.width}
           height={layout.height}
+          onClickLabel={onSelectDataFlow ? handleClickLabel : undefined}
+          selectedLabel={selectedLabel}
         />
+
+        {/* Flow port nodes (input/output) */}
+        {layout.flowPorts.map((port) => (
+          <FlowPortNode
+            key={port.id}
+            port={port}
+            selection={selection ?? null}
+            onSelect={onSelectDataFlow ?? (() => {})}
+          />
+        ))}
 
         {layout.nodes.map((node) => {
           const stepDef = workflow.steps[node.id];

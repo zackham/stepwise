@@ -1,10 +1,18 @@
 import type { DagEdge, LoopEdge } from "@/lib/dag-layout";
 
+interface SelectedLabel {
+  fromStep: string;
+  toStep: string;
+  fieldName: string;
+}
+
 interface DagEdgesProps {
   edges: DagEdge[];
   loopEdges: LoopEdge[];
   width: number;
   height: number;
+  onClickLabel?: (from: string, to: string, field: string) => void;
+  selectedLabel?: SelectedLabel | null;
 }
 
 function buildPath(points: Array<{ x: number; y: number }>): string {
@@ -53,7 +61,9 @@ function edgeMidpoint(
   return points[mid];
 }
 
-export function DagEdges({ edges, loopEdges, width, height }: DagEdgesProps) {
+const LABEL_LINE_HEIGHT = 14;
+
+export function DagEdges({ edges, loopEdges, width, height, onClickLabel, selectedLabel }: DagEdgesProps) {
   return (
     <svg
       className="absolute inset-0 pointer-events-none"
@@ -95,8 +105,9 @@ export function DagEdges({ edges, loopEdges, width, height }: DagEdgesProps) {
       </defs>
       {edges.map((edge, i) => {
         const mid = edgeMidpoint(edge.points);
-        const label = edge.labels.length > 0 ? edge.labels.join(", ") : null;
         const isSequencingOnly = edge.labels.length === 0;
+        const totalHeight = edge.labels.length * LABEL_LINE_HEIGHT;
+        const startY = mid.y - 6 - totalHeight / 2 + LABEL_LINE_HEIGHT / 2;
         return (
           <g key={`${edge.from}-${edge.to}-${i}`}>
             <path
@@ -108,17 +119,54 @@ export function DagEdges({ edges, loopEdges, width, height }: DagEdgesProps) {
               markerEnd="url(#arrowhead)"
               opacity={isSequencingOnly ? 0.4 : 0.5}
             />
-            {label && (
-              <text
-                x={mid.x}
-                y={mid.y - 6}
-                textAnchor="middle"
-                className="fill-zinc-500 text-[10px]"
-                style={{ fontFamily: "monospace" }}
-              >
-                {label}
-              </text>
-            )}
+            {edge.labels.map((field, fi) => {
+              const isSelected =
+                selectedLabel &&
+                selectedLabel.fromStep === edge.from &&
+                selectedLabel.toStep === edge.to &&
+                selectedLabel.fieldName === field;
+              const ly = startY + fi * LABEL_LINE_HEIGHT;
+              // Estimate text width (~6px per char at 10px mono)
+              const textW = field.length * 6.5 + 12;
+              const textH = 14;
+              return (
+                <g
+                  key={field}
+                  style={{ pointerEvents: "auto", cursor: onClickLabel ? "pointer" : undefined }}
+                  onClick={(e) => {
+                    if (!onClickLabel) return;
+                    e.stopPropagation();
+                    onClickLabel(edge.from, edge.to, field);
+                  }}
+                >
+                  <rect
+                    x={mid.x - textW / 2}
+                    y={ly - textH / 2 - 1}
+                    width={textW}
+                    height={textH}
+                    rx={3}
+                    fill={isSelected ? "oklch(0.25 0.08 250)" : "transparent"}
+                    className={onClickLabel ? "hover:fill-zinc-800/60" : ""}
+                  />
+                  <text
+                    x={mid.x}
+                    y={ly}
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                    className={
+                      isSelected
+                        ? "fill-blue-400 text-[10px]"
+                        : onClickLabel
+                          ? "fill-zinc-500 text-[10px] hover:fill-zinc-300"
+                          : "fill-zinc-500 text-[10px]"
+                    }
+                    style={{ fontFamily: "monospace" }}
+                  >
+                    {field}
+                  </text>
+                </g>
+              );
+            })}
           </g>
         );
       })}
