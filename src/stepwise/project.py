@@ -83,9 +83,25 @@ def init_project(target: Path | None = None, force: bool = False) -> StepwisePro
     from stepwise.hooks import scaffold_hooks
     scaffold_hooks(dot)
 
-    # Self-ignoring safety net
+    # Project config files
+    config_path = dot / "config.yaml"
+    if not config_path.exists():
+        config_path.write_text(
+            "# Stepwise project config — committed to git\n"
+            "# Override label assignments or add custom labels here.\n"
+            "labels: {}\n"
+        )
+
+    config_local_path = dot / "config.local.yaml"
+    if not config_local_path.exists():
+        config_local_path.write_text(
+            "# Local overrides — NOT committed to git\n"
+            "# API keys and personal label overrides go here.\n"
+        )
+
+    # Self-ignoring safety net — ignore everything except config.yaml
     gitignore_inner = dot / ".gitignore"
-    gitignore_inner.write_text("*\n")
+    gitignore_inner.write_text("*\n!config.yaml\nconfig.local.yaml\n")
 
     # Append to parent .gitignore if it exists and doesn't already contain .stepwise/
     gitignore_outer = root / ".gitignore"

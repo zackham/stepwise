@@ -62,7 +62,10 @@ class TestInitProject:
         init_project(tmp_path)
         gitignore = tmp_path / DOT_DIR_NAME / ".gitignore"
         assert gitignore.exists()
-        assert gitignore.read_text() == "*\n"
+        content = gitignore.read_text()
+        assert "*\n" in content
+        assert "!config.yaml" in content
+        assert "config.local.yaml" in content
 
     def test_appends_to_existing_gitignore(self, tmp_path):
         gitignore = tmp_path / ".gitignore"
