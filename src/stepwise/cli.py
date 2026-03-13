@@ -680,22 +680,93 @@ def cmd_check(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
+def _try_registry_fetch(flow_ref: str, io: IOAdapter) -> Path | None:
+    """Try fetching a flow from the registry. Returns flow path or None."""
+    from stepwise.bundle import unpack_bundle
+    from stepwise.registry_client import fetch_flow, RegistryError
+
+    # Parse @author:name or plain slug
+    if flow_ref.startswith("@"):
+        ref_body = flow_ref.lstrip("@")
+        slug = ref_body.split(":", 1)[-1] if ":" in ref_body else ref_body
+    else:
+        slug = flow_ref
+
+    try:
+        io.log("info", f"Fetching '{slug}' from registry...")
+        data = fetch_flow(slug)
+    except RegistryError:
+        return None
+
+    import hashlib
+    from datetime import datetime, timezone
+    from stepwise.registry_client import get_registry_url
+
+    target_dir = Path("flows") / slug
+    origin = {
+        "registry": get_registry_url(),
+        "author": data.get("author", "unknown"),
+        "slug": slug,
+        "version": data.get("version", 1),
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "content_hash": hashlib.sha256(data["yaml"].encode()).hexdigest(),
+    }
+    flow_path = unpack_bundle(
+        target_dir=target_dir,
+        yaml_content=data["yaml"],
+        files=data.get("files"),
+        origin=origin,
+    )
+    steps = data.get("steps", "?")
+    author = data.get("author", "unknown")
+    io.log("success", f"Downloaded {slug} ({steps} steps, by {author})")
+    return flow_path
+
+
 def cmd_run(args: argparse.Namespace) -> int:
-    from stepwise.flow_resolution import FlowResolutionError, resolve_flow
+    from stepwise.flow_resolution import FlowResolutionError, resolve_flow, FLOW_NAME_PATTERN
     from stepwise.runner import run_flow, parse_vars, load_vars_file
 
+    io = _io(args)
     project = _find_project_or_exit(args)
 
-    # Resolve flow name/path early
+    # Resolve flow name/path — fall back to registry if not found locally
+    flow_ref = args.flow
     try:
-        flow_path = resolve_flow(args.flow, _project_dir(args))
-    except FlowResolutionError as e:
-        if getattr(args, "wait", False) or getattr(args, "async_mode", False):
-            from stepwise.runner import _json_error
-            _json_error(2, str(e))
+        flow_path = resolve_flow(flow_ref, _project_dir(args))
+    except FlowResolutionError:
+        # Try registry if it looks like a name or @author:name
+        is_name = FLOW_NAME_PATTERN.match(flow_ref) or flow_ref.startswith("@")
+        if is_name:
+            flow_path = _try_registry_fetch(flow_ref, io)
+            if flow_path:
+                # Re-resolve now that it's downloaded
+                try:
+                    slug = flow_ref.lstrip("@").split(":", 1)[-1] if flow_ref.startswith("@") else flow_ref
+                    flow_path = resolve_flow(slug, _project_dir(args))
+                except FlowResolutionError as e2:
+                    if getattr(args, "wait", False) or getattr(args, "async_mode", False):
+                        from stepwise.runner import _json_error
+                        _json_error(2, str(e2))
+                        return EXIT_USAGE_ERROR
+                    io.log("error", str(e2))
+                    return EXIT_USAGE_ERROR
+            else:
+                msg = f"Flow '{flow_ref}' not found locally or in registry"
+                if getattr(args, "wait", False) or getattr(args, "async_mode", False):
+                    from stepwise.runner import _json_error
+                    _json_error(2, msg)
+                    return EXIT_USAGE_ERROR
+                io.log("error", msg)
+                return EXIT_USAGE_ERROR
+        else:
+            msg = f"Flow not found: {flow_ref}"
+            if getattr(args, "wait", False) or getattr(args, "async_mode", False):
+                from stepwise.runner import _json_error
+                _json_error(2, msg)
+                return EXIT_USAGE_ERROR
+            io.log("error", msg)
             return EXIT_USAGE_ERROR
-        print(f"Error: {e}", file=sys.stderr)
-        return EXIT_USAGE_ERROR
 
     # Parse input variables (shared across all modes)
     inputs: dict = {}
