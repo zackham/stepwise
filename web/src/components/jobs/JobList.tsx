@@ -110,15 +110,15 @@ export function JobList({ selectedJobId, onSelectJob }: JobListProps) {
                   <div className="flex flex-col items-end gap-1 shrink-0">
                     <div className="flex items-center gap-1">
                       {isStale(job) && (
-                        <AlertTriangle className="w-3 h-3 text-amber-500" title="Owner not responding" />
+                        <AlertTriangle className="w-3 h-3 text-amber-500" />
                       )}
                       <JobStatusBadge status={job.status} />
                     </div>
                     <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
                       {isCliOwned(job.created_by) ? (
-                        <Terminal className="w-2.5 h-2.5" title="CLI" />
+                        <Terminal className="w-2.5 h-2.5" />
                       ) : (
-                        <Monitor className="w-2.5 h-2.5" title="Server" />
+                        <Monitor className="w-2.5 h-2.5" />
                       )}
                       <Clock className="w-2.5 h-2.5" />
                       {timeAgo(job.updated_at)}
