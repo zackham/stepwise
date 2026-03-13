@@ -2,6 +2,77 @@ import { useState } from "react";
 import { ChevronRight, ChevronDown, Copy, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+function classifyString(s: string): "inline" | "block" | "json" {
+  const trimmed = s.trimStart();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      JSON.parse(s);
+      return "json";
+    } catch {
+      // not valid JSON, fall through
+    }
+  }
+  if (s.includes("\n")) return "block";
+  return "inline";
+}
+
+const COLLAPSE_THRESHOLD = 12;
+
+function BlockString({ value, name }: { value: string; name?: string }) {
+  const lineCount = value.split("\n").length;
+  const isLong = lineCount > COLLAPSE_THRESHOLD;
+  const [expanded, setExpanded] = useState(!isLong);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(value);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <div>
+      {name && (
+        <span className="text-zinc-400 text-sm block mb-1">{name}:</span>
+      )}
+      <div className="relative group rounded border border-zinc-700/30 bg-zinc-900/40 px-3 py-2">
+        <button
+          onClick={handleCopy}
+          className="absolute top-2 right-2 text-zinc-500 hover:text-zinc-300 opacity-0 group-hover:opacity-100 transition-opacity"
+          title="Copy text"
+        >
+          {copied ? (
+            <Check className="w-3 h-3 text-emerald-400" />
+          ) : (
+            <Copy className="w-3 h-3" />
+          )}
+        </button>
+        <div
+          className={cn(
+            "whitespace-pre-wrap break-words text-sm text-zinc-200 font-mono leading-relaxed",
+            !expanded && "max-h-[16rem] overflow-hidden"
+          )}
+        >
+          {value}
+        </div>
+        {!expanded && (
+          <div className="absolute bottom-8 left-0 right-0 h-12 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
+        )}
+        {isLong && (
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="text-xs text-zinc-400 hover:text-zinc-200 mt-1"
+          >
+            {expanded
+              ? "Show less"
+              : `Show more (${lineCount} lines)`}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 interface JsonViewProps {
   data: unknown;
   name?: string;
@@ -34,10 +105,33 @@ export function JsonView({
   }
 
   if (typeof data === "string") {
+    const category = classifyString(data);
+
+    if (category === "json") {
+      try {
+        const parsed = JSON.parse(data);
+        return (
+          <JsonView
+            data={parsed}
+            name={name}
+            defaultExpanded={depth < 1}
+            depth={depth + 1}
+          />
+        );
+      } catch {
+        // fall through to block/inline
+      }
+    }
+
+    if (category === "block") {
+      return <BlockString value={data} name={name} />;
+    }
+
+    // inline
     return (
       <span>
         {name && <span className="text-zinc-400 mr-1">{name}:</span>}
-        <span className="text-emerald-400">&quot;{data}&quot;</span>
+        <span className="text-zinc-200">{data}</span>
       </span>
     );
   }
@@ -106,6 +200,9 @@ export function JsonView({
       );
     }
 
+    const isSingleKey = entries.length === 1;
+    const shouldExpand = isSingleKey || expanded;
+
     return (
       <div>
         <div className="flex items-center gap-1">
@@ -113,7 +210,7 @@ export function JsonView({
             onClick={() => setExpanded(!expanded)}
             className="flex items-center gap-1 hover:text-foreground text-zinc-400 text-sm"
           >
-            {expanded ? (
+            {shouldExpand ? (
               <ChevronDown className="w-3 h-3" />
             ) : (
               <ChevronRight className="w-3 h-3" />
@@ -139,14 +236,14 @@ export function JsonView({
             </button>
           )}
         </div>
-        {expanded && (
+        {shouldExpand && (
           <div className="ml-4 border-l border-zinc-700/50 pl-3 mt-1 space-y-0.5">
             {entries.map(([key, value]) => (
               <div key={key} className="text-sm">
                 <JsonView
                   data={value}
                   name={key}
-                  defaultExpanded={depth < 1}
+                  defaultExpanded={isSingleKey || depth < 1}
                   depth={depth + 1}
                 />
               </div>

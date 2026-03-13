@@ -351,6 +351,11 @@ def load_config_with_sources(project_dir: Path | None = None) -> ConfigWithSourc
     registry = _ensure_label_models_in_registry(registry, merged_labels)
     registry = _ensure_defaults_in_registry(registry)
 
+    billing = "subscription"
+    for level in (user, project, local):
+        if level.billing != "subscription":
+            billing = level.billing
+
     config = StepwiseConfig(
         openrouter_api_key=(local.openrouter_api_key or project.openrouter_api_key
                             or user.openrouter_api_key),
@@ -360,6 +365,7 @@ def load_config_with_sources(project_dir: Path | None = None) -> ConfigWithSourc
         default_model=(local.default_model or project.default_model
                        or user.default_model or "balanced"),
         labels=merged_labels,
+        billing=billing,
     )
 
     return ConfigWithSources(config=config, label_info=label_info, api_key_source=api_key_source)
