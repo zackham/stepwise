@@ -531,7 +531,7 @@ def run_flow(
 
     store = SQLiteStore(str(project.db_path))
     registry = create_default_registry(config)
-    engine = AsyncEngine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir, billing_mode=config.billing)
+    engine = AsyncEngine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir, billing_mode=config.billing, config=config)
 
     # 3. Create and start job
     import os
@@ -810,7 +810,7 @@ def run_wait(
 
     store = SQLiteStore(str(project.db_path))
     registry = create_default_registry(config)
-    engine = AsyncEngine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir, billing_mode=config.billing)
+    engine = AsyncEngine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir, billing_mode=config.billing, config=config)
 
     # Create and start job
     flow_name = objective or flow_display_name(flow_path)
@@ -1355,7 +1355,7 @@ def run_async(
     store = SQLiteStore(str(project.db_path))
     try:
         registry = create_default_registry(config)
-        engine = AsyncEngine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir, billing_mode=config.billing)
+        engine = AsyncEngine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir, billing_mode=config.billing, config=config)
 
         flow_name = objective or flow_display_name(flow_path)
         job = engine.create_job(

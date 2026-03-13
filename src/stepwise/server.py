@@ -337,7 +337,7 @@ async def lifespan(app: FastAPI):
     registry = create_default_registry(config)
 
     dot_dir = _project_dir / ".stepwise"
-    _engine = AsyncEngine(store, registry, jobs_dir=jobs_dir, project_dir=dot_dir if dot_dir.is_dir() else None, billing_mode=config.billing)
+    _engine = AsyncEngine(store, registry, jobs_dir=jobs_dir, project_dir=dot_dir if dot_dir.is_dir() else None, billing_mode=config.billing, config=config)
     _engine.on_broadcast = _schedule_broadcast
     _engine_task = asyncio.create_task(_engine.run())
     _stream_monitor = asyncio.create_task(_agent_stream_monitor())
@@ -937,6 +937,7 @@ def get_config():
         "model_registry": [m.to_dict() for m in enriched],
         "default_model": cfg.default_model,
         "labels": [li.to_dict() for li in cs.label_info],
+        "billing_mode": cfg.billing,
     }
 
 
@@ -1238,11 +1239,13 @@ def list_local_flows():
         except OSError:
             modified_at = ""
 
-        # Parse lightly to get step count
+        # Parse lightly to get step count and description
         steps_count = 0
+        description = ""
         try:
             wf = load_workflow_yaml(flow_info.path)
             steps_count = len(wf.steps)
+            description = wf.metadata.description or ""
         except (YAMLLoadError, Exception):
             pass
 
@@ -1255,6 +1258,7 @@ def list_local_flows():
         result.append({
             "path": rel_path,
             "name": flow_info.name,
+            "description": description,
             "steps_count": steps_count,
             "modified_at": modified_at,
             "is_directory": flow_info.is_directory,

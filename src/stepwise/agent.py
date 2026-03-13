@@ -30,75 +30,6 @@ from stepwise.models import HandoffEnvelope, Sidecar, SubJobDefinition, _now
 EMIT_FLOW_FILENAME = "emit.flow.yaml"
 EMIT_FLOW_DIR = ".stepwise"
 
-_EMIT_FLOW_INSTRUCTIONS = """
-
-## Flow Emission
-
-You can delegate complex multi-step work by writing a flow definition to:
-
-    .stepwise/emit.flow.yaml
-
-(relative to your working directory)
-
-When this file exists at the end of your session, it will be launched as a
-sub-workflow. Your current step will wait for the sub-workflow to complete,
-and the sub-workflow's final outputs become your step's outputs.
-
-**When to emit a flow:**
-- The task naturally decomposes into multiple sequential or parallel steps
-- Different parts need different executors (scripts, LLM calls, human review)
-- You want built-in retry, timeout, or fallback behavior on individual steps
-
-**When NOT to emit (just do the work directly):**
-- The task is straightforward and you can complete it in one session
-- The task is purely exploratory/research
-
-### Available executor types
-
-| Type | Usage | Notes |
-|---|---|---|
-| `script` | `run: \\|` shorthand | Shell commands, stdout parsed as JSON |
-| `llm` | `executor: llm` | LLM API call |
-| `human` | `executor: human` | Suspends for human input via web UI |
-| `agent` | `executor: agent` | Spawns another agent session |
-
-### Flow format
-
-```yaml
-name: descriptive-name
-steps:
-  step-one:
-    run: |
-      echo '{"key": "value"}'
-    outputs: [key]
-
-  step-two:
-    executor: llm
-    prompt: "Analyze: $data"
-    inputs:
-      data: step-one.key
-    outputs: [analysis]
-```
-
-### Rules
-
-- Step names must be kebab-case
-- Output field names must be underscore_case
-- Each step's `outputs` list must match the JSON keys produced by that step
-- Steps with no `inputs` referencing other steps run first (entry steps)
-- Steps run as soon as all their dependencies have completed
-- The terminal step's outputs become your parent step's outputs
-- Use `$job.param_name` to reference job-level inputs
-- Use `source-step.field` in inputs to reference upstream step outputs
-
-### Iterative pattern
-
-If this step loops (via exit rules), you can see results from your previous
-iteration via `$prev_result`. On the first iteration, `$prev_result` is None.
-Emit a flow when more decomposed work is needed; return directly when done.
-The `_delegated` marker in outputs indicates the result came from a sub-flow.
-"""
-
 
 # ── Agent Backend Protocol ────────────────────────────────────────────
 
@@ -864,7 +795,13 @@ class AgentExecutor(Executor):
             prompt += "\n\nAdditional context:\n" + "\n".join(context.injected_context)
 
         if self.config.get("emit_flow"):
-            prompt += _EMIT_FLOW_INSTRUCTIONS
+            from stepwise.agent_help import build_emit_flow_instructions
+            prompt += build_emit_flow_instructions(
+                registry=self.config.get("_registry"),
+                config=self.config.get("_config"),
+                depth_remaining=self.config.get("_depth_remaining"),
+                project_dir=self.config.get("_project_dir"),
+            )
 
         # For file output mode, replace generic "output.json" references with
         # the step-specific filename to prevent collisions in shared workspace.

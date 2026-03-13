@@ -73,12 +73,14 @@ class Engine:
         jobs_dir: str | None = None,
         project_dir: Path | None = None,
         billing_mode: str = "subscription",
+        config: object | None = None,
     ) -> None:
         self.store = store
         self.registry = registry or ExecutorRegistry()
         self.jobs_dir = jobs_dir or "jobs"
         self.project_dir = project_dir  # .stepwise/ dir for hooks
         self.billing_mode = billing_mode  # "subscription" | "api_key"
+        self.config = config  # StepwiseConfig — used for emit_flow instructions
         self._injected_contexts: dict[str, list[str]] = {}  # job_id -> contexts
 
     # ── Job Lifecycle ─────────────────────────────────────────────────────
@@ -853,6 +855,19 @@ class Engine:
             exec_ref = exec_ref.with_config({"output_fields": step_def.outputs})
         if job.workflow.source_dir and exec_ref.type == "script":
             exec_ref = exec_ref.with_config({"flow_dir": job.workflow.source_dir})
+
+        # Inject runtime context for agent executors with emit_flow enabled
+        if exec_ref.type == "agent" and exec_ref.config.get("emit_flow"):
+            emit_ctx: dict = {
+                "_registry": self.registry,
+                "_config": self.config,
+            }
+            depth = self._get_job_depth(job)
+            max_depth = job.config.max_sub_job_depth
+            emit_ctx["_depth_remaining"] = max(0, max_depth - depth - 1)
+            if self.project_dir:
+                emit_ctx["_project_dir"] = self.project_dir.parent
+            exec_ref = exec_ref.with_config(emit_ctx)
 
         return run, exec_ref, inputs, ctx
 
@@ -1958,8 +1973,9 @@ class AsyncEngine(Engine):
         jobs_dir: str | None = None,
         project_dir: Path | None = None,
         billing_mode: str = "subscription",
+        config: object | None = None,
     ) -> None:
-        super().__init__(store, registry, jobs_dir, project_dir, billing_mode=billing_mode)
+        super().__init__(store, registry, jobs_dir, project_dir, billing_mode=billing_mode, config=config)
         self._queue: asyncio.Queue = asyncio.Queue()
         self._tasks: dict = {}  # run_id → Task or Future (for cancellation)
         self._job_done: dict[str, asyncio.Event] = {}  # job_id → done signal

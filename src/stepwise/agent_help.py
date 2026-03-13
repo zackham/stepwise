@@ -279,6 +279,146 @@ def _format_full(entries: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def build_emit_flow_instructions(
+    registry: object | None = None,
+    config: object | None = None,
+    depth_remaining: int | None = None,
+    project_dir: Path | None = None,
+) -> str:
+    """Build dynamic instructions for agents with emit_flow=true.
+
+    Generates context-aware instructions based on:
+    - Available executor types (from registry)
+    - Model labels (from config)
+    - Available flows for composition (from project discovery)
+    - Remaining sub-job depth
+    """
+    lines: list[str] = []
+
+    lines.append("\n## Flow Emission\n")
+    lines.append("You can delegate complex multi-step work by writing a flow definition to:")
+    lines.append("\n    .stepwise/emit.flow.yaml\n")
+    lines.append("(relative to your working directory)\n")
+    lines.append(
+        "When this file exists at the end of your session, it will be launched as a "
+        "sub-workflow. Your current step will wait for the sub-workflow to complete, "
+        "and the sub-workflow's final outputs become your step's outputs.\n"
+    )
+
+    # When to emit vs direct
+    lines.append("**When to emit a flow:**")
+    lines.append("- The task decomposes into multiple sequential or parallel steps")
+    lines.append("- Different parts need different executors (scripts, LLM calls, human review)")
+    lines.append("- You want retry, timeout, or fallback on individual steps\n")
+    lines.append("**When NOT to emit (just do the work directly):**")
+    lines.append("- The task is straightforward and you can complete it in one session")
+    lines.append("- The task is purely exploratory/research\n")
+
+    # Available executor types — dynamic from registry
+    lines.append("### Available executor types\n")
+    executor_docs = {
+        "script": ("script", "`run: |` shorthand", "Shell commands, stdout parsed as JSON"),
+        "llm": ("llm", "`executor: llm`", "LLM API call"),
+        "human": ("human", "`executor: human`", "Suspends for human input via web UI"),
+        "agent": ("agent", "`executor: agent`", "Spawns another agent session"),
+    }
+
+    available_types: list[str] = []
+    if registry and hasattr(registry, "_factories"):
+        available_types = [t for t in ("script", "llm", "human", "agent")
+                          if t in registry._factories]
+    else:
+        available_types = list(executor_docs.keys())
+
+    lines.append("| Type | Usage | Notes |")
+    lines.append("|---|---|---|")
+    for t in available_types:
+        if t in executor_docs:
+            name, usage, notes = executor_docs[t]
+            lines.append(f"| `{name}` | {usage} | {notes} |")
+    lines.append("")
+
+    # Model labels — dynamic from config
+    if config and hasattr(config, "labels") and config.labels:
+        from stepwise.config import label_model_id
+        lines.append("### Model labels\n")
+        lines.append("Use labels instead of full model IDs in `model:` fields:\n")
+        lines.append("| Label | Model |")
+        lines.append("|---|---|")
+        for name, value in config.labels.items():
+            model_id = label_model_id(value)
+            lines.append(f"| `{name}` | `{model_id}` |")
+        lines.append("")
+        if config.default_model:
+            lines.append(f"Default model: `{config.default_model}`\n")
+
+    # Agent executor guidance
+    lines.append("### Agent steps in emitted flows\n")
+    lines.append("For `executor: agent` steps, do NOT specify `model:`. The agent "
+                 "uses the user's configured default (claude, codex, etc.).\n")
+
+    # Flow format
+    lines.append("### Flow format\n")
+    lines.append("```yaml")
+    lines.append("name: descriptive-name")
+    lines.append("steps:")
+    lines.append("  step-one:")
+    lines.append("    run: |")
+    lines.append("      echo '{\"key\": \"value\"}'")
+    lines.append("    outputs: [key]")
+    lines.append("")
+    lines.append("  step-two:")
+    lines.append("    executor: llm")
+    lines.append("    prompt: \"Analyze: $data\"")
+    if config and hasattr(config, "default_model") and config.default_model:
+        lines.append(f"    model: {config.default_model}")
+    lines.append("    inputs:")
+    lines.append("      data: step-one.key")
+    lines.append("    outputs: [analysis]")
+    lines.append("```\n")
+
+    # Rules
+    lines.append("### Rules\n")
+    lines.append("- Step names: kebab-case. Output fields: underscore_case")
+    lines.append("- `outputs` must match JSON keys produced by the step")
+    lines.append("- Steps with no `inputs` referencing other steps run first")
+    lines.append("- Steps run as soon as all dependencies complete")
+    lines.append("- Terminal step outputs become the parent step's outputs")
+    lines.append("- `$job.param` references job-level inputs; `source-step.field` for upstream")
+    lines.append("- Always include a safety cap (`attempt >= N`) in loop exit rules\n")
+
+    # Available flows for composition
+    if project_dir:
+        try:
+            flows = _discover_flows(project_dir)
+            if flows:
+                lines.append("### Available flows for composition\n")
+                lines.append("You can reference these as sub-flow steps via `flow: name`:\n")
+                for flow in flows[:10]:  # cap at 10 to limit token use
+                    lines.append(f"- `{flow.name}`")
+                lines.append("")
+                lines.append("Only compose with these if the task genuinely maps to them.\n")
+        except Exception:
+            pass
+
+    # Depth remaining
+    if depth_remaining is not None:
+        lines.append(f"### Depth limit\n")
+        lines.append(f"Sub-job depth remaining: **{depth_remaining}**. "
+                     f"Emitted flows count as 1 level.\n")
+
+    # Iterative pattern
+    lines.append("### Iterative pattern\n")
+    lines.append(
+        "If this step loops (via exit rules), you can see results from your previous "
+        "iteration via `$prev_result`. On the first iteration, `$prev_result` is None. "
+        "Emit a flow when more decomposed work is needed; return directly when done. "
+        "The `_delegated` marker in outputs indicates the result came from a sub-flow."
+    )
+
+    return "\n".join(lines)
+
+
 def update_file(target: Path, content: str) -> bool:
     """Update a section in target file between markers, or append.
 
