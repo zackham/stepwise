@@ -390,7 +390,7 @@ steps:
         max_iterations: 5
 ```
 
-The `_delegated: True` marker is injected into the artifact when a sub-flow completes, allowing exit rules to distinguish delegation from direct completion. Design doc: `docs/design/dynamic-sub-jobs.md`.
+The `_delegated: True` marker is injected into the artifact when a sub-flow completes, allowing exit rules to distinguish delegation from direct completion.
 
 ### Distribution & Releases
 
