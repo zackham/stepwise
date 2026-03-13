@@ -175,13 +175,8 @@ def _find_project_or_exit(args: argparse.Namespace, auto_init: bool = False) -> 
         return find_project(start)
     except ProjectNotFoundError:
         if auto_init:
-            io = _io(args)
             target = start or Path.cwd()
-            if io.prompt_confirm(f"No .stepwise/ found. Create project in {target}?"):
-                project = init_project(target)
-                io.log("success", f"Initialized project in {project.dot_dir}")
-                return project
-            sys.exit(EXIT_PROJECT_ERROR)
+            return init_project(target)
         _io(args).log("error",
             f"No .stepwise/ found (searched up from {start or Path.cwd()}). "
             f"Run 'stepwise init' to create a project.")
