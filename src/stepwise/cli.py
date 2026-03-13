@@ -1301,7 +1301,7 @@ def cmd_list(args: argparse.Namespace) -> int:
                     if max_age and age_seconds > max_age:
                         continue
 
-                items.append({
+                item = {
                     "job_id": job.id,
                     "flow_name": job.objective,
                     "run_id": run.id,
@@ -1311,7 +1311,10 @@ def cmd_list(args: argparse.Namespace) -> int:
                     "suspended_at": suspended_at.isoformat() if suspended_at else None,
                     "age_seconds": age_seconds,
                     "fulfill_command": f"stepwise fulfill {run.id}",
-                })
+                }
+                if run.watch.output_schema:
+                    item["output_schema"] = run.watch.output_schema
+                items.append(item)
 
         if getattr(args, "output", None) == "json":
             print(json.dumps({"suspended_steps": items, "count": len(items)}, indent=2, default=str))

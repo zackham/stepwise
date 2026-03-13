@@ -787,7 +787,7 @@ def list_suspended_jobs(
             if flow and job.objective != flow:
                 continue
 
-            items.append({
+            item = {
                 "job_id": job.id,
                 "flow_name": job.objective,
                 "run_id": run.id,
@@ -797,7 +797,10 @@ def list_suspended_jobs(
                 "suspended_at": run.started_at.isoformat() if run.started_at else None,
                 "age_seconds": round(age, 1),
                 "fulfill_command": f"stepwise fulfill {run.id} '<json>'",
-            })
+            }
+            if run.watch and run.watch.output_schema:
+                item["output_schema"] = run.watch.output_schema
+            items.append(item)
 
     return {"count": len(items), "suspended_steps": items}
 

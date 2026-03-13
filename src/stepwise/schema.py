@@ -39,11 +39,14 @@ def generate_schema(workflow: WorkflowDefinition) -> dict:
     human_steps: list[dict] = []
     for name, step in workflow.steps.items():
         if step.executor.type == "human":
-            human_steps.append({
+            entry: dict = {
                 "step": name,
                 "prompt": step.executor.config.get("prompt", ""),
                 "fields": step.outputs,
-            })
+            }
+            if step.output_schema:
+                entry["schema"] = {k: v.to_dict() for k, v in step.output_schema.items()}
+            human_steps.append(entry)
 
     schema: dict = {
         "name": workflow.metadata.name,
