@@ -295,16 +295,6 @@ async def lifespan(app: FastAPI):
     _engine = Engine(store, registry, jobs_dir=jobs_dir, project_dir=dot_dir if dot_dir.is_dir() else None)
     _tick_task = asyncio.create_task(_tick_loop())
 
-    # --watch mode: auto-create and start a job if env var is set
-    watch_workflow_json = os.environ.pop("STEPWISE_WATCH_WORKFLOW", None)
-    if watch_workflow_json:
-        wf = WorkflowDefinition.from_dict(json.loads(watch_workflow_json))
-        objective = os.environ.pop("STEPWISE_WATCH_OBJECTIVE", "watch")
-        watch_inputs_json = os.environ.pop("STEPWISE_WATCH_INPUTS", None)
-        watch_inputs = json.loads(watch_inputs_json) if watch_inputs_json else None
-        job = _engine.create_job(objective=objective, workflow=wf, inputs=watch_inputs)
-        _engine.start_job(job.id)
-
     yield
 
     # Cancel all stream tailer tasks

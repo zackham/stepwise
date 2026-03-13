@@ -810,11 +810,11 @@ def _run_watch(
     flow_path: Path,
     inputs: dict,
 ) -> int:
-    """--watch mode: ephemeral server with pre-loaded job."""
+    """--watch mode: start or reuse server, submit job via API."""
     import os
-    import json
     import uvicorn
     from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+    from stepwise.server_detect import detect_server, write_pidfile, remove_pidfile
 
     # Load and validate the flow
     try:
@@ -828,70 +828,66 @@ def _run_watch(
         print(f"Error: {'; '.join(errors)}", file=sys.stderr)
         return EXIT_USAGE_ERROR
 
-    # If a server is already running, submit the job there instead
-    from stepwise.server_detect import detect_server
+    objective = args.objective or flow_path.stem
+
+    # If a server is already running, submit there and exit
     existing_url = detect_server(project.dot_dir)
     if existing_url:
-        return _watch_via_existing_server(
-            existing_url, workflow, args, flow_path, inputs,
-        )
+        return _submit_watch_job(existing_url, workflow, objective, inputs, args)
 
-    # Pick port
+    # Start a new server, submit the job once it's ready
     if args.port:
         port = args.port
     else:
         port = _find_free_port()
 
     host = "127.0.0.1"
+    server_url = f"http://{host}:{port}"
 
-    # Set env vars for server lifespan
     os.environ["STEPWISE_DB"] = str(project.db_path)
     os.environ["STEPWISE_TEMPLATES"] = str(project.templates_dir)
     os.environ["STEPWISE_JOBS_DIR"] = str(project.jobs_dir)
-
-    # Stash flow data in env for the lifespan to pick up
-    os.environ["STEPWISE_WATCH_WORKFLOW"] = json.dumps(workflow.to_dict())
-    os.environ["STEPWISE_WATCH_OBJECTIVE"] = args.objective or flow_path.stem
-    if inputs:
-        os.environ["STEPWISE_WATCH_INPUTS"] = json.dumps(inputs)
+    os.environ["STEPWISE_PROJECT_DIR"] = str(project.root)
 
     print(f"▸ entering flow...")
-    print(f"  http://{host}:{port}")
+    print(f"  {server_url}")
     print()
     print(f"  Press Ctrl+C to stop.")
 
-    if not args.no_open:
-        _open_browser_when_ready(host, port)
+    # Background thread: wait for server ready → submit job → open browser
+    _submit_job_when_ready(host, port, server_url, workflow, objective, inputs, args)
 
-    uvicorn.run(
-        "stepwise.server:app",
-        host=host,
-        port=port,
-        log_level="warning",
-    )
+    write_pidfile(project.dot_dir, port)
+    try:
+        uvicorn.run(
+            "stepwise.server:app",
+            host=host,
+            port=port,
+            log_level="warning",
+        )
+    finally:
+        remove_pidfile(project.dot_dir)
     return EXIT_SUCCESS
 
 
-def _watch_via_existing_server(
+def _submit_watch_job(
     server_url: str,
     workflow,
-    args,
-    flow_path: Path,
+    objective: str,
     inputs: dict,
+    args,
 ) -> int:
-    """Submit a job to an already-running server and open the browser."""
+    """Submit a job to a server via REST API, start it, and open the browser."""
     import json
     import urllib.request
     import urllib.error
 
-    objective = args.objective or flow_path.stem
     payload = json.dumps({
         "objective": objective,
         "workflow": workflow.to_dict(),
         "inputs": inputs if inputs else None,
     }).encode()
 
-    # Create and start the job via REST API
     try:
         req = urllib.request.Request(
             f"{server_url}/api/jobs",
@@ -903,7 +899,7 @@ def _watch_via_existing_server(
             job_data = json.loads(resp.read())
             job_id = job_data["id"]
     except (urllib.error.URLError, Exception) as e:
-        print(f"Error: Failed to create job on running server: {e}", file=sys.stderr)
+        print(f"Error: Failed to create job: {e}", file=sys.stderr)
         return EXIT_JOB_FAILED
 
     try:
@@ -914,17 +910,80 @@ def _watch_via_existing_server(
         )
         urllib.request.urlopen(start_req, timeout=10)
     except (urllib.error.URLError, Exception) as e:
-        print(f"Error: Failed to start job on running server: {e}", file=sys.stderr)
+        print(f"Error: Failed to start job: {e}", file=sys.stderr)
         return EXIT_JOB_FAILED
 
     job_url = f"{server_url}/jobs/{job_id}"
     print(f"▸ job submitted to running server")
     print(f"  {job_url}")
 
-    if not args.no_open:
+    if not getattr(args, "no_open", False):
         _open_browser(job_url)
 
     return EXIT_SUCCESS
+
+
+def _submit_job_when_ready(
+    host: str,
+    port: int,
+    server_url: str,
+    workflow,
+    objective: str,
+    inputs: dict,
+    args,
+) -> None:
+    """Background thread: wait for server, submit job via API, open browser."""
+    import json
+    import socket
+    import threading
+    import urllib.request
+
+    def _wait_submit_open():
+        # Wait for server to accept connections
+        for _ in range(50):  # up to 5 seconds
+            try:
+                with socket.create_connection((host, port), timeout=0.5):
+                    break
+            except OSError:
+                import time
+                time.sleep(0.1)
+        else:
+            return  # server never came up
+
+        # Submit the job
+        payload = json.dumps({
+            "objective": objective,
+            "workflow": workflow.to_dict(),
+            "inputs": inputs if inputs else None,
+        }).encode()
+
+        try:
+            req = urllib.request.Request(
+                f"{server_url}/api/jobs",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                job_data = json.loads(resp.read())
+                job_id = job_data["id"]
+
+            start_req = urllib.request.Request(
+                f"{server_url}/api/jobs/{job_id}/start",
+                data=b"",
+                method="POST",
+            )
+            urllib.request.urlopen(start_req, timeout=10)
+
+            job_url = f"{server_url}/jobs/{job_id}"
+        except Exception:
+            job_url = server_url  # fallback: open root if job submission fails
+
+        if not getattr(args, "no_open", False):
+            _open_browser(job_url)
+
+    t = threading.Thread(target=_wait_submit_open, daemon=True)
+    t.start()
 
 
 def _port_available(host: str, port: int) -> bool:

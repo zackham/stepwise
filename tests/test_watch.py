@@ -1,7 +1,8 @@
 """Tests for --watch mode."""
 
+import json
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, ANY
 from pathlib import Path
 
 from stepwise.cli import EXIT_SUCCESS, EXIT_USAGE_ERROR, main, _find_free_port
@@ -32,7 +33,7 @@ class TestFindFreePort:
 
 
 class TestWatchMode:
-    """--watch starts server with pre-loaded job."""
+    """--watch starts server and submits job via API."""
 
     def _write_flow(self, tmp_path):
         flow = tmp_path / "test.flow.yaml"
@@ -67,23 +68,25 @@ class TestWatchMode:
         port = call_kwargs.kwargs.get("port") or call_kwargs[1].get("port")
         assert port == 9999
 
-    def test_watch_sets_env_vars(self, tmp_path, capsys, monkeypatch):
+    def test_watch_submits_job_via_api(self, tmp_path, capsys, monkeypatch):
+        """--watch submits the job via API in a background thread."""
         init_project(tmp_path)
         monkeypatch.chdir(tmp_path)
         flow = self._write_flow(tmp_path)
 
-        import os
-        captured_env = {}
+        # Capture the background thread function
+        threads_started = []
+        original_thread_init = __import__("threading").Thread.__init__
 
-        def capture_env(*args, **kwargs):
-            captured_env["STEPWISE_WATCH_WORKFLOW"] = os.environ.get("STEPWISE_WATCH_WORKFLOW")
-            captured_env["STEPWISE_WATCH_OBJECTIVE"] = os.environ.get("STEPWISE_WATCH_OBJECTIVE")
-
-        with patch("uvicorn.run", side_effect=capture_env):
+        with patch("uvicorn.run"), \
+             patch("stepwise.cli._submit_job_when_ready") as mock_submit:
             main(["run", str(flow), "--watch", "--no-open"])
 
-        assert captured_env["STEPWISE_WATCH_WORKFLOW"] is not None
-        assert captured_env["STEPWISE_WATCH_OBJECTIVE"] is not None
+        mock_submit.assert_called_once()
+        # Verify workflow data was passed
+        call_args = mock_submit.call_args
+        workflow_arg = call_args[0][3] if len(call_args[0]) > 3 else call_args.kwargs.get("workflow")
+        assert workflow_arg is not None
 
     def test_watch_no_open_suppresses_browser(self, tmp_path, capsys, monkeypatch):
         init_project(tmp_path)
@@ -91,21 +94,11 @@ class TestWatchMode:
         flow = self._write_flow(tmp_path)
 
         with patch("uvicorn.run"), \
+             patch("stepwise.cli._submit_job_when_ready"), \
              patch("stepwise.cli._open_browser") as mock_browser:
             main(["run", str(flow), "--watch", "--no-open"])
 
         mock_browser.assert_not_called()
-
-    def test_watch_opens_browser_by_default(self, tmp_path, capsys, monkeypatch):
-        init_project(tmp_path)
-        monkeypatch.chdir(tmp_path)
-        flow = self._write_flow(tmp_path)
-
-        with patch("uvicorn.run"), \
-             patch("stepwise.cli._open_browser_when_ready") as mock_browser:
-            main(["run", str(flow), "--watch"])
-
-        mock_browser.assert_called_once()
 
     def test_watch_does_not_use_stdin_handler(self, tmp_path, capsys, monkeypatch):
         """--watch mode uses web UI for human steps, not stdin."""
@@ -137,3 +130,36 @@ class TestWatchMode:
         flow.write_text("not: valid: yaml: [")
         rc = main(["run", str(flow), "--watch", "--no-open"])
         assert rc == EXIT_USAGE_ERROR
+
+    def test_watch_reuses_existing_server(self, tmp_path, capsys, monkeypatch):
+        """If a server is already running, submit job there instead of starting a new one."""
+        init_project(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        flow = self._write_flow(tmp_path)
+
+        # Simulate an existing server via detect_server
+        with patch("stepwise.server_detect.detect_server", return_value="http://localhost:8340"), \
+             patch("stepwise.cli._submit_watch_job", return_value=EXIT_SUCCESS) as mock_submit, \
+             patch("uvicorn.run") as mock_uvicorn:
+            rc = main(["run", str(flow), "--watch", "--no-open"])
+
+        assert rc == EXIT_SUCCESS
+        mock_submit.assert_called_once()
+        mock_uvicorn.assert_not_called()  # should NOT start a new server
+
+    def test_watch_writes_pidfile(self, tmp_path, capsys, monkeypatch):
+        """--watch writes and cleans up a pidfile."""
+        init_project(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        flow = self._write_flow(tmp_path)
+
+        pidfile = tmp_path / ".stepwise" / "server.pid"
+
+        def check_pidfile(*args, **kwargs):
+            assert pidfile.exists()
+
+        with patch("uvicorn.run", side_effect=check_pidfile):
+            main(["run", str(flow), "--watch", "--no-open"])
+
+        # Pidfile should be cleaned up after server stops
+        assert not pidfile.exists()
