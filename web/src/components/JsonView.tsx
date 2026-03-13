@@ -2,18 +2,22 @@ import { useState } from "react";
 import { ChevronRight, ChevronDown, Copy, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-function classifyString(s: string): "inline" | "block" | "json" {
+type StringClass =
+  | { type: "inline" }
+  | { type: "block" }
+  | { type: "json"; parsed: unknown };
+
+function classifyString(s: string): StringClass {
   const trimmed = s.trimStart();
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     try {
-      JSON.parse(s);
-      return "json";
+      return { type: "json", parsed: JSON.parse(s) };
     } catch {
       // not valid JSON, fall through
     }
   }
-  if (s.includes("\n")) return "block";
-  return "inline";
+  if (s.includes("\n")) return { type: "block" };
+  return { type: "inline" };
 }
 
 const COLLAPSE_THRESHOLD = 12;
@@ -86,7 +90,12 @@ export function JsonView({
   defaultExpanded = true,
   depth = 0,
 }: JsonViewProps) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
+  const isSingleKeyObject =
+    typeof data === "object" &&
+    data !== null &&
+    !Array.isArray(data) &&
+    Object.keys(data as Record<string, unknown>).length === 1;
+  const [expanded, setExpanded] = useState(defaultExpanded || isSingleKeyObject);
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
@@ -105,25 +114,20 @@ export function JsonView({
   }
 
   if (typeof data === "string") {
-    const category = classifyString(data);
+    const cls = classifyString(data);
 
-    if (category === "json") {
-      try {
-        const parsed = JSON.parse(data);
-        return (
-          <JsonView
-            data={parsed}
-            name={name}
-            defaultExpanded={depth < 1}
-            depth={depth + 1}
-          />
-        );
-      } catch {
-        // fall through to block/inline
-      }
+    if (cls.type === "json") {
+      return (
+        <JsonView
+          data={cls.parsed}
+          name={name}
+          defaultExpanded={depth < 1}
+          depth={depth + 1}
+        />
+      );
     }
 
-    if (category === "block") {
+    if (cls.type === "block") {
       return <BlockString value={data} name={name} />;
     }
 
@@ -200,9 +204,6 @@ export function JsonView({
       );
     }
 
-    const isSingleKey = entries.length === 1;
-    const shouldExpand = isSingleKey || expanded;
-
     return (
       <div>
         <div className="flex items-center gap-1">
@@ -210,7 +211,7 @@ export function JsonView({
             onClick={() => setExpanded(!expanded)}
             className="flex items-center gap-1 hover:text-foreground text-zinc-400 text-sm"
           >
-            {shouldExpand ? (
+            {expanded ? (
               <ChevronDown className="w-3 h-3" />
             ) : (
               <ChevronRight className="w-3 h-3" />
@@ -236,14 +237,14 @@ export function JsonView({
             </button>
           )}
         </div>
-        {shouldExpand && (
+        {expanded && (
           <div className="ml-4 border-l border-zinc-700/50 pl-3 mt-1 space-y-0.5">
             {entries.map(([key, value]) => (
               <div key={key} className="text-sm">
                 <JsonView
                   data={value}
                   name={key}
-                  defaultExpanded={isSingleKey || depth < 1}
+                  defaultExpanded={isSingleKeyObject || depth < 1}
                   depth={depth + 1}
                 />
               </div>
