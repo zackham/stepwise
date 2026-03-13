@@ -1,4 +1,4 @@
-import { Save, RotateCcw, Plus } from "lucide-react";
+import { Save, RotateCcw, Plus, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface EditorToolbarProps {
@@ -8,6 +8,8 @@ interface EditorToolbarProps {
   onSave: () => void;
   onDiscard: () => void;
   onAddStep?: () => void;
+  onRun?: () => void;
+  isRunning?: boolean;
   parseErrors: string[];
 }
 
@@ -18,6 +20,8 @@ export function EditorToolbar({
   onSave,
   onDiscard,
   onAddStep,
+  onRun,
+  isRunning,
   parseErrors,
 }: EditorToolbarProps) {
   return (
@@ -41,6 +45,19 @@ export function EditorToolbar({
         >
           <Plus className="w-3 h-3 mr-1" />
           Add Step
+        </Button>
+      )}
+
+      {onRun && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onRun}
+          disabled={isRunning || parseErrors.length > 0}
+          className="h-7 text-xs text-emerald-400 hover:text-emerald-300"
+        >
+          <Play className="w-3 h-3 mr-1" />
+          {isRunning ? "Starting..." : "Run"}
         </Button>
       )}
 

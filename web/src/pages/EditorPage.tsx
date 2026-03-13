@@ -28,6 +28,7 @@ import {
   useInstallFlow,
   useFlowFiles,
 } from "@/hooks/useEditor";
+import { useStepwiseMutations } from "@/hooks/useStepwise";
 import { FileCode, FolderOpen, Globe, Plus, Code, Workflow, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { FlowDefinition, LocalFlow, RegistryFlow, ParseResult } from "@/lib/types";
@@ -378,6 +379,20 @@ export function EditorPage() {
     );
   }, [selectedFlow?.path, selectedStep, deleteStepMutation, applyVisualResult]);
 
+  // Run flow directly from editor
+  const mutations = useStepwiseMutations();
+  const handleRun = useCallback(() => {
+    if (!parsedFlow || !flowName) return;
+    mutations.createJob.mutate(
+      { objective: flowName, workflow: parsedFlow, inputs: {}, workspace_path: undefined },
+      {
+        onSuccess: (job) => {
+          navigate({ to: "/jobs/$jobId", params: { jobId: job.id } });
+        },
+      }
+    );
+  }, [parsedFlow, flowName, mutations, navigate]);
+
   // Registry install
   const handleInstall = useCallback(() => {
     if (!selectedRegistryFlow) return;
@@ -612,6 +627,8 @@ export function EditorPage() {
               onSave={handleSave}
               onDiscard={handleDiscard}
               onAddStep={() => setAddStepOpen(true)}
+              onRun={parsedFlow ? handleRun : undefined}
+              isRunning={mutations.createJob.isPending}
               parseErrors={parseErrors}
             />
             <div className="flex-1 flex min-h-0">
@@ -692,7 +709,7 @@ export function EditorPage() {
                   <div className="absolute bottom-3 right-3 w-72 z-20">
                     <ChatInput
                       onSend={handleChatSend}
-                      placeholder="Modify this flow..."
+                      placeholder="Ask AI to modify this flow..."
                       disabled={chat.isStreaming}
                       agentMode={chat.agentMode}
                       onModeChange={chat.setAgentMode}
@@ -760,7 +777,7 @@ export function EditorPage() {
                       />
                       <ChatInput
                         onSend={handleChatSend}
-                        placeholder="Modify this flow..."
+                        placeholder="Ask AI to modify this flow..."
                         disabled={chat.isStreaming}
                         agentMode={chat.agentMode}
                         onModeChange={chat.setAgentMode}
