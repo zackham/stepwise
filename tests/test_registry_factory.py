@@ -19,9 +19,10 @@ class TestCreateDefaultRegistry:
         assert "mock_llm" in registry._factories
         assert "agent" in registry._factories
 
-    def test_skips_llm_without_api_key(self):
-        """LLM executor not registered when no API key."""
-        registry = create_default_registry(StepwiseConfig(openrouter_api_key=None))
+    def test_skips_llm_without_api_key_or_cli(self):
+        """LLM executor not registered when no API key and no CLI backend."""
+        with patch("stepwise.cli_llm_client.detect_cli_backend", return_value=None):
+            registry = create_default_registry(StepwiseConfig(openrouter_api_key=None))
         assert "llm" not in registry._factories
 
     def test_registers_llm_with_api_key(self):
@@ -33,12 +34,12 @@ class TestCreateDefaultRegistry:
 
     def test_output_matches_server_types(self):
         """Registry has same executor types as server.py registration."""
-        # The expected types that server.py registers
+        # The expected types that server.py registers (without API key or CLI)
         expected_types = {"script", "human", "mock_llm", "agent"}
         config = StepwiseConfig()
-        registry = create_default_registry(config)
+        with patch("stepwise.cli_llm_client.detect_cli_backend", return_value=None):
+            registry = create_default_registry(config)
         actual_types = set(registry._factories.keys())
-        # Without API key, llm is excluded from both
         assert expected_types == actual_types
 
     def test_loads_config_from_disk_if_none(self):

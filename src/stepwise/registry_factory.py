@@ -6,6 +6,7 @@ registration code that drifts out of sync.
 
 from __future__ import annotations
 
+import logging
 import os
 
 from stepwise.agent import AgentExecutor, AcpxBackend
@@ -17,6 +18,8 @@ from stepwise.executors import (
     MockLLMExecutor,
     ScriptExecutor,
 )
+
+logger = logging.getLogger("stepwise.registry")
 
 
 def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorRegistry:
@@ -65,35 +68,56 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
            if k not in ("prompt", "output_mode", "output_path", "output_fields")},
     ))
 
-    # LLM executor — only if API key is configured and httpx available
+    # LLM executor — OpenRouter if key configured, else CLI fallback via acpx
+    llm_client = None
+    llm_backend = None  # "openrouter" | "cli" | None
+
     if config.openrouter_api_key:
         try:
             from stepwise.openrouter import OpenRouterClient
             llm_client = OpenRouterClient(api_key=config.openrouter_api_key)
-
-            def _create_llm_executor(cfg: dict):
-                from stepwise.executors import LLMExecutor
-                model_ref = cfg.get("model") or config.default_model or "anthropic/claude-sonnet-4-20250514"
-                model_id = config.resolve_model(model_ref)
-                kwargs: dict = {}
-                if cfg.get("system"):
-                    kwargs["system"] = cfg["system"]
-                if cfg.get("temperature") is not None:
-                    kwargs["temperature"] = cfg["temperature"]
-                if cfg.get("max_tokens") is not None:
-                    kwargs["max_tokens"] = cfg["max_tokens"]
-                executor = LLMExecutor(
-                    client=llm_client,
-                    model=model_id,
-                    prompt=cfg.get("prompt", ""),
-                    **kwargs,
-                )
-                if cfg.get("output_fields"):
-                    executor._output_fields = cfg["output_fields"]
-                return executor
-
-            registry.register("llm", _create_llm_executor)
+            llm_backend = "openrouter"
         except ImportError:
             pass  # httpx should always be available
+    else:
+        from stepwise.cli_llm_client import CliLLMClient, detect_cli_backend
+        cli_info = detect_cli_backend()
+        if cli_info:
+            acpx_path, agent = cli_info
+            llm_client = CliLLMClient(acpx_path=acpx_path, agent=agent)
+            llm_backend = "cli"
+
+    if llm_client:
+        def _create_llm_executor(cfg: dict, _client=llm_client):
+            from stepwise.executors import LLMExecutor
+            model_ref = cfg.get("model") or config.default_model or "anthropic/claude-sonnet-4-20250514"
+            model_id = config.resolve_model(model_ref)
+            kwargs: dict = {}
+            if cfg.get("system"):
+                kwargs["system"] = cfg["system"]
+            if cfg.get("temperature") is not None:
+                kwargs["temperature"] = cfg["temperature"]
+            if cfg.get("max_tokens") is not None:
+                kwargs["max_tokens"] = cfg["max_tokens"]
+            executor = LLMExecutor(
+                client=_client,
+                model=model_id,
+                prompt=cfg.get("prompt", ""),
+                **kwargs,
+            )
+            if cfg.get("output_fields"):
+                executor._output_fields = cfg["output_fields"]
+            return executor
+
+        registry.register("llm", _create_llm_executor)
+
+    if llm_backend == "openrouter":
+        logger.info("LLM executor: OpenRouter")
+    elif llm_backend == "cli":
+        logger.info("LLM executor: CLI fallback (%s via %s)", agent, acpx_path)
+    else:
+        logger.info("LLM executor: not available (no OpenRouter key or CLI)")
+
+    registry.llm_backend = llm_backend
 
     return registry
