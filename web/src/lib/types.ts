@@ -160,6 +160,9 @@ export interface Job {
   config: JobConfig;
   created_at: string;
   updated_at: string;
+  created_by: string;
+  runner_pid: number | null;
+  heartbeat_at: string | null;
 }
 
 // ── Event ──────────────────────────────────────────────────────────────

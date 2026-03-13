@@ -85,6 +85,14 @@ export function cancelJob(jobId: string): Promise<{ status: string }> {
   return request(`/jobs/${jobId}/cancel`, { method: "POST" });
 }
 
+export function adoptJob(jobId: string): Promise<{ status: string; job_id: string }> {
+  return request(`/jobs/${jobId}/adopt`, { method: "POST" });
+}
+
+export function fetchStaleJobs(): Promise<Job[]> {
+  return request<Job[]>("/jobs/stale");
+}
+
 export function fetchJobTree(jobId: string): Promise<JobTreeNode> {
   return request<JobTreeNode>(`/jobs/${jobId}/tree`);
 }
