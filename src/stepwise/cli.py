@@ -393,6 +393,15 @@ def cmd_serve(args: argparse.Namespace) -> int:
     import os
     import uvicorn
 
+    # Check if a server is already running for this project
+    from stepwise.server_detect import detect_server
+    existing_url = detect_server(project.dot_dir)
+    if existing_url:
+        print(f"Stepwise is already running at {existing_url}")
+        if not args.no_open:
+            _open_browser(existing_url)
+        return EXIT_SUCCESS
+
     # Set env vars so server.py picks them up in lifespan
     os.environ["STEPWISE_DB"] = str(project.db_path)
     os.environ["STEPWISE_TEMPLATES"] = str(project.templates_dir)
@@ -803,7 +812,7 @@ def _run_watch(
 ) -> int:
     """--watch mode: ephemeral server with pre-loaded job."""
     import os
-    import socket
+    import json
     import uvicorn
     from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
 
@@ -819,6 +828,14 @@ def _run_watch(
         print(f"Error: {'; '.join(errors)}", file=sys.stderr)
         return EXIT_USAGE_ERROR
 
+    # If a server is already running, submit the job there instead
+    from stepwise.server_detect import detect_server
+    existing_url = detect_server(project.dot_dir)
+    if existing_url:
+        return _watch_via_existing_server(
+            existing_url, workflow, args, flow_path, inputs,
+        )
+
     # Pick port
     if args.port:
         port = args.port
@@ -833,7 +850,6 @@ def _run_watch(
     os.environ["STEPWISE_JOBS_DIR"] = str(project.jobs_dir)
 
     # Stash flow data in env for the lifespan to pick up
-    import json
     os.environ["STEPWISE_WATCH_WORKFLOW"] = json.dumps(workflow.to_dict())
     os.environ["STEPWISE_WATCH_OBJECTIVE"] = args.objective or flow_path.stem
     if inputs:
@@ -853,6 +869,61 @@ def _run_watch(
         port=port,
         log_level="warning",
     )
+    return EXIT_SUCCESS
+
+
+def _watch_via_existing_server(
+    server_url: str,
+    workflow,
+    args,
+    flow_path: Path,
+    inputs: dict,
+) -> int:
+    """Submit a job to an already-running server and open the browser."""
+    import json
+    import urllib.request
+    import urllib.error
+
+    objective = args.objective or flow_path.stem
+    payload = json.dumps({
+        "objective": objective,
+        "workflow": workflow.to_dict(),
+        "inputs": inputs if inputs else None,
+    }).encode()
+
+    # Create and start the job via REST API
+    try:
+        req = urllib.request.Request(
+            f"{server_url}/api/jobs",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            job_data = json.loads(resp.read())
+            job_id = job_data["id"]
+    except (urllib.error.URLError, Exception) as e:
+        print(f"Error: Failed to create job on running server: {e}", file=sys.stderr)
+        return EXIT_JOB_FAILED
+
+    try:
+        start_req = urllib.request.Request(
+            f"{server_url}/api/jobs/{job_id}/start",
+            data=b"",
+            method="POST",
+        )
+        urllib.request.urlopen(start_req, timeout=10)
+    except (urllib.error.URLError, Exception) as e:
+        print(f"Error: Failed to start job on running server: {e}", file=sys.stderr)
+        return EXIT_JOB_FAILED
+
+    job_url = f"{server_url}/jobs/{job_id}"
+    print(f"▸ job submitted to running server")
+    print(f"  {job_url}")
+
+    if not args.no_open:
+        _open_browser(job_url)
+
     return EXIT_SUCCESS
 
 
