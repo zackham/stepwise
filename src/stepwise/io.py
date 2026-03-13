@@ -652,9 +652,10 @@ class _FlowDisplay:
 class _TerminalLiveFlowHandle(LiveFlowHandle):
     """Live flow handle backed by rich.live.Live."""
 
-    def __init__(self, display: _FlowDisplay, live):
+    def __init__(self, display: _FlowDisplay, live, console):
         self._display = display
         self._live = live
+        self._console = console
 
     def update_step(
         self,
@@ -686,10 +687,16 @@ class _TerminalLiveFlowHandle(LiveFlowHandle):
             self._display.total_cost = cost
 
     def pause_for_input(self) -> None:
+        # Stop live display (transient=True clears it), then print a static snapshot
         self._live.stop()
+        self._console.print(self._display)
 
     def resume_after_input(self) -> None:
         self._live.start()
+
+    def print_final(self) -> None:
+        """Print the final state of the display after live stops."""
+        self._console.print(self._display)
 
 
 class TerminalAdapter(IOAdapter):
@@ -803,14 +810,16 @@ class TerminalAdapter(IOAdapter):
             display,
             console=self._console,
             refresh_per_second=8,
-            transient=False,
+            transient=True,
         )
-        handle = _TerminalLiveFlowHandle(display, live)
+        handle = _TerminalLiveFlowHandle(display, live, self._console)
         live.start()
         try:
             yield handle
         finally:
             live.stop()
+            # Print the final state once (transient=True cleared the live display)
+            handle.print_final()
 
     def prompt_confirm(self, message: str, default: bool = True) -> bool:
         try:
