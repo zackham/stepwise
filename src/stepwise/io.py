@@ -568,95 +568,48 @@ class QuietAdapter(IOAdapter):
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
-@dataclass
-class _StepState:
-    status: str = "waiting"
-    start_time: float | None = None
-    duration: float | None = None
-    cost: float | None = None
-    error: str | None = None
+class _AppendFlowHandle(LiveFlowHandle):
+    """Append-only flow handle — prints each transition as a permanent line.
 
+    No live display, no screen clearing. Output builds up top-to-bottom.
+    Human input appears inline, gets erased after collection so the step
+    shows as a clean one-liner like all others.
+    """
 
-class _FlowDisplay:
-    """Rich renderable for the live flow display."""
+    def __init__(self, console, flow_name: str):
+        self._console = console
+        self._flow_name = flow_name
+        self._running_step: str | None = None  # track the "running" line to overwrite
 
-    def __init__(self, flow_name: str, step_names: list[str]):
-        self.flow_name = flow_name
-        self.step_names = step_names
-        self.steps: dict[str, _StepState] = {
-            name: _StepState() for name in step_names
-        }
-        self.completed = 0
-        self.total = len(step_names)
-        self.total_cost: float | None = None
-        self.start_time = time.time()
-
-    def __rich_console__(self, console, options):
+    def _step_line(
+        self, name: str, status: str,
+        duration: float | None = None,
+        cost: float | None = None,
+        error: str | None = None,
+    ) -> None:
         from rich.text import Text
 
-        elapsed = time.time() - self.start_time
-        spinner_idx = int(elapsed * 10) % len(_SPINNER_FRAMES)
-        spinner = _SPINNER_FRAMES[spinner_idx]
-
-        yield Text(f"  ▸ {self.flow_name}\n", style="bold")
-
-        for name in self.step_names:
-            state = self.steps[name]
-            if state.status == "completed":
-                icon = "✓"
-                style = "green"
-                info = "completed"
-                if state.duration is not None:
-                    info += f"   {state.duration:.1f}s"
-                if state.cost is not None:
-                    info += f"   ${state.cost:.3f}"
-            elif state.status == "running":
-                icon = spinner
-                style = "cyan"
-                run_time = time.time() - (state.start_time or time.time())
-                info = f"running...  {run_time:.1f}s"
-            elif state.status == "failed":
-                icon = "✗"
-                style = "red"
-                info = "failed"
-                if state.error:
-                    info += f"     {state.error}"
-            elif state.status == "suspended":
-                icon = "◆"
-                style = "yellow"
-                info = "needs input"
-            elif state.status == "delegated":
-                icon = "↗"
-                style = "blue"
-                info = "delegated"
-            else:
-                icon = "○"
-                style = "dim"
-                info = "waiting"
-
-            line = Text()
-            line.append(f"  {icon} ", style=style)
-            line.append(f"{name:<20}", style=style if state.status != "waiting" else "dim")
-            line.append(f" {info}", style="dim" if state.status in ("waiting", "completed") else style)
-            yield line
-
-        # Summary line
-        summary_parts = [f"{self.completed}/{self.total} steps"]
-        if self.total_cost is not None:
-            summary_parts.append(f"${self.total_cost:.3f}")
-        summary_parts.append(f"{elapsed:.1f}s elapsed")
-        yield Text()
-        yield Text(f"  {' · '.join(summary_parts)}", style="dim")
-
-
-class _TerminalLiveFlowHandle(LiveFlowHandle):
-    """Live flow handle backed by rich.live.Live."""
-
-    def __init__(self, display: _FlowDisplay, live, console):
-        self._display = display
-        self._live = live
-        self._console = console
-        self._pause_cursor_saved = False
+        icons = {
+            "running": ("⠋", "cyan"),
+            "completed": ("✓", "green"),
+            "failed": ("✗", "red"),
+            "suspended": ("◆", "yellow"),
+            "delegated": ("↗", "blue"),
+        }
+        icon, style = icons.get(status, ("○", "dim"))
+        line = Text()
+        line.append(f"  {icon} ", style=style)
+        line.append(f"{name:<20}", style=style)
+        parts: list[str] = []
+        if duration is not None:
+            parts.append(f"{duration:.1f}s")
+        if cost is not None:
+            parts.append(f"${cost:.3f}")
+        if error:
+            parts.append(error)
+        if parts:
+            line.append(" " + "  ".join(parts), style="dim")
+        self._console.print(line, highlight=False)
 
     def update_step(
         self,
@@ -666,58 +619,50 @@ class _TerminalLiveFlowHandle(LiveFlowHandle):
         cost: float | None = None,
         error: str | None = None,
     ) -> None:
-        if name in self._display.steps:
-            state = self._display.steps[name]
-            state.status = status
-            if status == "running" and state.start_time is None:
-                state.start_time = time.time()
-            if duration is not None:
-                state.duration = duration
-            if cost is not None:
-                state.cost = cost
-            if error is not None:
-                state.error = error
+        file = self._console.file or sys.stderr
+
+        if status == "running":
+            # Print "running" line — we'll overwrite it when the step finishes
+            self._running_step = name
+            self._step_line(name, "running")
+            # Save position so we can overwrite this line
+            file.write("\033[s")
+            file.flush()
+        elif status in ("completed", "failed"):
+            if self._running_step == name:
+                # Overwrite the "running" line with the final status
+                file.write("\033[u")  # restore to start of running line
+                file.write("\033[J")  # clear to end of screen
+                file.flush()
+                self._running_step = None
+            self._step_line(name, status, duration, cost, error)
+        elif status == "suspended":
+            if self._running_step == name:
+                # Overwrite the "running" line
+                file.write("\033[u")
+                file.write("\033[J")
+                file.flush()
+                self._running_step = None
+            self._step_line(name, "suspended")
 
     def update_summary(
         self, completed: int, total: int,
         cost: float | None = None, elapsed: float | None = None,
     ) -> None:
-        self._display.completed = completed
-        self._display.total = total
-        if cost is not None:
-            self._display.total_cost = cost
+        pass  # no live summary — printed at the end by flow_complete
 
     def pause_for_input(self) -> None:
-        """Stop live display, print static step list, mark position for input cleanup."""
-        self._live.stop()
-        # Print the step list as static output (stays on screen)
-        self._console.print(self._display)
-        # Save cursor position — everything below here (input panel + prompts) gets erased
+        """Save cursor position before input prompts."""
         file = self._console.file or sys.stderr
-        file.write("\033[s")  # save cursor position
+        file.write("\033[s")
         file.flush()
-        self._pause_cursor_saved = True
 
     def resume_after_input(self) -> None:
-        """Erase input panel/prompts below the step list, restart live display over the step list."""
+        """Erase the input prompts, leaving the step list clean."""
         file = self._console.file or sys.stderr
-        if self._pause_cursor_saved:
-            file.write("\033[u")  # restore cursor to just after step list
-            file.write("\033[J")  # clear from cursor to end of screen
-            file.flush()
-            self._pause_cursor_saved = False
-        # Count lines in the static step list so live display overwrites it
-        # (header + steps + blank + summary = len(step_names) + 3)
-        lines_up = len(self._display.step_names) + 3
-        for _ in range(lines_up):
-            file.write("\033[A")  # move cursor up
-        file.write("\r")
+        file.write("\033[u")  # restore cursor to before input
+        file.write("\033[J")  # clear everything below
         file.flush()
-        self._live.start()
-
-    def print_final(self) -> None:
-        """Print the final state of the display after live stops."""
-        self._console.print(self._display)
 
 
 class TerminalAdapter(IOAdapter):
@@ -824,23 +769,9 @@ class TerminalAdapter(IOAdapter):
     def live_flow(
         self, flow_name: str, step_names: list[str],
     ) -> Generator[LiveFlowHandle, None, None]:
-        from rich.live import Live
-
-        display = _FlowDisplay(flow_name, step_names)
-        live = Live(
-            display,
-            console=self._console,
-            refresh_per_second=8,
-            transient=True,
-        )
-        handle = _TerminalLiveFlowHandle(display, live, self._console)
-        live.start()
-        try:
-            yield handle
-        finally:
-            live.stop()
-            # Print the final state once (transient=True cleared the live display)
-            handle.print_final()
+        self._console.print()
+        self.banner(flow_name)
+        yield _AppendFlowHandle(self._console, flow_name)
 
     def prompt_confirm(self, message: str, default: bool = True) -> bool:
         try:
