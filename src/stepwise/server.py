@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from stepwise.engine import Engine
+from stepwise.engine import AsyncEngine, Engine
 from stepwise.executors import ExecutorStatus
 from stepwise.config import (
     load_config, load_config_with_sources, save_config,
@@ -36,17 +36,61 @@ from stepwise.store import SQLiteStore
 
 
 
+class _LockedConnection:
+    """Proxy that serializes all sqlite3.Connection method calls via a lock."""
+
+    def __init__(self, conn, lock):
+        self._conn = conn
+        self._lock = lock
+
+    def execute(self, *args, **kwargs):
+        with self._lock:
+            return self._conn.execute(*args, **kwargs)
+
+    def executemany(self, *args, **kwargs):
+        with self._lock:
+            return self._conn.executemany(*args, **kwargs)
+
+    def executescript(self, *args, **kwargs):
+        with self._lock:
+            return self._conn.executescript(*args, **kwargs)
+
+    def commit(self, *args, **kwargs):
+        with self._lock:
+            return self._conn.commit(*args, **kwargs)
+
+    def close(self, *args, **kwargs):
+        with self._lock:
+            return self._conn.close(*args, **kwargs)
+
+    @property
+    def row_factory(self):
+        return self._conn.row_factory
+
+    @row_factory.setter
+    def row_factory(self, value):
+        self._conn.row_factory = value
+
+
 class ThreadSafeStore(SQLiteStore):
-    """SQLiteStore subclass that allows cross-thread access for the server."""
+    """SQLiteStore subclass that allows cross-thread access for the server.
+
+    Wraps the sqlite3 connection with a threading.Lock proxy since API handlers
+    run in FastAPI's threadpool while the engine's to_thread() executor calls
+    also access the store concurrently.
+    """
 
     def __init__(self, db_path: str = ":memory:") -> None:
         import sqlite3
+        import threading
+        lock = threading.Lock()
+        raw_conn = sqlite3.connect(db_path, check_same_thread=False)
+        raw_conn.row_factory = sqlite3.Row
+        raw_conn.execute("PRAGMA journal_mode=WAL")
+        raw_conn.execute("PRAGMA foreign_keys=ON")
+        raw_conn.execute("PRAGMA busy_timeout=5000")
         self._db_path = db_path
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA foreign_keys=ON")
-        self._conn.execute("PRAGMA busy_timeout=5000")
+        self._conn = _LockedConnection(raw_conn, lock)
         self._create_tables()
 
 
@@ -77,21 +121,31 @@ class SaveTemplateRequest(BaseModel):
 
 # ── Global state ──────────────────────────────────────────────────────
 
-_engine: Engine | None = None
+_engine: AsyncEngine | None = None
 _ws_clients: set[WebSocket] = set()
-_tick_task: asyncio.Task | None = None
-_tick_event: asyncio.Event | None = None  # signals tick loop to wake immediately
+_engine_task: asyncio.Task | None = None
 _event_loop: asyncio.AbstractEventLoop | None = None
 _templates_dir: Path = Path("templates")
 _project_dir: Path = Path(".")
-_last_snapshot: dict[str, Any] = {}
 _stream_tasks: dict[str, asyncio.Task] = {}
 
 
-def notify_tick() -> None:
-    """Signal the tick loop to run immediately. Thread-safe for sync endpoints."""
-    if _tick_event is not None and _event_loop is not None:
-        _event_loop.call_soon_threadsafe(_tick_event.set)
+def _schedule_broadcast(event: dict) -> None:
+    """Schedule a WebSocket broadcast from sync context (engine callback). Thread-safe."""
+    if _event_loop is not None:
+        _event_loop.call_soon_threadsafe(
+            _event_loop.create_task,
+            _broadcast({"type": "tick", "changed_jobs": [event.get("job_id", "")], "timestamp": _now().isoformat()}),
+        )
+
+
+def _notify_change(job_id: str) -> None:
+    """Broadcast a change for endpoints that modify state outside the engine."""
+    if _event_loop is not None:
+        _event_loop.call_soon_threadsafe(
+            _event_loop.create_task,
+            _broadcast({"type": "tick", "changed_jobs": [job_id], "timestamp": _now().isoformat()}),
+        )
 
 
 # ── Agent output streaming ───────────────────────────────────────────
@@ -160,7 +214,7 @@ async def _tail_agent_output(run_id: str, output_path: str) -> None:
         pass
 
 
-def _get_engine() -> Engine:
+def _get_engine() -> AsyncEngine:
     if _engine is None:
         raise RuntimeError("Engine not initialized")
     return _engine
@@ -183,68 +237,11 @@ async def _broadcast(message: dict) -> None:
         _ws_clients.discard(ws)
 
 
-def _snapshot() -> dict[str, Any]:
-    """Take a snapshot of engine state for change detection."""
+async def _agent_stream_monitor() -> None:
+    """Periodically check for new agent output streams to tail."""
     engine = _get_engine()
-    jobs = engine.store.all_jobs()
-    runs = {}
-    for job in jobs:
-        runs[job.id] = [r.to_dict() for r in engine.store.runs_for_job(job.id)]
-    return {
-        "jobs": {j.id: j.to_dict() for j in jobs},
-        "runs": runs,
-    }
-
-
-async def _tick_loop() -> None:
-    """Event-driven tick loop.
-
-    Wakes immediately when notify_tick() is called (API mutations),
-    or falls back to polling at 0.5s (active jobs) / 30s (idle).
-
-    Compares against _last_snapshot so changes made by sync endpoints
-    (outside this loop) are detected and broadcast.
-    """
-    global _last_snapshot
-    assert _tick_event is not None
-    engine = _get_engine()
-
-    # Initialize baseline snapshot
-    _last_snapshot = _snapshot()
-
     while True:
         try:
-            active = engine.store.active_jobs()
-            interval = 0.5 if active else 30.0
-
-            # Wait for event signal or timeout — whichever comes first
-            _tick_event.clear()
-            try:
-                await asyncio.wait_for(_tick_event.wait(), timeout=interval)
-            except asyncio.TimeoutError:
-                pass
-
-            # Advance engine state (polls async executors, starts ready steps)
-            engine.tick()
-
-            # Compare current state against last known snapshot
-            after = _snapshot()
-
-            if _last_snapshot != after:
-                # Something changed — broadcast
-                changed_job_ids = set()
-                for jid in set(list(after["jobs"].keys()) + list(_last_snapshot.get("jobs", {}).keys())):
-                    if after["jobs"].get(jid) != _last_snapshot.get("jobs", {}).get(jid):
-                        changed_job_ids.add(jid)
-                    if after["runs"].get(jid) != _last_snapshot.get("runs", {}).get(jid):
-                        changed_job_ids.add(jid)
-
-                await _broadcast({
-                    "type": "tick",
-                    "changed_jobs": list(changed_job_ids),
-                    "timestamp": _now().isoformat(),
-                })
-
             # Start tailers for new running agent steps
             for job in engine.store.active_jobs():
                 for run in engine.store.running_runs(job.id):
@@ -265,20 +262,18 @@ async def _tick_loop() -> None:
                 _stream_tasks[rid].cancel()
                 del _stream_tasks[rid]
 
-            _last_snapshot = after
+            await asyncio.sleep(1.0)
         except asyncio.CancelledError:
             break
-        except Exception as e:
-            print(f"Tick loop error: {e}")
+        except Exception:
             await asyncio.sleep(5.0)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _engine, _tick_task, _tick_event, _event_loop, _templates_dir, _project_dir
+    global _engine, _engine_task, _event_loop, _templates_dir, _project_dir
 
     _event_loop = asyncio.get_running_loop()
-    _tick_event = asyncio.Event()
     db_path = os.environ.get("STEPWISE_DB", "stepwise.db")
     tmpl_dir = os.environ.get("STEPWISE_TEMPLATES", "templates")
     jobs_dir = os.environ.get("STEPWISE_JOBS_DIR", "jobs")
@@ -292,8 +287,10 @@ async def lifespan(app: FastAPI):
     registry = create_default_registry()
 
     dot_dir = _project_dir / ".stepwise"
-    _engine = Engine(store, registry, jobs_dir=jobs_dir, project_dir=dot_dir if dot_dir.is_dir() else None)
-    _tick_task = asyncio.create_task(_tick_loop())
+    _engine = AsyncEngine(store, registry, jobs_dir=jobs_dir, project_dir=dot_dir if dot_dir.is_dir() else None)
+    _engine.on_broadcast = _schedule_broadcast
+    _engine_task = asyncio.create_task(_engine.run())
+    _stream_monitor = asyncio.create_task(_agent_stream_monitor())
 
     yield
 
@@ -302,10 +299,16 @@ async def lifespan(app: FastAPI):
         task.cancel()
     _stream_tasks.clear()
 
-    if _tick_task:
-        _tick_task.cancel()
+    _stream_monitor.cancel()
+    try:
+        await _stream_monitor
+    except asyncio.CancelledError:
+        pass
+
+    if _engine_task:
+        _engine_task.cancel()
         try:
-            await _tick_task
+            await _engine_task
         except asyncio.CancelledError:
             pass
     store.close()
@@ -350,7 +353,7 @@ def create_job(req: CreateJobRequest):
             config=config,
             workspace_path=req.workspace_path,
         )
-        notify_tick()
+        _notify_change(job.id)
         return _serialize_job(job)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -380,7 +383,7 @@ def start_job(job_id: str):
     engine = _get_engine()
     try:
         engine.start_job(job_id)
-        notify_tick()
+        _notify_change(job_id)
         return {"status": "started"}
     except (KeyError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -391,7 +394,7 @@ def pause_job(job_id: str):
     engine = _get_engine()
     try:
         engine.pause_job(job_id)
-        notify_tick()
+        _notify_change(job_id)
         return {"status": "paused"}
     except (KeyError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -402,7 +405,7 @@ def resume_job(job_id: str):
     engine = _get_engine()
     try:
         engine.resume_job(job_id)
-        notify_tick()
+        _notify_change(job_id)
         return {"status": "resumed"}
     except (KeyError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -413,7 +416,7 @@ def cancel_job(job_id: str):
     engine = _get_engine()
     try:
         engine.cancel_job(job_id)
-        notify_tick()
+        _notify_change(job_id)
         return {"status": "cancelled"}
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
@@ -427,7 +430,7 @@ def delete_job(job_id: str):
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
     engine.store.delete_job(job_id)
-    notify_tick()
+    _notify_change(job_id)
     return {"status": "deleted"}
 
 
@@ -464,7 +467,7 @@ def rerun_step(job_id: str, step_name: str):
     engine = _get_engine()
     try:
         run = engine.rerun_step(job_id, step_name)
-        notify_tick()
+        _notify_change(job_id)
         return run.to_dict()
     except (KeyError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -475,7 +478,7 @@ def fulfill_watch(run_id: str, req: FulfillWatchRequest):
     engine = _get_engine()
     try:
         result = engine.fulfill_watch(run_id, req.payload)
-        notify_tick()
+        _notify_change(run_id)
         # Idempotent: already fulfilled returns a dict
         if result is not None:
             return result
@@ -535,7 +538,7 @@ def cancel_run(run_id: str):
     run.error_category = "user_cancelled"
     run.completed_at = _now()
     engine.store.save_run(run)
-    notify_tick()
+    _notify_change(run.job_id)
     return {"status": "cancelled", "run_id": run_id}
 
 
@@ -563,7 +566,7 @@ def inject_context(job_id: str, req: InjectContextRequest):
     engine = _get_engine()
     try:
         engine.inject_context(job_id, req.context)
-        notify_tick()
+        _notify_change(job_id)
         return {"status": "injected"}
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
@@ -696,9 +699,11 @@ def _parse_server_duration(s: str) -> float | None:
 
 @app.post("/api/tick")
 def manual_tick():
+    """Legacy tick endpoint — triggers engine to re-evaluate all active jobs."""
     engine = _get_engine()
-    engine.tick()
-    notify_tick()
+    for job in engine.store.active_jobs():
+        engine._dispatch_ready(job.id)
+        engine._check_job_terminal(job.id)
     return {"status": "ticked"}
 
 

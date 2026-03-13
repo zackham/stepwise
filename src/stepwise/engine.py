@@ -1923,14 +1923,16 @@ class AsyncEngine(Engine):
     ) -> None:
         super().__init__(store, registry, jobs_dir, project_dir)
         self._queue: asyncio.Queue = asyncio.Queue()
-        self._tasks: dict[str, asyncio.Task] = {}  # run_id → task
+        self._tasks: dict = {}  # run_id → Task or Future (for cancellation)
         self._job_done: dict[str, asyncio.Event] = {}  # job_id → done signal
+        self._loop: asyncio.AbstractEventLoop | None = None  # set by run()
         self.on_broadcast: Callable[[dict], None] | None = None
 
     # ── Main loop ────────────────────────────────────────────────────────
 
     async def run(self) -> None:
         """Main event loop — blocks on queue, processes events."""
+        self._loop = asyncio.get_running_loop()
         while True:
             event = await self._queue.get()
             try:
@@ -2050,10 +2052,15 @@ class AsyncEngine(Engine):
         # Normal step: prepare run, dispatch executor to thread pool
         run, exec_ref, inputs, ctx = self._prepare_step_run(job, step_name)
 
-        loop = asyncio.get_running_loop()
-        task = loop.create_task(
-            self._run_executor(job.id, step_name, run.id, exec_ref, inputs, ctx)
-        )
+        coro = self._run_executor(job.id, step_name, run.id, exec_ref, inputs, ctx)
+        try:
+            loop = asyncio.get_running_loop()
+            task = loop.create_task(coro)
+        except RuntimeError:
+            # Called from a non-async thread (e.g. FastAPI threadpool)
+            if self._loop is None:
+                raise RuntimeError("AsyncEngine.run() must be started before dispatching steps")
+            task = asyncio.run_coroutine_threadsafe(coro, self._loop)
         self._tasks[run.id] = task
         return run
 
@@ -2114,7 +2121,8 @@ class AsyncEngine(Engine):
             self._after_step_change(job_id)
 
     def _after_step_change(self, job_id: str) -> None:
-        """After a step result is processed, dispatch ready steps and check terminal."""
+        """After a step result is processed, broadcast, dispatch ready steps, check terminal."""
+        self._broadcast({"type": "job_changed", "job_id": job_id})
         self._dispatch_ready(job_id)
         self._check_job_terminal(job_id)
 
