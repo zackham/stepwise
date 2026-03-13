@@ -6,6 +6,8 @@ Entry point: `stepwise.cli:cli_main` (defined in `pyproject.toml` `[project.scri
 
 **Push to master = users get it on next `stepwise update`.** There is no staging branch.
 
+**Commit after every meaningful change.** Don't batch unrelated work into one commit. Each commit should be a single logical unit (a feature, a fix, a refactor). Write concise commit messages that explain what changed. This keeps the git log useful for changelog generation and makes reverts safe.
+
 ---
 
 ## Quick start
@@ -72,7 +74,6 @@ All registered in `src/stepwise/registry_factory.py:create_default_registry()`:
 | `llm` | `LLMExecutor` | `executors.py` | OpenRouter API call (only registered if API key configured) |
 | `mock_llm` | `MockLLMExecutor` | `executors.py` | Test-only LLM stub with configurable failure/latency |
 | `agent` | `AgentExecutor` | `agent.py` | ACP agent via acpx subprocess with tool dispatch |
-| `delegating` | `DelegatingExecutor` | `server.py` | Creates a sub-job from a child workflow |
 
 Decorators (`src/stepwise/decorators.py`): `TimeoutDecorator`, `RetryDecorator`, `NotificationDecorator`, `FallbackDecorator` — applied via `ExecutorRef.decorators` list.
 
@@ -84,7 +85,6 @@ Every executor's `start()` returns an `ExecutorResult` with one of these `type` 
 |---|---|---|
 | `"data"` | Synchronous completion | `envelope=HandoffEnvelope(artifact={...}, sidecar=Sidecar(), workspace=..., timestamp=_now())` |
 | `"watch"` | Suspend for external input | `watch=WatchSpec(mode="human"\|"poll", ...)` |
-| `"sub_job"` | Delegate to child workflow | `sub_job_def=SubJobDefinition(...)` |
 | `"async"` | Long-running, poll via `check_status()` | `executor_state={...}` (opaque dict persisted by engine) |
 
 **Failure signaling:** Set `executor_state={"failed": True, "error": "..."}` and `envelope.executor_meta={"failed": True}`. The engine checks `executor_state["failed"]` in `check_status()`.
@@ -219,7 +219,7 @@ Other patterns:
 
 **CLI/Runner:** `cli.py` (all CLI commands), `runner.py` (headless `stepwise run`), `runner_bg.py` (background mode), `agent.py` (AgentExecutor + AcpxBackend), `agent_help.py` (agent instruction generation)
 
-**Server:** `server.py` (FastAPI REST + WS + ThreadSafeStore + DelegatingExecutor), `registry_factory.py` (shared executor registration)
+**Server:** `server.py` (FastAPI REST + WS + ThreadSafeStore), `registry_factory.py` (shared executor registration)
 
 **Config/Parsing:** `yaml_loader.py` (.flow.yaml parser), `project.py` (.stepwise/ directory), `config.py` (StepwiseConfig + model aliases), `context.py` (LLM context chain compilation), `report.py` (HTML job reports), `openrouter.py` (OpenRouter API client), `llm_client.py` (LLM client ABC), `registry_client.py` (stepwise.run registry client)
 

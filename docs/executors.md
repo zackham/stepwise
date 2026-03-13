@@ -20,6 +20,12 @@ fetch_data:
 - The script prints JSON to stdout — that's the output
 - Non-zero exit code = step failure
 
+**Environment variables set by Stepwise:**
+- `STEPWISE_PROJECT_DIR` — absolute path to the project root
+- `STEPWISE_FLOW_DIR` — absolute path to the flow directory (for directory flows)
+- `PYTHONPATH` — project root is prepended, so `import` works for project modules
+- All step inputs as env vars (strings, or JSON for dicts/lists)
+
 **When to use:** Data fetching, file processing, API calls, build commands, anything deterministic. If you can write it as a script, use a script. It's faster, cheaper, and easier to debug than an LLM call.
 
 **Output format:** The script must print a single JSON object to stdout. The keys must match the step's declared `outputs`:

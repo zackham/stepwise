@@ -219,7 +219,12 @@ summarize:
 
 For directory flows, `run:` paths resolve relative to the flow directory. A flow at `my-flow/FLOW.yaml` with `run: analyze.py` resolves to `my-flow/analyze.py`.
 
-Scripts always execute with cwd set to the job workspace directory (not the flow directory). The environment variable `STEPWISE_FLOW_DIR` is set to the flow directory's absolute path, so scripts can locate co-located data files if needed.
+Scripts always execute with cwd set to the job workspace directory (not the flow directory). The following environment variables are set:
+
+- `STEPWISE_PROJECT_DIR` — absolute path to the project root
+- `STEPWISE_FLOW_DIR` — absolute path to the flow directory
+- `PYTHONPATH` — project root is prepended, so scripts can import project modules directly
+- All step inputs are passed as env vars (strings, or JSON-encoded for dicts/lists)
 
 For single-file flows, `run:` paths resolve relative to cwd as before.
 
