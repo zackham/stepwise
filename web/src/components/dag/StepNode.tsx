@@ -9,6 +9,7 @@ import {
   Layers,
   ChevronDown,
   Bot,
+  Clock,
 } from "lucide-react";
 import { StepStatusBadge } from "@/components/StatusBadge";
 import { STEP_STATUS_COLORS, STEP_PENDING_COLORS } from "@/lib/status-colors";
@@ -95,6 +96,16 @@ function executorSubtitle(stepDef: StepDefinition): string {
     default:
       return type;
   }
+}
+
+function formatDuration(startedAt: string | null, completedAt: string | null): string | null {
+  if (!startedAt) return null;
+  const start = new Date(startedAt).getTime();
+  const end = completedAt ? new Date(completedAt).getTime() : Date.now();
+  const ms = end - start;
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${(ms / 60000).toFixed(1)}m`;
 }
 
 const ACTION_COLORS: Record<string, string> = {
@@ -211,6 +222,14 @@ export function StepNode({
           <StepStatusBadge status={status} />
         </div>
       </div>
+
+      {/* Duration */}
+      {latestRun && (status === "completed" || status === "failed" || status === "running") && (
+        <div className="flex items-center gap-0.5 text-[9px] text-zinc-500 mt-0.5">
+          <Clock className="w-2.5 h-2.5" />
+          {formatDuration(latestRun.started_at, latestRun.completed_at)}
+        </div>
+      )}
 
       {/* Description */}
       {stepDef.description && (
