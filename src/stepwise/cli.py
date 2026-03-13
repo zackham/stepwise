@@ -165,13 +165,24 @@ def _check_for_upgrade() -> str | None:
     return None
 
 
-def _find_project_or_exit(args: argparse.Namespace) -> StepwiseProject:
-    """Find project, respecting --project-dir flag."""
+def _find_project_or_exit(args: argparse.Namespace, auto_init: bool = False) -> StepwiseProject:
+    """Find project, respecting --project-dir flag.
+
+    If auto_init=True, creates a project in cwd instead of exiting.
+    """
     start = Path(args.project_dir) if args.project_dir else None
     try:
         return find_project(start)
-    except ProjectNotFoundError as e:
-        _io(args).log("error", str(e))
+    except ProjectNotFoundError:
+        if auto_init:
+            io = _io(args)
+            target = start or Path.cwd()
+            project = init_project(target)
+            io.log("success", f"Initialized project in {project.dot_dir}")
+            return project
+        _io(args).log("error",
+            f"No .stepwise/ found (searched up from {start or Path.cwd()}). "
+            f"Run 'stepwise init' to create a project.")
         sys.exit(EXIT_PROJECT_ERROR)
 
 
@@ -744,7 +755,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     from stepwise.runner import run_flow, parse_vars, load_vars_file
 
     io = _io(args)
-    project = _find_project_or_exit(args)
+    project = _find_project_or_exit(args, auto_init=True)
     project_dir = _project_dir(args) or Path.cwd()
 
     # Resolve flow: @author:name uses registry cache, otherwise local only
