@@ -13,8 +13,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TextIO
 
+import asyncio
+
 from stepwise.config import StepwiseConfig, load_config
-from stepwise.engine import Engine
+from stepwise.engine import AsyncEngine, Engine
 from stepwise.models import (
     Job,
     JobStatus,
@@ -93,7 +95,7 @@ class StdinHumanHandler:
         self._input = input_stream or sys.stdin
         self._output = output_stream or sys.stderr
 
-    def handle_suspended_step(self, engine: Engine, run: StepRun) -> None:
+    def handle_suspended_step(self, engine: Engine | AsyncEngine, run: StepRun) -> None:
         """Print prompt, collect input per field, call engine.fulfill_watch()."""
         if not run.watch:
             return
@@ -223,7 +225,7 @@ def run_flow(
 
     store = SQLiteStore(str(project.db_path))
     registry = create_default_registry(config)
-    engine = Engine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir)
+    engine = AsyncEngine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir)
 
     # 3. Create and start job
     flow_name = objective or flow_path.stem
@@ -242,27 +244,48 @@ def run_flow(
 
     reporter.on_flow_start(flow_name)
 
-    # 4. Signal handling
-    shutdown_requested = False
-    original_sigint = signal.getsignal(signal.SIGINT)
-    original_sigterm = signal.getsignal(signal.SIGTERM)
+    # 4. Run async
+    try:
+        return asyncio.run(_async_run_flow(
+            engine, job, store, reporter, human_handler,
+            output_stream, output_json, report, report_output, flow_path,
+        ))
+    finally:
+        store.close()
 
-    def _shutdown_handler(signum, frame):
+
+async def _async_run_flow(
+    engine: AsyncEngine,
+    job: Job,
+    store: SQLiteStore,
+    reporter: TerminalReporter,
+    human_handler: StdinHumanHandler,
+    output_stream: TextIO | None,
+    output_json: bool,
+    report: bool,
+    report_output: str | None,
+    flow_path: Path,
+) -> int:
+    """Async inner loop: engine runs autonomously, we poll for reporting."""
+    engine_task = asyncio.create_task(engine.run())
+    shutdown_requested = False
+
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGINT, lambda: _set_flag())
+    loop.add_signal_handler(signal.SIGTERM, lambda: _set_flag())
+
+    def _set_flag():
         nonlocal shutdown_requested
         shutdown_requested = True
 
-    signal.signal(signal.SIGINT, _shutdown_handler)
-    signal.signal(signal.SIGTERM, _shutdown_handler)
-
     start_time = time.time()
-    seen_running: set[str] = set()  # run IDs we've already reported as started
-    seen_completed: set[str] = set()  # run IDs we've already reported as completed/failed
+    seen_running: set[str] = set()
+    seen_completed: set[str] = set()
     steps_completed = 0
 
     try:
         engine.start_job(job.id)
 
-        # 5. Tick loop
         while True:
             if shutdown_requested:
                 engine.cancel_job(job.id)
@@ -281,7 +304,6 @@ def run_flow(
                     seen_running.add(run.id)
                     step_def = job.workflow.steps.get(run.step_name)
                     executor_type = step_def.executor.type if step_def else "unknown"
-                    # For-each: show item count
                     es = run.executor_state or {}
                     if es.get("for_each"):
                         count = es.get("item_count", 0)
@@ -308,8 +330,10 @@ def run_flow(
                 if run.status == StepRunStatus.SUSPENDED and run.watch:
                     if run.watch.mode == "human" and run.id not in seen_completed:
                         reporter.on_step_suspended(run.step_name)
-                        human_handler.handle_suspended_step(engine, run)
-                        seen_completed.add(run.id)  # mark so we don't re-prompt
+                        await asyncio.to_thread(
+                            human_handler.handle_suspended_step, engine, run
+                        )
+                        seen_completed.add(run.id)
 
             # Check job terminal state
             if job.status == JobStatus.COMPLETED:
@@ -351,23 +375,14 @@ def run_flow(
                     _generate_report(job, store, flow_path, report_output, output_stream)
                 return EXIT_JOB_FAILED
 
-            # Tick again
-            time.sleep(0.1)
-            try:
-                engine.tick()
-            except Exception as e:
-                import traceback
-                logging.getLogger("stepwise.runner").error(
-                    f"Tick crashed: {e}\n{traceback.format_exc()}"
-                )
-                _err(f"\n✗ Engine error: {type(e).__name__}: {e}", output_stream)
-                return EXIT_JOB_FAILED
+            await asyncio.sleep(0.1)
 
     finally:
-        # Restore signal handlers
-        signal.signal(signal.SIGINT, original_sigint)
-        signal.signal(signal.SIGTERM, original_sigterm)
-        store.close()
+        engine_task.cancel()
+        try:
+            await engine_task
+        except asyncio.CancelledError:
+            pass
 
 
 def _generate_report(
@@ -463,7 +478,7 @@ def run_wait(
 
     store = SQLiteStore(str(project.db_path))
     registry = create_default_registry(config)
-    engine = Engine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir)
+    engine = AsyncEngine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir)
 
     # Create and start job
     flow_name = objective or flow_path.stem
@@ -473,12 +488,139 @@ def run_wait(
         inputs=inputs or {},
         workspace_path=workspace,
     )
-    engine.start_job(job.id)
 
     try:
-        return wait_for_job(engine, store, job.id, timeout=timeout)
+        return asyncio.run(_async_wait_for_job(engine, store, job.id, timeout=timeout))
     finally:
         store.close()
+
+
+async def _async_wait_for_job(
+    engine: AsyncEngine,
+    store: SQLiteStore,
+    job_id: str,
+    timeout: int | None = None,
+) -> int:
+    """Async inner loop for wait_for_job: engine runs autonomously."""
+    engine_task = asyncio.create_task(engine.run())
+    shutdown_requested = False
+
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGINT, lambda: _set_flag())
+    loop.add_signal_handler(signal.SIGTERM, lambda: _set_flag())
+
+    def _set_flag():
+        nonlocal shutdown_requested
+        shutdown_requested = True
+
+    engine.start_job(job_id)
+    start_time = time.time()
+
+    try:
+        while True:
+            if shutdown_requested:
+                engine.cancel_job(job_id)
+                result = {
+                    "status": "cancelled",
+                    "job_id": job_id,
+                    "completed_outputs": engine.completed_outputs(job_id),
+                    "duration_seconds": round(time.time() - start_time, 1),
+                }
+                _json_stdout(result)
+                return 4  # EXIT_CANCELLED
+
+            # Check timeout
+            if timeout and (time.time() - start_time) > timeout:
+                job = engine.get_job(job_id)
+                suspended = engine.suspended_step_details(job_id)
+                result = {
+                    "status": "timeout",
+                    "job_id": job_id,
+                    "timeout_seconds": timeout,
+                    "completed_outputs": engine.completed_outputs(job_id),
+                    "duration_seconds": round(time.time() - start_time, 1),
+                }
+                if suspended:
+                    result["suspended_at_step"] = suspended[0]["step"]
+                    result["resume_hint"] = (
+                        f"Job is still running. Resume with: "
+                        f"stepwise fulfill {suspended[0]['run_id']} '{{...}}'"
+                    )
+                _json_stdout(result)
+                return 3  # EXIT_TIMEOUT
+
+            job = engine.get_job(job_id)
+
+            # Check terminal states
+            if job.status == JobStatus.COMPLETED:
+                duration = round(time.time() - start_time, 1)
+                cost = engine.job_cost(job_id)
+                result = {
+                    "status": "completed",
+                    "job_id": job_id,
+                    "outputs": engine.terminal_outputs(job_id),
+                    "cost_usd": round(cost, 4) if cost else 0,
+                    "duration_seconds": duration,
+                }
+                _json_stdout(result)
+                return EXIT_SUCCESS
+
+            elif job.status in (JobStatus.FAILED, JobStatus.CANCELLED):
+                duration = round(time.time() - start_time, 1)
+                cost = engine.job_cost(job_id)
+                failed_step = None
+                error_msg = None
+                for run in engine.get_runs(job_id):
+                    if run.status == StepRunStatus.FAILED:
+                        failed_step = run.step_name
+                        error_msg = run.error
+                        break
+
+                result = {
+                    "status": "failed",
+                    "job_id": job_id,
+                    "error": error_msg or "Unknown error",
+                    "failed_step": failed_step,
+                    "completed_outputs": engine.completed_outputs(job_id),
+                    "cost_usd": round(cost, 4) if cost else 0,
+                    "duration_seconds": duration,
+                }
+                _json_stdout(result)
+                return EXIT_JOB_FAILED
+
+            # Check for suspension: all progress blocked by suspended steps
+            if _is_blocked_by_suspension(engine, job_id):
+                duration = round(time.time() - start_time, 1)
+                cost = engine.job_cost(job_id)
+                suspended_details = engine.suspended_step_details(job_id)
+                for detail in suspended_details:
+                    run = store.load_run(detail["run_id"])
+                    detail["inputs"] = run.inputs or {}
+                    detail["suspended_at"] = run.started_at.isoformat() if run.started_at else None
+
+                completed_steps = [
+                    r.step_name for r in engine.get_runs(job_id)
+                    if r.status == StepRunStatus.COMPLETED
+                ]
+                result = {
+                    "status": "suspended",
+                    "job_id": job_id,
+                    "suspended_steps": suspended_details,
+                    "completed_steps": completed_steps,
+                    "cost_usd": round(cost, 4) if cost else 0,
+                    "duration_seconds": duration,
+                }
+                _json_stdout(result)
+                return EXIT_SUSPENDED
+
+            await asyncio.sleep(0.1)
+
+    finally:
+        engine_task.cancel()
+        try:
+            await engine_task
+        except asyncio.CancelledError:
+            pass
 
 
 def wait_for_job(
@@ -487,7 +629,7 @@ def wait_for_job(
     job_id: str,
     timeout: int | None = None,
 ) -> int:
-    """Block until a job reaches terminal state or suspension.
+    """Block until a job reaches terminal state or suspension (legacy sync API).
 
     Returns exit code: 0=completed, 1=failed, 3=timeout, 4=cancelled, 5=suspended.
     Outputs JSON to stdout.
@@ -558,7 +700,6 @@ def wait_for_job(
             elif job.status in (JobStatus.FAILED, JobStatus.CANCELLED):
                 duration = round(time.time() - start_time, 1)
                 cost = engine.job_cost(job_id)
-                # Find the failed step
                 failed_step = None
                 error_msg = None
                 for run in engine.get_runs(job_id):
@@ -584,7 +725,6 @@ def wait_for_job(
                 duration = round(time.time() - start_time, 1)
                 cost = engine.job_cost(job_id)
                 suspended_details = engine.suspended_step_details(job_id)
-                # Enrich with inputs and suspended_at
                 for detail in suspended_details:
                     run = store.load_run(detail["run_id"])
                     detail["inputs"] = run.inputs or {}
@@ -625,7 +765,7 @@ def wait_for_job(
         signal.signal(signal.SIGTERM, original_sigterm)
 
 
-def _is_blocked_by_suspension(engine: Engine, job_id: str) -> bool:
+def _is_blocked_by_suspension(engine: Engine | AsyncEngine, job_id: str) -> bool:
     """Check if all forward progress is blocked by suspended steps.
 
     Returns True when there are suspended runs AND no running/delegated runs.
@@ -681,7 +821,7 @@ def run_async(
     store = SQLiteStore(str(project.db_path))
     try:
         registry = create_default_registry(config)
-        engine = Engine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir)
+        engine = AsyncEngine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir)
 
         flow_name = objective or flow_path.stem
         job = engine.create_job(
