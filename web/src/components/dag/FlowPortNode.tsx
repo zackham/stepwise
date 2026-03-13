@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp } from "lucide-react";
+import { ArrowDown } from "lucide-react";
 import type { FlowPortNode as FlowPortNodeType, DagSelection } from "@/lib/dag-layout";
 import { cn } from "@/lib/utils";
 
@@ -10,7 +10,7 @@ interface FlowPortNodeProps {
 
 export function FlowPortNode({ port, selection, onSelect }: FlowPortNodeProps) {
   const isInput = port.type === "input";
-  const Icon = isInput ? ArrowDown : ArrowUp;
+  const Icon = ArrowDown;
   const title = isInput ? "Inputs" : "Outputs";
 
   return (
