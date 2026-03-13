@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
-import { useJob, useRuns, useJobTree, useJobOutput, useStepwiseMutations } from "@/hooks/useStepwise";
+import { useJob, useRuns, useJobTree, useJobOutput, useJobCost, useConfig, useStepwiseMutations } from "@/hooks/useStepwise";
 import { JobList } from "@/components/jobs/JobList";
 import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
 import { FlowDagView } from "@/components/dag/FlowDagView";
@@ -23,6 +23,7 @@ import {
   Terminal,
   Monitor,
   AlertTriangle,
+  DollarSign,
 } from "lucide-react";
 import type { JobTreeNode, StepDefinition } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -62,6 +63,8 @@ export function JobDetailPage() {
   const { data: parentJob } = useJob(job?.parent_job_id ?? undefined);
   const { data: jobTree } = useJobTree(jobId);
   const { data: runs = [] } = useRuns(jobId);
+  const { data: costData } = useJobCost(jobId);
+  const { data: configData } = useConfig();
   const [selection, setSelection] = useState<DagSelection>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
@@ -238,6 +241,17 @@ export function JobDetailPage() {
                 <Clock className="w-2.5 h-2.5" />
                 {formatDuration(job.created_at, job.updated_at)}
               </span>
+              {costData && costData.cost_usd > 0 && (
+                <span
+                  className="text-[10px] text-zinc-600 flex items-center gap-0.5"
+                  title={configData?.billing_mode === "subscription"
+                    ? "Estimated cost — running against subscription plan"
+                    : "API cost"}
+                >
+                  <DollarSign className="w-2.5 h-2.5" />
+                  ${costData.cost_usd.toFixed(4)}
+                </span>
+              )}
             </div>
             <div className="text-[10px] font-mono text-zinc-600 mt-0.5">
               {job.id}
@@ -347,6 +361,19 @@ export function JobDetailPage() {
                       {formatDuration(job.created_at, job.updated_at)}
                     </span>
                   </div>
+                  {costData && costData.cost_usd > 0 && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-zinc-500 w-16">Cost</span>
+                      <span className="font-mono text-zinc-400">
+                        ${costData.cost_usd.toFixed(4)}
+                      </span>
+                      {configData?.billing_mode === "subscription" && (
+                        <span className="text-[9px] text-zinc-600" title="Running against subscription plan — cost is estimated">
+                          est.
+                        </span>
+                      )}
+                    </div>
+                  )}
                   <div className="flex items-center gap-2">
                     <span className="text-zinc-500 w-16">Created</span>
                     <span className="font-mono text-zinc-500 text-[10px]">

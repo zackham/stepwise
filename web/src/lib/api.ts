@@ -418,6 +418,7 @@ export interface ConfigResponse {
   model_registry: ModelInfo[];
   default_model: string;
   labels: LabelInfo[];
+  billing_mode: string;
 }
 
 export function fetchConfig(): Promise<ConfigResponse> {
