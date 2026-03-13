@@ -24,7 +24,6 @@ from stepwise.io import IOAdapter, create_adapter
 from stepwise.models import (
     Job,
     JobStatus,
-    StepRun,
     StepRunStatus,
     WorkflowDefinition,
 )
@@ -40,9 +39,6 @@ EXIT_USAGE_ERROR = 2
 EXIT_CONFIG_ERROR = 3
 EXIT_SUSPENDED = 5
 
-
-
-# TerminalReporter and StdinHumanHandler deleted — replaced by IOAdapter (io.py)
 
 
 def parse_vars(var_list: list[str] | None) -> dict[str, str]:
