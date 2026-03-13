@@ -426,32 +426,25 @@ class SQLiteStore:
     def claim_step(self, job_id: str, step_name: str) -> int | None:
         """Atomically claim a step. Returns attempt number or None if already claimed.
 
-        Uses BEGIN IMMEDIATE for write-lock to prevent two concurrent processes
-        from both claiming the same step.
+        Checks if a step already has an active run (running/suspended/delegated).
+        If so, returns None. Otherwise, returns the next attempt number.
+
+        For multi-process safety (standalone CLIs sharing a DB), the caller should
+        hold a write lock or use BEGIN IMMEDIATE at a higher level. For single-process
+        server use, ThreadSafeStore's _LockedConnection provides serialization.
         """
-        try:
-            self._conn.execute("BEGIN IMMEDIATE")
-            row = self._conn.execute(
-                "SELECT 1 FROM step_runs WHERE job_id = ? AND step_name = ? "
-                "AND status IN ('running', 'suspended', 'delegated') LIMIT 1",
-                (job_id, step_name),
-            ).fetchone()
-            if row:
-                self._conn.execute("ROLLBACK")
-                return None
-            max_row = self._conn.execute(
-                "SELECT MAX(attempt) FROM step_runs WHERE job_id = ? AND step_name = ?",
-                (job_id, step_name),
-            ).fetchone()
-            attempt = (max_row[0] or 0) + 1
-            self._conn.execute("COMMIT")
-            return attempt
-        except Exception:
-            try:
-                self._conn.execute("ROLLBACK")
-            except Exception:
-                pass
-            raise
+        row = self._conn.execute(
+            "SELECT 1 FROM step_runs WHERE job_id = ? AND step_name = ? "
+            "AND status IN ('running', 'suspended', 'delegated') LIMIT 1",
+            (job_id, step_name),
+        ).fetchone()
+        if row:
+            return None
+        max_row = self._conn.execute(
+            "SELECT MAX(attempt) FROM step_runs WHERE job_id = ? AND step_name = ?",
+            (job_id, step_name),
+        ).fetchone()
+        return (max_row[0] or 0) + 1
 
     # ── Step Events (M4: fine-grained agent activity) ───────────────────
 
