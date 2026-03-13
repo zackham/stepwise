@@ -103,8 +103,8 @@ class CliLLMClient:
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
 
-        # Parse NDJSON from stderr (exec mode outputs to stderr)
-        ndjson = result.stderr or ""
+        # Parse NDJSON from stdout (exec mode outputs JSON-RPC stream to stdout)
+        ndjson = result.stdout or ""
 
         if result.returncode != 0:
             logger.warning(

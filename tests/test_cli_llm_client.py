@@ -37,12 +37,12 @@ def _usage_update(amount: float) -> dict:
     }
 
 
-def _make_completed_process(ndjson_stderr: str, returncode: int = 0) -> subprocess.CompletedProcess:
+def _make_completed_process(ndjson_stdout: str, returncode: int = 0) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(
         args=["acpx"],
         returncode=returncode,
-        stdout="",
-        stderr=ndjson_stderr,
+        stdout=ndjson_stdout,
+        stderr="",
     )
 
 
@@ -195,15 +195,15 @@ class TestCliLLMClient:
         assert captured_env is not None
         assert "CLAUDECODE" not in captured_env
 
-    def test_ndjson_on_stderr(self):
-        """Verify we parse stderr (not stdout) for NDJSON content."""
-        ndjson = _make_ndjson(_agent_message_chunk("from stderr"))
+    def test_ndjson_on_stdout(self):
+        """Verify we parse stdout for NDJSON content (acpx exec outputs JSON-RPC to stdout)."""
+        ndjson = _make_ndjson(_agent_message_chunk("from stdout"))
 
-        # Put NDJSON in stderr, garbage in stdout
+        # Put NDJSON in stdout, nothing useful in stderr
         result = subprocess.CompletedProcess(
             args=["acpx"], returncode=0,
-            stdout="this is stdout garbage",
-            stderr=ndjson,
+            stdout=ndjson,
+            stderr="",
         )
 
         client = CliLLMClient()
@@ -212,7 +212,7 @@ class TestCliLLMClient:
                 model="x", messages=[{"role": "user", "content": "hi"}],
             )
 
-        assert response.content == "from stderr"
+        assert response.content == "from stdout"
 
     def test_nonzero_exit_with_text_returns_partial(self):
         """Non-zero exit but text extracted → return partial response."""
