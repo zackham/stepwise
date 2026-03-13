@@ -1,28 +1,30 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useJobs, useStepwiseMutations } from "@/hooks/useStepwise";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { AlertTriangle, Briefcase, Clock, Monitor, Terminal, Trash2 } from "lucide-react";
+import { AlertTriangle, Briefcase, Clock, Monitor, Terminal, Trash2, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { JobStatus } from "@/lib/types";
+import type { Job, JobStatus } from "@/lib/types";
 
 interface JobListProps {
   selectedJobId: string | null;
   onSelectJob: (jobId: string) => void;
 }
 
+const STATUS_OPTIONS: { value: string; label: string }[] = [
+  { value: "running", label: "Running" },
+  { value: "paused", label: "Paused" },
+  { value: "completed", label: "Completed" },
+  { value: "failed", label: "Failed" },
+  { value: "pending", label: "Pending" },
+  { value: "cancelled", label: "Cancelled" },
+];
+
 function isStale(job: { status: string; created_by: string; heartbeat_at: string | null }): boolean {
   if (job.status !== "running" || job.created_by === "server") return false;
   if (!job.heartbeat_at) return true;
   const age = Date.now() - new Date(job.heartbeat_at).getTime();
-  return age > 60_000; // 60 seconds
+  return age > 60_000;
 }
 
 function isCliOwned(created_by: string): boolean {
@@ -40,64 +42,106 @@ function timeAgo(ts: string): string {
 }
 
 export function JobList({ selectedJobId, onSelectJob }: JobListProps) {
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const { data: jobs = [], isLoading } = useJobs(
-    statusFilter === "all" ? undefined : statusFilter
-  );
+  const { data: jobs = [], isLoading } = useJobs();
   const mutations = useStepwiseMutations();
 
-  const sortedJobs = [...jobs].sort(
-    (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-  );
+  // Derive unique workflow names from objectives
+  const workflowNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const job of jobs) {
+      if (job.objective) names.add(job.objective);
+    }
+    return [...names].sort();
+  }, [jobs]);
+
+  // Filter jobs by query (matches objective) and status toggle
+  const filteredJobs = useMemo(() => {
+    const q = query.toLowerCase().trim();
+    return jobs
+      .filter((job) => {
+        if (statusFilter && job.status !== statusFilter) return false;
+        if (q && !(job.objective || "").toLowerCase().includes(q)) return false;
+        return true;
+      })
+      .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+  }, [jobs, query, statusFilter]);
+
+  const hasActiveFilter = !!query || !!statusFilter;
 
   return (
     <div className="flex flex-col h-full">
-      {/* Filter */}
-      <div className="p-3 border-b border-border flex items-center gap-2">
-        <Select value={statusFilter} onValueChange={(v) => { if (v !== null) setStatusFilter(v); }}>
-          <SelectTrigger className="h-8 text-xs flex-1">
-            <SelectValue placeholder="Filter by status" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Jobs</SelectItem>
-            <SelectItem value="pending">Pending</SelectItem>
-            <SelectItem value="running">Running</SelectItem>
-            <SelectItem value="paused">Paused</SelectItem>
-            <SelectItem value="completed">Completed</SelectItem>
-            <SelectItem value="failed">Failed</SelectItem>
-            <SelectItem value="cancelled">Cancelled</SelectItem>
-          </SelectContent>
-        </Select>
-        {confirmDelete ? (
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => {
-                mutations.deleteAllJobs.mutate(undefined, {
-                  onSuccess: () => setConfirmDelete(false),
-                });
-              }}
-              disabled={mutations.deleteAllJobs.isPending}
-              className="text-[10px] text-red-400 hover:text-red-300 px-1.5 py-1 rounded border border-red-500/30 hover:bg-red-500/10 transition-colors"
-            >
-              Confirm
-            </button>
-            <button
-              onClick={() => setConfirmDelete(false)}
-              className="text-[10px] text-zinc-500 hover:text-zinc-300 px-1.5 py-1"
-            >
-              Cancel
-            </button>
+      {/* Search + delete */}
+      <div className="p-2 border-b border-border space-y-1.5">
+        <div className="flex items-center gap-1.5">
+          <div className="relative flex-1">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-600" />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Filter jobs..."
+              className="w-full h-7 pl-7 pr-7 rounded-md border border-zinc-800 bg-zinc-900/50 text-xs text-foreground placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600 transition-colors"
+            />
+            {hasActiveFilter && (
+              <button
+                onClick={() => { setQuery(""); setStatusFilter(null); }}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-400"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
           </div>
-        ) : (
-          <button
-            onClick={() => setConfirmDelete(true)}
-            className="text-zinc-600 hover:text-red-400 p-1.5 rounded hover:bg-zinc-800/50 transition-colors shrink-0"
-            title="Delete all jobs"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
-        )}
+          {confirmDelete ? (
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                onClick={() => {
+                  mutations.deleteAllJobs.mutate(undefined, {
+                    onSuccess: () => setConfirmDelete(false),
+                  });
+                }}
+                disabled={mutations.deleteAllJobs.isPending}
+                className="text-[10px] text-red-400 hover:text-red-300 px-1.5 py-1 rounded border border-red-500/30 hover:bg-red-500/10 transition-colors"
+              >
+                Confirm
+              </button>
+              <button
+                onClick={() => setConfirmDelete(false)}
+                className="text-[10px] text-zinc-500 hover:text-zinc-300 px-1.5 py-1"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setConfirmDelete(true)}
+              className="text-zinc-600 hover:text-red-400 p-1 rounded hover:bg-zinc-800/50 transition-colors shrink-0"
+              title="Delete all jobs"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+
+        {/* Status pills */}
+        <div className="flex flex-wrap gap-1">
+          {STATUS_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => setStatusFilter(statusFilter === opt.value ? null : opt.value)}
+              className={cn(
+                "px-1.5 py-0.5 rounded text-[10px] transition-colors",
+                statusFilter === opt.value
+                  ? "bg-zinc-700 text-foreground"
+                  : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50",
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Job list */}
@@ -107,12 +151,12 @@ export function JobList({ selectedJobId, onSelectJob }: JobListProps) {
             <div className="text-zinc-500 text-sm text-center py-8">
               Loading...
             </div>
-          ) : sortedJobs.length === 0 ? (
+          ) : filteredJobs.length === 0 ? (
             <div className="text-zinc-500 text-sm text-center py-8">
-              No jobs found
+              {hasActiveFilter ? "No matching jobs" : "No jobs found"}
             </div>
           ) : (
-            sortedJobs.map((job) => (
+            filteredJobs.map((job) => (
               <button
                 key={job.id}
                 onClick={() => onSelectJob(job.id)}
