@@ -484,6 +484,7 @@ async def _async_run_flow(
     last_heartbeat = 0.0
     seen_running: set[str] = set()
     seen_completed: set[str] = set()
+    seen_prompted: set[str] = set()  # human steps we've already prompted for
     steps_completed = 0
     step_names = list(job.workflow.steps.keys())
 
@@ -540,7 +541,8 @@ async def _async_run_flow(
 
                     # Handle suspended (human) steps
                     if run.status == StepRunStatus.SUSPENDED and run.watch:
-                        if run.watch.mode == "human" and run.id not in seen_completed:
+                        if run.watch.mode == "human" and run.id not in seen_prompted:
+                            seen_prompted.add(run.id)
                             handle.update_step(run.step_name, "suspended")
                             handle.pause_for_input()
 
@@ -554,7 +556,6 @@ async def _async_run_flow(
                             engine.fulfill_watch(run.id, payload)
 
                             handle.resume_after_input()
-                            seen_completed.add(run.id)
 
                 # Update summary
                 handle.update_summary(
@@ -564,7 +565,20 @@ async def _async_run_flow(
 
                 # Check job terminal state
                 if job.status == JobStatus.COMPLETED:
+                    # Final sweep — catch any transitions missed in this tick
+                    for run in engine.get_runs(job.id):
+                        if run.id not in seen_completed and run.status == StepRunStatus.COMPLETED:
+                            seen_completed.add(run.id)
+                            duration = 0.0
+                            if run.started_at and run.completed_at:
+                                duration = (run.completed_at - run.started_at).total_seconds()
+                            cost = store.accumulated_cost(run.id) or None
+                            handle.update_step(
+                                run.step_name, "completed", duration=duration, cost=cost,
+                            )
+                            steps_completed += 1
                     total_time = time.time() - start_time
+                    handle.update_summary(steps_completed, len(step_names), elapsed=total_time)
                     adapter.flow_complete(steps_completed, total_time)
                     if output_json:
                         cost = engine.job_cost(job.id)
