@@ -174,10 +174,15 @@ implement:
   outputs: [result]
   inputs:
     plan: planning.result
-  limits:
-    max_cost_usd: 2.00
-    max_duration_minutes: 60
   idempotency: allow_restart        # recommended for agent steps
+```
+
+Optional: add limits for API-key-billed runs or open-ended loops:
+
+```yaml
+  limits:
+    max_cost_usd: 2.00              # only enforced with billing: api_key
+    max_iterations: 20              # safety net for loops
 ```
 
 | Config field | Type | Required | Default | Description |
@@ -203,6 +208,11 @@ implement:
 **Important:** If downstream steps need the agent's text, use `output_mode: stream_result`.
 
 Auto-injected prompt variables: `$objective`, `$workspace`.
+
+**Defaults and best practices:**
+- Agent steps have **no timeout or cost cap by default** — this is intentional for code tasks on subscription plans.
+- `max_cost_usd` only matters when billing via API key. On subscription plans (Anthropic Max, Codex), cost caps are unnecessary and ignored.
+- `max_iterations` is the most useful safety net for looping agents — recommended even for open-ended loops (15–20 as a starting point).
 
 ## Inputs
 
@@ -666,9 +676,9 @@ expensive_step:
     max_iterations: 10             # max completed runs when looping
 ```
 
-- `max_cost_usd` — engine cancels the executor if cost exceeds this
-- `max_duration_minutes` — engine cancels the executor if wall-clock exceeds this
-- `max_iterations` — when exit rules loop back to this step, after N completions the loop escalates (pauses the job)
+- `max_cost_usd` — engine cancels the executor if cost exceeds this. **Only enforced when `billing: api_key` is set in stepwise config** (default is `subscription`).
+- `max_duration_minutes` — engine cancels the executor if wall-clock exceeds this. Always enforced regardless of billing mode.
+- `max_iterations` — when exit rules loop back to this step, after N completions the loop escalates (pauses the job). Always enforced regardless of billing mode.
 
 ## Idempotency Modes
 
@@ -776,8 +786,6 @@ steps:
     outputs: [result]
     inputs:
       pr_url: $job.pr_url
-    limits:
-      max_cost_usd: 1.00
     idempotency: allow_restart
 
   approve:
@@ -820,8 +828,6 @@ steps:
     outputs: [result]
     inputs:
       topic: $job.topic
-    limits:
-      max_cost_usd: 0.50
     idempotency: allow_restart
 
   gather_internal:
