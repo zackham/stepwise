@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
 import { useJob, useRuns, useJobTree, useJobOutput, useStepwiseMutations } from "@/hooks/useStepwise";
 import { JobList } from "@/components/jobs/JobList";
@@ -120,10 +120,9 @@ export function JobDetailPage() {
     );
   }
 
-  const resolvedStep = useMemo(
-    () => selectedStep ? resolveStep(selectedStep, job.id, job.workflow, jobTree ?? null) : null,
-    [selectedStep, job, jobTree],
-  );
+  const resolvedStep = selectedStep
+    ? resolveStep(selectedStep, job.id, job.workflow, jobTree ?? null)
+    : null;
 
   const stepCount = Object.keys(job.workflow.steps).length;
   const hasInputs = job.inputs && Object.keys(job.inputs).length > 0;
