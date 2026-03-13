@@ -883,6 +883,9 @@ class Job:
     config: JobConfig = field(default_factory=JobConfig)
     created_at: datetime = field(default_factory=_now)
     updated_at: datetime = field(default_factory=_now)
+    created_by: str = "server"
+    runner_pid: int | None = None
+    heartbeat_at: datetime | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -897,6 +900,9 @@ class Job:
             "config": self.config.to_dict(),
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
+            "created_by": self.created_by,
+            "runner_pid": self.runner_pid,
+            "heartbeat_at": self.heartbeat_at.isoformat() if self.heartbeat_at else None,
         }
 
     @classmethod
@@ -913,6 +919,9 @@ class Job:
             config=JobConfig.from_dict(d["config"]) if d.get("config") else JobConfig(),
             created_at=datetime.fromisoformat(d["created_at"]) if d.get("created_at") else _now(),
             updated_at=datetime.fromisoformat(d["updated_at"]) if d.get("updated_at") else _now(),
+            created_by=d.get("created_by", "server"),
+            runner_pid=d.get("runner_pid"),
+            heartbeat_at=datetime.fromisoformat(d["heartbeat_at"]) if d.get("heartbeat_at") else None,
         )
 
 

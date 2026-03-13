@@ -56,7 +56,10 @@ class SQLiteStore:
                 workspace_path TEXT,
                 config TEXT,
                 created_at TEXT,
-                updated_at TEXT
+                updated_at TEXT,
+                created_by TEXT DEFAULT 'server',
+                runner_pid INTEGER,
+                heartbeat_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS step_runs (
@@ -109,10 +112,22 @@ class SQLiteStore:
     def _migrate(self) -> None:
         """Add columns that may not exist in older databases."""
         cursor = self._conn.execute("PRAGMA table_info(step_runs)")
-        columns = {row[1] for row in cursor.fetchall()}
-        if "error_category" not in columns:
+        run_columns = {row[1] for row in cursor.fetchall()}
+        if "error_category" not in run_columns:
             self._conn.execute("ALTER TABLE step_runs ADD COLUMN error_category TEXT")
             self._conn.commit()
+
+        cursor = self._conn.execute("PRAGMA table_info(jobs)")
+        job_columns = {row[1] for row in cursor.fetchall()}
+        for col, typ, default in [
+            ("created_by", "TEXT", "'server'"),
+            ("runner_pid", "INTEGER", None),
+            ("heartbeat_at", "TEXT", None),
+        ]:
+            if col not in job_columns:
+                default_clause = f" DEFAULT {default}" if default else ""
+                self._conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {typ}{default_clause}")
+        self._conn.commit()
 
     # ── Jobs ──────────────────────────────────────────────────────────────
 
@@ -120,8 +135,9 @@ class SQLiteStore:
         self._conn.execute(
             """INSERT INTO jobs
                 (id, objective, workflow, status, inputs, parent_job_id,
-                 parent_step_run_id, workspace_path, config, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 parent_step_run_id, workspace_path, config, created_at, updated_at,
+                 created_by, runner_pid, heartbeat_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 objective = excluded.objective,
                 workflow = excluded.workflow,
@@ -131,7 +147,10 @@ class SQLiteStore:
                 parent_step_run_id = excluded.parent_step_run_id,
                 workspace_path = excluded.workspace_path,
                 config = excluded.config,
-                updated_at = excluded.updated_at
+                updated_at = excluded.updated_at,
+                created_by = excluded.created_by,
+                runner_pid = excluded.runner_pid,
+                heartbeat_at = excluded.heartbeat_at
             """,
             (
                 job.id,
@@ -145,6 +164,9 @@ class SQLiteStore:
                 _dumps(job.config.to_dict()),
                 job.created_at.isoformat(),
                 job.updated_at.isoformat(),
+                job.created_by,
+                job.runner_pid,
+                job.heartbeat_at.isoformat() if job.heartbeat_at else None,
             ),
         )
         self._conn.commit()
@@ -170,6 +192,9 @@ class SQLiteStore:
             config=JobConfig.from_dict(json.loads(row["config"])) if row["config"] else JobConfig(),
             created_at=_parse_dt(row["created_at"]),
             updated_at=_parse_dt(row["updated_at"]),
+            created_by=row["created_by"] or "server",
+            runner_pid=row["runner_pid"],
+            heartbeat_at=_parse_dt(row["heartbeat_at"]) if row["heartbeat_at"] else None,
         )
 
     def active_jobs(self) -> list[Job]:
@@ -347,6 +372,54 @@ class SQLiteStore:
             (job_id, step_name),
         ).fetchone()
         return row["cnt"] if row else 0
+
+    # ── Job Ownership & Heartbeat ────────────────────────────────────────
+
+    def heartbeat(self, job_id: str) -> None:
+        """Update heartbeat_at for a running job."""
+        from stepwise.models import _now
+        self._conn.execute(
+            "UPDATE jobs SET heartbeat_at = ? WHERE id = ?",
+            (_now().isoformat(), job_id),
+        )
+        self._conn.commit()
+
+    def stale_jobs(self, max_age_seconds: int = 60) -> list[Job]:
+        """RUNNING jobs whose owner hasn't heartbeated recently."""
+        import os
+        from datetime import timedelta
+        from stepwise.models import _now
+        cutoff = (_now() - timedelta(seconds=max_age_seconds)).isoformat()
+        rows = self._conn.execute(
+            "SELECT * FROM jobs WHERE status = 'running' AND created_by != 'server' "
+            "AND (heartbeat_at IS NULL OR heartbeat_at < ?)",
+            (cutoff,),
+        ).fetchall()
+        result = []
+        for r in rows:
+            job = self._row_to_job(r)
+            if job.runner_pid:
+                try:
+                    os.kill(job.runner_pid, 0)
+                except ProcessLookupError:
+                    pass  # Process dead — definitely stuck
+                result.append(job)
+            else:
+                result.append(job)
+        return result
+
+    def running_jobs(self, exclude_owner: str | None = None) -> list[Job]:
+        """Return RUNNING jobs, optionally excluding a specific owner."""
+        if exclude_owner:
+            rows = self._conn.execute(
+                "SELECT * FROM jobs WHERE status = 'running' AND created_by != ?",
+                (exclude_owner,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM jobs WHERE status = 'running'",
+            ).fetchall()
+        return [self._row_to_job(r) for r in rows]
 
     # ── Step Events (M4: fine-grained agent activity) ───────────────────
 
