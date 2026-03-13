@@ -149,6 +149,18 @@ export function deleteJob(jobId: string): Promise<{ status: string }> {
   return request(`/jobs/${jobId}`, { method: "DELETE" });
 }
 
+export function fetchJobCost(
+  jobId: string
+): Promise<{ job_id: string; cost_usd: number }> {
+  return request(`/jobs/${jobId}/cost`);
+}
+
+export function fetchJobSuspended(
+  jobId: string
+): Promise<{ job_id: string; suspended_steps: Array<{ run_id: string; step: string; prompt: string; fields: string[] }> }> {
+  return request(`/jobs/${jobId}/suspended`);
+}
+
 export function fetchJobOutput(
   jobId: string
 ): Promise<Record<string, unknown>> {

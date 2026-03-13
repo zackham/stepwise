@@ -692,6 +692,30 @@ def get_job_status(job_id: str):
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
 
 
+@app.get("/api/jobs/{job_id}/cost")
+def get_job_cost(job_id: str):
+    """Get total accumulated cost for a job."""
+    engine = _get_engine()
+    try:
+        engine.get_job(job_id)  # validate job exists
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    cost = engine.job_cost(job_id)
+    return {"job_id": job_id, "cost_usd": round(cost, 4) if cost else 0}
+
+
+@app.get("/api/jobs/{job_id}/suspended")
+def get_job_suspended(job_id: str):
+    """Get details of suspended steps for a job."""
+    engine = _get_engine()
+    try:
+        engine.get_job(job_id)  # validate job exists
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    details = engine.suspended_step_details(job_id)
+    return {"job_id": job_id, "suspended_steps": details}
+
+
 @app.get("/api/jobs/{job_id}/output")
 def get_job_output(
     job_id: str,

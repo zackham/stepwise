@@ -32,8 +32,12 @@ make build-web                             # npm build → copies web/dist/ → 
 | CLI mode | What it does |
 |---|---|
 | `stepwise run <file>` | Headless execution, event-driven engine, exits on job complete/fail. Delegates to running server if one is detected (use `--local` to force standalone). |
+| `stepwise run --wait <file>` | Blocking JSON output mode. Delegates to server if available (use `--local` to force standalone). |
+| `stepwise run --async <file>` | Fire-and-forget. Delegates to server if available (no subprocess needed); falls back to detached background process with `--local`. |
 | `stepwise run --watch <file>` | Launches FastAPI server with auto-created job, opens web UI |
 | `stepwise serve` | Persistent web server on port 8340 (REST + WebSocket) |
+
+All delegation modes (`run`, `--wait`, `--async`) use WebSocket notifications from the server for low-latency updates, falling back to REST polling at 2s intervals if WS connection fails.
 
 ---
 
