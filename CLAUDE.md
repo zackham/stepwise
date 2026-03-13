@@ -31,7 +31,7 @@ make build-web                             # npm build → copies web/dist/ → 
 
 | CLI mode | What it does |
 |---|---|
-| `stepwise run <file>` | Headless execution, 0.1s tick loop, exits on job complete/fail |
+| `stepwise run <file>` | Headless execution, event-driven engine, exits on job complete/fail. Delegates to running server if one is detected (use `--local` to force standalone). |
 | `stepwise run --watch <file>` | Launches FastAPI server with auto-created job, opens web UI |
 | `stepwise serve` | Persistent web server on port 8340 (REST + WebSocket) |
 
@@ -52,12 +52,15 @@ models → llm_client → executors → engine → server
 
 ### Engine (`src/stepwise/engine.py`)
 
-Tick-based loop: `engine.tick()` iterates active jobs, polls running executors, checks step readiness, launches ready steps.
+Two engine classes: `AsyncEngine` (primary, event-driven) and `Engine` (legacy, tick-based).
 
-- **Tick interval:** 0.1s in runner (`runner.py`), 2s active / 10s idle in server (`server.py`)
+**AsyncEngine** — event-driven with `asyncio.Queue`. Executors run in the thread pool via `asyncio.to_thread()`. Steps complete → push result event → engine dispatches newly ready steps. No polling, no tick interval.
+
+**Engine** (legacy) — tick-based `engine.tick()` loop. Still used by some tests. All business logic (readiness, exit rules, input resolution) is shared between both engines.
+
 - **Step readiness** (`_is_step_ready()`): no active run + no current completed run (or loop guard) + all deps have current completed runs
 - **Currency** (`_is_current()`): latest run for step is COMPLETED and all dep runs are also current (recursive)
-- **Executor dispatch:** `registry.create(ExecutorRef)` → factory lookup → decorator wrapping
+- **Executor dispatch:** `registry.create(ExecutorRef)` → factory lookup → decorator wrapping → `to_thread(executor.start)` (AsyncEngine) or direct call (Engine)
 - **Exit rules** after step completion: `advance` (continue DAG), `loop` (re-launch target step), `escalate` (pause job), `abandon` (fail job) — defined via `models.py:ExitRule`
 - **Input resolution:** `_resolve_inputs()` navigates artifact fields via dot-path (`"step_name.field.nested"`)
 
@@ -73,7 +76,7 @@ All registered in `src/stepwise/registry_factory.py:create_default_registry()`:
 | `human` | `HumanExecutor` | `executors.py` | Immediately suspends for human input via API |
 | `llm` | `LLMExecutor` | `executors.py` | OpenRouter API call (only registered if API key configured) |
 | `mock_llm` | `MockLLMExecutor` | `executors.py` | Test-only LLM stub with configurable failure/latency |
-| `agent` | `AgentExecutor` | `agent.py` | ACP agent via acpx subprocess with tool dispatch |
+| `agent` | `AgentExecutor` | `agent.py` | ACP agent via acpx subprocess — blocks in `start()` via `os.waitpid`, returns `type="data"` |
 
 Decorators (`src/stepwise/decorators.py`): `TimeoutDecorator`, `RetryDecorator`, `NotificationDecorator`, `FallbackDecorator` — applied via `ExecutorRef.decorators` list.
 
@@ -85,17 +88,21 @@ Every executor's `start()` returns an `ExecutorResult` with one of these `type` 
 |---|---|---|
 | `"data"` | Synchronous completion | `envelope=HandoffEnvelope(artifact={...}, sidecar=Sidecar(), workspace=..., timestamp=_now())` |
 | `"watch"` | Suspend for external input | `watch=WatchSpec(mode="human"\|"poll", ...)` |
-| `"async"` | Long-running, poll via `check_status()` | `executor_state={...}` (opaque dict persisted by engine) |
+| `"async"` | Legacy: long-running, poll via `check_status()` | `executor_state={...}` (opaque dict persisted by engine). No built-in executor uses this — prefer blocking in `start()` (safe in AsyncEngine's thread pool). |
 
-**Failure signaling:** Set `executor_state={"failed": True, "error": "..."}` and `envelope.executor_meta={"failed": True}`. The engine checks `executor_state["failed"]` in `check_status()`.
+**Failure signaling:** Set `executor_state={"failed": True, "error": "..."}` and `envelope.executor_meta={"failed": True}`. For `type="data"` failures, the engine routes through `_fail_run()` which evaluates exit rules.
 
 **Artifact keys must match the step's `outputs` list** in the YAML definition. The engine validates this via `_validate_artifact()`.
 
 ### Server (`src/stepwise/server.py`)
 
-- FastAPI REST at `/api/*`, WebSocket at `/ws` for live tick updates and agent output streaming
-- `ThreadSafeStore` subclass lives here (not in `store.py`) — wraps SQLiteStore with `check_same_thread=False`
+- FastAPI REST at `/api/*`, WebSocket at `/ws` for live updates and agent output streaming
+- `ThreadSafeStore` subclass lives here (not in `store.py`) — wraps SQLiteStore with `_LockedConnection` proxy (serializes all sqlite3 calls via `threading.Lock`)
+- `AsyncEngine` runs as an `asyncio.Task` in the server lifespan — no tick loop
+- `_observe_external_jobs()` loop: polls for state changes in CLI-owned jobs, broadcasts stale job warnings via WebSocket
 - Agent output: NDJSON file tailing → broadcast to all WebSocket clients
+- Job adoption: `POST /api/jobs/{id}/adopt` — takes over orphaned CLI jobs, fails running steps, re-evaluates via engine
+- Stale detection: `GET /api/jobs/stale` — returns RUNNING CLI jobs with old heartbeats
 - Web UI served from `src/stepwise/_web/` via static file mount
 
 ### Web UI (`web/src/`)
@@ -125,6 +132,7 @@ Job ← StepRun ← HandoffEnvelope (with artifact dict, Sidecar, executor_meta)
 
 - All dataclasses have `to_dict()`/`from_dict()` serialization pair — new dataclasses must too
 - StepRun states: `RUNNING` → `COMPLETED` | `FAILED` | `SUSPENDED` | `DELEGATED`
+- Job ownership: `created_by` (`"server"` or `"cli:<pid>"`), `runner_pid`, `heartbeat_at` — used for stale detection and adoption
 - Events: append-only log, type constants in `src/stepwise/events.py`
 - YAML parsing: `yaml_loader.py:load_workflow_yaml()` → `WorkflowDefinition`
 
@@ -170,15 +178,16 @@ Fixtures in `tests/conftest.py`:
 |---|---|
 | `store()` | In-memory `SQLiteStore(":memory:")` |
 | `registry()` | `ExecutorRegistry` with `callable`, `script`, `human`, `mock_llm` registered |
-| `engine(store, registry)` | `Engine` instance |
+| `engine(store, registry)` | Legacy `Engine` instance (tick-based) |
+| `async_engine(store, registry)` | `AsyncEngine` instance (event-driven, preferred for new tests) |
 | `cleanup_step_fns` | Autouse — clears `CallableExecutor` registry after each test |
 
-**CallableExecutor pattern** — register a Python function, reference from workflow config:
+**`run_job_sync()` helper** — preferred way to run a job to completion in tests:
 
 ```python
-from tests.conftest import register_step_fn
+from tests.conftest import register_step_fn, run_job_sync
 
-def test_my_feature(engine):
+def test_my_feature(async_engine):
     register_step_fn("double", lambda inputs: {"result": inputs["n"] * 2})
 
     wf = WorkflowDefinition(steps={
@@ -189,22 +198,17 @@ def test_my_feature(engine):
             outputs=["result"],
         ),
     })
-    job = engine.create_job(wf, objective="test", inputs={"n": 5})
-    engine.start_job(job.id)
-    for _ in range(10):
-        engine.tick()
-        job = engine.store.load_job(job.id)
-        if job.status != JobStatus.RUNNING:
-            break
-    assert job.status == JobStatus.COMPLETED
-    runs = engine.store.runs_for_job(job.id)
+    job = async_engine.create_job(objective="test", workflow=wf, inputs={"n": 5})
+    result = run_job_sync(async_engine, job.id)
+    assert result.status == JobStatus.COMPLETED
+    runs = async_engine.store.runs_for_job(job.id)
     assert runs[0].result.artifact["result"] == 10
 ```
 
 Other patterns:
 - Inline `Executor` subclasses for failure/edge-case testing (no external mock library)
 - `tempfile.mkdtemp()` for workspace and DB paths
-- Manual tick loops: `for _ in range(N): engine.tick(); if done: break`
+- Legacy tick loops (older tests): `for _ in range(N): engine.tick(); if done: break`
 
 ### Web (Vitest + jsdom + @testing-library/react)
 
@@ -215,17 +219,17 @@ Other patterns:
 
 ## Key files
 
-**Engine:** `engine.py` (tick loop, readiness, launching), `models.py` (all dataclasses), `executors.py` (ABC + built-in executors), `store.py` (SQLite), `events.py` (event type constants), `decorators.py` (retry, timeout, fallback, notification)
+**Engine:** `engine.py` (AsyncEngine event queue + legacy Engine tick loop, readiness, launching), `models.py` (all dataclasses), `executors.py` (ABC + built-in executors), `store.py` (SQLite + heartbeat + stale detection), `events.py` (event type constants), `decorators.py` (retry, timeout, fallback, notification)
 
-**CLI/Runner:** `cli.py` (all CLI commands), `runner.py` (headless `stepwise run`), `runner_bg.py` (background mode), `agent.py` (AgentExecutor + AcpxBackend), `agent_help.py` (agent instruction generation)
+**CLI/Runner:** `cli.py` (all CLI commands), `runner.py` (headless `stepwise run` + server delegation), `runner_bg.py` (background mode), `agent.py` (AgentExecutor + AcpxBackend), `agent_help.py` (agent instruction generation), `server_detect.py` (PID file + health probe for server detection)
 
-**Server:** `server.py` (FastAPI REST + WS + ThreadSafeStore), `registry_factory.py` (shared executor registration)
+**Server:** `server.py` (FastAPI REST + WS + ThreadSafeStore + observation loop + adoption), `registry_factory.py` (shared executor registration)
 
 **Config/Parsing:** `yaml_loader.py` (.flow.yaml parser), `project.py` (.stepwise/ directory), `config.py` (StepwiseConfig + model aliases), `context.py` (LLM context chain compilation), `report.py` (HTML job reports), `openrouter.py` (OpenRouter API client), `llm_client.py` (LLM client ABC), `registry_client.py` (stepwise.run registry client)
 
 **Web:** `lib/api.ts` (all fetch calls), `hooks/useStepwise.ts` (React Query), `hooks/useStepwiseWebSocket.ts` (WS connection), `hooks/useAgentStream.ts` (NDJSON stream parser), `lib/dag-layout.ts` (Dagre layout engine), `router.tsx` (route definitions), `components/layout/AppLayout.tsx` (root layout)
 
-**Tests:** `tests/conftest.py` (fixtures: store, registry, engine, CallableExecutor, register_step_fn)
+**Tests:** `tests/conftest.py` (fixtures: store, registry, engine, async_engine, run_job_sync, CallableExecutor, register_step_fn), `test_job_ownership.py` (ownership, heartbeat, stale, claiming), `test_concurrency.py` (parallel execution, thread safety)
 
 ---
 
@@ -307,8 +311,8 @@ registry.register("http", lambda cfg: HttpExecutor(url=cfg["url"]))
 ### Add a new test
 
 1. Create `tests/test_mymodule.py`
-2. Use fixtures from `conftest.py` (`engine`, `store`, `registry`)
-3. Build `WorkflowDefinition` inline (see test example above), create job, tick engine, assert on `runs[].result.artifact`
+2. Use fixtures from `conftest.py` (`async_engine`, `store`, `registry`)
+3. Build `WorkflowDefinition` inline (see test example above), create job, use `run_job_sync()`, assert on `runs[].result.artifact`
 4. For executor-specific tests: subclass `Executor` inline or use `register_step_fn()`
 
 ### Distribution & Releases
