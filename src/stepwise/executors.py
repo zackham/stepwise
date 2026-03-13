@@ -17,6 +17,7 @@ from stepwise.llm_client import LLMClient, LLMResponse
 from stepwise.models import (
     HandoffEnvelope,
     Sidecar,
+    SubJobDefinition,
     WatchSpec,
     _now,
 )
@@ -45,10 +46,11 @@ class ExecutionContext:
 
 @dataclass
 class ExecutorResult:
-    type: str  # "data" | "watch" | "async"
+    type: str  # "data" | "watch" | "async" | "delegate"
     envelope: HandoffEnvelope | None = None
     watch: WatchSpec | None = None
     executor_state: dict | None = None
+    sub_job_def: SubJobDefinition | None = None  # for type="delegate"
 
 
 # ── Executor Status (for check_status) ─────────────────────────────────

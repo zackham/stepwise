@@ -65,7 +65,7 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
         output_mode=cfg.get("output_mode", "effect"),
         output_path=cfg.get("output_path"),
         **{k: v for k, v in cfg.items()
-           if k not in ("prompt", "output_mode", "output_path", "output_fields")},
+           if k not in ("prompt", "output_mode", "output_path")},
     ))
 
     # LLM executor — OpenRouter if key configured, else CLI fallback via acpx
