@@ -53,12 +53,23 @@ export function DataFlowPanel({
 
   if (selection.kind === "edge-field") {
     title = selection.fieldName;
-    context = `${selection.fromStep} → ${selection.toStep}`;
-    const run = latestRuns[selection.fromStep];
-    if (run?.result?.artifact) {
-      value = run.result.artifact[selection.fieldName];
+    const isFromFlowInput = selection.fromStep === "__flow_input__";
+    context = isFromFlowInput
+      ? `Job Input → ${selection.toStep}`
+      : `${selection.fromStep} → ${selection.toStep}`;
+    if (isFromFlowInput) {
+      if (job.inputs && selection.fieldName in job.inputs) {
+        value = job.inputs[selection.fieldName];
+      } else {
+        noDataMessage = "Input not provided";
+      }
     } else {
-      noDataMessage = "Source step has not completed";
+      const run = latestRuns[selection.fromStep];
+      if (run?.result?.artifact) {
+        value = run.result.artifact[selection.fieldName];
+      } else {
+        noDataMessage = "Source step has not completed";
+      }
     }
   } else if (selection.kind === "flow-input") {
     title = selection.fieldName;
