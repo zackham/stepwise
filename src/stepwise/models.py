@@ -284,6 +284,7 @@ class StepDefinition:
     sequencing: list[str] = field(default_factory=list)  # wait-for-completion deps
     exit_rules: list[ExitRule] = field(default_factory=list)
     idempotency: str = "idempotent"  # "idempotent" | "retriable_with_guard" | "non_retriable"
+    description: str = ""  # optional human-readable description
     limits: StepLimits | None = None  # M4: cost/time/iteration limits
     for_each: ForEachSpec | None = None  # iteration over upstream list
     sub_flow: WorkflowDefinition | None = None  # embedded flow for for_each

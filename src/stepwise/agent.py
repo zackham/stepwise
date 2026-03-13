@@ -594,6 +594,9 @@ class AgentExecutor(Executor):
         str_inputs.setdefault("objective", context.objective or "")
         str_inputs.setdefault("workspace", context.workspace_path or "")
         prompt = Template(self.prompt_template).safe_substitute(str_inputs)
+        # Also support {{var}} (Jinja/Mustache-style) templates
+        for k, v in str_inputs.items():
+            prompt = prompt.replace("{{" + k + "}}", v)
 
         # M7a: Prepend chain context (prior conversation history) if present
         if context.chain_context:

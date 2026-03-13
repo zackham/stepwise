@@ -12,12 +12,11 @@ class TestCreateDefaultRegistry:
     """create_default_registry() registers all built-in executor types."""
 
     def test_registers_core_types(self):
-        """Core types (script, human, mock_llm, delegating, agent) always present."""
+        """Core types (script, human, mock_llm, agent) always present."""
         registry = create_default_registry(StepwiseConfig())
         assert "script" in registry._factories
         assert "human" in registry._factories
         assert "mock_llm" in registry._factories
-        assert "delegating" in registry._factories
         assert "agent" in registry._factories
 
     def test_skips_llm_without_api_key(self):
@@ -35,7 +34,7 @@ class TestCreateDefaultRegistry:
     def test_output_matches_server_types(self):
         """Registry has same executor types as server.py registration."""
         # The expected types that server.py registers
-        expected_types = {"script", "human", "mock_llm", "delegating", "agent"}
+        expected_types = {"script", "human", "mock_llm", "agent"}
         config = StepwiseConfig()
         registry = create_default_registry(config)
         actual_types = set(registry._factories.keys())

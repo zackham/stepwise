@@ -17,7 +17,6 @@ from stepwise.llm_client import LLMClient, LLMResponse
 from stepwise.models import (
     HandoffEnvelope,
     Sidecar,
-    SubJobDefinition,
     WatchSpec,
     _now,
 )
@@ -44,9 +43,8 @@ class ExecutionContext:
 
 @dataclass
 class ExecutorResult:
-    type: str  # "data" | "sub_job" | "watch" | "async"
+    type: str  # "data" | "watch" | "async"
     envelope: HandoffEnvelope | None = None
-    sub_job_def: SubJobDefinition | None = None
     watch: WatchSpec | None = None
     executor_state: dict | None = None
 
@@ -196,12 +194,17 @@ class ScriptExecutor(Executor):
         input_file = step_io_dir / f"{context.step_name}-{context.attempt}.input.json"
         input_file.write_text(json.dumps(inputs, default=str))
 
+        project_dir = str(Path(workspace).resolve())
         env = {
             **os.environ,
             "JOB_ENGINE_INPUTS": str(input_file),
             "JOB_ENGINE_WORKSPACE": str(workspace),
             "STEPWISE_STEP_IO": str(step_io_dir),
+            "STEPWISE_PROJECT_DIR": project_dir,
         }
+        # Prepend project root to PYTHONPATH so flow scripts can import project modules
+        existing_pypath = os.environ.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = project_dir + (":" + existing_pypath if existing_pypath else "")
         # M10: Set STEPWISE_FLOW_DIR if flow_dir is available
         if self.flow_dir:
             env["STEPWISE_FLOW_DIR"] = self.flow_dir
@@ -593,6 +596,9 @@ class LLMExecutor(Executor):
             else:
                 str_inputs[k] = str(v)
         prompt = Template(self.prompt_template).safe_substitute(str_inputs)
+        # Also support {{var}} (Jinja/Mustache-style) templates
+        for k, v in str_inputs.items():
+            prompt = prompt.replace("{{" + k + "}}", v)
 
         # M7a: Prepend chain context (prior conversation history) if present
         if context.chain_context:

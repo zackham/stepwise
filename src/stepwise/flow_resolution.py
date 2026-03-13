@@ -168,4 +168,5 @@ def _discovery_dirs(project_dir: Path) -> list[Path]:
         project_dir,
         project_dir / "flows",
         project_dir / ".stepwise" / "flows",
+        Path.home() / ".stepwise" / "flows",
     ]

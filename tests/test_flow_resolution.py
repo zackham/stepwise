@@ -109,6 +109,37 @@ class TestResolveFlowByName:
         flow.write_text(SIMPLE_FLOW)
         assert resolve_flow("hidden", project_dir=tmp_path) == flow
 
+    def test_user_level_flows_searched(self, tmp_path, monkeypatch):
+        """~/.stepwise/flows/ is searched for flow names."""
+        fake_home = tmp_path / "fakehome"
+        user_flows = fake_home / ".stepwise" / "flows"
+        user_flows.mkdir(parents=True)
+        flow = user_flows / "global-flow.flow.yaml"
+        flow.write_text(SIMPLE_FLOW)
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+        # project_dir has no matching flow, but user-level does
+        project = tmp_path / "project"
+        project.mkdir()
+        assert resolve_flow("global-flow", project_dir=project) == flow
+
+    def test_project_takes_precedence_over_user_level(self, tmp_path, monkeypatch):
+        """Project flows shadow user-level flows."""
+        fake_home = tmp_path / "fakehome"
+        user_flows = fake_home / ".stepwise" / "flows"
+        user_flows.mkdir(parents=True)
+        (user_flows / "shared.flow.yaml").write_text(SIMPLE_FLOW)
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+        project = tmp_path / "project"
+        proj_flows = project / "flows"
+        proj_flows.mkdir(parents=True)
+        proj_flow = proj_flows / "shared.flow.yaml"
+        proj_flow.write_text(SIMPLE_FLOW)
+
+        result = resolve_flow("shared", project_dir=project)
+        assert result == proj_flow
+
     def test_invalid_name_errors(self, tmp_path):
         with pytest.raises(FlowResolutionError, match="Invalid flow name"):
             resolve_flow("bad name!", project_dir=tmp_path)

@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 
 from stepwise.agent import AgentExecutor, AcpxBackend
+from pathlib import Path
 from stepwise.config import StepwiseConfig, load_config
 from stepwise.executors import (
     ExecutorRegistry,
@@ -16,7 +17,6 @@ from stepwise.executors import (
     MockLLMExecutor,
     ScriptExecutor,
 )
-from stepwise.models import SubJobDefinition, WorkflowDefinition
 
 
 def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorRegistry:
@@ -28,8 +28,6 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
     Returns:
         ExecutorRegistry with all built-in executor types registered.
     """
-    from stepwise.server import DelegatingExecutor
-
     if config is None:
         config = load_config()
 
@@ -51,11 +49,6 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
         partial_rate=cfg.get("partial_rate", 0.0),
         latency_range=tuple(cfg.get("latency_range", [0.0, 0.0])),
         responses=cfg.get("responses"),
-    ))
-
-    registry.register("delegating", lambda cfg: DelegatingExecutor(
-        objective=cfg.get("objective", "Sub-job"),
-        child_workflow=cfg.get("child_workflow", {"steps": {}}),
     ))
 
     # Agent executor (ACP via acpx)

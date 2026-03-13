@@ -32,7 +32,6 @@ from stepwise.models import (
     StepDefinition,
     StepRun,
     StepRunStatus,
-    SubJobDefinition,
     WatchSpec,
     WorkflowDefinition,
     _gen_id,
@@ -54,50 +53,35 @@ def make_registry():
     return reg
 
 
-# ── Test 10: Sub-job delegation ──────────────────────────────────────
+# ── Test 10: Sub-flow delegation ─────────────────────────────────────
 
 
-class TestSubJobDelegation:
-    def test_step_returns_sub_job(self):
+class TestSubFlowDelegation:
+    def test_sub_flow_step(self):
         register_step_fn("sub_process", lambda i: {"result": f"sub_processed_{i.get('data', '')}"})
 
         store = SQLiteStore(":memory:")
         reg = make_registry()
-
-        class DelegatingExecutor(Executor):
-            def start(self, inputs, context):
-                sub_w = WorkflowDefinition(steps={
-                    "sub_a": StepDefinition(
-                        name="sub_a", outputs=["result"],
-                        executor=ExecutorRef("callable", {"fn_name": "sub_process"}),
-                    ),
-                })
-                return ExecutorResult(
-                    type="sub_job",
-                    sub_job_def=SubJobDefinition(
-                        objective="sub task",
-                        workflow=sub_w,
-                    ),
-                )
-
-            def check_status(self, state):
-                return ExecutorStatus(state="running")
-
-            def cancel(self, state):
-                pass
-
-        reg.register("delegating", lambda config: DelegatingExecutor())
-
         engine = Engine(store=store, registry=reg)
+
+        sub_flow = WorkflowDefinition(steps={
+            "sub_a": StepDefinition(
+                name="sub_a", outputs=["result"],
+                executor=ExecutorRef("callable", {"fn_name": "sub_process"}),
+                inputs=[InputBinding("data", "$job", "data")],
+            ),
+        })
 
         w = WorkflowDefinition(steps={
             "a": StepDefinition(
                 name="a", outputs=["result"],
-                executor=ExecutorRef("delegating", {}),
+                executor=ExecutorRef("sub_flow", {"flow_ref": "test"}),
+                inputs=[InputBinding("data", "$job", "data")],
+                sub_flow=sub_flow,
             ),
         })
 
-        job = engine.create_job("Sub-job test", w, inputs={"data": "hello"})
+        job = engine.create_job("Sub-flow test", w, inputs={"data": "hello"})
         engine.start_job(job.id)
 
         for _ in range(10):
@@ -114,126 +98,44 @@ class TestSubJobDelegation:
         assert "sub_processed" in runs[-1].result.artifact.get("result", "")
 
 
-# ── Test 11: Sub-job validation ──────────────────────────────────────
+# ── Test 12: Nested sub-flows ────────────────────────────────────────
 
 
-class TestSubJobValidation:
-    def test_reject_multiple_terminal_steps(self):
-        register_step_fn("sj_a", lambda i: {"result": "a"})
-        register_step_fn("sj_b", lambda i: {"result": "b"})
-
-        store = SQLiteStore(":memory:")
-        reg = make_registry()
-
-        class BadDelegator(Executor):
-            def start(self, inputs, context):
-                sub_w = WorkflowDefinition(steps={
-                    "sub_a": StepDefinition(
-                        name="sub_a", outputs=["result"],
-                        executor=ExecutorRef("callable", {"fn_name": "sj_a"}),
-                    ),
-                    "sub_b": StepDefinition(
-                        name="sub_b", outputs=["result"],
-                        executor=ExecutorRef("callable", {"fn_name": "sj_b"}),
-                    ),
-                })
-                return ExecutorResult(
-                    type="sub_job",
-                    sub_job_def=SubJobDefinition(
-                        objective="bad sub",
-                        workflow=sub_w,
-                    ),
-                )
-
-            def check_status(self, state):
-                return ExecutorStatus(state="running")
-
-            def cancel(self, state):
-                pass
-
-        reg.register("bad_delegator", lambda config: BadDelegator())
-
-        engine = Engine(store=store, registry=reg)
-
-        w = WorkflowDefinition(steps={
-            "a": StepDefinition(
-                name="a", outputs=["result"],
-                executor=ExecutorRef("bad_delegator", {}),
-            ),
-        })
-
-        job = engine.create_job("Bad sub-job", w)
-        with pytest.raises(ValueError, match="exactly one terminal"):
-            engine.start_job(job.id)
-
-
-# ── Test 12: Nested sub-jobs ─────────────────────────────────────────
-
-
-class TestNestedSubJobs:
-    def test_depth_2_sub_jobs(self):
+class TestNestedSubFlows:
+    def test_depth_2_sub_flows(self):
         register_step_fn("deep_fn", lambda i: {"result": f"deep_{i.get('data', '')}"})
 
         store = SQLiteStore(":memory:")
         reg = make_registry()
-
-        class Level1Executor(Executor):
-            def start(self, inputs, context):
-                sub_w = WorkflowDefinition(steps={
-                    "inner": StepDefinition(
-                        name="inner", outputs=["result"],
-                        executor=ExecutorRef("callable", {"fn_name": "deep_fn"}),
-                    ),
-                })
-                return ExecutorResult(
-                    type="sub_job",
-                    sub_job_def=SubJobDefinition(
-                        objective="level 1 sub",
-                        workflow=sub_w,
-                    ),
-                )
-
-            def check_status(self, state):
-                return ExecutorStatus(state="running")
-
-            def cancel(self, state):
-                pass
-
-        class RootExecutor(Executor):
-            def start(self, inputs, context):
-                sub_w = WorkflowDefinition(steps={
-                    "mid": StepDefinition(
-                        name="mid", outputs=["result"],
-                        executor=ExecutorRef("level1", {}),
-                    ),
-                })
-                return ExecutorResult(
-                    type="sub_job",
-                    sub_job_def=SubJobDefinition(
-                        objective="root sub",
-                        workflow=sub_w,
-                    ),
-                )
-
-            def check_status(self, state):
-                return ExecutorStatus(state="running")
-
-            def cancel(self, state):
-                pass
-
-        reg.register("root_delegator", lambda config: RootExecutor())
-        reg.register("level1", lambda config: Level1Executor())
-
         engine = Engine(store=store, registry=reg)
+
+        inner_flow = WorkflowDefinition(steps={
+            "inner": StepDefinition(
+                name="inner", outputs=["result"],
+                executor=ExecutorRef("callable", {"fn_name": "deep_fn"}),
+                inputs=[InputBinding("data", "$job", "data")],
+            ),
+        })
+
+        mid_flow = WorkflowDefinition(steps={
+            "mid": StepDefinition(
+                name="mid", outputs=["result"],
+                executor=ExecutorRef("sub_flow", {"flow_ref": "inner"}),
+                inputs=[InputBinding("data", "$job", "data")],
+                sub_flow=inner_flow,
+            ),
+        })
 
         w = WorkflowDefinition(steps={
             "start": StepDefinition(
                 name="start", outputs=["result"],
-                executor=ExecutorRef("root_delegator", {}),
+                executor=ExecutorRef("sub_flow", {"flow_ref": "mid"}),
+                inputs=[InputBinding("data", "$job", "data")],
+                sub_flow=mid_flow,
             ),
         })
 
-        job = engine.create_job("Nested sub-jobs", w, inputs={"data": "test"})
+        job = engine.create_job("Nested sub-flows", w, inputs={"data": "test"})
         engine.start_job(job.id)
 
         for _ in range(20):
@@ -572,8 +474,8 @@ class TestCrashRecovery:
 # ── Test: Sub-job output flows back to parent ────────────────────────
 
 
-class TestSubJobOutputFlowback:
-    def test_sub_job_terminal_result_becomes_parent_result(self):
+class TestSubFlowOutputFlowback:
+    def test_sub_flow_terminal_result_becomes_parent_result(self):
         """The child job's terminal step output becomes the parent step's result."""
         register_step_fn("sub_work", lambda i: {
             "analysis": "deep analysis result",
@@ -582,37 +484,20 @@ class TestSubJobOutputFlowback:
 
         store = SQLiteStore(":memory:")
         reg = make_registry()
-
-        class AnalysisExecutor(Executor):
-            def start(self, inputs, context):
-                sub_w = WorkflowDefinition(steps={
-                    "deep_analyze": StepDefinition(
-                        name="deep_analyze", outputs=["analysis", "confidence"],
-                        executor=ExecutorRef("callable", {"fn_name": "sub_work"}),
-                    ),
-                })
-                return ExecutorResult(
-                    type="sub_job",
-                    sub_job_def=SubJobDefinition(
-                        objective="deep analysis",
-                        workflow=sub_w,
-                    ),
-                )
-
-            def check_status(self, state):
-                return ExecutorStatus(state="running")
-
-            def cancel(self, state):
-                pass
-
-        reg.register("analysis", lambda config: AnalysisExecutor())
-
         engine = Engine(store=store, registry=reg)
+
+        sub_flow = WorkflowDefinition(steps={
+            "deep_analyze": StepDefinition(
+                name="deep_analyze", outputs=["analysis", "confidence"],
+                executor=ExecutorRef("callable", {"fn_name": "sub_work"}),
+            ),
+        })
 
         w = WorkflowDefinition(steps={
             "analyze": StepDefinition(
                 name="analyze", outputs=["analysis", "confidence"],
-                executor=ExecutorRef("analysis", {}),
+                executor=ExecutorRef("sub_flow", {"flow_ref": "analysis"}),
+                sub_flow=sub_flow,
             ),
             "report": StepDefinition(
                 name="report", outputs=["summary"],
@@ -640,7 +525,7 @@ class TestSubJobOutputFlowback:
         job = engine.get_job(job.id)
         assert job.status == JobStatus.COMPLETED
 
-        # Check parent step got the sub-job output
+        # Check parent step got the sub-flow output
         analyze_runs = engine.get_runs(job.id, "analyze")
         assert analyze_runs[-1].result.artifact["analysis"] == "deep analysis result"
         assert analyze_runs[-1].result.artifact["confidence"] == 0.95
@@ -654,41 +539,24 @@ class TestSubJobOutputFlowback:
 
 
 class TestCancelPropagation:
-    def test_cancel_job_cancels_sub_job(self):
+    def test_cancel_job_cancels_sub_flow(self):
         """cancel_job propagates to child jobs."""
         store = SQLiteStore(":memory:")
         reg = make_registry()
-
-        class SlowDelegator(Executor):
-            def start(self, inputs, context):
-                sub_w = WorkflowDefinition(steps={
-                    "slow": StepDefinition(
-                        name="slow", outputs=["result"],
-                        executor=ExecutorRef("human", {"prompt": "do something slow"}),
-                    ),
-                })
-                return ExecutorResult(
-                    type="sub_job",
-                    sub_job_def=SubJobDefinition(
-                        objective="slow sub task",
-                        workflow=sub_w,
-                    ),
-                )
-
-            def check_status(self, state):
-                return ExecutorStatus(state="running")
-
-            def cancel(self, state):
-                pass
-
-        reg.register("slow_delegator", lambda config: SlowDelegator())
-
         engine = Engine(store=store, registry=reg)
+
+        sub_flow = WorkflowDefinition(steps={
+            "slow": StepDefinition(
+                name="slow", outputs=["result"],
+                executor=ExecutorRef("human", {"prompt": "do something slow"}),
+            ),
+        })
 
         w = WorkflowDefinition(steps={
             "a": StepDefinition(
                 name="a", outputs=["result"],
-                executor=ExecutorRef("slow_delegator", {}),
+                executor=ExecutorRef("sub_flow", {"flow_ref": "slow"}),
+                sub_flow=sub_flow,
             ),
         })
 
@@ -726,37 +594,20 @@ class TestRerunSafetyDelegated:
         """Cannot rerun a step whose latest run is DELEGATED."""
         store = SQLiteStore(":memory:")
         reg = make_registry()
-
-        class DelegatorExecutor(Executor):
-            def start(self, inputs, context):
-                sub_w = WorkflowDefinition(steps={
-                    "inner": StepDefinition(
-                        name="inner", outputs=["result"],
-                        executor=ExecutorRef("human", {"prompt": "waiting"}),
-                    ),
-                })
-                return ExecutorResult(
-                    type="sub_job",
-                    sub_job_def=SubJobDefinition(
-                        objective="sub",
-                        workflow=sub_w,
-                    ),
-                )
-
-            def check_status(self, state):
-                return ExecutorStatus(state="running")
-
-            def cancel(self, state):
-                pass
-
-        reg.register("delegator", lambda config: DelegatorExecutor())
-
         engine = Engine(store=store, registry=reg)
+
+        sub_flow = WorkflowDefinition(steps={
+            "inner": StepDefinition(
+                name="inner", outputs=["result"],
+                executor=ExecutorRef("human", {"prompt": "waiting"}),
+            ),
+        })
 
         w = WorkflowDefinition(steps={
             "a": StepDefinition(
                 name="a", outputs=["result"],
-                executor=ExecutorRef("delegator", {}),
+                executor=ExecutorRef("sub_flow", {"flow_ref": "test"}),
+                sub_flow=sub_flow,
             ),
         })
 

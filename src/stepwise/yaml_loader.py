@@ -255,12 +255,26 @@ def _parse_decorators(dec_data: list[dict], step_name: str) -> list[DecoratorRef
     return decorators
 
 
+def _find_project_dir(start: Path) -> Path:
+    """Walk up from start to find project root (has .stepwise/ or flows/)."""
+    current = start.resolve()
+    for _ in range(20):
+        if (current / ".stepwise").is_dir() or (current / "flows").is_dir():
+            return current
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return start
+
+
 def _load_flow_from_file(
     file_ref: str,
     step_name: str,
     context: str,
     base_dir: Path | None,
     loading_files: frozenset[Path] | None,
+    project_dir: Path | None = None,
 ) -> WorkflowDefinition:
     """Load a sub-flow from a file path reference.
 
@@ -288,6 +302,40 @@ def _load_flow_from_file(
         str(abs_path),
         base_dir=abs_path.parent,
         loading_files=branch_files,
+        project_dir=project_dir,
+    )
+
+
+def _resolve_flow_name(
+    name: str,
+    step_name: str,
+    context: str,
+    project_dir: Path | None,
+    loading_files: frozenset[Path] | None,
+) -> WorkflowDefinition:
+    """Resolve a bare flow name via project discovery.
+
+    Uses resolve_flow() from flow_resolution.py, checks for circular refs.
+    """
+    from stepwise.flow_resolution import resolve_flow, FlowResolutionError
+
+    try:
+        flow_path = resolve_flow(name, project_dir=project_dir)
+    except FlowResolutionError as e:
+        raise ValueError(f"Step '{step_name}' {context}: {e}") from e
+
+    abs_path = flow_path.resolve()
+    if loading_files and abs_path in loading_files:
+        raise ValueError(
+            f"Step '{step_name}' {context}: circular flow reference: "
+            f"{abs_path} is already being loaded"
+        )
+    branch_files = (loading_files or frozenset()) | {abs_path}
+    return load_workflow_yaml(
+        str(abs_path),
+        base_dir=abs_path.parent,
+        loading_files=branch_files,
+        project_dir=project_dir,
     )
 
 
@@ -339,11 +387,69 @@ def _load_flow_from_registry(
     return flow
 
 
+def _resolve_flow_source(
+    flow_data: Any,
+    step_name: str,
+    context: str,
+    base_dir: Path | None = None,
+    loading_files: frozenset[Path] | None = None,
+    project_dir: Path | None = None,
+) -> tuple[WorkflowDefinition, str | None]:
+    """Resolve a flow source (string ref or inline dict) to a WorkflowDefinition.
+
+    Returns (workflow, flow_ref) where flow_ref is the original ref string
+    for provenance (None for inline dicts).
+    """
+    if isinstance(flow_data, str):
+        if flow_data.startswith("@"):
+            flow = _load_flow_from_registry(flow_data, step_name, context)
+            return flow, flow_data
+        if flow_data.endswith((".yaml", ".yml")):
+            flow = _load_flow_from_file(
+                flow_data, step_name, context, base_dir, loading_files,
+                project_dir=project_dir,
+            )
+            return flow, flow_data
+        from stepwise.flow_resolution import FLOW_NAME_PATTERN
+        if FLOW_NAME_PATTERN.match(flow_data):
+            flow = _resolve_flow_name(
+                flow_data, step_name, context, project_dir, loading_files
+            )
+            return flow, flow_data
+        raise ValueError(
+            f"Step '{step_name}' {context}: flow must be a .yaml/.yml file path, "
+            f"a bare flow name, or an @author:name registry ref"
+        )
+
+    if isinstance(flow_data, dict):
+        flow_steps_data = flow_data.get("steps")
+        if not flow_steps_data or not isinstance(flow_steps_data, dict):
+            raise ValueError(
+                f"Step '{step_name}' {context}: inline flow must have a 'steps' mapping"
+            )
+        flow_steps: dict[str, StepDefinition] = {}
+        for sub_name, sub_data in flow_steps_data.items():
+            if not isinstance(sub_data, dict):
+                raise ValueError(
+                    f"Step '{step_name}' {context} step '{sub_name}': must be a mapping"
+                )
+            flow_steps[sub_name] = _parse_step(
+                sub_name, sub_data, base_dir=base_dir, loading_files=loading_files,
+                project_dir=project_dir,
+            )
+        return WorkflowDefinition(steps=flow_steps), None
+
+    raise ValueError(
+        f"Step '{step_name}' {context}: 'flow' must be a string or mapping"
+    )
+
+
 def _parse_for_each(
     step_data: dict,
     step_name: str,
     base_dir: Path | None = None,
     loading_files: frozenset[Path] | None = None,
+    project_dir: Path | None = None,
 ) -> tuple[ForEachSpec | None, WorkflowDefinition | None]:
     """Parse for_each and flow blocks from step YAML data."""
     for_each_source = step_data.get("for_each")
@@ -388,46 +494,10 @@ def _parse_for_each(
             f"Step '{step_name}': for_each requires a 'flow' block"
         )
 
-    # String ref support for for_each (file or registry)
-    if isinstance(flow_data, str):
-        if flow_data.startswith("@"):
-            sub_flow = _load_flow_from_registry(
-                flow_data, step_name, "for_each flow"
-            )
-            return for_each_spec, sub_flow
-        if flow_data.endswith((".yaml", ".yml")):
-            sub_flow = _load_flow_from_file(
-                flow_data, step_name, "for_each flow", base_dir, loading_files
-            )
-            return for_each_spec, sub_flow
-        raise ValueError(
-            f"Step '{step_name}': for_each flow string must be a .yaml/.yml file path "
-            f"or an @author:name registry ref"
-        )
-
-    if not isinstance(flow_data, dict):
-        raise ValueError(
-            f"Step '{step_name}': for_each requires a 'flow' block"
-        )
-
-    flow_steps_data = flow_data.get("steps")
-    if not flow_steps_data or not isinstance(flow_steps_data, dict):
-        raise ValueError(
-            f"Step '{step_name}': for_each flow must have a 'steps' mapping"
-        )
-
-    flow_steps: dict[str, StepDefinition] = {}
-    for sub_step_name, sub_step_data in flow_steps_data.items():
-        if not isinstance(sub_step_data, dict):
-            raise ValueError(
-                f"Step '{step_name}' sub-flow step '{sub_step_name}': must be a mapping"
-            )
-        flow_steps[sub_step_name] = _parse_step(
-            sub_step_name, sub_step_data, base_dir=base_dir, loading_files=loading_files
-        )
-
-    sub_flow = WorkflowDefinition(steps=flow_steps)
-
+    sub_flow, _ = _resolve_flow_source(
+        flow_data, step_name, "for_each flow",
+        base_dir=base_dir, loading_files=loading_files, project_dir=project_dir,
+    )
     return for_each_spec, sub_flow
 
 
@@ -437,6 +507,7 @@ def _parse_route(
     outputs: list[str],
     base_dir: Path | None = None,
     loading_files: frozenset[Path] | None = None,
+    project_dir: Path | None = None,
 ) -> RouteDefinition | None:
     """Parse route definitions from step YAML data.
 
@@ -485,49 +556,10 @@ def _parse_route(
                 f"Step '{step_name}': route '{route_name}' missing 'flow'"
             )
 
-        flow: WorkflowDefinition | None = None
-        flow_ref: str | None = None
-
-        if isinstance(flow_source, dict):
-            # Inline flow
-            flow_steps_data = flow_source.get("steps")
-            if not flow_steps_data or not isinstance(flow_steps_data, dict):
-                raise ValueError(
-                    f"Step '{step_name}' route '{route_name}': inline flow must have a 'steps' mapping"
-                )
-            flow_steps: dict[str, StepDefinition] = {}
-            for sub_name, sub_data in flow_steps_data.items():
-                if not isinstance(sub_data, dict):
-                    raise ValueError(
-                        f"Step '{step_name}' route '{route_name}' step '{sub_name}': must be a mapping"
-                    )
-                flow_steps[sub_name] = _parse_step(
-                    sub_name, sub_data, base_dir=base_dir, loading_files=loading_files
-                )
-            flow = WorkflowDefinition(steps=flow_steps)
-        elif isinstance(flow_source, str):
-            if flow_source.startswith("@"):
-                # Registry ref — resolve at parse time, bake inline
-                flow = _load_flow_from_registry(
-                    flow_source, step_name, f"route '{route_name}'"
-                )
-                flow_ref = flow_source  # Preserve original ref for provenance
-            elif flow_source.endswith((".yaml", ".yml")):
-                # File ref — load eagerly, bake inline
-                flow = _load_flow_from_file(
-                    flow_source, step_name, f"route '{route_name}'",
-                    base_dir, loading_files,
-                )
-                flow_ref = flow_source  # Preserve original path for readability
-            else:
-                raise ValueError(
-                    f"Step '{step_name}' route '{route_name}': flow must be an inline block, "
-                    f"a .yaml/.yml file path, or an @author:name registry ref"
-                )
-        else:
-            raise ValueError(
-                f"Step '{step_name}' route '{route_name}': 'flow' must be a mapping or string"
-            )
+        flow, flow_ref = _resolve_flow_source(
+            flow_source, step_name, f"route '{route_name}'",
+            base_dir=base_dir, loading_files=loading_files, project_dir=project_dir,
+        )
 
         route_spec = RouteSpec(
             name=route_name,
@@ -554,6 +586,7 @@ def _parse_step(
     step_data: dict,
     base_dir: Path | None = None,
     loading_files: frozenset[Path] | None = None,
+    project_dir: Path | None = None,
 ) -> StepDefinition:
     """Parse a single step from YAML data."""
     # Outputs
@@ -562,12 +595,16 @@ def _parse_step(
         raise ValueError(f"Step '{step_name}': 'outputs' must be a list")
 
     # Check for routes (before for_each — mutual exclusivity checked later)
-    route_def = _parse_route(step_data, step_name, outputs, base_dir, loading_files)
+    route_def = _parse_route(step_data, step_name, outputs, base_dir, loading_files, project_dir)
 
     if route_def:
         if step_data.get("for_each"):
             raise ValueError(
                 f"Step '{step_name}': cannot combine for_each and routes"
+            )
+        if step_data.get("flow") and not step_data.get("for_each"):
+            raise ValueError(
+                f"Step '{step_name}': cannot combine flow and routes"
             )
         if not outputs:
             raise ValueError(
@@ -599,6 +636,7 @@ def _parse_step(
 
         return StepDefinition(
             name=step_name,
+            description=step_data.get("description", ""),
             outputs=outputs,
             executor=executor,
             inputs=input_bindings,
@@ -606,9 +644,72 @@ def _parse_step(
             route_def=route_def,
         )
 
+    # Check for direct flow step (sub-flow invocation without routes or for_each)
+    flow_data = step_data.get("flow")
+    if flow_data and not step_data.get("for_each"):
+        if step_data.get("routes"):
+            raise ValueError(f"Step '{step_name}': cannot combine flow and routes")
+        if step_data.get("run") or step_data.get("executor"):
+            raise ValueError(f"Step '{step_name}': cannot combine flow with run/executor")
+
+        sub_flow, flow_ref = _resolve_flow_source(
+            flow_data, step_name, "flow",
+            base_dir=base_dir, loading_files=loading_files, project_dir=project_dir,
+        )
+
+        if not outputs:
+            raise ValueError(f"Step '{step_name}': flow steps must declare outputs")
+
+        # Validate output contract: terminal steps must cover declared outputs
+        terms = sub_flow.terminal_steps()
+        if not terms:
+            raise ValueError(
+                f"Step '{step_name}': sub-flow has no terminal steps "
+                f"but flow step requires outputs {sorted(outputs)}"
+            )
+        for term_name in terms:
+            term_outputs = set(sub_flow.steps[term_name].outputs)
+            missing = set(outputs) - term_outputs
+            if missing:
+                raise ValueError(
+                    f"Step '{step_name}': sub-flow terminal step '{term_name}' "
+                    f"missing outputs {sorted(missing)}"
+                )
+
+        # Parse inputs
+        inputs_data = step_data.get("inputs", {})
+        input_bindings: list[InputBinding] = []
+        if isinstance(inputs_data, dict):
+            for local_name, source in inputs_data.items():
+                if isinstance(source, str):
+                    try:
+                        binding = _parse_input_binding(local_name, source)
+                        input_bindings.append(binding)
+                    except ValueError as e:
+                        raise ValueError(f"Step '{step_name}': {e}") from e
+                else:
+                    raise ValueError(
+                        f"Step '{step_name}': input '{local_name}' source must be a string, "
+                        f"got {type(source).__name__}"
+                    )
+
+        sequencing = step_data.get("sequencing", [])
+        if isinstance(sequencing, str):
+            sequencing = [sequencing]
+
+        return StepDefinition(
+            name=step_name,
+            description=step_data.get("description", ""),
+            outputs=outputs,
+            executor=ExecutorRef("sub_flow", {"flow_ref": flow_ref} if flow_ref else {}),
+            inputs=input_bindings,
+            sequencing=sequencing,
+            sub_flow=sub_flow,
+        )
+
     # Check for for_each (changes how the step is parsed)
     for_each_spec, sub_flow = _parse_for_each(
-        step_data, step_name, base_dir, loading_files
+        step_data, step_name, base_dir, loading_files, project_dir
     )
 
     if for_each_spec:
@@ -642,6 +743,7 @@ def _parse_step(
 
         return StepDefinition(
             name=step_name,
+            description=step_data.get("description", ""),
             outputs=outputs,
             executor=executor,
             inputs=input_bindings,
@@ -701,6 +803,7 @@ def _parse_step(
 
     return StepDefinition(
         name=step_name,
+        description=step_data.get("description", ""),
         outputs=outputs,
         executor=executor,
         inputs=input_bindings,
@@ -768,6 +871,7 @@ def load_workflow_yaml(
     source: str | Path,
     base_dir: Path | None = None,
     loading_files: frozenset[Path] | None = None,
+    project_dir: Path | None = None,
 ) -> WorkflowDefinition:
     """Load a WorkflowDefinition from a YAML file or string.
 
@@ -777,6 +881,8 @@ def load_workflow_yaml(
             the parent of the source file, or "." for strings.
         loading_files: Set of absolute file paths currently being loaded
             (for cycle detection). Uses frozenset for immutable branching.
+        project_dir: Project root for bare flow name resolution. Auto-derived
+            from base_dir by walking up to find .stepwise/ or flows/.
 
     Returns:
         A validated WorkflowDefinition.
@@ -800,11 +906,13 @@ def load_workflow_yaml(
     else:
         raw = source
 
-    # Determine base_dir and loading_files defaults
+    # Determine base_dir, loading_files, and project_dir defaults
     if base_dir is None:
         base_dir = source_path.parent if source_path else Path(".")
     if loading_files is None:
         loading_files = frozenset({source_path.resolve()}) if source_path else frozenset()
+    if project_dir is None:
+        project_dir = _find_project_dir(base_dir)
 
     try:
         data = yaml.safe_load(raw)
@@ -828,7 +936,8 @@ def load_workflow_yaml(
             continue
         try:
             steps[step_name] = _parse_step(
-                step_name, step_data, base_dir=base_dir, loading_files=loading_files
+                step_name, step_data, base_dir=base_dir, loading_files=loading_files,
+                project_dir=project_dir,
             )
         except ValueError as e:
             errors.append(str(e))

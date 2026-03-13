@@ -1235,6 +1235,136 @@ steps:
             assert "not found" in str(exc_info.value).lower()
 
 
+# ── Name-Based Route Flow Resolution ─────────────────────────────────
+
+
+class TestRouteWithFlowName:
+    def test_bare_name_resolves_from_flows_dir(self):
+        """flow: my-sub resolves via flow name discovery."""
+        with tempfile.TemporaryDirectory() as tmp:
+            # Create flows/my-sub/FLOW.yaml (directory flow)
+            sub_dir = Path(tmp) / "flows" / "my-sub"
+            sub_dir.mkdir(parents=True)
+            (sub_dir / "FLOW.yaml").write_text("""
+steps:
+  worker:
+    executor: mock_llm
+    prompt: work
+    outputs: [result]
+""")
+            main_path = Path(tmp) / "main.yaml"
+            main_path.write_text("""
+steps:
+  classify:
+    executor: mock_llm
+    prompt: classify
+    outputs: [category, result]
+  route:
+    inputs: { category: classify.category }
+    routes:
+      fast:
+        when: "category == 'fast'"
+        flow: my-sub
+    outputs: [result]
+""")
+            w = load_workflow_yaml(str(main_path))
+            route_def = w.steps["route"].route_def
+            assert route_def.routes[0].flow is not None
+            assert "worker" in route_def.routes[0].flow.steps
+            assert route_def.routes[0].flow_ref == "my-sub"
+
+    def test_bare_name_single_file_flow(self):
+        """flow: my-sub resolves to my-sub.flow.yaml."""
+        with tempfile.TemporaryDirectory() as tmp:
+            flows_dir = Path(tmp) / "flows"
+            flows_dir.mkdir()
+            (flows_dir / "my-sub.flow.yaml").write_text("""
+steps:
+  worker:
+    executor: mock_llm
+    prompt: work
+    outputs: [result]
+""")
+            main_path = Path(tmp) / "main.yaml"
+            main_path.write_text("""
+steps:
+  classify:
+    executor: mock_llm
+    prompt: classify
+    outputs: [category, result]
+  route:
+    inputs: { category: classify.category }
+    routes:
+      fast:
+        when: "category == 'fast'"
+        flow: my-sub
+    outputs: [result]
+""")
+            w = load_workflow_yaml(str(main_path))
+            assert w.steps["route"].route_def.routes[0].flow is not None
+            assert "worker" in w.steps["route"].route_def.routes[0].flow.steps
+
+    def test_bare_name_not_found_errors(self):
+        """Non-existent bare name → clear error."""
+        with tempfile.TemporaryDirectory() as tmp:
+            main_path = Path(tmp) / "main.yaml"
+            main_path.write_text("""
+steps:
+  classify:
+    executor: mock_llm
+    prompt: classify
+    outputs: [category, result]
+  route:
+    inputs: { category: classify.category }
+    routes:
+      fast:
+        when: "category == 'fast'"
+        flow: nonexistent-flow
+    outputs: [result]
+""")
+            with pytest.raises(YAMLLoadError) as exc_info:
+                load_workflow_yaml(str(main_path))
+            assert "not found" in str(exc_info.value).lower()
+
+    def test_bare_name_circular_ref_detected(self):
+        """Circular bare name ref raises error."""
+        with tempfile.TemporaryDirectory() as tmp:
+            flows_dir = Path(tmp) / "flows"
+            flows_dir.mkdir()
+            # main references sub-flow by name, sub-flow references main file
+            # (which is what's currently being loaded → cycle)
+            sub_dir = flows_dir / "my-sub"
+            sub_dir.mkdir()
+            main_path = Path(tmp) / "main.yaml"
+            (sub_dir / "FLOW.yaml").write_text(f"""
+steps:
+  step1:
+    executor: mock_llm
+    prompt: step1
+    outputs: [result]
+    routes:
+      r1:
+        when: "True"
+        flow: {main_path}
+    outputs: [result]
+""")
+            main_path.write_text("""
+steps:
+  step1:
+    executor: mock_llm
+    prompt: classify
+    outputs: [result]
+    routes:
+      r1:
+        when: "True"
+        flow: my-sub
+    outputs: [result]
+""")
+            with pytest.raises(YAMLLoadError) as exc_info:
+                load_workflow_yaml(str(main_path))
+            assert "circular flow reference" in str(exc_info.value).lower()
+
+
 # ── For-Each File Ref ─────────────────────────────────────────────────
 
 
@@ -1279,6 +1409,86 @@ steps:
   each_item:
     for_each: produce.items
     flow: nonexistent.yaml
+    outputs: [results]
+""")
+            with pytest.raises(YAMLLoadError) as exc_info:
+                load_workflow_yaml(str(main_path))
+            assert "not found" in str(exc_info.value).lower()
+
+
+# ── For-Each Name Resolution ─────────────────────────────────────────
+
+
+class TestForEachWithFlowName:
+    def test_bare_name_resolves_from_flows_dir(self):
+        """for_each flow: my-sub resolves via flow name discovery."""
+        with tempfile.TemporaryDirectory() as tmp:
+            sub_dir = Path(tmp) / "flows" / "my-sub"
+            sub_dir.mkdir(parents=True)
+            (sub_dir / "FLOW.yaml").write_text("""
+steps:
+  worker:
+    executor: mock_llm
+    prompt: work
+    outputs: [result]
+""")
+            main_path = Path(tmp) / "main.yaml"
+            main_path.write_text("""
+steps:
+  produce:
+    executor: mock_llm
+    prompt: produce
+    outputs: [items]
+  each_item:
+    for_each: produce.items
+    flow: my-sub
+    outputs: [results]
+""")
+            w = load_workflow_yaml(str(main_path))
+            assert w.steps["each_item"].sub_flow is not None
+            assert "worker" in w.steps["each_item"].sub_flow.steps
+
+    def test_bare_name_single_file_flow(self):
+        """for_each flow: my-sub resolves to my-sub.flow.yaml."""
+        with tempfile.TemporaryDirectory() as tmp:
+            flows_dir = Path(tmp) / "flows"
+            flows_dir.mkdir()
+            (flows_dir / "my-sub.flow.yaml").write_text("""
+steps:
+  worker:
+    executor: mock_llm
+    prompt: work
+    outputs: [result]
+""")
+            main_path = Path(tmp) / "main.yaml"
+            main_path.write_text("""
+steps:
+  produce:
+    executor: mock_llm
+    prompt: produce
+    outputs: [items]
+  each_item:
+    for_each: produce.items
+    flow: my-sub
+    outputs: [results]
+""")
+            w = load_workflow_yaml(str(main_path))
+            assert w.steps["each_item"].sub_flow is not None
+            assert "worker" in w.steps["each_item"].sub_flow.steps
+
+    def test_bare_name_not_found_errors(self):
+        """Non-existent bare name → clear error."""
+        with tempfile.TemporaryDirectory() as tmp:
+            main_path = Path(tmp) / "main.yaml"
+            main_path.write_text("""
+steps:
+  produce:
+    executor: mock_llm
+    prompt: produce
+    outputs: [items]
+  each_item:
+    for_each: produce.items
+    flow: nonexistent-flow
     outputs: [results]
 """)
             with pytest.raises(YAMLLoadError) as exc_info:

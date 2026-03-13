@@ -788,6 +788,10 @@ class Engine:
         if step_def.route_def:
             return self._launch_route(job, step_def)
 
+        # Direct sub-flow steps
+        if step_def.executor.type == "sub_flow" and step_def.sub_flow:
+            return self._launch_sub_flow(job, step_def)
+
         attempt = self.store.next_attempt(job.id, step_name)
         inputs, dep_run_ids = self._resolve_inputs(job, step_def)
 
@@ -903,17 +907,6 @@ class Engine:
                         # Emit effector events from executor_meta
                         self._emit_effector_events(job.id, result.envelope)
                         self._process_completion(job, run)
-
-            case "sub_job":
-                self._validate_sub_job(step_def, result.sub_job_def)
-                sub = self._create_sub_job(job, run, result.sub_job_def)
-                run.status = StepRunStatus.DELEGATED
-                run.sub_job_id = sub.id
-                self.store.save_run(run)
-                self._emit(job.id, STEP_DELEGATED, {
-                    "step": step_name,
-                    "sub_job_id": sub.id,
-                })
 
             case "watch":
                 run.status = StepRunStatus.SUSPENDED
@@ -1277,6 +1270,46 @@ class Engine:
         })
         return run
 
+    # ── Direct Sub-Flow Steps ─────────────────────────────────────────────
+
+    def _launch_sub_flow(self, job: Job, step_def: StepDefinition) -> StepRun:
+        """Launch a direct sub-flow step: delegate to embedded workflow."""
+        assert step_def.sub_flow is not None
+
+        attempt = self.store.next_attempt(job.id, step_def.name)
+        inputs, dep_run_ids = self._resolve_inputs(job, step_def)
+
+        run = StepRun(
+            id=_gen_id("run"), job_id=job.id, step_name=step_def.name,
+            attempt=attempt, status=StepRunStatus.DELEGATED,
+            inputs=inputs, dep_run_ids=dep_run_ids,
+            started_at=_now(),
+        )
+        self.store.save_run(run)
+
+        flow_ref = step_def.executor.config.get("flow_ref", step_def.name)
+        sub_def = SubJobDefinition(
+            objective=f"Sub-flow '{flow_ref}' for step '{step_def.name}'",
+            workflow=step_def.sub_flow,
+        )
+        try:
+            sub = self._create_sub_job(job, run, sub_def)
+        except Exception as e:
+            run.status = StepRunStatus.FAILED
+            run.error = f"Failed to create sub-job for flow step '{step_def.name}': {e}"
+            run.completed_at = _now()
+            self.store.save_run(run)
+            self._halt_job(job, run)
+            return run
+
+        run.sub_job_id = sub.id
+        run.executor_state = {"sub_flow": True, "flow_ref": flow_ref}
+        self.store.save_run(run)
+        self._emit(job.id, STEP_DELEGATED, {
+            "step": step_def.name, "sub_job_id": sub.id, "flow_ref": flow_ref,
+        })
+        return run
+
     def _resolve_flow_ref(self, ref: str, job: Job) -> WorkflowDefinition:
         """Resolve a flow reference to a WorkflowDefinition.
 
@@ -1611,29 +1644,7 @@ class Engine:
         run.executor_state["_watch"] = watch_state
         self.store.save_run(run)
 
-    # ── Sub-Job ───────────────────────────────────────────────────────────
-
-    def _validate_sub_job(self, parent_step: StepDefinition, sub_def: SubJobDefinition) -> None:
-        """Validate sub-job definition."""
-        errors = sub_def.workflow.validate()
-        if errors:
-            raise ValueError(f"Invalid sub-job workflow: {'; '.join(errors)}")
-
-        terminal = sub_def.workflow.terminal_steps()
-        if len(terminal) != 1:
-            raise ValueError(
-                f"Sub-job must have exactly one terminal step, got {len(terminal)}: "
-                f"{', '.join(terminal)}"
-            )
-
-        # Check terminal step outputs match parent step outputs
-        terminal_step = sub_def.workflow.steps[terminal[0]]
-        for out in parent_step.outputs:
-            if out not in terminal_step.outputs:
-                raise ValueError(
-                    f"Sub-job terminal step '{terminal[0]}' missing output '{out}' "
-                    f"required by parent step '{parent_step.name}'"
-                )
+    # ── Validation ────────────────────────────────────────────────────────
 
     def _validate_artifact(self, step_def: StepDefinition, envelope: HandoffEnvelope | None) -> str | None:
         """M1: hard validation — artifact must contain all declared output fields.
