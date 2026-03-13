@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import {
   Terminal,
   User,
@@ -108,6 +108,26 @@ function formatDuration(startedAt: string | null, completedAt: string | null): s
   return `${(ms / 60000).toFixed(1)}m`;
 }
 
+function formatPreviewValue(value: unknown, maxLen: number = 20): string {
+  if (value === null || value === undefined) return "null";
+  if (typeof value === "boolean") return String(value);
+  if (typeof value === "number") return String(value);
+  if (typeof value === "string") {
+    if (value.length <= maxLen) return value;
+    return value.slice(0, maxLen - 1) + "…";
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "[]";
+    return `[${value.length}]`;
+  }
+  if (typeof value === "object") {
+    const keys = Object.keys(value as Record<string, unknown>);
+    if (keys.length === 0) return "{}";
+    return `{${keys.length}}`;
+  }
+  return String(value);
+}
+
 const ACTION_COLORS: Record<string, string> = {
   advance: "text-emerald-400",
   loop: "text-purple-400",
@@ -151,6 +171,58 @@ function ExitRuleTooltip({ rules }: { rules: ExitRule[] }) {
   );
 }
 
+function ArtifactPreviewRow({ artifact }: { artifact: Record<string, unknown> }) {
+  const [hover, setHover] = useState(false);
+  const entries = Object.entries(artifact);
+
+  // Build compact inline preview
+  const parts: string[] = [];
+  let len = 0;
+  let shown = 0;
+  for (const [key, val] of entries) {
+    const formatted = `${key}: ${formatPreviewValue(val, 14)}`;
+    if (len + formatted.length > 32 && parts.length > 0) break;
+    parts.push(formatted);
+    len += formatted.length + 3;
+    shown++;
+  }
+  const remaining = entries.length - shown;
+
+  return (
+    <div
+      className="relative"
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      <div className="text-[10px] text-emerald-400/60 truncate font-mono leading-tight cursor-default">
+        {parts.join(" · ")}
+        {remaining > 0 && <span className="text-zinc-500"> +{remaining}</span>}
+      </div>
+      {hover && (
+        <div className="absolute left-0 top-full mt-1 z-50 bg-zinc-900 border border-zinc-700 rounded-md shadow-xl p-2 min-w-[200px] max-w-[360px]">
+          <div className="text-[10px] font-medium text-zinc-400 uppercase tracking-wide mb-1.5">
+            Output
+          </div>
+          <table className="w-full text-[11px]">
+            <tbody>
+              {entries.map(([key, value]) => (
+                <tr key={key} className="border-t border-zinc-800 first:border-t-0">
+                  <td className="py-1 pr-3 font-mono text-zinc-400 whitespace-nowrap align-top">
+                    {key}
+                  </td>
+                  <td className="py-1 font-mono text-zinc-200 break-words max-w-[240px]">
+                    {formatPreviewValue(value, 120)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function StepNode({
   stepDef,
   latestRun,
@@ -180,6 +252,15 @@ export function StepNode({
 
   const attempt = latestRun?.attempt ?? 0;
   const showAttemptBadge = attempt > 1 || (maxAttempts != null && attempt >= 1);
+
+  // Artifact preview for completed steps
+  const visibleArtifact = useMemo(() => {
+    if (status !== "completed" || !latestRun?.result?.artifact) return null;
+    const filtered = Object.fromEntries(
+      Object.entries(latestRun.result.artifact).filter(([k]) => !k.startsWith("_"))
+    );
+    return Object.keys(filtered).length > 0 ? filtered : null;
+  }, [status, latestRun]);
 
   return (
     <div
@@ -238,8 +319,8 @@ export function StepNode({
         </div>
       )}
 
-      {/* Executor subtitle */}
-      <div className={cn("text-[10px] text-zinc-500 truncate font-mono leading-tight", !stepDef.description && "mt-1")}>
+      {/* Executor subtitle / Artifact preview */}
+      <div className={cn("text-[10px] font-mono leading-tight", !stepDef.description && "mt-1")}>
         {onToggleExpand ? (
           <button
             className="flex items-center gap-1 text-purple-400 hover:text-purple-300 transition-colors"
@@ -268,8 +349,12 @@ export function StepNode({
             <Hand className="w-2.5 h-2.5" />
             Awaiting input
           </span>
+        ) : visibleArtifact ? (
+          <ArtifactPreviewRow artifact={visibleArtifact} />
         ) : (
-          executorSubtitle(stepDef)
+          <span className="text-zinc-500 truncate block">
+            {executorSubtitle(stepDef)}
+          </span>
         )}
       </div>
 
