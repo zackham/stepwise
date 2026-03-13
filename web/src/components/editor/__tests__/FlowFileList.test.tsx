@@ -7,6 +7,7 @@ const mockFlows: LocalFlow[] = [
   {
     path: "flows/research/FLOW.yaml",
     name: "research",
+    description: "",
     steps_count: 3,
     modified_at: "2026-03-11T10:00:00",
     is_directory: true,
@@ -14,6 +15,7 @@ const mockFlows: LocalFlow[] = [
   {
     path: "flows/deploy.flow.yaml",
     name: "deploy",
+    description: "",
     steps_count: 2,
     modified_at: "2026-03-10T08:00:00",
     is_directory: false,
@@ -21,6 +23,7 @@ const mockFlows: LocalFlow[] = [
   {
     path: "flows/review/FLOW.yaml",
     name: "review",
+    description: "",
     steps_count: 5,
     modified_at: "2026-03-09T14:00:00",
     is_directory: true,

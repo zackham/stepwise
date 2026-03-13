@@ -230,6 +230,7 @@ export type WebSocketMessage = TickMessage | AgentOutputMessage;
 export interface LocalFlow {
   path: string;
   name: string;
+  description: string;
   steps_count: number;
   modified_at: string;
   is_directory: boolean;
