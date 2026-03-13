@@ -35,6 +35,7 @@ export interface DagLayout {
 // Hierarchical layout types for expand-in-place sub-jobs
 export interface HierarchicalDagNode extends DagNode {
   isExpanded: boolean;
+  hasSubFlow: boolean;
   childLayout: HierarchicalDagLayout | null;
   childJobId: string | null;
   childStepCount: number;
@@ -51,9 +52,15 @@ export interface ExpandedNodeData {
 
 export const NODE_WIDTH = 240;
 export const NODE_HEIGHT = 88;
+export const NODE_HEIGHT_WITH_DESC = 108;
 const CONTAINER_HEADER = 44;
 const CONTAINER_PAD_X = 24;
 const CONTAINER_PAD_BOTTOM = 16;
+
+export function nodeHeight(workflow: FlowDefinition, stepName: string): number {
+  const step = workflow.steps[stepName];
+  return step?.description ? NODE_HEIGHT_WITH_DESC : NODE_HEIGHT;
+}
 
 export function computeDagLayout(workflow: FlowDefinition): DagLayout {
   const g = new dagre.graphlib.Graph();
@@ -68,9 +75,12 @@ export function computeDagLayout(workflow: FlowDefinition): DagLayout {
 
   const stepNames = Object.keys(workflow.steps);
 
-  // Add nodes
+  // Add nodes (variable height based on description)
+  const nodeHeights: Record<string, number> = {};
   for (const name of stepNames) {
-    g.setNode(name, { width: NODE_WIDTH, height: NODE_HEIGHT });
+    const h = nodeHeight(workflow, name);
+    nodeHeights[name] = h;
+    g.setNode(name, { width: NODE_WIDTH, height: h });
   }
 
   // Add edges from input bindings and sequencing
@@ -104,12 +114,13 @@ export function computeDagLayout(workflow: FlowDefinition): DagLayout {
   for (const name of stepNames) {
     const node = g.node(name);
     if (node) {
+      const h = nodeHeights[name];
       nodes.push({
         id: name,
         x: node.x - NODE_WIDTH / 2,
-        y: node.y - NODE_HEIGHT / 2,
+        y: node.y - h / 2,
         width: NODE_WIDTH,
-        height: NODE_HEIGHT,
+        height: h,
       });
     }
   }
@@ -217,6 +228,10 @@ function buildSubJobMap(
  * Compute a hierarchical DAG layout that supports expand-in-place sub-jobs.
  * Recursive: child layouts are computed first (bottom-up), then the parent
  * layout uses inflated node dimensions for expanded nodes.
+ *
+ * Sub-flow structure comes from two sources (in priority order):
+ * 1. JobTreeNode data (runtime — has actual sub-job runs)
+ * 2. StepDefinition.sub_flow (design-time — baked workflow definition)
  */
 export function computeHierarchicalLayout(
   workflow: FlowDefinition,
@@ -229,11 +244,20 @@ export function computeHierarchicalLayout(
     ? buildSubJobMap(jobTree.runs, jobTree.sub_jobs)
     : new Map<string, JobTreeNode>();
 
+  // Build a map of step_name -> sub_flow from step definitions (design-time fallback)
+  const subFlowDefs = new Map<string, FlowDefinition>();
+  for (const [name, step] of Object.entries(workflow.steps)) {
+    if (step.sub_flow && !subJobMap.has(name)) {
+      subFlowDefs.set(name, step.sub_flow);
+    }
+  }
+
   // Pass 1: compute child layouts for expanded nodes (bottom-up)
   const childLayouts = new Map<string, HierarchicalDagLayout>();
   for (const stepName of expandedSteps) {
     const subTree = subJobMap.get(stepName);
-    if (!subTree) continue;
+    const subFlowDef = subFlowDefs.get(stepName);
+    if (!subTree && !subFlowDef) continue;
 
     // Build child expanded steps (filter to those scoped under this sub-job)
     const childExpandedSteps = new Set<string>();
@@ -243,10 +267,13 @@ export function computeHierarchicalLayout(
       childExpandedSteps.add(key);
     }
 
+    const childWorkflow = subTree ? subTree.job.workflow : subFlowDef!;
+    const childTree = subTree ?? null;
+
     const childLayout = computeHierarchicalLayout(
-      subTree.job.workflow,
+      childWorkflow,
       childExpandedSteps,
-      subTree,
+      childTree,
       depth + 1,
     );
     childLayouts.set(stepName, childLayout);
@@ -276,7 +303,7 @@ export function computeHierarchicalLayout(
       const h = childLayout.height + CONTAINER_HEADER + CONTAINER_PAD_BOTTOM;
       nodeSizes.set(name, { width: Math.max(w, NODE_WIDTH), height: h });
     } else {
-      nodeSizes.set(name, { width: NODE_WIDTH, height: NODE_HEIGHT });
+      nodeSizes.set(name, { width: NODE_WIDTH, height: nodeHeight(workflow, name) });
     }
     const size = nodeSizes.get(name)!;
     g.setNode(name, { width: size.width, height: size.height });
@@ -317,9 +344,13 @@ export function computeHierarchicalLayout(
     const size = nodeSizes.get(name)!;
     const childLayout = childLayouts.get(name) ?? null;
     const subTree = subJobMap.get(name);
+    const subFlowDef = subFlowDefs.get(name);
+    const hasSubFlow = !!(subTree || subFlowDef);
     const childStepCount = subTree
       ? Object.keys(subTree.job.workflow.steps).length
-      : 0;
+      : subFlowDef
+        ? Object.keys(subFlowDef.steps).length
+        : 0;
 
     nodes.push({
       id: name,
@@ -328,6 +359,7 @@ export function computeHierarchicalLayout(
       width: size.width,
       height: size.height,
       isExpanded: childLayout !== null,
+      hasSubFlow,
       childLayout,
       childJobId: subTree?.job.id ?? null,
       childStepCount,

@@ -6,6 +6,7 @@ import type { StepDefinition, StepRun } from "@/lib/types";
 function makeStepDef(overrides: Partial<StepDefinition> = {}): StepDefinition {
   return {
     name: "test_step",
+    description: "",
     outputs: ["result"],
     executor: { type: "script", config: {}, decorators: [] },
     inputs: [],

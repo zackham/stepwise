@@ -1,11 +1,28 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createElement } from "react";
+import type { ReactNode } from "react";
 import { StepDefinitionPanel } from "../StepDefinitionPanel";
 import type { StepDefinition } from "@/lib/types";
+
+function createWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return createElement(QueryClientProvider, { client: queryClient }, children);
+  };
+}
+
+function renderWithQuery(ui: React.ReactElement) {
+  return render(ui, { wrapper: createWrapper() });
+}
 
 function makeStepDef(overrides: Partial<StepDefinition> = {}): StepDefinition {
   return {
     name: "analyze",
+    description: "",
     outputs: ["summary"],
     executor: { type: "llm", config: { prompt: "Analyze data", model: "gpt-4o" }, decorators: [] },
     inputs: [{ local_name: "raw", source_step: "fetch", source_field: "data" }],
@@ -19,7 +36,7 @@ function makeStepDef(overrides: Partial<StepDefinition> = {}): StepDefinition {
 
 describe("StepDefinitionPanel", () => {
   it("renders step name and executor type", () => {
-    render(
+    renderWithQuery(
       <StepDefinitionPanel
         stepDef={makeStepDef()}
         onClose={vi.fn()}
@@ -31,7 +48,7 @@ describe("StepDefinitionPanel", () => {
   });
 
   it("shows prompt field for LLM executor", () => {
-    render(
+    renderWithQuery(
       <StepDefinitionPanel
         stepDef={makeStepDef()}
         onClose={vi.fn()}
@@ -39,11 +56,12 @@ describe("StepDefinitionPanel", () => {
       />
     );
     expect(screen.getByText("Prompt")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("Analyze data")).toBeInTheDocument();
+    // Prompt is rendered read-only via PromptPreview
+    expect(screen.getByText("Analyze data")).toBeInTheDocument();
   });
 
   it("shows model field for LLM executor", () => {
-    render(
+    renderWithQuery(
       <StepDefinitionPanel
         stepDef={makeStepDef()}
         onClose={vi.fn()}
@@ -55,7 +73,7 @@ describe("StepDefinitionPanel", () => {
   });
 
   it("shows run command for script executor", () => {
-    render(
+    renderWithQuery(
       <StepDefinitionPanel
         stepDef={makeStepDef({
           name: "fetch",
@@ -70,7 +88,7 @@ describe("StepDefinitionPanel", () => {
   });
 
   it("shows prompt for human executor", () => {
-    render(
+    renderWithQuery(
       <StepDefinitionPanel
         stepDef={makeStepDef({
           name: "review",
@@ -81,11 +99,12 @@ describe("StepDefinitionPanel", () => {
       />
     );
     expect(screen.getByText("Prompt / Instructions")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("Review the output")).toBeInTheDocument();
+    // Prompt is rendered read-only via PromptPreview
+    expect(screen.getByText("Review the output")).toBeInTheDocument();
   });
 
   it("displays outputs as tags", () => {
-    render(
+    renderWithQuery(
       <StepDefinitionPanel
         stepDef={makeStepDef({ outputs: ["summary", "details"] })}
         onClose={vi.fn()}
@@ -97,7 +116,7 @@ describe("StepDefinitionPanel", () => {
   });
 
   it("displays input bindings", () => {
-    render(
+    renderWithQuery(
       <StepDefinitionPanel
         stepDef={makeStepDef()}
         onClose={vi.fn()}
@@ -110,7 +129,7 @@ describe("StepDefinitionPanel", () => {
 
   it("calls onClose when close button clicked", () => {
     const onClose = vi.fn();
-    render(
+    renderWithQuery(
       <StepDefinitionPanel
         stepDef={makeStepDef()}
         onClose={onClose}
@@ -129,7 +148,7 @@ describe("StepDefinitionPanel", () => {
 
   it("shows delete button when onDelete provided", () => {
     const onDelete = vi.fn();
-    render(
+    renderWithQuery(
       <StepDefinitionPanel
         stepDef={makeStepDef()}
         onClose={vi.fn()}
@@ -144,7 +163,7 @@ describe("StepDefinitionPanel", () => {
   });
 
   it("hides delete button when onDelete not provided", () => {
-    render(
+    renderWithQuery(
       <StepDefinitionPanel
         stepDef={makeStepDef()}
         onClose={vi.fn()}
@@ -154,28 +173,26 @@ describe("StepDefinitionPanel", () => {
     expect(screen.queryByTitle("Delete step")).not.toBeInTheDocument();
   });
 
-  it("calls onPatch with debounced prompt change", async () => {
+  it("calls onPatch when model changes via custom input", async () => {
     vi.useFakeTimers();
     const onPatch = vi.fn();
-    render(
+    renderWithQuery(
       <StepDefinitionPanel
         stepDef={makeStepDef()}
         onClose={vi.fn()}
         onPatch={onPatch}
       />
     );
-    const promptField = screen.getByDisplayValue("Analyze data");
-    fireEvent.change(promptField, { target: { value: "New prompt" } });
-    // Should not have called yet (debounced)
-    expect(onPatch).not.toHaveBeenCalled();
-    // Advance past debounce
-    vi.advanceTimersByTime(600);
-    expect(onPatch).toHaveBeenCalledWith({ prompt: "New prompt" });
+    // Switch to custom input mode
+    fireEvent.click(screen.getByTitle("Type a custom model ID"));
+    const modelInput = screen.getByPlaceholderText("provider/model-id");
+    fireEvent.change(modelInput, { target: { value: "claude-sonnet-4" } });
+    expect(onPatch).toHaveBeenCalledWith({ model: "claude-sonnet-4" });
     vi.useRealTimers();
   });
 
   it("shows limits when present", () => {
-    render(
+    renderWithQuery(
       <StepDefinitionPanel
         stepDef={makeStepDef({
           limits: { max_cost_usd: 0.5, max_duration_minutes: 10, max_iterations: 3 },
@@ -191,7 +208,7 @@ describe("StepDefinitionPanel", () => {
   });
 
   it("shows exit rules when present", () => {
-    render(
+    renderWithQuery(
       <StepDefinitionPanel
         stepDef={makeStepDef({
           exit_rules: [

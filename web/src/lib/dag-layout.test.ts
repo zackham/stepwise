@@ -11,6 +11,7 @@ function makeStep(
 ) {
   return {
     name,
+    description: "",
     outputs: ["result"],
     executor: { type: "script", config: {}, decorators: [] },
     inputs: opts.inputs ?? [],

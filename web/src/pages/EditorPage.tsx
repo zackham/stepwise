@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useParams, useNavigate } from "@tanstack/react-router";
 import { FlowFileList } from "@/components/editor/FlowFileList";
 import { YamlEditor } from "@/components/editor/YamlEditor";
@@ -8,13 +9,16 @@ import { StepDefinitionPanel } from "@/components/editor/StepDefinitionPanel";
 import { AddStepDialog } from "@/components/editor/AddStepDialog";
 import { RegistryBrowser } from "@/components/editor/RegistryBrowser";
 import { FlowInfoPanel } from "@/components/editor/FlowInfoPanel";
-import { ChatPanel } from "@/components/editor/ChatPanel";
+import { ChatMessages } from "@/components/editor/ChatMessages";
+import { ChatInput } from "@/components/editor/ChatInput";
 import { FlowFileTree } from "@/components/editor/FlowFileTree";
 import { FlowFileViewer } from "@/components/editor/FlowFileViewer";
+import { useEditorChat } from "@/hooks/useEditorChat";
 import {
   useLocalFlows,
   useLocalFlow,
   useCreateFlow,
+  useDeleteFlow,
   useParseYaml,
   useSaveFlow,
   usePatchStep,
@@ -24,18 +28,73 @@ import {
   useInstallFlow,
   useFlowFiles,
 } from "@/hooks/useEditor";
-import { FileCode, FolderOpen, Globe, Plus, Code, Workflow } from "lucide-react";
+import { FileCode, FolderOpen, Globe, Plus, Code, Workflow, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { FlowDefinition, LocalFlow, RegistryFlow, ParseResult } from "@/lib/types";
 
-const EMPTY_SET = new Set<string>();
 const EMPTY_RUNS: never[] = [];
 
 type SidebarTab = "local" | "registry";
 type CenterTab = "flow" | "source";
+type StepPanelTab = "details" | "chat";
+
+/** Dedicated prompt editor with local state to avoid cursor jumps from re-renders. */
+function PromptEditor({
+  stepName,
+  fieldName,
+  initialValue,
+  onPatch,
+  onClose,
+}: {
+  stepName: string;
+  fieldName: string;
+  initialValue: string;
+  onPatch: (changes: Record<string, unknown>) => void;
+  onClose: () => void;
+}) {
+  const [local, setLocal] = useState(initialValue);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const onPatchRef = useRef(onPatch);
+  onPatchRef.current = onPatch;
+
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const v = e.target.value;
+    setLocal(v);
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => onPatchRef.current({ [fieldName]: v }), 500);
+  };
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-zinc-950/50">
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-zinc-500">{stepName}</span>
+          <span className="text-zinc-600">→</span>
+          <span className="text-foreground font-medium">{fieldName}</span>
+        </div>
+        <button
+          onClick={onClose}
+          className="text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-800"
+        >
+          Done
+        </button>
+      </div>
+      <textarea
+        className="flex-1 w-full p-4 font-mono text-sm bg-transparent text-zinc-300 resize-none outline-none leading-relaxed"
+        value={local}
+        onChange={handleChange}
+        spellCheck={false}
+        autoFocus
+      />
+    </div>
+  );
+}
 
 export function EditorPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   // Get flow name from URL if present
   const params = useParams({ strict: false }) as { flowName?: string };
@@ -44,8 +103,20 @@ export function EditorPage() {
   // Sidebar tab state
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("local");
 
+  // Sub-flow expand/collapse
+  const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
+  const toggleExpand = useCallback((stepName: string) => {
+    setExpandedSteps((prev) => {
+      const next = new Set(prev);
+      if (next.has(stepName)) next.delete(stepName);
+      else next.add(stepName);
+      return next;
+    });
+  }, []);
+
   // Create flow
   const createFlowMutation = useCreateFlow();
+  const deleteFlowMutation = useDeleteFlow();
   const [showNewFlowInput, setShowNewFlowInput] = useState(false);
   const [newFlowName, setNewFlowName] = useState("");
 
@@ -59,7 +130,7 @@ export function EditorPage() {
   );
 
   // Load selected flow detail
-  const { data: flowDetail } = useLocalFlow(selectedFlow?.path);
+  const { data: flowDetail, refetch: refetchFlow } = useLocalFlow(selectedFlow?.path);
 
   // Load flow files for directory flows
   const isDirectoryFlow = selectedFlow?.is_directory ?? false;
@@ -73,9 +144,10 @@ export function EditorPage() {
   const [parseErrors, setParseErrors] = useState<string[]>([]);
   const [selectedStep, setSelectedStep] = useState<string | null>(null);
   const [addStepOpen, setAddStepOpen] = useState(false);
-  const [chatOpen, setChatOpen] = useState(false);
   const [viewingFile, setViewingFile] = useState<string | null>(null);
   const [centerTab, setCenterTab] = useState<CenterTab>("flow");
+  const [editingPrompt, setEditingPrompt] = useState<{ step: string; field: string } | null>(null);
+  const [stepPanelTab, setStepPanelTab] = useState<StepPanelTab>("details");
 
   // Registry state
   const [selectedRegistryFlow, setSelectedRegistryFlow] = useState<RegistryFlow | null>(null);
@@ -91,6 +163,48 @@ export function EditorPage() {
     return set;
   }, [isDirty, flowName]);
 
+  // Apply YAML from chat
+  const handleApplyChat = useCallback(
+    (yaml: string) => {
+      setYamlContent(yaml);
+      clearTimeout(parseTimerRef.current);
+      parseMutation.mutate(yaml, {
+        onSuccess: (result) => {
+          if (result.flow) {
+            setParsedFlow(result.flow);
+            setParseErrors([]);
+          } else {
+            setParseErrors(result.errors);
+          }
+        },
+      });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+
+  const handleFilesChanged = useCallback(async () => {
+    refetchFiles();
+    queryClient.invalidateQueries({ queryKey: ["localFlows"] });
+    const { data } = await refetchFlow();
+    if (data) {
+      loadedPathRef.current = data.path;
+      setYamlContent(data.raw_yaml);
+      setSavedYaml(data.raw_yaml);
+      setParsedFlow(data.flow);
+      setParseErrors([]);
+    }
+  }, [refetchFiles, queryClient, refetchFlow]);
+
+  // Chat hook — shared across flow and step contexts
+  const chat = useEditorChat({
+    currentYaml: yamlContent,
+    selectedStep,
+    flowPath: selectedFlow?.path ?? null,
+    onApplyYaml: handleApplyChat,
+    onFilesChanged: handleFilesChanged,
+  });
+
   // When flow detail loads, initialize editor
   const loadedPathRef = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -101,10 +215,13 @@ export function EditorPage() {
       setParsedFlow(flowDetail.flow);
       setParseErrors([]);
       setSelectedStep(null);
-      setViewingFile(null);
+      setExpandedSteps(new Set());
+      setViewingFile("FLOW.yaml");
+      setEditingPrompt(null);
       setCenterTab("flow");
+      chat.reset();
     }
-  }, [flowDetail]);
+  }, [flowDetail]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Debounced parse on YAML change
   const parseMutation = useParseYaml();
@@ -167,6 +284,21 @@ export function EditorPage() {
       navigate({ to: "/editor/$flowName", params: { flowName: flow.name } });
     },
     [isDirty, navigate]
+  );
+
+  // Delete flow
+  const handleDeleteFlow = useCallback(
+    (flow: LocalFlow) => {
+      if (!confirm(`Delete flow "${flow.name}"? This cannot be undone.`)) return;
+      deleteFlowMutation.mutate(flow.path, {
+        onSuccess: () => {
+          if (flowName === flow.name) {
+            navigate({ to: "/editor" });
+          }
+        },
+      });
+    },
+    [deleteFlowMutation, flowName, navigate]
   );
 
   // Create new flow
@@ -263,32 +395,39 @@ export function EditorPage() {
     setSelectedRegistryFlow(flow);
   }, []);
 
-  // Apply YAML from chat
-  const handleApplyChat = useCallback(
-    (yaml: string) => {
-      setYamlContent(yaml);
-      clearTimeout(parseTimerRef.current);
-      parseMutation.mutate(yaml, {
-        onSuccess: (result) => {
-          if (result.flow) {
-            setParsedFlow(result.flow);
-            setParseErrors([]);
-          } else {
-            setParseErrors(result.errors);
-          }
-        },
-      });
-    },
-    [parseMutation]
-  );
-
-  // Click file in tree → open source tab with that file
+  // Click file in tree → open source tab with that file (FLOW.yaml → flow tab)
   const handleSelectFile = useCallback((filePath: string | null) => {
     setViewingFile(filePath);
-    if (filePath) {
+    setEditingPrompt(null);
+    if (filePath === "FLOW.yaml") {
+      setCenterTab("flow");
+    } else if (filePath) {
       setCenterTab("source");
     }
   }, []);
+
+  // When selecting a step, reset chat tab to details and clear chat
+  const handleSelectStep = useCallback((stepName: string | null) => {
+    if (stepName !== selectedStep) {
+      setStepPanelTab("details");
+      chat.reset();
+    }
+    setSelectedStep(stepName);
+  }, [selectedStep, chat]);
+
+  // Send chat message — auto-switch to chat tab when step is selected
+  const handleChatSend = useCallback((text: string) => {
+    if (selectedStep) {
+      setStepPanelTab("chat");
+    }
+    chat.send(text);
+  }, [selectedStep, chat]);
+
+  // Close step chat tab
+  const handleCloseStepChat = useCallback(() => {
+    setStepPanelTab("details");
+    chat.reset();
+  }, [chat]);
 
   // Ctrl+S global handler
   const handleSaveRef = useRef(handleSave);
@@ -326,6 +465,8 @@ export function EditorPage() {
     : null;
   const registryDagWorkflow = registryFlowDetail?.flow ?? { steps: {} };
   const isRegistryPreview = sidebarTab === "registry" && selectedRegistryFlow != null;
+  const hasStepChat = chat.messages.length > 0 && selectedStep != null;
+  const showRightPanel = !!selectedStepDef || chat.messages.length > 0;
 
   return (
     <div className="h-full flex">
@@ -415,19 +556,14 @@ export function EditorPage() {
               flows={flows}
               selectedName={flowName}
               onSelect={handleSelectFlow}
+              onDelete={handleDeleteFlow}
               dirtyFlows={dirtyFlows}
+              flowFiles={isDirectoryFlow ? flowFilesData?.files : undefined}
+              selectedFile={viewingFile}
+              onSelectFile={handleSelectFile}
+              onRefreshFiles={() => refetchFiles()}
+              isRefreshingFiles={isRefetchingFiles}
             />
-            {isDirectoryFlow && flowFilesData?.files && (
-              <div className="border-t border-border mt-1 pt-1">
-                <FlowFileTree
-                  files={flowFilesData.files}
-                  selectedFile={viewingFile}
-                  onSelectFile={handleSelectFile}
-                  onRefresh={() => refetchFiles()}
-                  isRefreshing={isRefetchingFiles}
-                />
-              </div>
-            )}
           </div>
         ) : (
           <RegistryBrowser
@@ -447,8 +583,8 @@ export function EditorPage() {
                   workflow={registryDagWorkflow}
                   runs={EMPTY_RUNS}
                   jobTree={null}
-                  expandedSteps={EMPTY_SET}
-                  onToggleExpand={() => {}}
+                  expandedSteps={expandedSteps}
+                  onToggleExpand={toggleExpand}
                   selectedStep={null}
                   onSelectStep={() => {}}
                 />
@@ -476,58 +612,71 @@ export function EditorPage() {
               onSave={handleSave}
               onDiscard={handleDiscard}
               onAddStep={() => setAddStepOpen(true)}
-              onToggleChat={() => setChatOpen((v) => !v)}
-              chatOpen={chatOpen}
               parseErrors={parseErrors}
             />
-            {/* Center tab bar */}
-            <div className="flex items-center border-b border-border bg-zinc-950/50 px-4">
-              <button
-                onClick={() => setCenterTab("flow")}
-                className={cn(
-                  "px-3 py-2 text-xs font-medium border-b-2 transition-colors flex items-center gap-1.5",
-                  centerTab === "flow"
-                    ? "border-blue-500 text-foreground"
-                    : "border-transparent text-zinc-500 hover:text-zinc-300"
-                )}
-              >
-                <Workflow className="w-3 h-3" />
-                Flow
-              </button>
-              <button
-                onClick={() => setCenterTab("source")}
-                className={cn(
-                  "px-3 py-2 text-xs font-medium border-b-2 transition-colors flex items-center gap-1.5",
-                  centerTab === "source"
-                    ? "border-blue-500 text-foreground"
-                    : "border-transparent text-zinc-500 hover:text-zinc-300"
-                )}
-              >
-                <Code className="w-3 h-3" />
-                Source
-                {isDirty && <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />}
-              </button>
-            </div>
             <div className="flex-1 flex min-h-0">
-              {/* Center panel: Flow (DAG) or Source (editor/viewer) */}
-              <div className="flex-1 min-w-0">
-                {centerTab === "flow" ? (
+              {/* Center panel: tabs + Flow (DAG) or Source (editor/viewer) */}
+              <div className="flex-1 min-w-0 flex flex-col">
+                {/* Center tab bar */}
+                <div className="flex items-center border-b border-border bg-zinc-950/50 px-4">
+                  <button
+                    onClick={() => { setCenterTab("flow"); setEditingPrompt(null); }}
+                    className={cn(
+                      "px-3 py-2 text-xs font-medium border-b-2 transition-colors flex items-center gap-1.5",
+                      centerTab === "flow"
+                        ? "border-blue-500 text-foreground"
+                        : "border-transparent text-zinc-500 hover:text-zinc-300"
+                    )}
+                  >
+                    <Workflow className="w-3 h-3" />
+                    Flow
+                  </button>
+                  <button
+                    onClick={() => setCenterTab("source")}
+                    className={cn(
+                      "px-3 py-2 text-xs font-medium border-b-2 transition-colors flex items-center gap-1.5",
+                      centerTab === "source"
+                        ? "border-blue-500 text-foreground"
+                        : "border-transparent text-zinc-500 hover:text-zinc-300"
+                    )}
+                  >
+                    <Code className="w-3 h-3" />
+                    Source
+                    {isDirty && <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />}
+                  </button>
+                </div>
+                <div className="flex-1 min-w-0 min-h-0 relative">
+                {editingPrompt && parsedFlow ? (() => {
+                  const stepDef = parsedFlow.steps[editingPrompt.step];
+                  const promptValue = stepDef
+                    ? String((stepDef.executor.config as Record<string, unknown>)[editingPrompt.field] ?? "")
+                    : "";
+                  return (
+                    <PromptEditor
+                      key={`${editingPrompt.step}:${editingPrompt.field}`}
+                      stepName={editingPrompt.step}
+                      fieldName={editingPrompt.field}
+                      initialValue={promptValue}
+                      onPatch={handlePatchStep}
+                      onClose={() => { setEditingPrompt(null); setViewingFile("FLOW.yaml"); }}
+                    />
+                  );
+                })() : centerTab === "flow" ? (
                   <FlowDagView
                     workflow={dagWorkflow}
                     runs={EMPTY_RUNS}
                     jobTree={null}
-                    expandedSteps={EMPTY_SET}
-                    onToggleExpand={() => {}}
+                    expandedSteps={expandedSteps}
+                    onToggleExpand={toggleExpand}
                     selectedStep={selectedStep}
-                    onSelectStep={setSelectedStep}
+                    onSelectStep={handleSelectStep}
                   />
-                ) : viewingFile && selectedFlow?.path ? (
+                ) : viewingFile && viewingFile !== "FLOW.yaml" && selectedFlow?.path ? (
                   <FlowFileViewer
                     flowPath={selectedFlow.path}
                     filePath={viewingFile}
                     onClose={() => {
-                      setViewingFile(null);
-                      setCenterTab("source"); // stay on source, show FLOW.yaml
+                      setViewingFile("FLOW.yaml");
                     }}
                   />
                 ) : (
@@ -537,32 +686,92 @@ export function EditorPage() {
                     onSave={handleSave}
                   />
                 )}
+
+                {/* Floating chat input — visible only when no sidebar is shown */}
+                {!showRightPanel && (
+                  <div className="absolute bottom-3 right-3 w-72 z-20">
+                    <ChatInput
+                      onSend={handleChatSend}
+                      placeholder="Modify this flow..."
+                      disabled={chat.isStreaming}
+                      agentMode={chat.agentMode}
+                      onModeChange={chat.setAgentMode}
+                      sessionId={chat.sessionId}
+                      onReset={chat.reset}
+                      flowPath={selectedFlow?.path ?? null}
+                      floating
+                    />
+                  </div>
+                )}
+                </div>
               </div>
-              {/* Right panel: Step editor or AI chat */}
-              {selectedStepDef ? (
-                <div className="w-80 border-l border-border shrink-0">
-                  <StepDefinitionPanel
-                    stepDef={selectedStepDef}
-                    onClose={() => setSelectedStep(null)}
-                    onPatch={handlePatchStep}
-                    onDelete={handleDeleteStep}
-                  />
+
+              {/* Right panel — only when step selected or chat active */}
+              {showRightPanel && (
+                <div className="w-80 border-l border-border shrink-0 flex flex-col">
+                  {selectedStepDef ? (
+                    <>
+                      <StepDefinitionPanel
+                        stepDef={selectedStepDef}
+                        onClose={() => {
+                          setSelectedStep(null);
+                          setEditingPrompt(null);
+                          setViewingFile("FLOW.yaml");
+                        }}
+                        onPatch={handlePatchStep}
+                        onDelete={handleDeleteStep}
+                        onViewFile={(path) => {
+                          setViewingFile(path);
+                          setCenterTab("source");
+                        }}
+                        onViewSource={(field) => {
+                          setEditingPrompt({ step: selectedStep!, field });
+                          setViewingFile(null);
+                          setCenterTab("source");
+                        }}
+                        mode={hasStepChat ? stepPanelTab : undefined}
+                        onTabChange={setStepPanelTab}
+                        onCloseChat={handleCloseStepChat}
+                        chatContent={
+                          <ChatMessages
+                            messages={chat.messages}
+                            isStreaming={chat.isStreaming}
+                            onApplyYaml={chat.applyYaml}
+                          />
+                        }
+                      />
+                      <ChatInput
+                        onSend={handleChatSend}
+                        placeholder={`Modify ${selectedStep}...`}
+                        disabled={chat.isStreaming}
+                        agentMode={chat.agentMode}
+                        onModeChange={chat.setAgentMode}
+                        sessionId={chat.sessionId}
+                        onReset={chat.reset}
+                        flowPath={selectedFlow?.path ?? null}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <ChatMessages
+                        messages={chat.messages}
+                        isStreaming={chat.isStreaming}
+                        onApplyYaml={chat.applyYaml}
+                      />
+                      <ChatInput
+                        onSend={handleChatSend}
+                        placeholder="Modify this flow..."
+                        disabled={chat.isStreaming}
+                        agentMode={chat.agentMode}
+                        onModeChange={chat.setAgentMode}
+                        sessionId={chat.sessionId}
+                        onReset={chat.reset}
+                        flowPath={selectedFlow?.path ?? null}
+                      />
+                    </>
+                  )}
                 </div>
-              ) : chatOpen ? (
-                <div className="w-80 border-l border-border shrink-0">
-                  <ChatPanel
-                    currentYaml={yamlContent}
-                    selectedStep={selectedStep}
-                    flowPath={selectedFlow?.path ?? null}
-                    onApplyYaml={handleApplyChat}
-                    onFilesChanged={() => {
-                      refetchFiles();
-                      loadedPathRef.current = undefined;
-                    }}
-                    onClose={() => setChatOpen(false)}
-                  />
-                </div>
-              ) : null}
+              )}
             </div>
             <AddStepDialog
               open={addStepOpen}

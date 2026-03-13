@@ -51,6 +51,56 @@ interface ChatPanelProps {
   onClose: () => void;
 }
 
+/** Collapsible tool activity summary — expanded while streaming, collapsed when done. */
+function ToolActivitiesBlock({ tools, isStreaming }: { tools: ToolActivity[]; isStreaming: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const allDone = tools.every((t) => t.done);
+  const showExpanded = expanded || isStreaming || !allDone;
+
+  const doneCount = tools.filter((t) => t.done).length;
+
+  if (!showExpanded) {
+    return (
+      <button
+        onClick={() => setExpanded(true)}
+        className="flex items-center gap-1.5 text-[11px] text-zinc-600 hover:text-zinc-400 transition-colors"
+      >
+        <ChevronRight className="w-3 h-3" />
+        <Check className="w-3 h-3 text-green-600" />
+        <span>{tools.length} tool {tools.length === 1 ? "call" : "calls"}</span>
+      </button>
+    );
+  }
+
+  return (
+    <div className="space-y-1 my-1">
+      {allDone && (
+        <button
+          onClick={() => setExpanded(false)}
+          className="flex items-center gap-1.5 text-[11px] text-zinc-600 hover:text-zinc-400 transition-colors"
+        >
+          <ChevronDown className="w-3 h-3" />
+          <span>{doneCount} tool {doneCount === 1 ? "call" : "calls"}</span>
+        </button>
+      )}
+      {tools.map((tool) => {
+        const IconComponent = TOOL_ICONS[tool.kind ?? ""] ?? FileText;
+        return (
+          <div key={tool.id} className="flex items-center gap-1.5 text-[11px] text-zinc-500">
+            {tool.done ? (
+              <Check className="w-3 h-3 text-green-500 shrink-0" />
+            ) : (
+              <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+            )}
+            <IconComponent className="w-3 h-3 shrink-0" />
+            <span className="truncate">{tool.name}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function ChatPanel({
   currentYaml,
   selectedStep,
@@ -355,6 +405,14 @@ export function ChatPanel({
 
           {messages.map((msg, msgIdx) => (
             <div key={msgIdx} className="space-y-1.5">
+              {/* Tool activities — shown above response text */}
+              {msg.role === "assistant" && msg.toolActivities && msg.toolActivities.length > 0 && (
+                <ToolActivitiesBlock
+                  tools={msg.toolActivities}
+                  isStreaming={isStreaming && msgIdx === messages.length - 1}
+                />
+              )}
+
               {/* Message text */}
               <div className={`text-xs ${
                 msg.role === "user"
@@ -363,26 +421,6 @@ export function ChatPanel({
               }`}>
                 <span className="whitespace-pre-wrap">{msg.content}</span>
               </div>
-
-              {/* Tool activities */}
-              {msg.toolActivities && msg.toolActivities.length > 0 && (
-                <div className="space-y-1 my-1.5">
-                  {msg.toolActivities.map((tool) => {
-                    const IconComponent = TOOL_ICONS[tool.kind ?? ""] ?? FileText;
-                    return (
-                      <div key={tool.id} className="flex items-center gap-1.5 text-[11px] text-zinc-500">
-                        {tool.done ? (
-                          <Check className="w-3 h-3 text-green-500 shrink-0" />
-                        ) : (
-                          <Loader2 className="w-3 h-3 animate-spin shrink-0" />
-                        )}
-                        <IconComponent className="w-3 h-3 shrink-0" />
-                        <span className="truncate">{tool.name}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
 
               {/* Files changed notification */}
               {msg.filesChanged && msg.filesChanged.length > 0 && (

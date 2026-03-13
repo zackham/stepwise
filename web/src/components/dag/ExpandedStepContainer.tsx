@@ -12,8 +12,8 @@ interface ExpandedStepContainerProps {
   childLayout: HierarchicalDagLayout;
   childWorkflow: FlowDefinition;
   childRuns: StepRun[];
-  childJobTree: JobTreeNode;
-  childStatus: JobStatus;
+  childJobTree: JobTreeNode | null;
+  childStatus: JobStatus | null;
   expandedSteps: Set<string>;
   selectedStep: string | null;
   onSelectStep: (key: string | null) => void;
@@ -91,15 +91,25 @@ export function ExpandedStepContainer({
     }
   }
 
-  // Build sub-job map for child's children
+  // Build sub-job map for child's children (runtime data)
   const childSubJobMap = new Map<string, JobTreeNode>();
-  for (const subJob of childJobTree.sub_jobs) {
-    if (subJob.job.parent_step_run_id) {
-      for (const run of childRuns) {
-        if (run.sub_job_id === subJob.job.id) {
-          childSubJobMap.set(run.step_name, subJob);
+  if (childJobTree) {
+    for (const subJob of childJobTree.sub_jobs) {
+      if (subJob.job.parent_step_run_id) {
+        for (const run of childRuns) {
+          if (run.sub_job_id === subJob.job.id) {
+            childSubJobMap.set(run.step_name, subJob);
+          }
         }
       }
+    }
+  }
+
+  // Design-time sub_flow fallback for child steps
+  const childSubFlowDefs = new Map<string, FlowDefinition>();
+  for (const [name, step] of Object.entries(childWorkflow.steps)) {
+    if (step.sub_flow && !childSubJobMap.has(name)) {
+      childSubFlowDefs.set(name, step.sub_flow);
     }
   }
 
@@ -124,7 +134,7 @@ export function ExpandedStepContainer({
         <span className="text-sm font-medium text-foreground truncate">
           {stepName}
         </span>
-        <JobStatusBadge status={childStatus} />
+        {childStatus && <JobStatusBadge status={childStatus} />}
         <span className="text-[10px] text-zinc-500 ml-auto mr-1">
           {Object.keys(childWorkflow.steps).length} steps
         </span>
@@ -152,18 +162,21 @@ export function ExpandedStepContainer({
             const stepDef = childWorkflow.steps[childNode.id];
             if (!stepDef) return null;
             const subTree = childSubJobMap.get(childNode.id);
+            const subFlowDef = childSubFlowDefs.get(childNode.id);
 
-            if (childNode.isExpanded && childNode.childLayout && subTree) {
+            if (childNode.isExpanded && childNode.childLayout) {
+              const nestedWorkflow = subTree?.job.workflow ?? subFlowDef ?? { steps: {} };
+              const nestedRuns = subTree?.runs ?? [];
               return (
                 <div key={childNode.id} data-step-node>
                   <ExpandedStepContainer
                     node={childNode}
                     stepName={childNode.id}
                     childLayout={childNode.childLayout}
-                    childWorkflow={subTree.job.workflow}
-                    childRuns={subTree.runs}
-                    childJobTree={subTree}
-                    childStatus={subTree.job.status}
+                    childWorkflow={nestedWorkflow}
+                    childRuns={nestedRuns}
+                    childJobTree={subTree ?? null}
+                    childStatus={subTree?.job.status ?? null}
                     expandedSteps={expandedSteps}
                     selectedStep={selectedStep}
                     onSelectStep={onSelectStep}
@@ -185,7 +198,7 @@ export function ExpandedStepContainer({
                     onSelectStep(selectedStep === childNode.id ? null : childNode.id)
                   }
                   onToggleExpand={
-                    subTree ? () => onToggleExpand(childNode.id) : undefined
+                    childNode.hasSubFlow ? () => onToggleExpand(childNode.id) : undefined
                   }
                   childStepCount={childNode.childStepCount}
                   childJobStatus={subTree?.job.status ?? null}

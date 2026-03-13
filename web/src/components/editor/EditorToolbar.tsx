@@ -1,6 +1,5 @@
-import { Save, RotateCcw, Plus, Sparkles } from "lucide-react";
+import { Save, RotateCcw, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 
 interface EditorToolbarProps {
   flowName: string;
@@ -9,8 +8,6 @@ interface EditorToolbarProps {
   onSave: () => void;
   onDiscard: () => void;
   onAddStep?: () => void;
-  onToggleChat?: () => void;
-  chatOpen?: boolean;
   parseErrors: string[];
 }
 
@@ -21,8 +18,6 @@ export function EditorToolbar({
   onSave,
   onDiscard,
   onAddStep,
-  onToggleChat,
-  chatOpen,
   parseErrors,
 }: EditorToolbarProps) {
   return (
@@ -58,18 +53,6 @@ export function EditorToolbar({
         >
           {parseErrors[0]}
         </span>
-      )}
-
-      {onToggleChat && (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onToggleChat}
-          className={cn("h-7 text-xs", chatOpen && "bg-violet-500/20 text-violet-300")}
-        >
-          <Sparkles className="w-3 h-3 mr-1" />
-          AI
-        </Button>
       )}
 
       <Button

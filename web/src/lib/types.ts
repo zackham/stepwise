@@ -56,6 +56,7 @@ export interface StepLimits {
 
 export interface StepDefinition {
   name: string;
+  description: string;
   outputs: string[];
   executor: ExecutorRef;
   inputs: InputBinding[];
@@ -63,6 +64,7 @@ export interface StepDefinition {
   exit_rules: ExitRule[];
   idempotency: string;
   limits: StepLimits | null;
+  sub_flow?: FlowDefinition;
 }
 
 // ── Flow Definition ───────────────────────────────────────────────────

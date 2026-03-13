@@ -42,6 +42,8 @@ function executorIcon(type: string) {
       return <Brain className="w-3.5 h-3.5" />;
     case "agent":
       return <Bot className="w-3.5 h-3.5" />;
+    case "sub_flow":
+      return <Layers className="w-3.5 h-3.5" />;
     default:
       return <Cog className="w-3.5 h-3.5" />;
   }
@@ -210,9 +212,16 @@ export function StepNode({
         </div>
       </div>
 
+      {/* Description */}
+      {stepDef.description && (
+        <div className="mt-1 text-[11px] text-zinc-400 truncate leading-tight">
+          {stepDef.description}
+        </div>
+      )}
+
       {/* Executor subtitle */}
-      <div className="mt-1 text-[10px] text-zinc-500 truncate font-mono leading-tight">
-        {subJobId && onToggleExpand ? (
+      <div className={cn("text-[10px] text-zinc-500 truncate font-mono leading-tight", !stepDef.description && "mt-1")}>
+        {onToggleExpand ? (
           <button
             className="flex items-center gap-1 text-purple-400 hover:text-purple-300 transition-colors"
             onClick={(e) => {
@@ -221,7 +230,7 @@ export function StepNode({
             }}
           >
             <Layers className="w-2.5 h-2.5" />
-            {childStepCount ? `${childStepCount} steps` : "Sub-job"}
+            {childStepCount ? `${childStepCount} steps` : "Sub-flow"}
             <ChevronDown className="w-2.5 h-2.5" />
           </button>
         ) : subJobId && onNavigateSubJob ? (

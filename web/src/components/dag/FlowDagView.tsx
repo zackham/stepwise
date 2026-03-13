@@ -46,10 +46,10 @@ export function FlowDagView({
     el.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
   }, []);
 
-  // Re-center when expansion state changes
+  // Re-center when workflow or expansion state changes
   useEffect(() => {
     hasCenteredRef.current = false;
-  }, [expandedSteps]);
+  }, [workflow, expandedSteps]);
 
   // Fit-to-view: runs synchronously before paint to avoid flash
   const fitToView = useCallback(() => {
@@ -154,7 +154,7 @@ export function FlowDagView({
     }
   }, []);
 
-  // Build a map of step_name -> sub-job tree node
+  // Build a map of step_name -> sub-job tree node (runtime data)
   const subJobMap = useMemo(() => {
     if (!jobTree) return new Map<string, JobTreeNode>();
     const map = new Map<string, JobTreeNode>();
@@ -176,6 +176,17 @@ export function FlowDagView({
     }
     return map;
   }, [jobTree, runs]);
+
+  // Build a map of step_name -> sub_flow definition (design-time fallback)
+  const subFlowDefs = useMemo(() => {
+    const map = new Map<string, FlowDefinition>();
+    for (const [name, step] of Object.entries(workflow.steps)) {
+      if (step.sub_flow && !subJobMap.has(name)) {
+        map.set(name, step.sub_flow);
+      }
+    }
+    return map;
+  }, [workflow, subJobMap]);
 
   // Build a map of step_name -> max attempts (from loop rules targeting that step)
   const maxAttemptsMap = useMemo(() => {
@@ -262,18 +273,22 @@ export function FlowDagView({
           const stepDef = workflow.steps[node.id];
           if (!stepDef) return null;
           const subTree = subJobMap.get(node.id);
+          const subFlowDef = subFlowDefs.get(node.id);
 
-          if (node.isExpanded && node.childLayout && subTree) {
+          if (node.isExpanded && node.childLayout) {
+            // Runtime sub-job tree takes priority, fall back to design-time sub_flow
+            const childWorkflow = subTree?.job.workflow ?? subFlowDef ?? { steps: {} };
+            const childRuns = subTree?.runs ?? [];
             return (
               <div key={node.id} data-step-node>
                 <ExpandedStepContainer
                   node={node}
                   stepName={node.id}
                   childLayout={node.childLayout}
-                  childWorkflow={subTree.job.workflow}
-                  childRuns={subTree.runs}
-                  childJobTree={subTree}
-                  childStatus={subTree.job.status}
+                  childWorkflow={childWorkflow}
+                  childRuns={childRuns}
+                  childJobTree={subTree ?? null}
+                  childStatus={subTree?.job.status ?? null}
                   expandedSteps={expandedSteps}
                   selectedStep={selectedStep}
                   onSelectStep={onSelectStep}
@@ -295,7 +310,7 @@ export function FlowDagView({
                   onSelectStep(selectedStep === node.id ? null : node.id)
                 }
                 onToggleExpand={
-                  subTree ? () => onToggleExpand(node.id) : undefined
+                  node.hasSubFlow ? () => onToggleExpand(node.id) : undefined
                 }
                 childStepCount={node.childStepCount}
                 childJobStatus={subTree?.job.status ?? null}
@@ -310,7 +325,7 @@ export function FlowDagView({
       </div>
 
       {/* Zoom controls */}
-      <div className="absolute bottom-3 right-3 flex items-center gap-1 bg-zinc-900/80 rounded-md border border-zinc-700/50 px-2 py-1">
+      <div className="absolute bottom-3 left-3 flex items-center gap-1 bg-zinc-900/80 rounded-md border border-zinc-700/50 px-2 py-1 z-10">
         <button
           onClick={() => {
             transformRef.current.scale = Math.min(transformRef.current.scale * 1.2, 3);
