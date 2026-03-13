@@ -682,8 +682,13 @@ class _AppendFlowHandle(LiveFlowHandle):
         pass  # no live summary — printed at the end by flow_complete
 
     def pause_for_input(self) -> None:
-        """Record cursor position before input prompts."""
-        self._pause_row = _get_cursor_row()
+        """Record cursor position before input prompts.
+
+        Called after the suspended line is printed, so we subtract 1 to
+        include that line in the erase range on resume.
+        """
+        row = _get_cursor_row()
+        self._pause_row = (row - 1) if row is not None else None
 
     def resume_after_input(self) -> None:
         """Erase everything printed during the pause."""
