@@ -1,4 +1,3 @@
-import { useState } from "react";
 import type { DagEdge, LoopEdge } from "@/lib/dag-layout";
 import type { StepRun } from "@/lib/types";
 
@@ -6,6 +5,13 @@ interface SelectedLabel {
   fromStep: string;
   toStep: string;
   fieldName: string;
+}
+
+export interface HoveredLabelInfo {
+  x: number;
+  y: number;
+  field: string;
+  value: unknown;
 }
 
 interface DagEdgesProps {
@@ -16,6 +22,8 @@ interface DagEdgesProps {
   onClickLabel?: (from: string, to: string, field: string) => void;
   selectedLabel?: SelectedLabel | null;
   latestRuns?: Record<string, StepRun>;
+  onHoverLabel?: (info: HoveredLabelInfo) => void;
+  onLeaveLabel?: () => void;
 }
 
 function formatPreviewValue(value: unknown, maxLen: number): string {
@@ -29,13 +37,6 @@ function formatPreviewValue(value: unknown, maxLen: number): string {
   if (Array.isArray(value)) return `[${value.length}]`;
   if (typeof value === "object") return `{${Object.keys(value as Record<string, unknown>).length}}`;
   return String(value);
-}
-
-function formatTooltipValue(value: unknown): string {
-  if (value === null || value === undefined) return "null";
-  if (typeof value === "string") return value;
-  if (typeof value === "boolean" || typeof value === "number") return String(value);
-  return JSON.stringify(value, null, 2);
 }
 
 function buildPath(points: Array<{ x: number; y: number }>): string {
@@ -86,16 +87,8 @@ function edgeMidpoint(
 
 const LABEL_LINE_HEIGHT = 14;
 
-export function DagEdges({ edges, loopEdges, width, height, onClickLabel, selectedLabel, latestRuns }: DagEdgesProps) {
-  const [hoveredLabel, setHoveredLabel] = useState<{
-    x: number;
-    y: number;
-    field: string;
-    value: unknown;
-  } | null>(null);
-
+export function DagEdges({ edges, loopEdges, width, height, onClickLabel, selectedLabel, latestRuns, onHoverLabel, onLeaveLabel }: DagEdgesProps) {
   return (
-    <>
     <svg
       className="absolute inset-0 pointer-events-none"
       width={width}
@@ -177,9 +170,9 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
                     onClickLabel(edge.from, edge.to, field);
                   }}
                   onMouseEnter={() => {
-                    if (hasValue) setHoveredLabel({ x: mid.x, y: ly, field, value: artifactValue });
+                    if (hasValue && onHoverLabel) onHoverLabel({ x: mid.x, y: ly, field, value: artifactValue });
                   }}
-                  onMouseLeave={() => setHoveredLabel(null)}
+                  onMouseLeave={() => onLeaveLabel?.()}
                 >
                   <rect
                     x={mid.x - textW / 2}
@@ -248,23 +241,5 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
         </g>
       ))}
     </svg>
-
-    {/* Hover tooltip for edge field values */}
-    {hoveredLabel && (
-      <div
-        className="absolute pointer-events-none z-50"
-        style={{ left: hoveredLabel.x, top: hoveredLabel.y + 14 }}
-      >
-        <div className="bg-zinc-900 border border-zinc-700 rounded-md shadow-xl p-2 -translate-x-1/2">
-          <div className="text-[10px] font-medium text-zinc-400 uppercase tracking-wide mb-1">
-            {hoveredLabel.field}
-          </div>
-          <pre className="text-[11px] font-mono text-zinc-200 whitespace-pre-wrap break-words max-w-[280px] max-h-[200px] overflow-auto m-0">
-            {formatTooltipValue(hoveredLabel.value)}
-          </pre>
-        </div>
-      </div>
-    )}
-    </>
   );
 }

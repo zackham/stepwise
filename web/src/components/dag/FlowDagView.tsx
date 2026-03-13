@@ -3,10 +3,18 @@ import { computeHierarchicalLayout } from "@/lib/dag-layout";
 import type { DagSelection } from "@/lib/dag-layout";
 import { StepNode } from "./StepNode";
 import { DagEdges } from "./DagEdges";
+import type { HoveredLabelInfo } from "./DagEdges";
 import { ExpandedStepContainer } from "./ExpandedStepContainer";
 import { FlowPortNode } from "./FlowPortNode";
 import { HumanInputPanel, getWatchProps } from "./HumanInputPanel";
 import type { FlowDefinition, StepRun, JobTreeNode } from "@/lib/types";
+
+function formatTooltipValue(value: unknown): string {
+  if (value === null || value === undefined) return "null";
+  if (typeof value === "string") return value;
+  if (typeof value === "boolean" || typeof value === "number") return String(value);
+  return JSON.stringify(value, null, 2);
+}
 
 interface FlowDagViewProps {
   workflow: FlowDefinition;
@@ -40,7 +48,9 @@ export function FlowDagView({
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const inputPanelRef = useRef<HTMLDivElement>(null);
+  const edgeTooltipRef = useRef<HTMLDivElement>(null);
   const transformRef = useRef({ x: 0, y: 0, scale: 1 });
+  const [hoveredLabel, setHoveredLabel] = useState<HoveredLabelInfo | null>(null);
   const isDraggingRef = useRef(false);
   const didDragRef = useRef(false);
   const dragStart = useRef({ x: 0, y: 0, tx: 0, ty: 0 });
@@ -58,9 +68,13 @@ export function FlowDagView({
     if (!el) return;
     const { x, y, scale } = transformRef.current;
     el.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
-    // Counter-scale the input panel so it stays at screen-pixel size
+    // Counter-scale overlays so they stay at screen-pixel size
+    const counterScale = `scale(${1 / scale})`;
     if (inputPanelRef.current) {
-      inputPanelRef.current.style.transform = `scale(${1 / scale})`;
+      inputPanelRef.current.style.transform = counterScale;
+    }
+    if (edgeTooltipRef.current) {
+      edgeTooltipRef.current.style.transform = counterScale;
     }
   }, []);
 
@@ -259,6 +273,14 @@ export function FlowDagView({
     [onSelectDataFlow],
   );
 
+  // Handle edge label hover (tooltip)
+  const handleHoverLabel = useCallback((info: HoveredLabelInfo) => {
+    setHoveredLabel(info);
+  }, []);
+  const handleLeaveLabel = useCallback(() => {
+    setHoveredLabel(null);
+  }, []);
+
   if (Object.keys(workflow.steps).length === 0) {
     return (
       <div className="flex items-center justify-center h-full text-zinc-500">
@@ -307,6 +329,8 @@ export function FlowDagView({
           onClickLabel={onSelectDataFlow ? handleClickLabel : undefined}
           selectedLabel={selectedLabel}
           latestRuns={latestRuns}
+          onHoverLabel={handleHoverLabel}
+          onLeaveLabel={handleLeaveLabel}
         />
 
         {/* Flow port nodes (input/output) */}
@@ -407,6 +431,31 @@ export function FlowDagView({
             </div>
           );
         })()}
+
+        {/* Edge label value tooltip — counter-scaled to stay at screen size */}
+        {hoveredLabel && (
+          <div
+            ref={edgeTooltipRef}
+            className="pointer-events-none"
+            style={{
+              position: "absolute",
+              left: hoveredLabel.x,
+              top: hoveredLabel.y + 14,
+              transformOrigin: "top center",
+              transform: `scale(${1 / transformRef.current.scale})`,
+              zIndex: 50,
+            }}
+          >
+            <div className="bg-zinc-900 border border-zinc-700 rounded-md shadow-xl p-2 -translate-x-1/2">
+              <div className="text-[10px] font-medium text-zinc-400 uppercase tracking-wide mb-1">
+                {hoveredLabel.field}
+              </div>
+              <pre className="text-[11px] font-mono text-zinc-200 whitespace-pre-wrap break-words max-w-[280px] max-h-[200px] overflow-auto m-0">
+                {formatTooltipValue(hoveredLabel.value)}
+              </pre>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Zoom controls */}
