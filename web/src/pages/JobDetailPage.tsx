@@ -18,6 +18,9 @@ import {
   Package,
   Clock,
   Info,
+  Terminal,
+  Monitor,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -104,6 +107,8 @@ export function JobDetailPage() {
   const stepCount = Object.keys(job.workflow.steps).length;
   const hasInputs = job.inputs && Object.keys(job.inputs).length > 0;
   const hasOutputs = outputs && Object.keys(outputs).length > 0;
+  const stale = job.status === "running" && job.created_by !== "server" &&
+    (!job.heartbeat_at || Date.now() - new Date(job.heartbeat_at).getTime() > 60_000);
 
   // Right panel shows step details when a step is selected, otherwise job details
   const showRightPanel = rightPanelOpen || !!selectedStepDef;
@@ -174,6 +179,12 @@ export function JobDetailPage() {
                 {job.objective || "Untitled Job"}
               </h2>
               <JobStatusBadge status={job.status} />
+              {stale && (
+                <span className="flex items-center gap-0.5 text-amber-500 text-[10px]">
+                  <AlertTriangle className="w-3 h-3" />
+                  Stale
+                </span>
+              )}
               <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
                 <Clock className="w-2.5 h-2.5" />
                 {formatDuration(job.created_at, job.updated_at)}
@@ -281,6 +292,30 @@ export function JobDetailPage() {
                       <span className="text-zinc-500 w-16">Finished</span>
                       <span className="font-mono text-zinc-500 text-[10px]">
                         {new Date(job.updated_at).toLocaleString()}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2">
+                    <span className="text-zinc-500 w-16">Source</span>
+                    <span className="flex items-center gap-1 text-zinc-400 text-[10px] font-mono">
+                      {job.created_by.startsWith("cli:") ? (
+                        <>
+                          <Terminal className="w-3 h-3" />
+                          CLI (PID {job.runner_pid ?? job.created_by.slice(4)})
+                        </>
+                      ) : (
+                        <>
+                          <Monitor className="w-3 h-3" />
+                          Server
+                        </>
+                      )}
+                    </span>
+                  </div>
+                  {job.heartbeat_at && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-zinc-500 w-16">Heartbeat</span>
+                      <span className="font-mono text-zinc-500 text-[10px]">
+                        {new Date(job.heartbeat_at).toLocaleString()}
                       </span>
                     </div>
                   )}

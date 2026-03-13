@@ -183,6 +183,11 @@ export function useStepwiseMutations() {
     },
   });
 
+  const adoptJobMutation = useMutation({
+    mutationFn: api.adoptJob,
+    onSuccess: invalidateAll,
+  });
+
   const deleteTemplateMutation = useMutation({
     mutationFn: api.deleteTemplate,
     onSuccess: () => {
@@ -201,6 +206,7 @@ export function useStepwiseMutations() {
     injectContext: injectContextMutation,
     cancelRun: cancelRunMutation,
     deleteJob: deleteJobMutation,
+    adoptJob: adoptJobMutation,
     triggerTick: triggerTickMutation,
     saveTemplate: saveTemplateMutation,
     deleteTemplate: deleteTemplateMutation,

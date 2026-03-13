@@ -9,13 +9,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Briefcase, Clock } from "lucide-react";
+import { AlertTriangle, Briefcase, Clock, Monitor, Terminal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { JobStatus } from "@/lib/types";
 
 interface JobListProps {
   selectedJobId: string | null;
   onSelectJob: (jobId: string) => void;
+}
+
+function isStale(job: { status: string; created_by: string; heartbeat_at: string | null }): boolean {
+  if (job.status !== "running" || job.created_by === "server") return false;
+  if (!job.heartbeat_at) return true;
+  const age = Date.now() - new Date(job.heartbeat_at).getTime();
+  return age > 60_000; // 60 seconds
+}
+
+function isCliOwned(created_by: string): boolean {
+  return created_by.startsWith("cli:");
 }
 
 function timeAgo(ts: string): string {
@@ -97,8 +108,18 @@ export function JobList({ selectedJobId, onSelectJob }: JobListProps) {
                     </div>
                   </div>
                   <div className="flex flex-col items-end gap-1 shrink-0">
-                    <JobStatusBadge status={job.status} />
+                    <div className="flex items-center gap-1">
+                      {isStale(job) && (
+                        <AlertTriangle className="w-3 h-3 text-amber-500" title="Owner not responding" />
+                      )}
+                      <JobStatusBadge status={job.status} />
+                    </div>
                     <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
+                      {isCliOwned(job.created_by) ? (
+                        <Terminal className="w-2.5 h-2.5" title="CLI" />
+                      ) : (
+                        <Monitor className="w-2.5 h-2.5" title="Server" />
+                      )}
                       <Clock className="w-2.5 h-2.5" />
                       {timeAgo(job.updated_at)}
                     </span>

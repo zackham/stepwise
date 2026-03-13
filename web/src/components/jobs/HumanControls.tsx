@@ -18,16 +18,26 @@ import {
   XCircle,
   MessageSquare,
   Zap,
+  AlertTriangle,
+  ShieldCheck,
 } from "lucide-react";
 
 interface HumanControlsProps {
   job: Job;
 }
 
+function isStale(job: { status: string; created_by: string; heartbeat_at: string | null }): boolean {
+  if (job.status !== "running" || job.created_by === "server") return false;
+  if (!job.heartbeat_at) return true;
+  const age = Date.now() - new Date(job.heartbeat_at).getTime();
+  return age > 60_000;
+}
+
 export function HumanControls({ job }: HumanControlsProps) {
   const mutations = useStepwiseMutations();
   const [contextDialogOpen, setContextDialogOpen] = useState(false);
   const [contextText, setContextText] = useState("");
+  const stale = isStale(job);
 
   const handleInjectContext = () => {
     if (!contextText.trim()) return;
@@ -95,6 +105,26 @@ export function HumanControls({ job }: HumanControlsProps) {
             <XCircle className="w-3.5 h-3.5 mr-1.5" />
             Cancel
           </Button>
+        )}
+
+        {/* Stale job warning + adopt */}
+        {stale && (
+          <>
+            <div className="flex items-center gap-1.5 text-amber-500 text-xs">
+              <AlertTriangle className="w-3.5 h-3.5" />
+              Owner not responding
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => mutations.adoptJob.mutate(job.id)}
+              disabled={mutations.adoptJob.isPending}
+              className="border-amber-500/30 text-amber-400 hover:bg-amber-500/10"
+            >
+              <ShieldCheck className="w-3.5 h-3.5 mr-1.5" />
+              Take Over
+            </Button>
+          </>
         )}
 
         <div className="flex-1" />
