@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
 import { useJob, useRuns, useJobTree, useJobOutput } from "@/hooks/useStepwise";
 import { JobList } from "@/components/jobs/JobList";
@@ -22,7 +22,26 @@ import {
   Monitor,
   AlertTriangle,
 } from "lucide-react";
+import type { JobTreeNode, StepDefinition } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+function resolveStep(
+  stepName: string,
+  jobId: string,
+  workflow: { steps: Record<string, StepDefinition> },
+  jobTree: JobTreeNode | null,
+): { stepDef: StepDefinition; jobId: string } | null {
+  if (workflow.steps[stepName]) {
+    return { stepDef: workflow.steps[stepName], jobId };
+  }
+  if (jobTree) {
+    for (const child of jobTree.sub_jobs) {
+      const found = resolveStep(stepName, child.job.id, child.job.workflow, child);
+      if (found) return found;
+    }
+  }
+  return null;
+}
 
 function formatDuration(createdAt: string, updatedAt: string): string {
   const start = new Date(createdAt).getTime();
@@ -100,9 +119,10 @@ export function JobDetailPage() {
     );
   }
 
-  const selectedStepDef = selectedStep
-    ? job.workflow.steps[selectedStep]
-    : null;
+  const resolvedStep = useMemo(
+    () => selectedStep ? resolveStep(selectedStep, job.id, job.workflow, jobTree ?? null) : null,
+    [selectedStep, job, jobTree],
+  );
 
   const stepCount = Object.keys(job.workflow.steps).length;
   const hasInputs = job.inputs && Object.keys(job.inputs).length > 0;
@@ -111,7 +131,7 @@ export function JobDetailPage() {
     (!job.heartbeat_at || Date.now() - new Date(job.heartbeat_at).getTime() > 60_000);
 
   // Right panel shows step details when a step is selected, otherwise job details
-  const showRightPanel = rightPanelOpen || !!selectedStepDef;
+  const showRightPanel = rightPanelOpen || !!resolvedStep;
 
   return (
     <div className="flex h-full">
@@ -247,10 +267,10 @@ export function JobDetailPage() {
       {/* Right sidebar: step details or job details */}
       {showRightPanel && (
         <div className="w-80 border-l border-border shrink-0 flex flex-col overflow-hidden" style={{ maxHeight: 'calc(100vh - 3rem)' }}>
-          {selectedStepDef ? (
+          {resolvedStep ? (
             <StepDetailPanel
-              jobId={jobId}
-              stepDef={selectedStepDef}
+              jobId={resolvedStep.jobId}
+              stepDef={resolvedStep.stepDef}
               onClose={() => setSelectedStep(null)}
             />
           ) : (
