@@ -570,6 +570,7 @@ class TestAgentWorkspaceResolve:
     def test_agent_executor_uses_resolved_workspace_in_start(self):
         """AgentExecutor.start() passes a resolved workspace to the backend."""
         backend = MockAgentBackend()
+        backend.set_auto_complete({"status": "done"})
         executor = AgentExecutor(
             backend=backend,
             prompt="Do work",
@@ -578,9 +579,8 @@ class TestAgentWorkspaceResolve:
         ctx = _ctx(workspace=tmpdir)
         result = executor.start({}, ctx)
 
-        # The mock backend receives the workspace_path from context
-        # AgentExecutor delegates to backend.spawn which receives context
-        assert result.type == "async"
+        # Blocking start() returns type="data"
+        assert result.type == "data"
         assert result.executor_state is not None
         # working_dir should be set from the mock backend
         assert result.executor_state["working_dir"] == tmpdir

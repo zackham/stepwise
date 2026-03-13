@@ -340,6 +340,14 @@ class SQLiteStore:
         ).fetchone()
         return row["cnt"] if row else 0
 
+    def run_count(self, job_id: str, step_name: str) -> int:
+        """Total run count for a step (all statuses)."""
+        row = self._conn.execute(
+            "SELECT COUNT(*) as cnt FROM step_runs WHERE job_id = ? AND step_name = ?",
+            (job_id, step_name),
+        ).fetchone()
+        return row["cnt"] if row else 0
+
     # ── Step Events (M4: fine-grained agent activity) ───────────────────
 
     def save_step_event(self, run_id: str, event_type: str, data: dict | None = None) -> None:

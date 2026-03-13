@@ -893,18 +893,14 @@ class Engine:
                     error_msg = result.envelope.executor_meta.get("reason", "Executor failed")
 
                 if is_failure:
-                    run.status = StepRunStatus.FAILED
-                    run.error = error_msg
+                    error_cat = None
+                    if result.executor_state:
+                        error_cat = result.executor_state.get("error_category")
                     run.result = result.envelope
                     run.executor_state = result.executor_state
-                    run.completed_at = _now()
-                    self.store.save_run(run)
-                    self._emit(job.id, STEP_FAILED, {
-                        "step": step_name,
-                        "attempt": attempt,
-                        "error": error_msg,
-                    })
-                    self._halt_job(job, run)
+                    self._fail_run(job, run, step_def,
+                                   error=error_msg or "Executor failed",
+                                   error_category=error_cat)
                 else:
                     validation_error = self._validate_artifact(step_def, result.envelope)
                     if validation_error:
@@ -1780,12 +1776,16 @@ class Engine:
         run.status = StepRunStatus.FAILED
         run.error = error
         run.error_category = error_category
-        run.result = HandoffEnvelope(
-            artifact={"error_category": error_category} if error_category else {},
-            sidecar=Sidecar(),
-            workspace=job.workspace_path,
-            timestamp=_now(),
-        )
+        if run.result is None:
+            run.result = HandoffEnvelope(
+                artifact={"error_category": error_category} if error_category else {},
+                sidecar=Sidecar(),
+                workspace=job.workspace_path,
+                timestamp=_now(),
+            )
+        elif error_category:
+            # Inject error_category into existing artifact for exit rule evaluation
+            run.result.artifact["error_category"] = error_category
         run.completed_at = _now()
         self.store.save_run(run)
 
@@ -1814,13 +1814,13 @@ class Engine:
                             target = rule.config.get("target", run.step_name)
                             max_iterations = rule.config.get("max_iterations")
                             if max_iterations is not None:
-                                completed_count = self.store.completed_run_count(job.id, target)
-                                if completed_count >= max_iterations:
+                                total_count = self.store.run_count(job.id, target)
+                                if total_count >= max_iterations:
                                     self._halt_job(job, run)
                                     return
                             self._emit(job.id, LOOP_ITERATION, {
                                 "step": run.step_name, "target": target,
-                                "count": self.store.completed_run_count(job.id, target),
+                                "count": self.store.run_count(job.id, target),
                             })
                             job = self.store.load_job(job.id)
                             if job.status == JobStatus.RUNNING:

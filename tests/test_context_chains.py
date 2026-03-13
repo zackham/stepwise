@@ -921,7 +921,7 @@ class TestEngineChainContext:
         job = store.load_job(job.id)
         assert job.status.value in ("completed", "running")
 
-    def test_chain_context_compiles_from_transcripts(self, chain_engine, store, workspace):
+    def test_chain_context_compiles_from_transcripts(self, chain_engine, store, workspace, mock_backend):
         """When transcripts exist, chain context XML is compiled for downstream steps."""
         wf = make_chain_workflow()
 
@@ -949,14 +949,16 @@ class TestEngineChainContext:
 
         register_step_fn("review_fn", lambda inputs: {"decision": "approve"})
 
+        # Auto-complete agent so start() returns immediately
+        mock_backend.set_auto_complete({"content": "drafted"})
+
         job = chain_engine.create_job("Chain with transcript", wf, workspace_path=workspace)
         chain_engine.start_job(job.id)
 
-        # Research completes, places transcript. Draft should launch with chain context.
-        # Check that draft was launched
+        # Research completes, then draft completes (blocking agent with auto_complete)
         draft_run = store.latest_run(job.id, "draft")
         assert draft_run is not None
-        assert draft_run.status == StepRunStatus.RUNNING
+        assert draft_run.status == StepRunStatus.COMPLETED
 
         # Verify the prompt file was written with chain context prepended
         prompt_path = Path(workspace) / ".step-io" / "draft-1.prompt.md"

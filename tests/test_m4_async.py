@@ -91,14 +91,15 @@ def engine(store, agent_registry):
     return Engine(store=store, registry=agent_registry)
 
 
-# ── Test: Async Result Type ───────────────────────────────────────────
+# ── Test: Blocking Agent with Engine ──────────────────────────────────
 
 
-class TestAsyncResultType:
-    """Test that executors can return type="async" and be polled."""
+class TestBlockingAgentWithEngine:
+    """Test that blocking AgentExecutor integrates correctly with Engine."""
 
-    def test_async_executor_returns_running(self, engine, store, mock_backend):
-        """Agent executor returns async result, run stays RUNNING."""
+    def test_agent_step_completes_immediately(self, engine, store, mock_backend):
+        """Blocking agent step completes during start_job (no tick needed)."""
+        mock_backend.set_auto_complete({"status": "completed"})
         wf = WorkflowDefinition(steps={
             "agent_step": StepDefinition(
                 name="agent_step",
@@ -109,75 +110,50 @@ class TestAsyncResultType:
                 }),
             ),
         })
-        job = engine.create_job("Test async", wf)
+        job = engine.create_job("Test blocking", wf)
         engine.start_job(job.id)
-
-        runs = store.runs_for_step(job.id, "agent_step")
-        assert len(runs) == 1
-        assert runs[0].status == StepRunStatus.RUNNING
-        assert runs[0].executor_state is not None
-        assert "pid" in runs[0].executor_state
-
-        # Job should still be running
-        job = store.load_job(job.id)
-        assert job.status == JobStatus.RUNNING
-
-    def test_async_executor_completes_on_tick(self, engine, store, mock_backend):
-        """After backend completes, next tick completes the run."""
-        wf = WorkflowDefinition(steps={
-            "agent_step": StepDefinition(
-                name="agent_step",
-                outputs=["status"],
-                executor=ExecutorRef("agent", {
-                    "prompt": "Do something",
-                    "output_mode": "effect",
-                }),
-            ),
-        })
-        job = engine.create_job("Test async complete", wf)
-        engine.start_job(job.id)
-
-        # Get the run and its PID
-        run = store.runs_for_step(job.id, "agent_step")[0]
-        pid = run.executor_state["pid"]
-
-        # Complete the mock process
-        mock_backend.complete_process(pid, {"status": "completed"})
-
-        # Tick should complete the run
-        engine.tick()
 
         run = store.latest_run(job.id, "agent_step")
         assert run.status == StepRunStatus.COMPLETED
         assert run.result is not None
-        assert run.result.artifact["status"] == "completed"
 
-        # Job should be completed (single terminal step)
         job = store.load_job(job.id)
         assert job.status == JobStatus.COMPLETED
 
-    def test_async_executor_failure(self, engine, store, mock_backend):
-        """Backend failure marks run as failed."""
+    def test_agent_step_produces_artifact(self, engine, store, mock_backend):
+        """Blocking agent produces correct artifact data."""
+        mock_backend.set_auto_complete({"status": "done", "count": 42})
+        wf = WorkflowDefinition(steps={
+            "agent_step": StepDefinition(
+                name="agent_step",
+                outputs=["status", "count"],
+                executor=ExecutorRef("agent", {
+                    "prompt": "Do something",
+                }),
+            ),
+        })
+        job = engine.create_job("Test artifact", wf)
+        engine.start_job(job.id)
+
+        run = store.latest_run(job.id, "agent_step")
+        assert run.status == StepRunStatus.COMPLETED
+        assert run.result.artifact["status"] == "done"
+        assert run.result.artifact["count"] == 42
+
+    def test_agent_step_failure_with_error_category(self, engine, store, mock_backend):
+        """Blocking agent failure sets error_category on run."""
+        mock_backend.set_auto_fail("Out of memory")
         wf = WorkflowDefinition(steps={
             "agent_step": StepDefinition(
                 name="agent_step",
                 outputs=["status"],
                 executor=ExecutorRef("agent", {
                     "prompt": "Do something",
-                    "output_mode": "effect",
                 }),
             ),
         })
-        job = engine.create_job("Test async fail", wf)
+        job = engine.create_job("Test fail", wf)
         engine.start_job(job.id)
-
-        run = store.runs_for_step(job.id, "agent_step")[0]
-        pid = run.executor_state["pid"]
-
-        # Fail the mock process
-        mock_backend.fail_process(pid, "Out of memory")
-
-        engine.tick()
 
         run = store.latest_run(job.id, "agent_step")
         assert run.status == StepRunStatus.FAILED
@@ -187,44 +163,30 @@ class TestAsyncResultType:
         job = store.load_job(job.id)
         assert job.status == JobStatus.FAILED
 
-    def test_async_stays_running_between_ticks(self, engine, store, mock_backend):
-        """Run stays RUNNING across multiple ticks while agent is working."""
+    def test_agent_spawn_count(self, engine, store, mock_backend):
+        """Engine only spawns agent once for a single step."""
+        mock_backend.set_auto_complete({"status": "done"})
         wf = WorkflowDefinition(steps={
             "agent_step": StepDefinition(
                 name="agent_step",
                 outputs=["status"],
-                executor=ExecutorRef("agent", {
-                    "prompt": "Do something",
-                    "output_mode": "effect",
-                }),
+                executor=ExecutorRef("agent", {"prompt": "Work"}),
             ),
         })
-        job = engine.create_job("Test running", wf)
+        job = engine.create_job("Test spawn count", wf)
         engine.start_job(job.id)
-
-        # Multiple ticks while still running
-        for _ in range(3):
-            engine.tick()
-            run = store.latest_run(job.id, "agent_step")
-            assert run.status == StepRunStatus.RUNNING
-
-        # Now complete
-        pid = run.executor_state["pid"]
-        mock_backend.complete_process(pid, {"status": "completed"})
-        engine.tick()
-
-        run = store.latest_run(job.id, "agent_step")
-        assert run.status == StepRunStatus.COMPLETED
+        assert mock_backend.spawn_count == 1
 
 
 # ── Test: Async in DAG ────────────────────────────────────────────────
 
 
-class TestAsyncInDAG:
-    """Test async steps in multi-step workflows."""
+class TestAgentInDAG:
+    """Test blocking agent steps in multi-step workflows."""
 
-    def test_async_step_blocks_downstream(self, engine, store, mock_backend):
-        """Downstream steps wait for async step to complete."""
+    def test_agent_step_chains_to_downstream(self, engine, store, mock_backend):
+        """Agent step completes and downstream callable runs."""
+        mock_backend.set_auto_complete({"data": "hello"})
         register_step_fn("downstream", lambda inputs: {"result": f"got {inputs['data']}"})
 
         wf = WorkflowDefinition(steps={
@@ -246,24 +208,18 @@ class TestAsyncInDAG:
         job = engine.create_job("Test DAG", wf)
         engine.start_job(job.id)
 
-        # Agent step is running, process step should NOT be launched
-        assert len(store.runs_for_step(job.id, "process")) == 0
-        engine.tick()
-        assert len(store.runs_for_step(job.id, "process")) == 0
-
-        # Complete agent step
-        run = store.runs_for_step(job.id, "agent_step")[0]
-        mock_backend.complete_process(run.executor_state["pid"], {"data": "hello"})
-        engine.tick()
-
-        # Now process step should have run
+        # Both steps should complete during start_job (blocking agent)
         process_runs = store.runs_for_step(job.id, "process")
         assert len(process_runs) == 1
         assert process_runs[0].status == StepRunStatus.COMPLETED
         assert process_runs[0].result.artifact["result"] == "got hello"
 
-    def test_async_step_with_exit_rules(self, engine, store, mock_backend):
-        """Async step completion triggers exit rule evaluation."""
+        job = store.load_job(job.id)
+        assert job.status == JobStatus.COMPLETED
+
+    def test_agent_step_with_exit_rules(self, engine, store, mock_backend):
+        """Agent step completion triggers downstream exit rule evaluation."""
+        mock_backend.set_auto_complete({"plan": "my plan"})
         register_step_fn("scorer", lambda inputs: {
             "score": 5, "passed": True,
         })
@@ -291,12 +247,6 @@ class TestAsyncInDAG:
         job = engine.create_job("Test exit rules", wf)
         engine.start_job(job.id)
 
-        # Complete agent step
-        run = store.runs_for_step(job.id, "agent_step")[0]
-        mock_backend.complete_process(run.executor_state["pid"], {"plan": "my plan"})
-        engine.tick()
-
-        # Score step should complete and job should be done
         job = store.load_job(job.id)
         assert job.status == JobStatus.COMPLETED
 
@@ -304,56 +254,90 @@ class TestAsyncInDAG:
 # ── Test: StepLimits ──────────────────────────────────────────────────
 
 
+class _SlowAsyncExecutor(Executor):
+    """Test executor that returns type=async and stays running until completed externally."""
+
+    def __init__(self):
+        self._cancelled = False
+
+    def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
+        return ExecutorResult(type="async", executor_state={"running": True})
+
+    def check_status(self, state: dict) -> ExecutorStatus:
+        if state.get("completed"):
+            return ExecutorStatus(
+                state="completed",
+                result=ExecutorResult(
+                    type="data",
+                    envelope=HandoffEnvelope(
+                        artifact=state.get("result", {"status": "done"}),
+                        sidecar=Sidecar(), workspace="", timestamp=_now(),
+                    ),
+                ),
+            )
+        return ExecutorStatus(state="running")
+
+    def cancel(self, state: dict) -> None:
+        self._cancelled = True
+
+
 class TestStepLimits:
     """Test cost and duration limit enforcement."""
 
-    def test_duration_limit_kills_step(self, engine, store, mock_backend):
+    @pytest.fixture
+    def async_engine(self, store):
+        """Engine with a slow async executor for limit testing."""
+        reg = ExecutorRegistry()
+        reg.register("slow_async", lambda config: _SlowAsyncExecutor())
+        reg.register("callable", lambda config: CallableExecutor(fn_name=config.get("fn_name", "default")))
+        return Engine(store=store, registry=reg)
+
+    def test_duration_limit_kills_step(self, async_engine, store):
         """Step exceeding duration limit gets cancelled."""
         wf = WorkflowDefinition(steps={
-            "slow_agent": StepDefinition(
-                name="slow_agent",
+            "slow_step": StepDefinition(
+                name="slow_step",
                 outputs=["status"],
-                executor=ExecutorRef("agent", {"prompt": "Slow work"}),
+                executor=ExecutorRef("slow_async", {}),
                 limits=StepLimits(max_duration_minutes=0.001),  # ~60ms
             ),
         })
-        job = engine.create_job("Test duration limit", wf)
-        engine.start_job(job.id)
+        job = async_engine.create_job("Test duration limit", wf)
+        async_engine.start_job(job.id)
 
-        # Wait a tiny bit for the limit to be exceeded
-        import time
+        # Step is RUNNING (async executor)
+        run = store.latest_run(job.id, "slow_step")
+        assert run.status == StepRunStatus.RUNNING
+
+        # Wait for limit to be exceeded
         time.sleep(0.1)
+        async_engine.tick()
 
-        engine.tick()
-
-        run = store.latest_run(job.id, "slow_agent")
+        run = store.latest_run(job.id, "slow_step")
         assert run.status == StepRunStatus.FAILED
         assert run.error_category == "timeout"
         assert "Duration limit" in run.error
 
-        # Backend should have been cancelled
-        assert mock_backend.cancel_count >= 1
-
-    def test_cost_limit_kills_step(self, engine, store, mock_backend):
+    def test_cost_limit_kills_step(self, async_engine, store):
         """Step exceeding cost limit gets cancelled."""
         wf = WorkflowDefinition(steps={
-            "expensive_agent": StepDefinition(
-                name="expensive_agent",
+            "expensive_step": StepDefinition(
+                name="expensive_step",
                 outputs=["status"],
-                executor=ExecutorRef("agent", {"prompt": "Expensive work"}),
+                executor=ExecutorRef("slow_async", {}),
                 limits=StepLimits(max_cost_usd=0.50),
             ),
         })
-        job = engine.create_job("Test cost limit", wf)
-        engine.start_job(job.id)
+        job = async_engine.create_job("Test cost limit", wf)
+        async_engine.start_job(job.id)
 
         # Record cost exceeding limit
-        run = store.runs_for_step(job.id, "expensive_agent")[0]
+        run = store.runs_for_step(job.id, "expensive_step")[0]
         store.save_step_event(run.id, "cost", {"cost_usd": 0.60})
 
-        engine.tick()
+        async_engine.tick()
 
-        run = store.latest_run(job.id, "expensive_agent")
+        run = store.latest_run(job.id, "expensive_step")
         assert run.status == StepRunStatus.FAILED
         assert run.error_category == "cost_limit"
         assert "Cost limit" in run.error
@@ -402,24 +386,23 @@ class TestStepLimits:
         restored = StepDefinition.from_dict(d)
         assert restored.limits is None
 
-    def test_no_limits_means_no_enforcement(self, engine, store, mock_backend):
+    def test_no_limits_means_no_enforcement(self, async_engine, store):
         """Steps without limits run indefinitely (no enforcement)."""
         wf = WorkflowDefinition(steps={
-            "agent_step": StepDefinition(
-                name="agent_step",
+            "async_step": StepDefinition(
+                name="async_step",
                 outputs=["status"],
-                executor=ExecutorRef("agent", {"prompt": "No limits"}),
-                # No limits set
+                executor=ExecutorRef("slow_async", {}),
             ),
         })
-        job = engine.create_job("No limits", wf)
-        engine.start_job(job.id)
+        job = async_engine.create_job("No limits", wf)
+        async_engine.start_job(job.id)
 
         # Multiple ticks should not fail
         for _ in range(5):
-            engine.tick()
+            async_engine.tick()
 
-        run = store.latest_run(job.id, "agent_step")
+        run = store.latest_run(job.id, "async_step")
         assert run.status == StepRunStatus.RUNNING
 
 
@@ -431,6 +414,7 @@ class TestErrorCategories:
 
     def test_error_category_on_failure(self, engine, store, mock_backend):
         """Failed step gets error_category set."""
+        mock_backend.set_auto_fail("Connection refused")
         wf = WorkflowDefinition(steps={
             "agent_step": StepDefinition(
                 name="agent_step",
@@ -441,17 +425,13 @@ class TestErrorCategories:
         job = engine.create_job("Test error cat", wf)
         engine.start_job(job.id)
 
-        run = store.runs_for_step(job.id, "agent_step")[0]
-        mock_backend.fail_process(run.executor_state["pid"], "Connection refused")
-
-        engine.tick()
-
         run = store.latest_run(job.id, "agent_step")
         assert run.status == StepRunStatus.FAILED
-        assert run.error_category is not None
+        assert run.error_category == "infra_failure"
 
     def test_exit_rule_routes_failure_to_loop(self, engine, store, mock_backend):
         """Exit rule can catch a failure and loop to retry."""
+        mock_backend.set_auto_fail("Connection refused")
         wf = WorkflowDefinition(steps={
             "agent_step": StepDefinition(
                 name="agent_step",
@@ -471,24 +451,15 @@ class TestErrorCategories:
         job = engine.create_job("Test failure routing", wf)
         engine.start_job(job.id)
 
-        # First attempt fails with infra_failure
-        run = store.runs_for_step(job.id, "agent_step")[0]
-        mock_backend.fail_process(run.executor_state["pid"], "Connection refused")
-        # Classify as infra_failure
-        mock_backend._completions[run.executor_state["pid"]] = AgentStatus(
-            state="failed", error="Connection refused"
-        )
-
-        engine.tick()
-
-        # The exit rule should have triggered a retry (new run)
+        # The exit rule should have triggered a retry — blocking start() means
+        # the retry also runs immediately. Two attempts: both fail with same auto_fail.
         runs = store.runs_for_step(job.id, "agent_step")
-        assert len(runs) == 2  # Original + retry
+        assert len(runs) >= 2
         assert runs[0].status == StepRunStatus.FAILED
-        assert runs[1].status == StepRunStatus.RUNNING
 
     def test_exit_rule_escalates_on_agent_failure(self, engine, store, mock_backend):
         """Exit rule can escalate on agent_failure."""
+        mock_backend.set_auto_fail("Agent could not complete task")
         wf = WorkflowDefinition(steps={
             "agent_step": StepDefinition(
                 name="agent_step",
@@ -506,16 +477,12 @@ class TestErrorCategories:
         job = engine.create_job("Test escalate", wf)
         engine.start_job(job.id)
 
-        run = store.runs_for_step(job.id, "agent_step")[0]
-        mock_backend.fail_process(run.executor_state["pid"], "Agent could not complete task")
-
-        engine.tick()
-
         job = store.load_job(job.id)
         assert job.status == JobStatus.PAUSED  # Escalated, not failed
 
     def test_unhandled_failure_halts_job(self, engine, store, mock_backend):
         """Failure with no matching exit rule halts the job."""
+        mock_backend.set_auto_fail("Total failure")
         wf = WorkflowDefinition(steps={
             "agent_step": StepDefinition(
                 name="agent_step",
@@ -527,21 +494,20 @@ class TestErrorCategories:
         job = engine.create_job("Test unhandled", wf)
         engine.start_job(job.id)
 
-        run = store.runs_for_step(job.id, "agent_step")[0]
-        mock_backend.fail_process(run.executor_state["pid"], "Total failure")
-
-        engine.tick()
-
         job = store.load_job(job.id)
         assert job.status == JobStatus.FAILED
 
-    def test_timeout_limit_sets_timeout_category(self, engine, store, mock_backend):
-        """Duration limit exceeded sets error_category=timeout."""
+    def test_timeout_limit_sets_timeout_category(self, store):
+        """Duration limit exceeded sets error_category=timeout on async executor."""
+        reg = ExecutorRegistry()
+        reg.register("slow_async", lambda config: _SlowAsyncExecutor())
+        eng = Engine(store=store, registry=reg)
+
         wf = WorkflowDefinition(steps={
-            "agent_step": StepDefinition(
-                name="agent_step",
+            "slow_step": StepDefinition(
+                name="slow_step",
                 outputs=["status"],
-                executor=ExecutorRef("agent", {"prompt": "Slow"}),
+                executor=ExecutorRef("slow_async", {}),
                 limits=StepLimits(max_duration_minutes=0.001),
                 exit_rules=[
                     ExitRule("handle_timeout", "field_match", {
@@ -552,17 +518,17 @@ class TestErrorCategories:
                 ],
             ),
         })
-        job = engine.create_job("Test timeout routing", wf)
-        engine.start_job(job.id)
+        job = eng.create_job("Test timeout routing", wf)
+        eng.start_job(job.id)
 
         time.sleep(0.1)
-        engine.tick()
+        eng.tick()
 
         # Should be escalated (paused), not failed
         job = store.load_job(job.id)
         assert job.status == JobStatus.PAUSED
 
-        run = store.latest_run(job.id, "agent_step")
+        run = store.latest_run(job.id, "slow_step")
         assert run.error_category == "timeout"
 
 
@@ -572,12 +538,10 @@ class TestErrorCategories:
 class TestLoopPattern:
     """Test the plan→score→refine→score→implement pattern."""
 
-    def test_plan_score_refine_loop(self, engine, store, mock_backend):
+    def test_plan_score_refine_loop(self, engine, store):
         """A→B→C→B→D: plan, score (fail), refine, score (pass), implement.
 
-        Data flow: plan outputs plan_content → score passes it through along
-        with scores/suggestions → refine uses suggestions → outputs plan_content
-        → score re-runs (supersedes) → loops until pass → implement.
+        Uses callable executors to test the DAG loop flow without async concerns.
         """
         score_call_count = [0]
 
@@ -597,15 +561,15 @@ class TestLoopPattern:
             }
 
         register_step_fn("score_fn", score_fn)
+        register_step_fn("plan_fn", lambda inputs: {"plan_content": "initial plan"})
+        register_step_fn("refine_fn", lambda inputs: {"plan_content": "refined plan"})
+        register_step_fn("implement_fn", lambda inputs: {"status": "done"})
 
         wf = WorkflowDefinition(steps={
             "plan": StepDefinition(
                 name="plan",
                 outputs=["plan_content"],
-                executor=ExecutorRef("agent", {
-                    "prompt": "Write a plan",
-                    "output_mode": "effect",
-                }),
+                executor=ExecutorRef("callable", {"fn_name": "plan_fn"}),
             ),
             "score": StepDefinition(
                 name="score",
@@ -623,16 +587,12 @@ class TestLoopPattern:
             "refine": StepDefinition(
                 name="refine",
                 outputs=["plan_content"],
-                executor=ExecutorRef("agent", {
-                    "prompt": "Refine: $suggestions",
-                    "output_mode": "effect",
-                }),
+                executor=ExecutorRef("callable", {"fn_name": "refine_fn"}),
                 inputs=[
                     InputBinding("plan_content", "score", "plan_content"),
                     InputBinding("suggestions", "score", "suggestions"),
                 ],
                 exit_rules=[
-                    # After refine, always loop back to score for re-evaluation
                     ExitRule("rescore", "always",
                              {"action": "loop", "target": "score"}, priority=10),
                 ],
@@ -640,10 +600,7 @@ class TestLoopPattern:
             "implement": StepDefinition(
                 name="implement",
                 outputs=["status"],
-                executor=ExecutorRef("agent", {
-                    "prompt": "Implement the plan",
-                    "output_mode": "effect",
-                }),
+                executor=ExecutorRef("callable", {"fn_name": "implement_fn"}),
                 inputs=[InputBinding("plan_content", "score", "plan_content")],
                 sequencing=["score"],
             ),
@@ -652,65 +609,35 @@ class TestLoopPattern:
         job = engine.create_job("Test loop", wf)
         engine.start_job(job.id)
 
-        # Step 1: plan is RUNNING (async)
-        plan_run = store.latest_run(job.id, "plan")
-        assert plan_run.status == StepRunStatus.RUNNING
-
-        # Complete plan
-        mock_backend.complete_process(
-            plan_run.executor_state["pid"],
-            {"plan_content": "initial plan"}
-        )
-        engine.tick()
-
-        # Step 2: score runs (sync), returns passed=False → loops to refine
-        score_run = store.latest_completed_run(job.id, "score")
-        assert score_run is not None
-        assert score_run.result.artifact["passed"] is False
-
-        # Step 3: refine is now RUNNING (async)
-        refine_run = store.latest_run(job.id, "refine")
-        assert refine_run.status == StepRunStatus.RUNNING
-
-        # Complete refine
-        mock_backend.complete_process(
-            refine_run.executor_state["pid"],
-            {"plan_content": "refined plan"}
-        )
-        engine.tick()
-
-        # Step 4: score runs again (attempt 2), returns passed=True → advance
-        score_runs = store.runs_for_step(job.id, "score")
-        assert len(score_runs) == 2  # Two score attempts
-        assert score_runs[1].result.artifact["passed"] is True
-
-        # Step 5: implement is now RUNNING (async)
-        impl_run = store.latest_run(job.id, "implement")
-        assert impl_run.status == StepRunStatus.RUNNING
-
-        # Complete implement
-        mock_backend.complete_process(
-            impl_run.executor_state["pid"],
-            {"status": "done"}
-        )
-        engine.tick()
-
-        # Job should be completed
+        # All steps complete synchronously during start_job
         job = store.load_job(job.id)
         assert job.status == JobStatus.COMPLETED
 
-        # Verify spawn count: plan + refine + implement = 3 agent spawns
-        assert mock_backend.spawn_count == 3
+        # Score ran twice (fail then pass)
+        score_runs = store.runs_for_step(job.id, "score")
+        assert len(score_runs) == 2
+        assert score_runs[0].result.artifact["passed"] is False
+        assert score_runs[1].result.artifact["passed"] is True
+
+        # Refine ran once
+        refine_runs = store.runs_for_step(job.id, "refine")
+        assert len(refine_runs) == 1
+
+        # Implement ran
+        impl_run = store.latest_run(job.id, "implement")
+        assert impl_run.status == StepRunStatus.COMPLETED
+        assert impl_run.result.artifact["status"] == "done"
 
 
 # ── Test: Agent Executor ──────────────────────────────────────────────
 
 
 class TestAgentExecutor:
-    """Test the AgentExecutor implementation."""
+    """Test the AgentExecutor implementation (blocking start())."""
 
-    def test_agent_executor_start_returns_async(self, mock_backend):
-        """AgentExecutor.start() returns type=async with executor_state."""
+    def test_agent_executor_start_returns_data(self, mock_backend):
+        """AgentExecutor.start() blocks and returns type=data with executor_state."""
+        mock_backend.set_auto_complete({"status": "done"})
         executor = AgentExecutor(
             backend=mock_backend,
             prompt="Hello $name",
@@ -722,58 +649,42 @@ class TestAgentExecutor:
         )
         result = executor.start({"name": "world"}, ctx)
 
-        assert result.type == "async"
+        assert result.type == "data"
         assert result.executor_state is not None
         assert "pid" in result.executor_state
         assert result.executor_state["output_mode"] == "effect"
 
-    def test_agent_executor_check_status_running(self, mock_backend):
-        """check_status returns running while process is alive."""
+    def test_agent_executor_completed(self, mock_backend):
+        """start() returns data result with envelope after process exits."""
+        mock_backend.set_auto_complete({"status": "done"})
         executor = AgentExecutor(backend=mock_backend, prompt="test")
         ctx = ExecutionContext(
             job_id="job-1", step_name="test", attempt=1,
             workspace_path="/tmp/test", idempotency="idempotent",
         )
         result = executor.start({}, ctx)
-        status = executor.check_status(result.executor_state)
 
-        assert status.state == "running"
+        assert result.type == "data"
+        assert result.envelope is not None
 
-    def test_agent_executor_check_status_completed(self, mock_backend):
-        """check_status returns completed with result after process exits."""
+    def test_agent_executor_failed(self, mock_backend):
+        """start() returns failure with error category."""
+        mock_backend.set_auto_fail("Connection refused")
         executor = AgentExecutor(backend=mock_backend, prompt="test")
         ctx = ExecutionContext(
             job_id="job-1", step_name="test", attempt=1,
             workspace_path="/tmp/test", idempotency="idempotent",
         )
         result = executor.start({}, ctx)
-        pid = result.executor_state["pid"]
 
-        mock_backend.complete_process(pid, {"status": "done"})
-        status = executor.check_status(result.executor_state)
-
-        assert status.state == "completed"
-        assert status.result is not None
-        assert status.result.envelope is not None
-
-    def test_agent_executor_check_status_failed(self, mock_backend):
-        """check_status returns failed with error category."""
-        executor = AgentExecutor(backend=mock_backend, prompt="test")
-        ctx = ExecutionContext(
-            job_id="job-1", step_name="test", attempt=1,
-            workspace_path="/tmp/test", idempotency="idempotent",
-        )
-        result = executor.start({}, ctx)
-        pid = result.executor_state["pid"]
-
-        mock_backend.fail_process(pid, "Connection refused")
-        status = executor.check_status(result.executor_state)
-
-        assert status.state == "failed"
-        assert status.error_category is not None
+        assert result.type == "data"
+        assert result.executor_state["failed"] is True
+        assert "Connection refused" in result.executor_state["error"]
+        assert result.executor_state["error_category"] == "infra_failure"
 
     def test_agent_executor_cancel(self, mock_backend):
         """cancel() delegates to backend."""
+        mock_backend.set_auto_complete()
         executor = AgentExecutor(backend=mock_backend, prompt="test")
         ctx = ExecutionContext(
             job_id="job-1", step_name="test", attempt=1,
@@ -786,6 +697,7 @@ class TestAgentExecutor:
 
     def test_prompt_template_rendering(self, mock_backend):
         """Prompt template renders with input values."""
+        mock_backend.set_auto_complete()
         executor = AgentExecutor(
             backend=mock_backend,
             prompt="Analyze $topic and report on $aspect",
@@ -803,7 +715,8 @@ class TestAgentExecutor:
         assert "performance" in info["prompt"]
 
     def test_output_mode_preserved_in_state(self, mock_backend):
-        """Output mode is stored in executor_state for check_status."""
+        """Output mode is stored in executor_state."""
+        mock_backend.set_auto_complete()
         for mode in ["effect", "file", "stream_result"]:
             executor = AgentExecutor(
                 backend=mock_backend, prompt="test", output_mode=mode,
@@ -817,20 +730,17 @@ class TestAgentExecutor:
 
     def test_completed_agent_returns_envelope(self, mock_backend):
         """Completed agent produces a HandoffEnvelope with artifact."""
+        mock_backend.set_auto_complete({"analysis": "done", "confidence": 0.95})
         executor = AgentExecutor(backend=mock_backend, prompt="test")
         ctx = ExecutionContext(
             job_id="job-1", step_name="test", attempt=1,
             workspace_path="/tmp/test", idempotency="idempotent",
         )
         result = executor.start({}, ctx)
-        pid = result.executor_state["pid"]
 
-        mock_backend.complete_process(pid, {"analysis": "done", "confidence": 0.95})
-        status = executor.check_status(result.executor_state)
-
-        assert status.state == "completed"
-        assert status.result.envelope.artifact["analysis"] == "done"
-        assert status.result.envelope.artifact["confidence"] == 0.95
+        assert result.type == "data"
+        assert result.envelope.artifact["analysis"] == "done"
+        assert result.envelope.artifact["confidence"] == 0.95
 
     def test_error_classification(self, mock_backend):
         """Error messages are classified into categories."""
@@ -848,12 +758,10 @@ class TestAgentExecutor:
             ("Could not complete task", "agent_failure"),
         ]
         for error_msg, expected_cat in test_cases:
+            mock_backend.set_auto_fail(error_msg)
             result = executor.start({}, ctx)
-            pid = result.executor_state["pid"]
-            mock_backend.fail_process(pid, error_msg)
-            status = executor.check_status(result.executor_state)
-            assert status.error_category == expected_cat, (
-                f"Expected '{expected_cat}' for '{error_msg}', got '{status.error_category}'"
+            assert result.executor_state["error_category"] == expected_cat, (
+                f"Expected '{expected_cat}' for '{error_msg}', got '{result.executor_state.get('error_category')}'"
             )
 
 
@@ -861,30 +769,33 @@ class TestAgentExecutor:
 
 
 class TestCancelStep:
-    """Test cancelling individual running steps."""
+    """Test cancelling running steps (uses async executor to keep step running)."""
 
-    def test_cancel_running_agent_step(self, engine, store, mock_backend):
-        """Cancelling a running agent step marks it failed."""
+    def test_cancel_running_async_step(self, store):
+        """Cancelling a running async step marks it failed."""
+        reg = ExecutorRegistry()
+        reg.register("slow_async", lambda config: _SlowAsyncExecutor())
+        eng = Engine(store=store, registry=reg)
+
         wf = WorkflowDefinition(steps={
-            "agent_step": StepDefinition(
-                name="agent_step",
+            "slow_step": StepDefinition(
+                name="slow_step",
                 outputs=["status"],
-                executor=ExecutorRef("agent", {"prompt": "Work"}),
+                executor=ExecutorRef("slow_async", {}),
             ),
         })
-        job = engine.create_job("Test cancel", wf)
-        engine.start_job(job.id)
+        job = eng.create_job("Test cancel", wf)
+        eng.start_job(job.id)
 
-        run = store.runs_for_step(job.id, "agent_step")[0]
+        run = store.runs_for_step(job.id, "slow_step")[0]
         assert run.status == StepRunStatus.RUNNING
 
-        # Cancel via engine's cancel_job
-        engine.cancel_job(job.id)
+        eng.cancel_job(job.id)
 
         job = store.load_job(job.id)
         assert job.status == JobStatus.CANCELLED
 
-        run = store.latest_run(job.id, "agent_step")
+        run = store.latest_run(job.id, "slow_step")
         assert run.status == StepRunStatus.FAILED
         assert "cancelled" in run.error.lower()
 
@@ -1013,10 +924,11 @@ class TestMaxIterations:
 
 
 class TestMixedWorkflow:
-    """Test workflows with both sync (script/callable) and async (agent) steps."""
+    """Test workflows with both sync (script/callable) and blocking agent steps."""
 
-    def test_sync_then_async_then_sync(self, engine, store, mock_backend):
-        """Script → Agent → Script pipeline."""
+    def test_sync_then_agent_then_sync(self, engine, store, mock_backend):
+        """Callable → Agent → Callable pipeline with blocking agent."""
+        mock_backend.set_auto_complete({"output": "processed data"})
         register_step_fn("prep", lambda inputs: {"data": "prepared"})
         register_step_fn("finish", lambda inputs: {"result": f"finished with {inputs['output']}"})
 
@@ -1042,24 +954,13 @@ class TestMixedWorkflow:
         job = engine.create_job("Mixed workflow", wf)
         engine.start_job(job.id)
 
-        # Prep completes immediately, agent starts
+        # All steps complete during start_job (blocking agent)
         prep_run = store.latest_run(job.id, "prep")
         assert prep_run.status == StepRunStatus.COMPLETED
 
         agent_run = store.latest_run(job.id, "agent")
-        assert agent_run.status == StepRunStatus.RUNNING
+        assert agent_run.status == StepRunStatus.COMPLETED
 
-        # Finish should NOT have started
-        assert store.latest_run(job.id, "finish") is None
-
-        # Complete agent
-        mock_backend.complete_process(
-            agent_run.executor_state["pid"],
-            {"output": "processed data"}
-        )
-        engine.tick()
-
-        # Finish should now be done
         finish_run = store.latest_run(job.id, "finish")
         assert finish_run.status == StepRunStatus.COMPLETED
         assert finish_run.result.artifact["result"] == "finished with processed data"

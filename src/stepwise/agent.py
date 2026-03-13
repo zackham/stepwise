@@ -58,6 +58,10 @@ class AgentBackend(Protocol):
     def spawn(self, prompt: str, config: dict, context: ExecutionContext) -> AgentProcess:
         ...
 
+    def wait(self, process: AgentProcess) -> AgentStatus:
+        """Block until the agent process exits. Returns final status."""
+        ...
+
     def check(self, process: AgentProcess) -> AgentStatus:
         ...
 
@@ -137,6 +141,19 @@ class AcpxBackend:
             working_dir=working_dir,
             session_name=session_name,
         )
+
+    def wait(self, process: AgentProcess) -> AgentStatus:
+        """Block until agent subprocess exits. Safe to call from thread pool."""
+        try:
+            _, status = os.waitpid(process.pid, 0)  # blocking wait
+            exit_code = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
+        except ChildProcessError:
+            # Not our child — poll until process disappears
+            while self._is_process_alive(process.pid):
+                import time
+                time.sleep(0.5)
+            exit_code = 0
+        return self._completed_status(process, exit_code)
 
     def check(self, process: AgentProcess) -> AgentStatus:
         # Try waitpid first (works when we're the parent)
@@ -409,12 +426,19 @@ class MockAgentBackend:
     """Simulates agent execution for testing.
 
     Tracks spawned processes and allows test code to control when they complete.
+
+    Two modes:
+    - Immediate: pre-set a result via auto_complete/auto_fail before spawning.
+      start() returns immediately. Used with AsyncEngine.
+    - Deferred: spawn first, then call complete_process()/fail_process().
+      wait() blocks until the result is set.
     """
 
     def __init__(self) -> None:
         self._processes: dict[int, dict] = {}
         self._next_pid = 10000
         self._completions: dict[int, AgentStatus] = {}
+        self._auto_result: AgentStatus | None = None
         self.spawn_count = 0
         self.cancel_count = 0
 
@@ -433,12 +457,25 @@ class MockAgentBackend:
             "context_attempt": context.attempt,
         }
 
+        # Auto-complete if configured
+        if self._auto_result is not None:
+            self._completions[pid] = self._auto_result
+            if self._auto_result.result:
+                self._processes[pid]["result"] = self._auto_result.result
+
         return AgentProcess(
             pid=pid,
             pgid=pid,
             output_path=output_path,
             working_dir=working_dir,
         )
+
+    def wait(self, process: AgentProcess) -> AgentStatus:
+        """Block until process is marked complete via complete_process() or fail_process()."""
+        import time
+        while process.pid not in self._completions:
+            time.sleep(0.01)
+        return self._completions[process.pid]
 
     def check(self, process: AgentProcess) -> AgentStatus:
         if process.pid in self._completions:
@@ -457,6 +494,24 @@ class MockAgentBackend:
         return False
 
     # ── Test control methods ──────────────────────────────────────────
+
+    def set_auto_complete(self, result: dict | None = None,
+                          cost_usd: float | None = None) -> None:
+        """Pre-set: all future spawns immediately complete with this result."""
+        self._auto_result = AgentStatus(
+            state="completed", exit_code=0,
+            cost_usd=cost_usd, result=result or {},
+        )
+
+    def set_auto_fail(self, error: str = "Mock failure") -> None:
+        """Pre-set: all future spawns immediately fail with this error."""
+        self._auto_result = AgentStatus(
+            state="failed", exit_code=1, error=error,
+        )
+
+    def clear_auto(self) -> None:
+        """Clear auto-completion — return to deferred mode."""
+        self._auto_result = None
 
     def complete_process(self, pid: int, result: dict | None = None,
                          cost_usd: float | None = None) -> None:
@@ -510,6 +565,7 @@ class AgentExecutor(Executor):
         self.config = config
 
     def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
+        """Spawn agent, block until completion. Runs in thread pool via AsyncEngine."""
         # For file output mode, generate step-specific output filename to prevent
         # collisions when multiple agent steps share the same workspace.
         output_file = self.output_path
@@ -519,18 +575,45 @@ class AgentExecutor(Executor):
         prompt = self._render_prompt(inputs, context)
         process = self.backend.spawn(prompt, self.config, context)
 
+        # Block until agent exits (safe — AsyncEngine runs this in thread pool)
+        agent_status = self.backend.wait(process)
+
+        state = {
+            "pid": process.pid,
+            "pgid": process.pgid,
+            "output_path": process.output_path,
+            "working_dir": process.working_dir,
+            "session_id": agent_status.session_id or process.session_id,
+            "session_name": process.session_name,
+            "output_mode": self.output_mode,
+            "output_file": output_file,
+        }
+
+        if agent_status.state == "failed":
+            error_cat = self._classify_error(agent_status)
+            return ExecutorResult(
+                type="data",
+                envelope=HandoffEnvelope(
+                    artifact={},
+                    sidecar=Sidecar(),
+                    workspace=process.working_dir,
+                    timestamp=_now(),
+                    executor_meta={"failed": True},
+                ),
+                executor_state={
+                    **state,
+                    "failed": True,
+                    "error": agent_status.error or "Agent failed",
+                    "error_category": error_cat,
+                },
+            )
+
+        # Completed — extract outputs based on mode
+        envelope = self._extract_output(state, self.output_mode, agent_status)
         return ExecutorResult(
-            type="async",
-            executor_state={
-                "pid": process.pid,
-                "pgid": process.pgid,
-                "output_path": process.output_path,
-                "working_dir": process.working_dir,
-                "session_id": process.session_id,
-                "session_name": process.session_name,
-                "output_mode": self.output_mode,
-                "output_file": output_file,
-            },
+            type="data",
+            envelope=envelope,
+            executor_state=state,
         )
 
     def check_status(self, state: dict) -> ExecutorStatus:
