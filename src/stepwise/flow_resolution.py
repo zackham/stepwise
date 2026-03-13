@@ -177,6 +177,42 @@ def flow_display_name(flow_path: Path) -> str:
     return flow_path.stem
 
 
+def resolve_registry_flow(author: str, slug: str, project_dir: Path | None = None) -> Path:
+    """Resolve a registry flow ref (@author:slug) to its cached FLOW.yaml path.
+
+    Looks in .stepwise/registry/@author/slug/FLOW.yaml within the project.
+    Raises FlowResolutionError if not cached locally.
+    """
+    if project_dir is None:
+        project_dir = Path.cwd()
+
+    registry_dir = project_dir / ".stepwise" / "registry" / f"@{author}" / slug
+    marker = registry_dir / FLOW_DIR_MARKER
+    if marker.is_file():
+        return marker
+
+    raise FlowResolutionError(
+        f"Registry flow '@{author}:{slug}' not cached locally. "
+        f"Expected at: {registry_dir}"
+    )
+
+
+def registry_flow_dir(author: str, slug: str, project_dir: Path) -> Path:
+    """Return the directory path for a registry flow cache."""
+    return project_dir / ".stepwise" / "registry" / f"@{author}" / slug
+
+
+def parse_registry_ref(ref: str) -> tuple[str, str] | None:
+    """Parse @author:name into (author, slug). Returns None if not a registry ref."""
+    if not ref.startswith("@"):
+        return None
+    body = ref[1:]  # strip @
+    if ":" in body:
+        author, slug = body.split(":", 1)
+        return (author, slug)
+    return None
+
+
 def _discovery_dirs(project_dir: Path) -> list[Path]:
     """Return ordered list of directories to search for flows."""
     return [

@@ -395,8 +395,8 @@ class TestGetWithBundle:
         rc = main(["get", "my-flow"])
         assert rc == EXIT_SUCCESS
 
-        # Verify directory structure
-        target_dir = tmp_path / "flows" / "my-flow"
+        # Verify directory structure in .stepwise/registry/@author/slug/
+        target_dir = tmp_path / ".stepwise" / "registry" / "@alice" / "my-flow"
         assert (target_dir / "FLOW.yaml").exists()
         assert (target_dir / "FLOW.yaml").read_text() == SIMPLE_FLOW
         assert (target_dir / "helper.py").read_text() == "x = 1"
@@ -431,7 +431,7 @@ class TestGetWithBundle:
         rc = main(["get", "my-flow"])
         assert rc == EXIT_SUCCESS
 
-        target_dir = tmp_path / "flows" / "my-flow"
+        target_dir = tmp_path / ".stepwise" / "registry" / "@alice" / "my-flow"
         assert (target_dir / "FLOW.yaml").exists()
         assert (target_dir / ".origin.json").exists()
 
@@ -450,8 +450,9 @@ class TestGetWithBundle:
             },
         )
 
-        # Pre-create target dir
-        (tmp_path / "flows" / "my-flow").mkdir(parents=True)
+        # Pre-create target dir at new location
+        reg_dir = tmp_path / ".stepwise" / "registry" / "@alice" / "my-flow"
+        reg_dir.mkdir(parents=True)
 
         rc = main(["get", "my-flow"])
         assert rc == EXIT_USAGE_ERROR
@@ -475,7 +476,7 @@ class TestGetWithBundle:
         )
 
         # Pre-create target dir with old content
-        target = tmp_path / "flows" / "my-flow"
+        target = tmp_path / ".stepwise" / "registry" / "@alice" / "my-flow"
         target.mkdir(parents=True)
         (target / "FLOW.yaml").write_text("old content")
 
@@ -507,7 +508,7 @@ class TestGetWithBundle:
         rc = main(["get", "@alice:cool-flow"])
         assert rc == EXIT_SUCCESS
         assert fetched_slugs == ["cool-flow"]
-        assert (tmp_path / "flows" / "cool-flow" / "FLOW.yaml").exists()
+        assert (tmp_path / ".stepwise" / "registry" / "@alice" / "cool-flow" / "FLOW.yaml").exists()
 
     def test_get_url_still_works(self, tmp_path, capsys, monkeypatch):
         """URL-based downloads still use the old path (not bundle)."""

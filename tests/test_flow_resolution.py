@@ -7,7 +7,10 @@ from stepwise.flow_resolution import (
     FlowResolutionError,
     FlowInfo,
     discover_flows,
+    parse_registry_ref,
+    registry_flow_dir,
     resolve_flow,
+    resolve_registry_flow,
 )
 from stepwise.cli import EXIT_SUCCESS, EXIT_USAGE_ERROR, main
 from stepwise.project import init_project
@@ -323,3 +326,89 @@ steps:
         output = json.loads(capsys.readouterr().out)
         assert output["status"] == "error"
         assert "not found" in output["error"].lower()
+
+
+# ── Registry ref parsing ──────────────────────────────────────────────
+
+
+class TestParseRegistryRef:
+    def test_author_name(self):
+        assert parse_registry_ref("@bob:code-review") == ("bob", "code-review")
+
+    def test_author_only(self):
+        # @bob without colon — not a valid registry ref (need author:name)
+        assert parse_registry_ref("@bob") is None
+
+    def test_bare_name(self):
+        assert parse_registry_ref("code-review") is None
+
+    def test_path(self):
+        assert parse_registry_ref("flows/test.flow.yaml") is None
+
+    def test_empty(self):
+        assert parse_registry_ref("") is None
+
+
+# ── Registry flow resolution ─────────────────────────────────────────
+
+
+class TestResolveRegistryFlow:
+    def test_resolves_cached_flow(self, tmp_path):
+        # Set up .stepwise/registry/@alice/my-flow/FLOW.yaml
+        reg_dir = tmp_path / ".stepwise" / "registry" / "@alice" / "my-flow"
+        reg_dir.mkdir(parents=True)
+        (reg_dir / "FLOW.yaml").write_text(SIMPLE_FLOW)
+
+        result = resolve_registry_flow("alice", "my-flow", tmp_path)
+        assert result == reg_dir / "FLOW.yaml"
+
+    def test_not_cached_raises(self, tmp_path):
+        with pytest.raises(FlowResolutionError, match="not cached"):
+            resolve_registry_flow("alice", "missing-flow", tmp_path)
+
+    def test_different_authors_dont_collide(self, tmp_path):
+        # alice and bob both have "code-review"
+        for author in ("alice", "bob"):
+            reg_dir = tmp_path / ".stepwise" / "registry" / f"@{author}" / "code-review"
+            reg_dir.mkdir(parents=True)
+            (reg_dir / "FLOW.yaml").write_text(f"name: code-review\nauthor: {author}\n")
+
+        alice_path = resolve_registry_flow("alice", "code-review", tmp_path)
+        bob_path = resolve_registry_flow("bob", "code-review", tmp_path)
+        assert alice_path != bob_path
+        assert "alice" in alice_path.read_text()
+        assert "bob" in bob_path.read_text()
+
+    def test_registry_flow_dir(self, tmp_path):
+        result = registry_flow_dir("alice", "my-flow", tmp_path)
+        assert result == tmp_path / ".stepwise" / "registry" / "@alice" / "my-flow"
+
+    def test_registry_flow_not_found_by_bare_name(self, tmp_path):
+        """Bare name resolution does NOT find registry flows."""
+        reg_dir = tmp_path / ".stepwise" / "registry" / "@alice" / "my-flow"
+        reg_dir.mkdir(parents=True)
+        (reg_dir / "FLOW.yaml").write_text(SIMPLE_FLOW)
+
+        # resolve_flow with bare name should NOT find it
+        with pytest.raises(FlowResolutionError):
+            resolve_flow("my-flow", tmp_path)
+
+    def test_local_flow_not_affected_by_registry(self, tmp_path):
+        """Local flow and registry flow with same name are independent."""
+        # Local flow
+        local_dir = tmp_path / "flows" / "my-flow"
+        local_dir.mkdir(parents=True)
+        (local_dir / "FLOW.yaml").write_text("name: my-flow\nauthor: me\n")
+
+        # Registry flow
+        reg_dir = tmp_path / ".stepwise" / "registry" / "@alice" / "my-flow"
+        reg_dir.mkdir(parents=True)
+        (reg_dir / "FLOW.yaml").write_text("name: my-flow\nauthor: alice\n")
+
+        # Bare name resolves to local
+        local_path = resolve_flow("my-flow", tmp_path)
+        assert "me" in local_path.read_text()
+
+        # @alice:my-flow resolves to registry
+        reg_path = resolve_registry_flow("alice", "my-flow", tmp_path)
+        assert "alice" in reg_path.read_text()

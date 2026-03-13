@@ -402,6 +402,7 @@ class FlowMetadata:
     author: str = ""
     version: str = ""
     tags: list[str] = field(default_factory=list)
+    forked_from: str = ""  # e.g. "@bob:code-review" — provenance for forked flows
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -415,6 +416,8 @@ class FlowMetadata:
             d["version"] = self.version
         if self.tags:
             d["tags"] = self.tags
+        if self.forked_from:
+            d["forked_from"] = self.forked_from
         return d
 
     @classmethod
@@ -425,6 +428,7 @@ class FlowMetadata:
             author=d.get("author", ""),
             version=d.get("version", ""),
             tags=d.get("tags", []),
+            forked_from=d.get("forked_from", ""),
         )
 
 

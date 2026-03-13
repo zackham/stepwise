@@ -89,7 +89,7 @@ class TestFlowGet:
         captured = capsys.readouterr()
         combined = captured.out + captured.err
         assert "downloaded" in combined.lower()
-        assert (tmp_path / "flows" / "downloaded" / "FLOW.yaml").exists()
+        assert (tmp_path / ".stepwise" / "registry" / "@alice" / "downloaded" / "FLOW.yaml").exists()
 
     def test_get_yml_extension_accepted(self, tmp_path, capsys, monkeypatch):
         monkeypatch.chdir(tmp_path)

@@ -680,32 +680,37 @@ def cmd_check(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
-def _try_registry_fetch(flow_ref: str, io: IOAdapter) -> Path | None:
-    """Try fetching a flow from the registry. Returns flow path or None."""
+def _try_registry_fetch(flow_ref: str, project_dir: Path, io: IOAdapter) -> Path | None:
+    """Fetch a flow from the registry into .stepwise/registry/@author/slug/.
+
+    Returns flow path or None if not found.
+    """
     from stepwise.bundle import unpack_bundle
+    from stepwise.flow_resolution import parse_registry_ref, registry_flow_dir
     from stepwise.registry_client import fetch_flow, RegistryError
 
-    # Parse @author:name or plain slug
-    if flow_ref.startswith("@"):
-        ref_body = flow_ref.lstrip("@")
-        slug = ref_body.split(":", 1)[-1] if ":" in ref_body else ref_body
-    else:
-        slug = flow_ref
+    parsed = parse_registry_ref(flow_ref)
+    if not parsed:
+        return None
+    author_hint, slug = parsed
 
     try:
-        io.log("info", f"Fetching '{slug}' from registry...")
+        io.log("info", f"Fetching '@{author_hint}:{slug}' from registry...")
         data = fetch_flow(slug)
     except RegistryError:
         return None
+
+    # Use the author from the registry response (authoritative)
+    author = data.get("author", author_hint)
 
     import hashlib
     from datetime import datetime, timezone
     from stepwise.registry_client import get_registry_url
 
-    target_dir = Path("flows") / slug
+    target_dir = registry_flow_dir(author, slug, project_dir)
     origin = {
         "registry": get_registry_url(),
-        "author": data.get("author", "unknown"),
+        "author": author,
         "slug": slug,
         "version": data.get("version", 1),
         "fetched_at": datetime.now(timezone.utc).isoformat(),
@@ -718,54 +723,48 @@ def _try_registry_fetch(flow_ref: str, io: IOAdapter) -> Path | None:
         origin=origin,
     )
     steps = data.get("steps", "?")
-    author = data.get("author", "unknown")
-    io.log("success", f"Downloaded {slug} ({steps} steps, by {author})")
+    io.log("success", f"Downloaded @{author}:{slug} ({steps} steps)")
     return flow_path
 
 
+def _run_flow_error(args, io, msg):
+    """Report a flow resolution error in the appropriate format."""
+    if getattr(args, "wait", False) or getattr(args, "async_mode", False):
+        from stepwise.runner import _json_error
+        _json_error(2, msg)
+    else:
+        io.log("error", msg)
+    return EXIT_USAGE_ERROR
+
+
 def cmd_run(args: argparse.Namespace) -> int:
-    from stepwise.flow_resolution import FlowResolutionError, resolve_flow, FLOW_NAME_PATTERN
+    from stepwise.flow_resolution import (
+        FlowResolutionError, parse_registry_ref, resolve_flow, resolve_registry_flow,
+    )
     from stepwise.runner import run_flow, parse_vars, load_vars_file
 
     io = _io(args)
     project = _find_project_or_exit(args)
+    project_dir = _project_dir(args) or Path.cwd()
 
-    # Resolve flow: @author:name fetches from registry, otherwise local only
+    # Resolve flow: @author:name uses registry cache, otherwise local only
     flow_ref = args.flow
-    if flow_ref.startswith("@"):
-        # Registry ref — fetch if not already local
-        slug = flow_ref.lstrip("@").split(":", 1)[-1] if ":" in flow_ref else flow_ref.lstrip("@")
+    parsed_ref = parse_registry_ref(flow_ref)
+
+    if parsed_ref:
+        author, slug = parsed_ref
+        # Registry ref — check local cache first, fetch if missing
         try:
-            flow_path = resolve_flow(slug, _project_dir(args))
+            flow_path = resolve_registry_flow(author, slug, project_dir)
         except FlowResolutionError:
-            flow_path = _try_registry_fetch(flow_ref, io)
+            flow_path = _try_registry_fetch(flow_ref, project_dir, io)
             if not flow_path:
-                msg = f"Flow '{flow_ref}' not found in registry"
-                if getattr(args, "wait", False) or getattr(args, "async_mode", False):
-                    from stepwise.runner import _json_error
-                    _json_error(2, msg)
-                    return EXIT_USAGE_ERROR
-                io.log("error", msg)
-                return EXIT_USAGE_ERROR
-            try:
-                flow_path = resolve_flow(slug, _project_dir(args))
-            except FlowResolutionError as e2:
-                if getattr(args, "wait", False) or getattr(args, "async_mode", False):
-                    from stepwise.runner import _json_error
-                    _json_error(2, str(e2))
-                    return EXIT_USAGE_ERROR
-                io.log("error", str(e2))
-                return EXIT_USAGE_ERROR
+                return _run_flow_error(args, io, f"Flow '{flow_ref}' not found in registry")
     else:
         try:
-            flow_path = resolve_flow(flow_ref, _project_dir(args))
+            flow_path = resolve_flow(flow_ref, project_dir)
         except FlowResolutionError as e:
-            if getattr(args, "wait", False) or getattr(args, "async_mode", False):
-                from stepwise.runner import _json_error
-                _json_error(2, str(e))
-                return EXIT_USAGE_ERROR
-            io.log("error", str(e))
-            return EXIT_USAGE_ERROR
+            return _run_flow_error(args, io, str(e))
 
     # Parse input variables (shared across all modes)
     inputs: dict = {}
@@ -1406,31 +1405,33 @@ def _format_age(seconds: int) -> str:
 def cmd_get(args: argparse.Namespace) -> int:
     """Download a flow by URL or registry name."""
     from stepwise.bundle import unpack_bundle
+    from stepwise.flow_resolution import parse_registry_ref, registry_flow_dir
     from stepwise.registry_client import fetch_flow, get_registry_url, RegistryError
 
+    io = _io(args)
     target = args.target
     if not target:
-        print("Error: flow get requires a URL or name", file=sys.stderr)
+        io.log("error", "flow get requires a URL or @author:name")
         return EXIT_USAGE_ERROR
 
     # URL download
     if target.startswith("http://") or target.startswith("https://"):
         return _flow_get_url(target)
 
-    # Registry name lookup — parse @author:name format
-    if target.startswith("@"):
-        ref_body = target.lstrip("@")
-        if ":" in ref_body:
-            _author, slug = ref_body.split(":", 1)
-        else:
-            slug = ref_body
+    # Registry name lookup — require @author:name format
+    parsed = parse_registry_ref(target)
+    if parsed:
+        author_hint, slug = parsed
     else:
+        # Bare name — treat as slug with unknown author
         slug = target
+        author_hint = None
+
     force = getattr(args, "force", False)
     try:
         data = fetch_flow(slug)
     except RegistryError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        io.log("error", str(e))
         return EXIT_USAGE_ERROR
 
     bundle_files = data.get("files")
@@ -1438,12 +1439,12 @@ def cmd_get(args: argparse.Namespace) -> int:
     author = data.get("author", "unknown")
     downloads = data.get("downloads", 0)
 
-    # Determine install location
-    flows_dir = Path("flows")
-    target_dir = flows_dir / slug
+    # Install to .stepwise/registry/@author/slug/
+    project_dir = Path.cwd()
+    target_dir = registry_flow_dir(author, slug, project_dir)
 
     if target_dir.exists() and not force:
-        print(f"Error: {target_dir} already exists (use --force to overwrite)", file=sys.stderr)
+        io.log("error", f"{target_dir} already exists (use --force to overwrite)")
         return EXIT_USAGE_ERROR
 
     # Build origin metadata
@@ -1466,11 +1467,10 @@ def cmd_get(args: argparse.Namespace) -> int:
         origin=origin,
     )
 
-    io = _io(args)
     file_count = len(bundle_files) if bundle_files else 0
     file_msg = f" + {file_count} file(s)" if file_count else ""
-    io.log("success", f"Downloaded {target_dir}/{file_msg} ({steps} steps, by {author}, {downloads:,} downloads)")
-    io.log("info", f"Run: stepwise run {flow_path}")
+    io.log("success", f"Downloaded @{author}:{slug}{file_msg} ({steps} steps, {downloads:,} downloads)")
+    io.log("info", f"Run: stepwise run @{author}:{slug}")
     return EXIT_SUCCESS
 
 

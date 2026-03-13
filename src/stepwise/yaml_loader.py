@@ -932,6 +932,7 @@ def _parse_metadata(data: dict, source_path: Path | None = None) -> FlowMetadata
         author=data.get("author", ""),
         version=data.get("version", ""),
         tags=data.get("tags", []) if isinstance(data.get("tags"), list) else [],
+        forked_from=data.get("forked_from", ""),
     )
 
 
