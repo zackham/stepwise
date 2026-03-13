@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
 
 import asyncio
 
@@ -99,6 +99,170 @@ class StdinHumanHandler:
         self._input = input_stream or sys.stdin
         self._output = output_stream or sys.stderr
 
+    def _collect_field(
+        self, field_name: str, spec: dict | None, is_only_field: bool,
+    ) -> tuple[str, Any]:
+        """Collect a single typed field from stdin.
+
+        Returns (field_name, value). value is None if optional and skipped.
+        """
+        from stepwise.models import OutputFieldSpec
+        s = OutputFieldSpec.from_dict(spec) if spec else OutputFieldSpec()
+
+        indent = "  " if is_only_field else "    "
+        optional_tag = " (optional)" if not s.required else ""
+
+        if s.description:
+            self._output.write(f"{indent}# {s.description}\n")
+            self._output.flush()
+
+        if s.type == "bool":
+            default_str = ""
+            if s.default is not None:
+                default_str = f" [{'yes' if s.default else 'no'}]"
+            self._output.write(f"{indent}{field_name} (y/n){default_str}{optional_tag}: ")
+            self._output.flush()
+            for _ in range(5):
+                raw = self._input.readline().strip().lower()
+                if not raw:
+                    if s.default is not None:
+                        return field_name, s.default
+                    if not s.required:
+                        return field_name, None
+                if raw in ("y", "yes", "true", "1"):
+                    return field_name, True
+                if raw in ("n", "no", "false", "0"):
+                    return field_name, False
+                self._output.write(f"{indent}  Please enter y or n: ")
+                self._output.flush()
+            return field_name, s.default
+
+        if s.type == "number":
+            range_str = ""
+            if s.min is not None and s.max is not None:
+                range_str = f" ({s.min}-{s.max})"
+            elif s.min is not None:
+                range_str = f" (>={s.min})"
+            elif s.max is not None:
+                range_str = f" (<={s.max})"
+            default_str = f" [{s.default}]" if s.default is not None else ""
+            self._output.write(f"{indent}{field_name}{range_str}{default_str}{optional_tag}: ")
+            self._output.flush()
+            for _ in range(5):
+                raw = self._input.readline().strip()
+                if not raw:
+                    if s.default is not None:
+                        return field_name, s.default
+                    if not s.required:
+                        return field_name, None
+                try:
+                    num = float(raw)
+                    if s.min is not None and num < s.min:
+                        self._output.write(f"{indent}  Must be >= {s.min}: ")
+                        self._output.flush()
+                        continue
+                    if s.max is not None and num > s.max:
+                        self._output.write(f"{indent}  Must be <= {s.max}: ")
+                        self._output.flush()
+                        continue
+                    return field_name, num
+                except ValueError:
+                    self._output.write(f"{indent}  Enter a number: ")
+                    self._output.flush()
+            return field_name, s.default
+
+        if s.type == "choice" and s.options:
+            self._output.write(f"{indent}{field_name}{optional_tag}:\n")
+            for i, opt in enumerate(s.options, 1):
+                marker = "*" if s.default == opt else " "
+                self._output.write(f"{indent}  {marker}{i}. {opt}\n")
+            self._output.flush()
+
+            if s.multiple:
+                # Multi-select: toggle numbers, blank to confirm
+                selected: list[str] = list(s.default) if isinstance(s.default, list) else []
+                self._output.write(f"{indent}  Toggle (1-{len(s.options)}), blank to confirm: ")
+                self._output.flush()
+                for _ in range(20):
+                    raw = self._input.readline().strip()
+                    if not raw:
+                        if not selected and not s.required:
+                            return field_name, None
+                        return field_name, selected
+                    try:
+                        idx = int(raw) - 1
+                        if 0 <= idx < len(s.options):
+                            opt = s.options[idx]
+                            if opt in selected:
+                                selected.remove(opt)
+                            else:
+                                selected.append(opt)
+                    except ValueError:
+                        if raw in s.options:
+                            if raw in selected:
+                                selected.remove(raw)
+                            else:
+                                selected.append(raw)
+                    self._output.write(f"{indent}  Selected: {selected}. Toggle or blank: ")
+                    self._output.flush()
+                return field_name, selected
+            else:
+                # Single select
+                default_str = f" [{s.default}]" if s.default else ""
+                self._output.write(f"{indent}  Choice{default_str}: ")
+                self._output.flush()
+                for _ in range(5):
+                    raw = self._input.readline().strip()
+                    if not raw:
+                        if s.default is not None:
+                            return field_name, s.default
+                        if not s.required:
+                            return field_name, None
+                    # Accept by number
+                    try:
+                        idx = int(raw) - 1
+                        if 0 <= idx < len(s.options):
+                            return field_name, s.options[idx]
+                    except ValueError:
+                        pass
+                    # Accept by text
+                    if raw in s.options:
+                        return field_name, raw
+                    self._output.write(f"{indent}  Invalid. Choose 1-{len(s.options)}: ")
+                    self._output.flush()
+                return field_name, s.default
+
+        if s.type == "text":
+            self._output.write(f"{indent}{field_name} (blank line to finish){optional_tag}:\n")
+            self._output.flush()
+            lines: list[str] = []
+            while True:
+                line = self._input.readline()
+                if not line:  # EOF
+                    break
+                stripped = line.rstrip("\n")
+                if stripped == "":
+                    break
+                lines.append(stripped)
+            text = "\n".join(lines)
+            if not text and not s.required:
+                return field_name, None
+            if not text and s.default is not None:
+                return field_name, s.default
+            return field_name, text
+
+        # Default: str type
+        default_str = f" [{s.default}]" if s.default is not None else ""
+        self._output.write(f"{indent}{field_name}{default_str}{optional_tag}: ")
+        self._output.flush()
+        raw = self._input.readline().strip()
+        if not raw:
+            if s.default is not None:
+                return field_name, s.default
+            if not s.required:
+                return field_name, None
+        return field_name, raw
+
     def handle_suspended_step(self, engine: Engine | AsyncEngine, run: StepRun) -> None:
         """Print prompt, collect input per field, call engine.fulfill_watch()."""
         if not run.watch:
@@ -106,27 +270,23 @@ class StdinHumanHandler:
 
         prompt = (run.watch.config or {}).get("prompt", "")
         fields = run.watch.fulfillment_outputs
+        schema = run.watch.output_schema or {}
 
         if prompt:
             self._output.write(f"\n  {prompt}\n\n")
             self._output.flush()
 
-        payload: dict[str, str] = {}
-        if len(fields) == 1:
-            # Single field — simpler prompt
-            field_name = fields[0]
-            self._output.write(f"  {field_name}: ")
-            self._output.flush()
-            value = self._input.readline().strip()
-            payload[field_name] = value
-        else:
-            # Multi-field
+        payload: dict[str, Any] = {}
+        is_only = len(fields) == 1
+
+        if not is_only:
             self._output.write("  Fields:\n")
             self._output.flush()
-            for field_name in fields:
-                self._output.write(f"    {field_name}: ")
-                self._output.flush()
-                value = self._input.readline().strip()
+
+        for field_name in fields:
+            spec = schema.get(field_name)
+            _, value = self._collect_field(field_name, spec, is_only)
+            if value is not None:
                 payload[field_name] = value
 
         engine.fulfill_watch(run.id, payload)
@@ -425,24 +585,27 @@ async def _delegated_ws_loop(
 
 def _collect_human_input(
     prompt: str, fields: list[str], output: TextIO, input_stream: TextIO,
-) -> dict[str, str]:
+    output_schema: dict[str, dict] | None = None,
+) -> dict[str, Any]:
     """Collect human input for a suspended step (runs in thread)."""
+    handler = StdinHumanHandler(input_stream=input_stream, output_stream=output)
     if prompt:
         output.write(f"\n  {prompt}\n\n")
         output.flush()
 
-    payload: dict[str, str] = {}
-    if len(fields) == 1:
-        output.write(f"  {fields[0]}: ")
-        output.flush()
-        payload[fields[0]] = input_stream.readline().strip()
-    else:
+    schema = output_schema or {}
+    payload: dict[str, Any] = {}
+    is_only = len(fields) == 1
+
+    if not is_only:
         output.write("  Fields:\n")
         output.flush()
-        for f in fields:
-            output.write(f"    {f}: ")
-            output.flush()
-            payload[f] = input_stream.readline().strip()
+
+    for field_name in fields:
+        spec = schema.get(field_name)
+        _, value = handler._collect_field(field_name, spec, is_only)
+        if value is not None:
+            payload[field_name] = value
     return payload
 
 

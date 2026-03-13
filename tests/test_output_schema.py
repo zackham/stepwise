@@ -1,5 +1,6 @@
 """Tests for typed output fields (OutputFieldSpec, YAML parsing, engine validation)."""
 
+import io
 import pytest
 
 from stepwise.models import (
@@ -17,6 +18,7 @@ from stepwise.models import (
 )
 from stepwise.yaml_loader import load_workflow_string, YAMLLoadError
 from stepwise.engine import Engine
+from stepwise.runner import StdinHumanHandler
 from tests.conftest import register_step_fn, run_job_sync
 
 
@@ -570,3 +572,96 @@ class TestSuspendedStepDetails:
         assert len(details) == 1
         assert "output_schema" in details[0]
         assert details[0]["output_schema"]["decision"]["type"] == "bool"
+
+
+# ── StdinHumanHandler typed collection ──────────────────────────────
+
+
+class TestStdinHumanHandlerTyped:
+    def _handler(self, input_text: str):
+        inp = io.StringIO(input_text)
+        out = io.StringIO()
+        return StdinHumanHandler(input_stream=inp, output_stream=out), out
+
+    def test_str_field(self):
+        handler, out = self._handler("hello\n")
+        _, val = handler._collect_field("name", {"type": "str"}, True)
+        assert val == "hello"
+
+    def test_str_default(self):
+        handler, out = self._handler("\n")
+        _, val = handler._collect_field("name", {"type": "str", "default": "world"}, True)
+        assert val == "world"
+
+    def test_str_optional_blank(self):
+        handler, out = self._handler("\n")
+        _, val = handler._collect_field("name", {"type": "str", "required": False}, True)
+        assert val is None
+
+    def test_number_valid(self):
+        handler, _ = self._handler("7.5\n")
+        _, val = handler._collect_field("score", {"type": "number"}, True)
+        assert val == 7.5
+
+    def test_number_retry(self):
+        handler, _ = self._handler("abc\n5\n")
+        _, val = handler._collect_field("score", {"type": "number"}, True)
+        assert val == 5.0
+
+    def test_number_min_max(self):
+        handler, _ = self._handler("15\n8\n")
+        _, val = handler._collect_field("score", {"type": "number", "min": 0, "max": 10}, True)
+        assert val == 8.0
+
+    def test_bool_yes(self):
+        handler, _ = self._handler("y\n")
+        _, val = handler._collect_field("ok", {"type": "bool"}, True)
+        assert val is True
+
+    def test_bool_no(self):
+        handler, _ = self._handler("no\n")
+        _, val = handler._collect_field("ok", {"type": "bool"}, True)
+        assert val is False
+
+    def test_bool_default(self):
+        handler, _ = self._handler("\n")
+        _, val = handler._collect_field("ok", {"type": "bool", "default": True}, True)
+        assert val is True
+
+    def test_choice_by_number(self):
+        handler, _ = self._handler("2\n")
+        _, val = handler._collect_field(
+            "pick", {"type": "choice", "options": ["a", "b", "c"]}, True
+        )
+        assert val == "b"
+
+    def test_choice_by_text(self):
+        handler, _ = self._handler("c\n")
+        _, val = handler._collect_field(
+            "pick", {"type": "choice", "options": ["a", "b", "c"]}, True
+        )
+        assert val == "c"
+
+    def test_choice_multiple(self):
+        handler, _ = self._handler("1\n3\n\n")
+        _, val = handler._collect_field(
+            "picks",
+            {"type": "choice", "options": ["a", "b", "c"], "multiple": True},
+            True,
+        )
+        assert val == ["a", "c"]
+
+    def test_text_multiline(self):
+        handler, _ = self._handler("line one\nline two\n\n")
+        _, val = handler._collect_field("notes", {"type": "text"}, True)
+        assert val == "line one\nline two"
+
+    def test_text_optional_blank(self):
+        handler, _ = self._handler("\n")
+        _, val = handler._collect_field("notes", {"type": "text", "required": False}, True)
+        assert val is None
+
+    def test_no_schema_falls_back_to_str(self):
+        handler, _ = self._handler("hello\n")
+        _, val = handler._collect_field("answer", None, True)
+        assert val == "hello"
