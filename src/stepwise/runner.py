@@ -16,7 +16,10 @@ from typing import TextIO
 
 import asyncio
 
+import httpx
+
 from stepwise.config import StepwiseConfig, load_config
+from stepwise.flow_resolution import flow_display_name
 from stepwise.engine import AsyncEngine, Engine
 from stepwise.models import (
     Job,
@@ -164,6 +167,87 @@ def load_vars_file(path: str) -> dict:
             return yaml.safe_load(content) or {}
 
 
+def _ws_url_from_server(server_url: str) -> str:
+    """Convert an HTTP server URL to a WebSocket URL."""
+    url = server_url.rstrip("/")
+    if url.startswith("https://"):
+        return url.replace("https://", "wss://", 1) + "/ws"
+    return url.replace("http://", "ws://", 1) + "/ws"
+
+
+async def _fetch_job_state(
+    client, job_id: str,
+) -> tuple[dict, list[dict]]:
+    """Fetch job and runs from the server. Returns (job_dict, runs_list)."""
+    job_resp = await client.get(f"/api/jobs/{job_id}")
+    job_resp.raise_for_status()
+    runs_resp = await client.get(f"/api/jobs/{job_id}/runs")
+    runs_resp.raise_for_status()
+    return job_resp.json(), runs_resp.json()
+
+
+def _report_transitions(
+    runs: list[dict],
+    reporter: TerminalReporter,
+    seen_running: set[str],
+    seen_completed: set[str],
+) -> int:
+    """Report step transitions. Returns count of newly completed steps."""
+    newly_completed = 0
+    for run in runs:
+        run_id = run["id"]
+        status = run["status"]
+
+        if run_id not in seen_running and status in ("running", "suspended", "delegated"):
+            seen_running.add(run_id)
+            reporter.on_step_started(run["step_name"], "")
+
+        if run_id not in seen_completed:
+            if status == "completed":
+                seen_completed.add(run_id)
+                duration = 0.0
+                if run.get("started_at") and run.get("completed_at"):
+                    s = datetime.fromisoformat(run["started_at"]).timestamp()
+                    e = datetime.fromisoformat(run["completed_at"]).timestamp()
+                    duration = e - s
+                reporter.on_step_completed(run["step_name"], duration, None)
+                newly_completed += 1
+            elif status == "failed":
+                seen_completed.add(run_id)
+                reporter.on_step_failed(run["step_name"], run.get("error", "unknown error"))
+    return newly_completed
+
+
+def _delegated_create_and_start(
+    server_url: str,
+    workflow: WorkflowDefinition,
+    objective: str,
+    inputs: dict | None,
+    workspace: str | None,
+) -> tuple[str | None, str | None]:
+    """Create and start a job on the server. Returns (job_id, error_message)."""
+    base = server_url.rstrip("/")
+    try:
+        resp = httpx.post(f"{base}/api/jobs", json={
+            "objective": objective,
+            "workflow": workflow.to_dict(),
+            "inputs": inputs,
+            "workspace_path": workspace,
+        }, timeout=10)
+        resp.raise_for_status()
+        job_id = resp.json()["id"]
+    except Exception as e:
+        return None, f"Failed to create job on server: {e}"
+
+    try:
+        resp = httpx.post(f"{base}/api/jobs/{job_id}/start", timeout=10)
+        resp.raise_for_status()
+    except Exception as e:
+        return None, f"Failed to start job on server: {e}"
+
+    return job_id, None
+
+
 def _delegated_run_flow(
     server_url: str,
     workflow: WorkflowDefinition,
@@ -178,45 +262,21 @@ def _delegated_run_flow(
     flow_path: Path,
 ) -> int:
     """Delegate flow execution to a running server. Returns exit code."""
-    import httpx
-    import json as json_mod
-
-    base = server_url.rstrip("/")
-
-    # Create job on server
-    try:
-        resp = httpx.post(f"{base}/api/jobs", json={
-            "objective": objective,
-            "workflow": workflow.to_dict(),
-            "inputs": inputs,
-            "workspace_path": workspace,
-        }, timeout=10)
-        resp.raise_for_status()
-        job_data = resp.json()
-        job_id = job_data["id"]
-    except Exception as e:
-        _err(f"Failed to create job on server: {e}", output_stream)
-        return EXIT_JOB_FAILED
-
-    # Start job on server
-    try:
-        resp = httpx.post(f"{base}/api/jobs/{job_id}/start", timeout=10)
-        resp.raise_for_status()
-    except Exception as e:
-        _err(f"Failed to start job on server: {e}", output_stream)
+    job_id, err = _delegated_create_and_start(server_url, workflow, objective, inputs, workspace)
+    if err:
+        _err(err, output_stream)
         return EXIT_JOB_FAILED
 
     reporter.on_flow_start(objective)
 
-    # Poll for updates
-    return asyncio.run(_delegated_poll_loop(
-        base, job_id, reporter,
+    return asyncio.run(_delegated_ws_loop(
+        server_url, job_id, reporter,
         output_stream, output_json, report, report_output, flow_path,
     ))
 
 
-async def _delegated_poll_loop(
-    base_url: str,
+async def _delegated_ws_loop(
+    server_url: str,
     job_id: str,
     reporter: TerminalReporter,
     output_stream: TextIO | None,
@@ -225,8 +285,7 @@ async def _delegated_poll_loop(
     report_output: str | None,
     flow_path: Path,
 ) -> int:
-    """Poll server for job status and drive TerminalReporter."""
-    import httpx
+    """Watch server via WebSocket for job updates, fall back to REST polling."""
     import json as json_mod
 
     shutdown_requested = False
@@ -242,110 +301,126 @@ async def _delegated_poll_loop(
     seen_running: set[str] = set()
     seen_completed: set[str] = set()
     steps_completed = 0
+    base_url = server_url.rstrip("/")
 
     async with httpx.AsyncClient(base_url=base_url, timeout=10) as client:
-        while True:
-            if shutdown_requested:
+        # Try WebSocket first
+        ws_url = _ws_url_from_server(server_url)
+        use_ws = True
+        try:
+            import websockets
+            ws_conn = await websockets.connect(ws_url)
+        except Exception:
+            logging.getLogger("stepwise.runner").warning(
+                "WebSocket connection failed, falling back to REST polling"
+            )
+            use_ws = False
+            ws_conn = None
+
+        try:
+            while True:
+                if shutdown_requested:
+                    try:
+                        await client.post(f"/api/jobs/{job_id}/cancel")
+                    except Exception:
+                        pass
+                    _err("Interrupted — cancelled active runs.", output_stream)
+                    return 130
+
+                # Wait for notification or poll
+                if use_ws and ws_conn:
+                    try:
+                        msg = await asyncio.wait_for(ws_conn.recv(), timeout=2.0)
+                        data = json_mod.loads(msg)
+                        # Only fetch if this tick is for our job
+                        changed = data.get("changed_jobs", [])
+                        if data.get("type") != "tick" or (changed and job_id not in changed):
+                            continue
+                    except asyncio.TimeoutError:
+                        # No message in 2s, do a fetch anyway to stay current
+                        pass
+                    except Exception:
+                        # WS died — degrade to polling
+                        logging.getLogger("stepwise.runner").warning(
+                            "WebSocket disconnected, falling back to REST polling"
+                        )
+                        use_ws = False
+                        ws_conn = None
+                else:
+                    await asyncio.sleep(2.0)
+
+                # Fetch state and report
                 try:
-                    await client.post(f"/api/jobs/{job_id}/cancel")
-                except Exception:
-                    pass
-                _err("Interrupted — cancelled active runs.", output_stream)
-                return 130
+                    job_data, runs = await _fetch_job_state(client, job_id)
+                except Exception as e:
+                    _err(f"Lost connection to server: {e}", output_stream)
+                    return EXIT_JOB_FAILED
 
-            try:
-                job_resp = await client.get(f"/api/jobs/{job_id}")
-                job_resp.raise_for_status()
-                job_data = job_resp.json()
-
-                runs_resp = await client.get(f"/api/jobs/{job_id}/runs")
-                runs_resp.raise_for_status()
-                runs = runs_resp.json()
-            except Exception as e:
-                _err(f"Lost connection to server: {e}", output_stream)
-                return EXIT_JOB_FAILED
-
-            # Report step transitions
-            for run in runs:
-                run_id = run["id"]
-                status = run["status"]
-
-                if run_id not in seen_running and status in ("running", "suspended", "delegated"):
-                    seen_running.add(run_id)
-                    reporter.on_step_started(run["step_name"], "")
-
-                if run_id not in seen_completed:
-                    if status == "completed":
-                        seen_completed.add(run_id)
-                        duration = 0.0
-                        if run.get("started_at") and run.get("completed_at"):
-                            s = datetime.fromisoformat(run["started_at"]).timestamp()
-                            e = datetime.fromisoformat(run["completed_at"]).timestamp()
-                            duration = e - s
-                        reporter.on_step_completed(run["step_name"], duration, None)
-                        steps_completed += 1
-                    elif status == "failed":
-                        seen_completed.add(run_id)
-                        reporter.on_step_failed(run["step_name"], run.get("error", "unknown error"))
+                steps_completed += _report_transitions(
+                    runs, reporter, seen_running, seen_completed,
+                )
 
                 # Handle suspended human steps
-                if status == "suspended" and run_id not in seen_completed:
-                    watch = run.get("watch")
-                    if watch and watch.get("mode") == "human":
-                        reporter.on_step_suspended(run["step_name"])
-                        fields = watch.get("fulfillment_outputs", [])
-                        prompt = (watch.get("config") or {}).get("prompt", "")
-                        payload = await asyncio.to_thread(
-                            _collect_human_input, prompt, fields,
-                            output_stream or sys.stderr, sys.stdin,
-                        )
-                        try:
-                            await client.post(
-                                f"/api/runs/{run_id}/fulfill",
-                                json={"payload": payload},
+                for run in runs:
+                    run_id = run["id"]
+                    status = run["status"]
+                    if status == "suspended" and run_id not in seen_completed:
+                        watch = run.get("watch")
+                        if watch and watch.get("mode") == "human":
+                            reporter.on_step_suspended(run["step_name"])
+                            fields = watch.get("fulfillment_outputs", [])
+                            prompt = (watch.get("config") or {}).get("prompt", "")
+                            payload = await asyncio.to_thread(
+                                _collect_human_input, prompt, fields,
+                                output_stream or sys.stderr, sys.stdin,
                             )
-                        except Exception as e:
-                            _err(f"Failed to fulfill step: {e}", output_stream)
-                        seen_completed.add(run_id)
+                            try:
+                                await client.post(
+                                    f"/api/runs/{run_id}/fulfill",
+                                    json={"payload": payload},
+                                )
+                            except Exception as e:
+                                _err(f"Failed to fulfill step: {e}", output_stream)
+                            seen_completed.add(run_id)
 
-            # Check terminal state
-            job_status = job_data["status"]
-            if job_status == "completed":
-                total_time = time.time() - start_time
-                # Build a minimal Job for reporter
-                reporter.on_flow_completed(
-                    type("_Job", (), {"status": "completed", "id": job_id})(),
-                    steps_completed, total_time,
-                )
-                if output_json:
-                    _json_stdout({
-                        "status": "completed",
-                        "job_id": job_id,
-                        "duration_seconds": round(total_time, 1),
-                    })
-                return EXIT_SUCCESS
-            elif job_status in ("failed", "cancelled"):
-                reporter.on_flow_failed(
-                    type("_Job", (), {"status": job_status, "id": job_id})(),
-                )
-                if output_json:
-                    failed_step = None
-                    error_msg = None
-                    for run in runs:
-                        if run["status"] == "failed":
-                            failed_step = run["step_name"]
-                            error_msg = run.get("error")
-                            break
-                    _json_stdout({
-                        "status": "failed",
-                        "job_id": job_id,
-                        "error": error_msg or "Unknown error",
-                        "failed_step": failed_step,
-                        "duration_seconds": round(time.time() - start_time, 1),
-                    })
-                return EXIT_JOB_FAILED
-
-            await asyncio.sleep(0.5)
+                # Check terminal state
+                job_status = job_data["status"]
+                if job_status == "completed":
+                    total_time = time.time() - start_time
+                    reporter.on_flow_completed(
+                        type("_Job", (), {"status": "completed", "id": job_id})(),
+                        steps_completed, total_time,
+                    )
+                    if output_json:
+                        _json_stdout({
+                            "status": "completed",
+                            "job_id": job_id,
+                            "duration_seconds": round(total_time, 1),
+                        })
+                    return EXIT_SUCCESS
+                elif job_status in ("failed", "cancelled"):
+                    reporter.on_flow_failed(
+                        type("_Job", (), {"status": job_status, "id": job_id})(),
+                    )
+                    if output_json:
+                        failed_step = None
+                        error_msg = None
+                        for run in runs:
+                            if run["status"] == "failed":
+                                failed_step = run["step_name"]
+                                error_msg = run.get("error")
+                                break
+                        _json_stdout({
+                            "status": "failed",
+                            "job_id": job_id,
+                            "error": error_msg or "Unknown error",
+                            "failed_step": failed_step,
+                            "duration_seconds": round(time.time() - start_time, 1),
+                        })
+                    return EXIT_JOB_FAILED
+        finally:
+            if ws_conn:
+                await ws_conn.close()
 
 
 def _collect_human_input(
@@ -428,7 +503,7 @@ def run_flow(
         return EXIT_USAGE_ERROR
 
     # 1b. Check for running server — delegate if available
-    flow_name = objective or flow_path.stem
+    flow_name = objective or flow_display_name(flow_path)
     if not force_local:
         from stepwise.server_detect import detect_server
         server_url = detect_server(project.dot_dir)
@@ -460,7 +535,7 @@ def run_flow(
 
     # 3. Create and start job
     import os
-    flow_name = objective or flow_path.stem
+    flow_name = objective or flow_display_name(flow_path)
     job = engine.create_job(
         objective=flow_name,
         workflow=workflow,
@@ -658,6 +733,7 @@ def run_wait(
     workspace: str | None = None,
     timeout: int | None = None,
     config: StepwiseConfig | None = None,
+    force_local: bool = False,
 ) -> int:
     """Run a flow in blocking mode with JSON output on stdout.
 
@@ -712,6 +788,20 @@ def run_wait(
         )
         return EXIT_USAGE_ERROR
 
+    # Check for running server — delegate if available
+    if not force_local:
+        from stepwise.server_detect import detect_server
+        server_url = detect_server(project.dot_dir)
+        if server_url:
+            return _delegated_run_wait(
+                server_url=server_url,
+                workflow=workflow,
+                objective=objective or flow_display_name(flow_path),
+                inputs=inputs,
+                workspace=workspace,
+                timeout=timeout,
+            )
+
     # Create engine
     if config is None:
         config = load_config()
@@ -723,7 +813,7 @@ def run_wait(
     engine = AsyncEngine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir)
 
     # Create and start job
-    flow_name = objective or flow_path.stem
+    flow_name = objective or flow_display_name(flow_path)
     job = engine.create_job(
         objective=flow_name,
         workflow=workflow,
@@ -735,6 +825,187 @@ def run_wait(
         return asyncio.run(_async_wait_for_job(engine, store, job.id, timeout=timeout))
     finally:
         store.close()
+
+
+def _delegated_run_wait(
+    server_url: str,
+    workflow: WorkflowDefinition,
+    objective: str,
+    inputs: dict | None,
+    workspace: str | None,
+    timeout: int | None,
+) -> int:
+    """Delegate --wait mode to a running server. Returns exit code."""
+    job_id, err = _delegated_create_and_start(server_url, workflow, objective, inputs, workspace)
+    if err:
+        _json_stdout({"status": "error", "exit_code": EXIT_JOB_FAILED, "error": err})
+        return EXIT_JOB_FAILED
+
+    return asyncio.run(_delegated_wait_ws_loop(server_url, job_id, timeout))
+
+
+async def _delegated_wait_ws_loop(
+    server_url: str,
+    job_id: str,
+    timeout: int | None,
+) -> int:
+    """WebSocket-driven wait loop for delegated --wait mode."""
+    import json as json_mod
+
+    shutdown_requested = False
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGINT, lambda: _set_flag())
+    loop.add_signal_handler(signal.SIGTERM, lambda: _set_flag())
+
+    def _set_flag():
+        nonlocal shutdown_requested
+        shutdown_requested = True
+
+    start_time = time.time()
+    base_url = server_url.rstrip("/")
+
+    async with httpx.AsyncClient(base_url=base_url, timeout=10) as client:
+        # Try WebSocket
+        ws_url = _ws_url_from_server(server_url)
+        use_ws = True
+        try:
+            import websockets
+            ws_conn = await websockets.connect(ws_url)
+        except Exception:
+            logging.getLogger("stepwise.runner").warning(
+                "WebSocket connection failed, falling back to REST polling"
+            )
+            use_ws = False
+            ws_conn = None
+
+        try:
+            while True:
+                if shutdown_requested:
+                    try:
+                        await client.post(f"/api/jobs/{job_id}/cancel")
+                    except Exception:
+                        pass
+                    _json_stdout({
+                        "status": "cancelled",
+                        "job_id": job_id,
+                        "duration_seconds": round(time.time() - start_time, 1),
+                    })
+                    return 4  # EXIT_CANCELLED
+
+                # Check timeout
+                if timeout and (time.time() - start_time) > timeout:
+                    _json_stdout({
+                        "status": "timeout",
+                        "job_id": job_id,
+                        "timeout_seconds": timeout,
+                        "duration_seconds": round(time.time() - start_time, 1),
+                    })
+                    return 3  # EXIT_TIMEOUT
+
+                # Wait for WS notification or poll
+                if use_ws and ws_conn:
+                    try:
+                        msg = await asyncio.wait_for(ws_conn.recv(), timeout=2.0)
+                        data = json_mod.loads(msg)
+                        changed = data.get("changed_jobs", [])
+                        if data.get("type") != "tick" or (changed and job_id not in changed):
+                            continue
+                    except asyncio.TimeoutError:
+                        pass
+                    except Exception:
+                        use_ws = False
+                        ws_conn = None
+                else:
+                    await asyncio.sleep(2.0)
+
+                # Fetch state
+                try:
+                    job_data, runs = await _fetch_job_state(client, job_id)
+                except Exception as e:
+                    _json_stdout({
+                        "status": "error",
+                        "exit_code": EXIT_JOB_FAILED,
+                        "error": f"Lost connection to server: {e}",
+                    })
+                    return EXIT_JOB_FAILED
+
+                job_status = job_data["status"]
+                duration = round(time.time() - start_time, 1)
+
+                if job_status == "completed":
+                    # Fetch outputs and cost
+                    try:
+                        out_resp = await client.get(f"/api/jobs/{job_id}/output")
+                        outputs = out_resp.json()
+                    except Exception:
+                        outputs = {}
+                    try:
+                        cost_resp = await client.get(f"/api/jobs/{job_id}/cost")
+                        cost_usd = cost_resp.json().get("cost_usd", 0)
+                    except Exception:
+                        cost_usd = 0
+
+                    _json_stdout({
+                        "status": "completed",
+                        "job_id": job_id,
+                        "outputs": outputs,
+                        "cost_usd": cost_usd,
+                        "duration_seconds": duration,
+                    })
+                    return EXIT_SUCCESS
+
+                elif job_status in ("failed", "cancelled"):
+                    failed_step = None
+                    error_msg = None
+                    for run in runs:
+                        if run["status"] == "failed":
+                            failed_step = run["step_name"]
+                            error_msg = run.get("error")
+                            break
+                    try:
+                        cost_resp = await client.get(f"/api/jobs/{job_id}/cost")
+                        cost_usd = cost_resp.json().get("cost_usd", 0)
+                    except Exception:
+                        cost_usd = 0
+
+                    _json_stdout({
+                        "status": "failed",
+                        "job_id": job_id,
+                        "error": error_msg or "Unknown error",
+                        "failed_step": failed_step,
+                        "cost_usd": cost_usd,
+                        "duration_seconds": duration,
+                    })
+                    return EXIT_JOB_FAILED
+
+                # Check for suspension
+                elif _is_blocked_by_suspension_from_runs(runs):
+                    try:
+                        sus_resp = await client.get(f"/api/jobs/{job_id}/suspended")
+                        suspended_details = sus_resp.json().get("suspended_steps", [])
+                    except Exception:
+                        suspended_details = []
+                    try:
+                        cost_resp = await client.get(f"/api/jobs/{job_id}/cost")
+                        cost_usd = cost_resp.json().get("cost_usd", 0)
+                    except Exception:
+                        cost_usd = 0
+
+                    completed_steps = [
+                        r["step_name"] for r in runs if r["status"] == "completed"
+                    ]
+                    _json_stdout({
+                        "status": "suspended",
+                        "job_id": job_id,
+                        "suspended_steps": suspended_details,
+                        "completed_steps": completed_steps,
+                        "cost_usd": cost_usd,
+                        "duration_seconds": duration,
+                    })
+                    return EXIT_SUSPENDED
+        finally:
+            if ws_conn:
+                await ws_conn.close()
 
 
 async def _async_wait_for_job(
@@ -1023,6 +1294,19 @@ def _is_blocked_by_suspension(engine: Engine | AsyncEngine, job_id: str) -> bool
     return has_suspended and not has_active
 
 
+def _is_blocked_by_suspension_from_runs(runs: list[dict]) -> bool:
+    """Check suspension from REST API run dicts (same logic as _is_blocked_by_suspension)."""
+    has_suspended = False
+    has_active = False
+    for run in runs:
+        status = run["status"]
+        if status == "suspended":
+            has_suspended = True
+        elif status in ("running", "delegated"):
+            has_active = True
+    return has_suspended and not has_active
+
+
 def run_async(
     flow_path: Path,
     project: StepwiseProject,
@@ -1030,6 +1314,7 @@ def run_async(
     inputs: dict | None = None,
     workspace: str | None = None,
     config: StepwiseConfig | None = None,
+    force_local: bool = False,
 ) -> int:
     """Fire-and-forget flow execution. Spawns a detached background process.
 
@@ -1054,6 +1339,13 @@ def run_async(
         _json_error(2, f"Invalid flow: {'; '.join(errors)}")
         return EXIT_USAGE_ERROR
 
+    # Check for running server — delegate if available
+    if not force_local:
+        from stepwise.server_detect import detect_server
+        server_url = detect_server(project.dot_dir)
+        if server_url:
+            return _delegated_run_async(server_url, workflow, objective or flow_display_name(flow_path), inputs, workspace)
+
     # Create the job in the store so we have a job_id
     if config is None:
         config = load_config()
@@ -1065,7 +1357,7 @@ def run_async(
         registry = create_default_registry(config)
         engine = AsyncEngine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir)
 
-        flow_name = objective or flow_path.stem
+        flow_name = objective or flow_display_name(flow_path)
         job = engine.create_job(
             objective=flow_name,
             workflow=workflow,
@@ -1093,6 +1385,23 @@ def run_async(
         stderr=sp.DEVNULL,
         start_new_session=True,
     )
+
+    _json_stdout({"job_id": job_id, "status": "running"})
+    return EXIT_SUCCESS
+
+
+def _delegated_run_async(
+    server_url: str,
+    workflow: WorkflowDefinition,
+    objective: str,
+    inputs: dict | None,
+    workspace: str | None,
+) -> int:
+    """Delegate --async mode to a running server. No polling, exits immediately."""
+    job_id, err = _delegated_create_and_start(server_url, workflow, objective, inputs, workspace)
+    if err:
+        _json_stdout({"status": "error", "exit_code": EXIT_JOB_FAILED, "error": err})
+        return EXIT_JOB_FAILED
 
     _json_stdout({"job_id": job_id, "status": "running"})
     return EXIT_SUCCESS

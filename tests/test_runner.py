@@ -154,8 +154,8 @@ class TestRunFlow:
         store = SQLiteStore(str(project.db_path))
         jobs = [store.load_job(r["id"]) for r in store._conn.execute("SELECT id FROM jobs").fetchall()]
         store.close()
-        # stem of "simple.flow.yaml" is "simple.flow"
-        assert any(j.objective == "simple.flow" for j in jobs)
+        # flow_display_name strips ".flow.yaml" → "simple"
+        assert any(j.objective == "simple" for j in jobs)
 
     def test_custom_objective(self, tmp_path):
         project = init_project(tmp_path)

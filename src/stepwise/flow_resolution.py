@@ -162,6 +162,21 @@ def discover_flows(project_dir: Path) -> list[FlowInfo]:
     return flows
 
 
+def flow_display_name(flow_path: Path) -> str:
+    """Derive a human-readable flow name from a flow file path.
+
+    - agent-test/FLOW.yaml  → "agent-test"
+    - my-flow.flow.yaml     → "my-flow"
+    - something.yaml        → "something"
+    """
+    if flow_path.name == FLOW_DIR_MARKER:
+        return flow_path.parent.name
+    name = flow_path.name
+    if name.endswith(FLOW_FILE_SUFFIX):
+        return name.removesuffix(FLOW_FILE_SUFFIX)
+    return flow_path.stem
+
+
 def _discovery_dirs(project_dir: Path) -> list[Path]:
     """Return ordered list of directories to search for flows."""
     return [

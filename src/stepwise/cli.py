@@ -768,6 +768,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             objective=args.objective,
             inputs=inputs if inputs else None,
             workspace=args.workspace,
+            force_local=getattr(args, "local", False),
         )
 
     # --wait mode: blocking JSON output (handles own errors as JSON)
@@ -780,6 +781,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             inputs=inputs if inputs else None,
             workspace=args.workspace,
             timeout=args.timeout,
+            force_local=getattr(args, "local", False),
         )
 
     # Everything below uses stderr for errors
@@ -829,7 +831,8 @@ def _run_watch(
         print(f"Error: {'; '.join(errors)}", file=sys.stderr)
         return EXIT_USAGE_ERROR
 
-    objective = args.objective or flow_path.stem
+    from stepwise.flow_resolution import flow_display_name
+    objective = args.objective or flow_display_name(flow_path)
 
     # If a server is already running, submit there and exit
     existing_url = detect_server(project.dot_dir)
