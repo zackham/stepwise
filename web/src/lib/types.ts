@@ -92,12 +92,28 @@ export interface HandoffEnvelope {
   timestamp: string;
 }
 
+// ── Output Schema ─────────────────────────────────────────────────────
+
+export interface OutputFieldSchema {
+  type: "str" | "text" | "number" | "bool" | "choice";
+  required?: boolean;       // default true
+  default?: unknown;
+  description?: string;
+  options?: string[];       // choice
+  multiple?: boolean;       // choice multi-select
+  min?: number;             // number
+  max?: number;             // number
+}
+
+export type OutputSchema = Record<string, OutputFieldSchema>;
+
 // ── WatchSpec ──────────────────────────────────────────────────────────
 
 export interface WatchSpec {
   mode: string; // "poll", "human", "timeout"
   config: Record<string, unknown>;
   fulfillment_outputs: string[];
+  output_schema?: OutputSchema;
 }
 
 // ── SubJobDefinition ───────────────────────────────────────────────────
