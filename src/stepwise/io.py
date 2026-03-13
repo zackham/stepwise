@@ -656,6 +656,7 @@ class _TerminalLiveFlowHandle(LiveFlowHandle):
         self._display = display
         self._live = live
         self._console = console
+        self._pause_cursor_saved = False
 
     def update_step(
         self,
@@ -687,11 +688,22 @@ class _TerminalLiveFlowHandle(LiveFlowHandle):
             self._display.total_cost = cost
 
     def pause_for_input(self) -> None:
-        # Stop live display (transient=True clears it), then print a static snapshot
+        """Stop live display and save cursor position for cleanup."""
         self._live.stop()
-        self._console.print(self._display)
+        # Save cursor position so we can erase input prompts on resume
+        file = self._console.file or sys.stderr
+        file.write("\033[s")  # save cursor position
+        file.flush()
+        self._pause_cursor_saved = True
 
     def resume_after_input(self) -> None:
+        """Erase input prompts and restart live display."""
+        if self._pause_cursor_saved:
+            file = self._console.file or sys.stderr
+            file.write("\033[u")  # restore cursor position
+            file.write("\033[J")  # clear from cursor to end of screen
+            file.flush()
+            self._pause_cursor_saved = False
         self._live.start()
 
     def print_final(self) -> None:
