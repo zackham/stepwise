@@ -485,7 +485,9 @@ export function ChatPanel({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={currentYaml ? "Modify this flow..." : "Describe a workflow..."}
+            placeholder={currentYaml
+              ? "Ask AI to modify this flow, add steps, fix issues..."
+              : "Describe a workflow and AI will generate it..."}
             className="text-xs bg-zinc-900 border-zinc-700 min-h-[60px] max-h-[120px] resize-none"
             disabled={isStreaming}
           />

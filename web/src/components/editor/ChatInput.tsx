@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { ChevronDown, Info, AlertTriangle, RotateCcw } from "lucide-react";
+import { ChevronDown, Info, AlertTriangle, RotateCcw, Sparkles } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import type { AgentMode } from "@/hooks/useEditorChat";
 
@@ -23,7 +23,7 @@ interface ChatInputProps {
 
 export function ChatInput({
   onSend,
-  placeholder = "Modify this flow...",
+  placeholder = "Ask AI to modify this flow...",
   disabled = false,
   agentMode,
   onModeChange,
@@ -77,7 +77,9 @@ export function ChatInput({
 
       {/* Header bar: mode selector + info */}
       <div className="flex items-center justify-between px-2 py-1 bg-zinc-950/50">
-        <div className="relative">
+        <div className="flex items-center gap-1.5">
+          <Sparkles className="w-3 h-3 text-violet-400" />
+          <div className="relative">
           <button
             onClick={() => setShowModeSelect(!showModeSelect)}
             className="flex items-center gap-1 text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
@@ -101,6 +103,7 @@ export function ChatInput({
               ))}
             </div>
           )}
+          </div>
         </div>
         <div className="flex items-center gap-1">
           {sessionId && (
