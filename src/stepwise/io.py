@@ -134,6 +134,13 @@ class IOAdapter(abc.ABC):
 
     # ── Concrete methods (shared by all adapters) ─────────────────────
 
+    def _field_label(self, field_name: str, spec: dict) -> str:
+        """Build a clean label for a field: 'description' or fallback to field_name."""
+        desc = spec.get("description")
+        if desc:
+            return desc
+        return field_name
+
     def collect_field(
         self, field_name: str, spec_dict: dict | None, is_only_field: bool,
     ) -> tuple[str, Any]:
@@ -147,26 +154,23 @@ class IOAdapter(abc.ABC):
         field_type = spec.get("type", "str")
         required = spec.get("required", True)
         default = spec.get("default")
-        description = spec.get("description")
         options = spec.get("options")
         multiple = spec.get("multiple", False)
         min_val = spec.get("min")
         max_val = spec.get("max")
-
-        if description:
-            self.log("info", f"  # {description}")
+        label = self._field_label(field_name, spec)
 
         if field_type == "bool":
             default_bool = default if isinstance(default, bool) else None
             result = self.prompt_confirm(
-                field_name,
+                label,
                 default=default_bool if default_bool is not None else True,
             )
             return field_name, result
 
         if field_type == "number":
             result = self.prompt_number(
-                field_name,
+                label,
                 min_val=min_val,
                 max_val=max_val,
                 default=default,
@@ -175,16 +179,16 @@ class IOAdapter(abc.ABC):
 
         if field_type == "choice" and options:
             if multiple:
-                result = self.prompt_multi_select(field_name, options)
+                result = self.prompt_multi_select(label, options)
                 if not result and not required:
                     return field_name, None
                 return field_name, result
             else:
-                result = self.prompt_select(field_name, options)
+                result = self.prompt_select(label, options)
                 return field_name, result
 
         if field_type == "text":
-            result = self.prompt_text(field_name, default=default, multiline=True)
+            result = self.prompt_text(label, default=default, multiline=True)
             if not result and not required:
                 return field_name, None
             if not result and default is not None:
@@ -192,7 +196,7 @@ class IOAdapter(abc.ABC):
             return field_name, result
 
         # Default: str
-        result = self.prompt_text(field_name, default=default)
+        result = self.prompt_text(label, default=default)
         if not result and not required:
             return field_name, None
         if not result and default is not None:
@@ -568,28 +572,35 @@ class QuietAdapter(IOAdapter):
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
-class _LineCountingFile:
-    """Wraps a file to count newlines, forwarding everything through."""
+def _get_cursor_row() -> int | None:
+    """Query the terminal for the current cursor row (1-indexed). Returns None if not a TTY."""
+    import os
+    import termios
+    import tty
 
-    def __init__(self, real_file: TextIO, handle: _AppendFlowHandle):
-        self._real_file = real_file
-        self._handle = handle
+    try:
+        fd = sys.stderr.fileno()
+        if not os.isatty(fd):
+            return None
 
-    def write(self, s: str) -> int:
-        self._handle._pause_lines += s.count("\n")
-        return self._real_file.write(s)
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd, when=termios.TCSANOW)
+            os.write(fd, b"\033[6n")  # DSR — Device Status Report
+            response = b""
+            while True:
+                ch = os.read(fd, 1)
+                response += ch
+                if ch == b"R":
+                    break
+        finally:
+            termios.tcsetattr(fd, termios.TCSANOW, old_settings)
 
-    def flush(self) -> None:
-        self._real_file.flush()
-
-    def fileno(self) -> int:
-        return self._real_file.fileno()
-
-    def isatty(self) -> bool:
-        return hasattr(self._real_file, "isatty") and self._real_file.isatty()
-
-    def __getattr__(self, name: str):
-        return getattr(self._real_file, name)
+        # Response: ESC [ row ; col R
+        parts = response.decode().lstrip("\033[").rstrip("R").split(";")
+        return int(parts[0])
+    except Exception:
+        return None
 
 
 class _AppendFlowHandle(LiveFlowHandle):
@@ -604,7 +615,7 @@ class _AppendFlowHandle(LiveFlowHandle):
         self._console = console
         self._flow_name = flow_name
         self._running_step: str | None = None  # track the "running" line to overwrite
-        self._pause_lines = 0  # lines printed during input pause
+        self._pause_row: int | None = None  # cursor row at start of pause
 
     def _step_line(
         self, name: str, status: str,
@@ -671,27 +682,21 @@ class _AppendFlowHandle(LiveFlowHandle):
         pass  # no live summary — printed at the end by flow_complete
 
     def pause_for_input(self) -> None:
-        """Start tracking lines so we can erase them on resume."""
-        self._pause_lines = 0
-        # Intercept both stderr (rich console) and stdout (questionary) to count newlines
-        self._real_console_file = self._console.file or sys.stderr
-        self._real_stdout = sys.stdout
-        self._console.file = _LineCountingFile(self._real_console_file, self)
-        sys.stdout = _LineCountingFile(self._real_stdout, self)  # type: ignore
+        """Record cursor position before input prompts."""
+        self._pause_row = _get_cursor_row()
 
     def resume_after_input(self) -> None:
         """Erase everything printed during the pause."""
-        # Restore real files
-        self._console.file = self._real_console_file
-        sys.stdout = self._real_stdout  # type: ignore
-        file = self._real_console_file
-        # Move up and clear each line printed during the pause
-        for _ in range(self._pause_lines):
-            file.write("\033[A\033[2K")
-        if self._pause_lines > 0:
-            file.write("\r")
-            file.flush()
-        self._pause_lines = 0
+        file = self._console.file or sys.stderr
+        current_row = _get_cursor_row()
+        if self._pause_row is not None and current_row is not None:
+            lines_to_erase = current_row - self._pause_row
+            if lines_to_erase > 0:
+                for _ in range(lines_to_erase):
+                    file.write("\033[A\033[2K")
+                file.write("\r")
+                file.flush()
+        self._pause_row = None
 
 
 class TerminalAdapter(IOAdapter):
