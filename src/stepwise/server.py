@@ -16,43 +16,24 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from stepwise.engine import Engine
-from stepwise.executors import (
-    Executor, ExecutionContext, ExecutorResult, ExecutorStatus,
+from stepwise.executors import ExecutorStatus
+from stepwise.config import (
+    load_config, load_config_with_sources, save_config,
+    save_project_config, save_project_local_config,
+    StepwiseConfig, ModelEntry, LabelInfo,
+    DEFAULT_LABELS, DEFAULT_LABEL_NAMES,
+    validate_label_name, label_model_id, parse_label_value,
 )
-from stepwise.config import load_config, save_config, StepwiseConfig, ModelEntry
+from stepwise.openrouter_models import get_openrouter_models, enrich_registry
 from stepwise.models import (
     Job,
     JobConfig,
     JobStatus,
-    SubJobDefinition,
     WorkflowDefinition,
     _now,
 )
 from stepwise.store import SQLiteStore
 
-
-class DelegatingExecutor(Executor):
-    """Creates a sub-job from a child workflow definition in config."""
-
-    def __init__(self, objective: str, child_workflow: dict) -> None:
-        self.objective = objective
-        self.child_workflow = child_workflow
-
-    def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
-        wf = WorkflowDefinition.from_dict(self.child_workflow)
-        return ExecutorResult(
-            type="sub_job",
-            sub_job_def=SubJobDefinition(
-                objective=self.objective,
-                workflow=wf,
-            ),
-        )
-
-    def check_status(self, state: dict) -> ExecutorStatus:
-        return ExecutorStatus(state="running")
-
-    def cancel(self, state: dict) -> None:
-        pass
 
 
 class ThreadSafeStore(SQLiteStore):
@@ -65,6 +46,7 @@ class ThreadSafeStore(SQLiteStore):
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
+        self._conn.execute("PRAGMA busy_timeout=5000")
         self._create_tables()
 
 
@@ -98,10 +80,18 @@ class SaveTemplateRequest(BaseModel):
 _engine: Engine | None = None
 _ws_clients: set[WebSocket] = set()
 _tick_task: asyncio.Task | None = None
+_tick_event: asyncio.Event | None = None  # signals tick loop to wake immediately
+_event_loop: asyncio.AbstractEventLoop | None = None
 _templates_dir: Path = Path("templates")
 _project_dir: Path = Path(".")
 _last_snapshot: dict[str, Any] = {}
 _stream_tasks: dict[str, asyncio.Task] = {}
+
+
+def notify_tick() -> None:
+    """Signal the tick loop to run immediately. Thread-safe for sync endpoints."""
+    if _tick_event is not None and _event_loop is not None:
+        _event_loop.call_soon_threadsafe(_tick_event.set)
 
 
 # ── Agent output streaming ───────────────────────────────────────────
@@ -207,25 +197,46 @@ def _snapshot() -> dict[str, Any]:
 
 
 async def _tick_loop() -> None:
-    """Background tick loop."""
+    """Event-driven tick loop.
+
+    Wakes immediately when notify_tick() is called (API mutations),
+    or falls back to polling at 0.5s (active jobs) / 30s (idle).
+
+    Compares against _last_snapshot so changes made by sync endpoints
+    (outside this loop) are detected and broadcast.
+    """
     global _last_snapshot
+    assert _tick_event is not None
     engine = _get_engine()
+
+    # Initialize baseline snapshot
+    _last_snapshot = _snapshot()
+
     while True:
         try:
             active = engine.store.active_jobs()
-            interval = 2.0 if active else 10.0
+            interval = 0.5 if active else 30.0
 
-            before = _snapshot()
+            # Wait for event signal or timeout — whichever comes first
+            _tick_event.clear()
+            try:
+                await asyncio.wait_for(_tick_event.wait(), timeout=interval)
+            except asyncio.TimeoutError:
+                pass
+
+            # Advance engine state (polls async executors, starts ready steps)
             engine.tick()
+
+            # Compare current state against last known snapshot
             after = _snapshot()
 
-            if before != after:
+            if _last_snapshot != after:
                 # Something changed — broadcast
                 changed_job_ids = set()
-                for jid in set(list(after["jobs"].keys()) + list(before.get("jobs", {}).keys())):
-                    if after["jobs"].get(jid) != before.get("jobs", {}).get(jid):
+                for jid in set(list(after["jobs"].keys()) + list(_last_snapshot.get("jobs", {}).keys())):
+                    if after["jobs"].get(jid) != _last_snapshot.get("jobs", {}).get(jid):
                         changed_job_ids.add(jid)
-                    if after["runs"].get(jid) != before.get("runs", {}).get(jid):
+                    if after["runs"].get(jid) != _last_snapshot.get("runs", {}).get(jid):
                         changed_job_ids.add(jid)
 
                 await _broadcast({
@@ -255,7 +266,6 @@ async def _tick_loop() -> None:
                 del _stream_tasks[rid]
 
             _last_snapshot = after
-            await asyncio.sleep(interval)
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -265,8 +275,10 @@ async def _tick_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _engine, _tick_task, _templates_dir, _project_dir
+    global _engine, _tick_task, _tick_event, _event_loop, _templates_dir, _project_dir
 
+    _event_loop = asyncio.get_running_loop()
+    _tick_event = asyncio.Event()
     db_path = os.environ.get("STEPWISE_DB", "stepwise.db")
     tmpl_dir = os.environ.get("STEPWISE_TEMPLATES", "templates")
     jobs_dir = os.environ.get("STEPWISE_JOBS_DIR", "jobs")
@@ -348,6 +360,7 @@ def create_job(req: CreateJobRequest):
             config=config,
             workspace_path=req.workspace_path,
         )
+        notify_tick()
         return _serialize_job(job)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -377,6 +390,7 @@ def start_job(job_id: str):
     engine = _get_engine()
     try:
         engine.start_job(job_id)
+        notify_tick()
         return {"status": "started"}
     except (KeyError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -387,6 +401,7 @@ def pause_job(job_id: str):
     engine = _get_engine()
     try:
         engine.pause_job(job_id)
+        notify_tick()
         return {"status": "paused"}
     except (KeyError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -397,6 +412,7 @@ def resume_job(job_id: str):
     engine = _get_engine()
     try:
         engine.resume_job(job_id)
+        notify_tick()
         return {"status": "resumed"}
     except (KeyError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -407,6 +423,7 @@ def cancel_job(job_id: str):
     engine = _get_engine()
     try:
         engine.cancel_job(job_id)
+        notify_tick()
         return {"status": "cancelled"}
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
@@ -420,6 +437,7 @@ def delete_job(job_id: str):
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
     engine.store.delete_job(job_id)
+    notify_tick()
     return {"status": "deleted"}
 
 
@@ -456,6 +474,7 @@ def rerun_step(job_id: str, step_name: str):
     engine = _get_engine()
     try:
         run = engine.rerun_step(job_id, step_name)
+        notify_tick()
         return run.to_dict()
     except (KeyError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -466,6 +485,7 @@ def fulfill_watch(run_id: str, req: FulfillWatchRequest):
     engine = _get_engine()
     try:
         result = engine.fulfill_watch(run_id, req.payload)
+        notify_tick()
         # Idempotent: already fulfilled returns a dict
         if result is not None:
             return result
@@ -525,6 +545,7 @@ def cancel_run(run_id: str):
     run.error_category = "user_cancelled"
     run.completed_at = _now()
     engine.store.save_run(run)
+    notify_tick()
     return {"status": "cancelled", "run_id": run_id}
 
 
@@ -552,6 +573,7 @@ def inject_context(job_id: str, req: InjectContextRequest):
     engine = _get_engine()
     try:
         engine.inject_context(job_id, req.context)
+        notify_tick()
         return {"status": "injected"}
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
@@ -686,6 +708,7 @@ def _parse_server_duration(s: str) -> float | None:
 def manual_tick():
     engine = _get_engine()
     engine.tick()
+    notify_tick()
     return {"status": "ticked"}
 
 
@@ -760,7 +783,10 @@ class ModelEntryRequest(BaseModel):
     id: str
     name: str
     provider: str
-    tier: str | None = None
+    context_length: int | None = None
+    max_output_tokens: int | None = None
+    prompt_cost: float | None = None
+    completion_cost: float | None = None
 
 
 class UpdateModelsRequest(BaseModel):
@@ -768,19 +794,112 @@ class UpdateModelsRequest(BaseModel):
     default_model: str | None = None
 
 
+class CreateLabelRequest(BaseModel):
+    name: str
+    model: str
+
+
+class UpdateLabelRequest(BaseModel):
+    model: str
+
+
+class SetApiKeyRequest(BaseModel):
+    key: str  # "openrouter" or "anthropic"
+    value: str
+    scope: str = "user"  # "user" or "project"
+
+
 @app.get("/api/config")
 def get_config():
-    cfg = load_config()
+    cs = load_config_with_sources(_project_dir)
+    cfg = cs.config
+    enriched = enrich_registry(cfg.model_registry)
     return {
         "has_api_key": bool(cfg.openrouter_api_key),
-        "model_registry": [m.to_dict() for m in cfg.model_registry],
+        "has_anthropic_key": bool(cfg.anthropic_api_key),
+        "api_key_source": cs.api_key_source,
+        "model_registry": [m.to_dict() for m in enriched],
         "default_model": cfg.default_model,
+        "labels": [li.to_dict() for li in cs.label_info],
     }
+
+
+@app.get("/api/config/labels")
+def get_labels():
+    cs = load_config_with_sources(_project_dir)
+    return {
+        "labels": [li.to_dict() for li in cs.label_info],
+        "default_model": cs.config.default_model,
+    }
+
+
+@app.post("/api/config/labels")
+def create_label(req: CreateLabelRequest):
+    if not validate_label_name(req.name):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid label name '{req.name}'. Must match: lowercase letters, digits, hyphens, underscores."
+        )
+    if req.name in DEFAULT_LABEL_NAMES:
+        raise HTTPException(status_code=400, detail=f"Cannot create label '{req.name}' — it's a default label. Use PUT to reassign it.")
+
+    import yaml as yaml_lib
+    path = _project_dir / ".stepwise" / "config.yaml"
+    data: dict = {}
+    if path.exists():
+        data = yaml_lib.safe_load(path.read_text()) or {}
+    labels = data.get("labels", {})
+    if req.name in labels:
+        raise HTTPException(status_code=409, detail=f"Label '{req.name}' already exists at project level.")
+    labels[req.name] = req.model
+    save_project_config(_project_dir, labels, data.get("default_model"))
+    return {"status": "created", "name": req.name, "model": req.model}
+
+
+@app.put("/api/config/labels/{name}")
+def update_label(name: str, req: UpdateLabelRequest):
+    import yaml as yaml_lib
+    path = _project_dir / ".stepwise" / "config.yaml"
+    data: dict = {}
+    if path.exists():
+        data = yaml_lib.safe_load(path.read_text()) or {}
+    labels = data.get("labels", {})
+    labels[name] = req.model
+    save_project_config(_project_dir, labels, data.get("default_model"))
+    return {"status": "updated", "name": name, "model": req.model}
+
+
+@app.delete("/api/config/labels/{name}")
+def delete_label(name: str):
+    if name in DEFAULT_LABEL_NAMES:
+        raise HTTPException(status_code=400, detail=f"Cannot delete default label '{name}'.")
+    import yaml as yaml_lib
+    path = _project_dir / ".stepwise" / "config.yaml"
+    data: dict = {}
+    if path.exists():
+        data = yaml_lib.safe_load(path.read_text()) or {}
+    labels = data.get("labels", {})
+    if name not in labels:
+        raise HTTPException(status_code=404, detail=f"Label '{name}' not found at project level.")
+    del labels[name]
+    save_project_config(_project_dir, labels, data.get("default_model"))
+    return {"status": "deleted", "name": name}
+
+
+@app.get("/api/config/models/search")
+def search_models(q: str = "", limit: int = 30):
+    """Search OpenRouter model catalog (cached 24h)."""
+    from stepwise.openrouter_models import search_openrouter_models
+    try:
+        results = search_openrouter_models(q, limit=limit)
+        return {"models": [m.to_dict() for m in results]}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch OpenRouter models: {e}")
 
 
 @app.get("/api/config/models")
 def get_models():
-    cfg = load_config()
+    cfg = load_config(_project_dir)
     return {
         "models": [m.to_dict() for m in cfg.model_registry],
         "default_model": cfg.default_model,
@@ -789,9 +908,9 @@ def get_models():
 
 @app.put("/api/config/models")
 def update_models(req: UpdateModelsRequest):
-    cfg = load_config()
+    cfg = load_config()  # user-level only for registry
     cfg.model_registry = [
-        ModelEntry(id=m.id, name=m.name, provider=m.provider, tier=m.tier)
+        ModelEntry(id=m.id, name=m.name, provider=m.provider)
         for m in req.models
     ]
     if req.default_model is not None:
@@ -800,16 +919,63 @@ def update_models(req: UpdateModelsRequest):
     return {"status": "updated", "models": [m.to_dict() for m in cfg.model_registry]}
 
 
-class SetApiKeyRequest(BaseModel):
-    api_key: str
+@app.post("/api/config/models")
+def add_model(req: ModelEntryRequest):
+    cfg = load_config()  # user-level
+    if any(m.id == req.id for m in cfg.model_registry):
+        raise HTTPException(status_code=409, detail=f"Model '{req.id}' already in registry.")
+    entry = ModelEntry(
+        id=req.id, name=req.name, provider=req.provider,
+        context_length=req.context_length,
+        max_output_tokens=req.max_output_tokens,
+        prompt_cost=req.prompt_cost,
+        completion_cost=req.completion_cost,
+    )
+    cfg.model_registry.append(entry)
+    save_config(cfg)
+    return {"status": "added", "model": entry.to_dict()}
+
+
+@app.delete("/api/config/models/{model_id:path}")
+def delete_model(model_id: str):
+    cfg = load_config()  # user-level
+    orig_len = len(cfg.model_registry)
+    cfg.model_registry = [m for m in cfg.model_registry if m.id != model_id]
+    if len(cfg.model_registry) == orig_len:
+        raise HTTPException(status_code=404, detail=f"Model '{model_id}' not in registry.")
+    save_config(cfg)
+    return {"status": "deleted", "model_id": model_id}
 
 
 @app.put("/api/config/api-key")
 def set_api_key(req: SetApiKeyRequest):
-    cfg = load_config()
-    cfg.openrouter_api_key = req.api_key
-    save_config(cfg)
+    if req.key not in ("openrouter", "anthropic"):
+        raise HTTPException(status_code=400, detail=f"Unknown key type: {req.key}")
+
+    if req.scope == "project":
+        kwargs = {f"{req.key}_api_key": req.value}
+        save_project_local_config(_project_dir, **kwargs)
+    else:
+        cfg = load_config()  # user-level
+        if req.key == "openrouter":
+            cfg.openrouter_api_key = req.value
+        else:
+            cfg.anthropic_api_key = req.value
+        save_config(cfg)
     return {"status": "updated"}
+
+
+@app.put("/api/config/default-model")
+def set_default_model(req: UpdateLabelRequest):
+    """Set the default model label/ID."""
+    import yaml as yaml_lib
+    path = _project_dir / ".stepwise" / "config.yaml"
+    data: dict = {}
+    if path.exists():
+        data = yaml_lib.safe_load(path.read_text()) or {}
+    labels = data.get("labels", {})
+    save_project_config(_project_dir, labels, req.model)
+    return {"status": "updated", "default_model": req.model}
 
 
 # ── Editor (flow listing / loading / saving) ─────────────────────────
@@ -999,11 +1165,13 @@ def create_local_flow(req: CreateFlowRequest):
         )
 
     flows_dir = _project_dir / "flows"
-    flows_dir.mkdir(parents=True, exist_ok=True)
-    flow_file = flows_dir / f"{name}.flow.yaml"
+    flow_dir = flows_dir / name
+    flow_file = flow_dir / "FLOW.yaml"
 
-    if flow_file.exists():
+    if flow_dir.exists() or (flows_dir / f"{name}.flow.yaml").exists():
         raise HTTPException(status_code=409, detail=f"Flow '{name}' already exists")
+
+    flow_dir.mkdir(parents=True, exist_ok=True)
 
     template = (
         f"name: {name}\n"
@@ -1017,10 +1185,182 @@ def create_local_flow(req: CreateFlowRequest):
     flow_file.write_text(template)
 
     return {
-        "path": str(flow_file.relative_to(_project_dir)),
+        "path": str(flow_dir.relative_to(_project_dir)),
         "name": name,
     }
 
+
+# ── Flow Directory Files ─────────────────────────────────────────────
+# NOTE: These routes MUST be registered before the catch-all /api/flows/local/{path:path}
+# or FastAPI's path parameter matching will swallow the /files suffix.
+
+ALLOWED_EXTENSIONS = {".yaml", ".yml", ".py", ".sh", ".txt", ".md", ".j2", ".json", ".toml"}
+MAX_FILE_SIZE = 100 * 1024  # 100KB
+
+
+def _resolve_flow_dir(flow_path: str) -> Path:
+    """Resolve the flow directory from a flow path. Raises HTTPException on errors."""
+    full = (_project_dir / flow_path).resolve()
+    # If path points to FLOW.yaml, use parent dir
+    if full.name == "FLOW.yaml":
+        flow_dir = full.parent
+    elif full.is_dir():
+        flow_dir = full
+    else:
+        # Single-file flow — use parent dir
+        flow_dir = full.parent
+
+    # Security: must be within project
+    try:
+        flow_dir.resolve().relative_to(_project_dir.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path escapes project directory")
+
+    if not flow_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Flow directory not found")
+
+    return flow_dir
+
+
+def _resolve_file_in_flow(flow_dir: Path, file_path: str) -> Path:
+    """Resolve a file path within a flow directory. Raises HTTPException on escape."""
+    full = (flow_dir / file_path).resolve()
+
+    # Security: resolve symlinks and check containment
+    try:
+        full.relative_to(flow_dir.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path escapes flow directory")
+
+    return full
+
+
+@app.get("/api/flows/local/{flow_path:path}/files")
+async def list_flow_files(flow_path: str):
+    """List all files in a flow directory (recursive tree)."""
+    flow_dir = _resolve_flow_dir(flow_path)
+    skip = {".git", "__pycache__", ".venv", "node_modules", ".stepwise"}
+
+    files = []
+    for item in sorted(flow_dir.rglob("*")):
+        if any(part in skip for part in item.parts):
+            continue
+        if item.name.startswith("."):
+            continue
+        if not item.is_file():
+            continue
+        rel = str(item.relative_to(flow_dir))
+        files.append({
+            "path": rel,
+            "size": item.stat().st_size,
+            "is_yaml": item.suffix in {".yaml", ".yml"},
+        })
+
+    return {"flow_dir": str(flow_dir.relative_to(_project_dir)), "files": files}
+
+
+@app.get("/api/flows/local/{flow_path:path}/files/{file_path:path}")
+async def read_flow_file(flow_path: str, file_path: str):
+    """Read a file from within a flow directory."""
+    flow_dir = _resolve_flow_dir(flow_path)
+    full = _resolve_file_in_flow(flow_dir, file_path)
+
+    if not full.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+
+    try:
+        content = full.read_text(errors="replace")
+    except Exception:
+        raise HTTPException(status_code=500, detail="Could not read file")
+
+    if len(content) > MAX_FILE_SIZE:
+        content = content[:MAX_FILE_SIZE] + f"\n\n[truncated — {len(content)} bytes total]"
+
+    return {"path": file_path, "content": content}
+
+
+class FlowFileWriteRequest(BaseModel):
+    content: str
+
+
+@app.post("/api/flows/local/{flow_path:path}/files/{file_path:path}")
+async def write_flow_file(flow_path: str, file_path: str, req: FlowFileWriteRequest):
+    """Create or update a file within a flow directory."""
+    flow_dir = _resolve_flow_dir(flow_path)
+    full = _resolve_file_in_flow(flow_dir, file_path)
+
+    # Extension whitelist
+    suffix = Path(file_path).suffix.lower()
+    if suffix and suffix not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File extension '{suffix}' not allowed. Allowed: {sorted(ALLOWED_EXTENSIONS)}",
+        )
+
+    # Size limit
+    if len(req.content.encode("utf-8")) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail=f"File too large (max {MAX_FILE_SIZE // 1024}KB)")
+
+    # Create parent directories
+    full.parent.mkdir(parents=True, exist_ok=True)
+
+    existed = full.exists()
+    full.write_text(req.content)
+
+    return {
+        "path": file_path,
+        "created": not existed,
+        "size": len(req.content.encode("utf-8")),
+    }
+
+
+@app.delete("/api/flows/local/{flow_path:path}/files/{file_path:path}")
+async def delete_flow_file(flow_path: str, file_path: str):
+    """Delete a file from a flow directory."""
+    flow_dir = _resolve_flow_dir(flow_path)
+    full = _resolve_file_in_flow(flow_dir, file_path)
+
+    if not full.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+
+    # Don't allow deleting FLOW.yaml
+    if full.name == "FLOW.yaml":
+        raise HTTPException(status_code=400, detail="Cannot delete FLOW.yaml")
+
+    full.unlink()
+    return {"status": "deleted", "path": file_path}
+
+
+@app.delete("/api/flows/local/{path:path}")
+async def delete_local_flow(path: str):
+    """Delete an entire flow (file or directory)."""
+    import shutil
+
+    abs_path = (_project_dir / path).resolve()
+
+    # Security: ensure the resolved path is within the project directory
+    try:
+        abs_path.relative_to(_project_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path escapes project directory")
+
+    # Determine what to delete
+    if abs_path.is_dir():
+        # Directory flow — delete the whole folder
+        shutil.rmtree(abs_path)
+    elif abs_path.is_file():
+        # Single .flow.yaml file
+        abs_path.unlink()
+    elif abs_path.name == "FLOW.yaml" and abs_path.parent.is_dir():
+        # Path was dir/FLOW.yaml — delete the directory
+        shutil.rmtree(abs_path.parent)
+    else:
+        raise HTTPException(status_code=404, detail=f"Flow not found: {path}")
+
+    return {"status": "deleted", "path": path}
+
+
+# ── Load Local Flow (catch-all — must be AFTER /files and DELETE routes) ──
 
 @app.get("/api/flows/local/{path:path}")
 def load_local_flow(path: str):
@@ -1544,145 +1884,6 @@ async def editor_clear_session(data: dict):
     return {"status": "ok"}
 
 
-# ── Flow Directory Files ─────────────────────────────────────────────
-
-ALLOWED_EXTENSIONS = {".yaml", ".yml", ".py", ".sh", ".txt", ".md", ".j2", ".json", ".toml"}
-MAX_FILE_SIZE = 100 * 1024  # 100KB
-
-
-def _resolve_flow_dir(flow_path: str) -> Path:
-    """Resolve the flow directory from a flow path. Raises HTTPException on errors."""
-    full = (_project_dir / flow_path).resolve()
-    # If path points to FLOW.yaml, use parent dir
-    if full.name == "FLOW.yaml":
-        flow_dir = full.parent
-    elif full.is_dir():
-        flow_dir = full
-    else:
-        # Single-file flow — use parent dir
-        flow_dir = full.parent
-
-    # Security: must be within project
-    try:
-        flow_dir.resolve().relative_to(_project_dir.resolve())
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Path escapes project directory")
-
-    if not flow_dir.is_dir():
-        raise HTTPException(status_code=404, detail="Flow directory not found")
-
-    return flow_dir
-
-
-def _resolve_file_in_flow(flow_dir: Path, file_path: str) -> Path:
-    """Resolve a file path within a flow directory. Raises HTTPException on escape."""
-    full = (flow_dir / file_path).resolve()
-
-    # Security: resolve symlinks and check containment
-    try:
-        full.relative_to(flow_dir.resolve())
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Path escapes flow directory")
-
-    return full
-
-
-@app.get("/api/flows/local/{flow_path:path}/files")
-async def list_flow_files(flow_path: str):
-    """List all files in a flow directory (recursive tree)."""
-    flow_dir = _resolve_flow_dir(flow_path)
-    skip = {".git", "__pycache__", ".venv", "node_modules", ".stepwise"}
-
-    files = []
-    for item in sorted(flow_dir.rglob("*")):
-        if any(part in skip for part in item.parts):
-            continue
-        if item.name.startswith("."):
-            continue
-        if not item.is_file():
-            continue
-        rel = str(item.relative_to(flow_dir))
-        files.append({
-            "path": rel,
-            "size": item.stat().st_size,
-            "is_yaml": item.suffix in {".yaml", ".yml"},
-        })
-
-    return {"flow_dir": str(flow_dir.relative_to(_project_dir)), "files": files}
-
-
-@app.get("/api/flows/local/{flow_path:path}/files/{file_path:path}")
-async def read_flow_file(flow_path: str, file_path: str):
-    """Read a file from within a flow directory."""
-    flow_dir = _resolve_flow_dir(flow_path)
-    full = _resolve_file_in_flow(flow_dir, file_path)
-
-    if not full.is_file():
-        raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
-
-    try:
-        content = full.read_text(errors="replace")
-    except Exception:
-        raise HTTPException(status_code=500, detail="Could not read file")
-
-    if len(content) > MAX_FILE_SIZE:
-        content = content[:MAX_FILE_SIZE] + f"\n\n[truncated — {len(content)} bytes total]"
-
-    return {"path": file_path, "content": content}
-
-
-class FlowFileWriteRequest(BaseModel):
-    content: str
-
-
-@app.post("/api/flows/local/{flow_path:path}/files/{file_path:path}")
-async def write_flow_file(flow_path: str, file_path: str, req: FlowFileWriteRequest):
-    """Create or update a file within a flow directory."""
-    flow_dir = _resolve_flow_dir(flow_path)
-    full = _resolve_file_in_flow(flow_dir, file_path)
-
-    # Extension whitelist
-    suffix = Path(file_path).suffix.lower()
-    if suffix and suffix not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File extension '{suffix}' not allowed. Allowed: {sorted(ALLOWED_EXTENSIONS)}",
-        )
-
-    # Size limit
-    if len(req.content.encode("utf-8")) > MAX_FILE_SIZE:
-        raise HTTPException(status_code=400, detail=f"File too large (max {MAX_FILE_SIZE // 1024}KB)")
-
-    # Create parent directories
-    full.parent.mkdir(parents=True, exist_ok=True)
-
-    existed = full.exists()
-    full.write_text(req.content)
-
-    return {
-        "path": file_path,
-        "created": not existed,
-        "size": len(req.content.encode("utf-8")),
-    }
-
-
-@app.delete("/api/flows/local/{flow_path:path}/files/{file_path:path}")
-async def delete_flow_file(flow_path: str, file_path: str):
-    """Delete a file from a flow directory."""
-    flow_dir = _resolve_flow_dir(flow_path)
-    full = _resolve_file_in_flow(flow_dir, file_path)
-
-    if not full.is_file():
-        raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
-
-    # Don't allow deleting FLOW.yaml
-    if full.name == "FLOW.yaml":
-        raise HTTPException(status_code=400, detail="Cannot delete FLOW.yaml")
-
-    full.unlink()
-    return {"status": "deleted", "path": file_path}
-
-
 # ── WebSocket ─────────────────────────────────────────────────────────
 
 
@@ -1705,10 +1906,9 @@ async def websocket_endpoint(ws: WebSocket):
 
 from stepwise.project import get_bundled_web_dir
 
-# Prefer bundled web assets, fall back to dev-mode web/dist
-_web_dist = get_bundled_web_dir()
-if not _web_dist.exists():
-    _web_dist = Path(__file__).parent.parent.parent / "web" / "dist"
+# Prefer local web/dist (dev mode, always fresh), fall back to bundled _web (installed package)
+_web_dev = Path(__file__).parent.parent.parent / "web" / "dist"
+_web_dist = _web_dev if _web_dev.exists() else get_bundled_web_dir()
 if _web_dist.exists():
     from fastapi.responses import FileResponse
 
