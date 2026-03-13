@@ -39,6 +39,7 @@ class AgentProcess:
     working_dir: str
     session_id: str | None = None
     session_name: str | None = None
+    capture_transcript: bool = True
 
 
 @dataclass
@@ -245,9 +246,14 @@ class AcpxBackend:
         Calls `acpx sessions show` to retrieve the structured conversation,
         normalizes it, and saves as a transcript file that downstream chain
         members can load.
+
+        Skipped when capture_transcript is False (agent steps not in a chain).
         """
         import logging
         logger = logging.getLogger("stepwise.agent")
+
+        if not process.capture_transcript:
+            return
 
         if not process.session_name:
             return
@@ -574,6 +580,7 @@ class AgentExecutor(Executor):
 
         prompt = self._render_prompt(inputs, context)
         process = self.backend.spawn(prompt, self.config, context)
+        process.capture_transcript = bool(context.chain)
 
         if context.state_update_fn:
             context.state_update_fn({
@@ -598,6 +605,7 @@ class AgentExecutor(Executor):
             "session_name": process.session_name,
             "output_mode": self.output_mode,
             "output_file": output_file,
+            "capture_transcript": process.capture_transcript,
         }
 
         if agent_status.state == "failed":
@@ -635,6 +643,7 @@ class AgentExecutor(Executor):
             working_dir=state["working_dir"],
             session_id=state.get("session_id"),
             session_name=state.get("session_name"),
+            capture_transcript=state.get("capture_transcript", True),
         )
 
         agent_status = self.backend.check(process)

@@ -843,6 +843,7 @@ class Engine:
             timeout_minutes=job.config.timeout_minutes,
             injected_context=self._injected_contexts.get(job.id),
             chain_context=chain_context,
+            chain=step_def.chain,
         )
 
         exec_ref = step_def.executor

@@ -36,6 +36,7 @@ class ExecutionContext:
     timeout_minutes: int | None = None
     injected_context: list[str] | None = None
     chain_context: str | None = None  # M7a: compiled prior-context XML block
+    chain: str | None = None  # chain membership — used to decide transcript capture
     state_update_fn: Callable[[dict], None] | None = None
 
 
