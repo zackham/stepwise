@@ -572,35 +572,49 @@ class QuietAdapter(IOAdapter):
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
-def _get_cursor_row() -> int | None:
-    """Query the terminal for the current cursor row (1-indexed). Returns None if not a TTY."""
-    import os
-    import termios
-    import tty
+class _FdLineCounter:
+    """Count newlines written to a file descriptor by interposing a pipe.
 
-    try:
-        fd = sys.stderr.fileno()
-        if not os.isatty(fd):
-            return None
+    Used to catch output from prompt_toolkit which writes directly to the fd,
+    bypassing Python file objects.
+    """
 
-        old_settings = termios.tcgetattr(fd)
-        try:
-            tty.setraw(fd, when=termios.TCSANOW)
-            os.write(fd, b"\033[6n")  # DSR — Device Status Report
-            response = b""
-            while True:
-                ch = os.read(fd, 1)
-                response += ch
-                if ch == b"R":
+    def __init__(self, target_fd: int):
+        import os
+        self._target_fd = target_fd
+        self._original_fd = os.dup(target_fd)  # save original
+        self._read_fd, self._write_fd = os.pipe()
+        os.dup2(self._write_fd, target_fd)  # redirect fd to our pipe
+        self.lines = 0
+        self._running = True
+        # Background thread reads from pipe, counts newlines, forwards to original
+        import threading
+        self._thread = threading.Thread(target=self._relay, daemon=True)
+        self._thread.start()
+
+    def _relay(self):
+        import os
+        while self._running:
+            try:
+                data = os.read(self._read_fd, 4096)
+                if not data:
                     break
-        finally:
-            termios.tcsetattr(fd, termios.TCSANOW, old_settings)
+                self.lines += data.count(b"\n")
+                os.write(self._original_fd, data)
+            except OSError:
+                break
 
-        # Response: ESC [ row ; col R
-        parts = response.decode().lstrip("\033[").rstrip("R").split(";")
-        return int(parts[0])
-    except Exception:
-        return None
+    def stop(self) -> int:
+        """Restore original fd and return line count."""
+        import os
+        self._running = False
+        # Restore original fd
+        os.dup2(self._original_fd, self._target_fd)
+        os.close(self._original_fd)
+        os.close(self._write_fd)
+        os.close(self._read_fd)
+        self._thread.join(timeout=0.1)
+        return self.lines
 
 
 class _AppendFlowHandle(LiveFlowHandle):
@@ -615,7 +629,7 @@ class _AppendFlowHandle(LiveFlowHandle):
         self._console = console
         self._flow_name = flow_name
         self._running_step: str | None = None  # track the "running" line to overwrite
-        self._pause_row: int | None = None  # cursor row at start of pause
+        self._fd_counter: _FdLineCounter | None = None
 
     def _step_line(
         self, name: str, status: str,
@@ -682,26 +696,44 @@ class _AppendFlowHandle(LiveFlowHandle):
         pass  # no live summary — printed at the end by flow_complete
 
     def pause_for_input(self) -> None:
-        """Record cursor position before input prompts.
+        """Start counting all terminal output lines for cleanup on resume.
 
-        Called after the suspended line is printed, so we subtract 1 to
-        include that line in the erase range on resume.
+        Interposes on stderr fd to catch prompt_toolkit output too.
+        The suspended step line was just printed, so we add 1 to erase it.
         """
-        row = _get_cursor_row()
-        self._pause_row = (row - 1) if row is not None else None
+        import os
+        file = self._console.file or sys.stderr
+        try:
+            fd = file.fileno()
+            if os.isatty(fd):
+                # Flush before interposing
+                file.flush()
+                sys.stdout.flush()
+                self._fd_counter = _FdLineCounter(fd)
+        except (AttributeError, OSError):
+            pass
 
     def resume_after_input(self) -> None:
-        """Erase everything printed during the pause."""
+        """Erase everything printed during the pause (including the suspended line)."""
         file = self._console.file or sys.stderr
-        current_row = _get_cursor_row()
-        if self._pause_row is not None and current_row is not None:
-            lines_to_erase = current_row - self._pause_row
-            if lines_to_erase > 0:
-                for _ in range(lines_to_erase):
-                    file.write("\033[A\033[2K")
-                file.write("\r")
-                file.flush()
-        self._pause_row = None
+        lines = 0
+        if self._fd_counter is not None:
+            file.flush()
+            sys.stdout.flush()
+            import time; time.sleep(0.05)  # let relay thread drain
+            lines = self._fd_counter.stop()
+            self._fd_counter = None
+            lines += 1  # include the suspended step line printed before pause
+
+        if lines > 0:
+            # Write erase sequences to the real fd directly
+            import os
+            try:
+                fd = file.fileno()
+                erase = b"".join(b"\033[A\033[2K" for _ in range(lines)) + b"\r"
+                os.write(fd, erase)
+            except (AttributeError, OSError):
+                pass
 
 
 class TerminalAdapter(IOAdapter):
