@@ -10,6 +10,7 @@ import { HumanControls } from "@/components/jobs/HumanControls";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { JsonView } from "@/components/JsonView";
 import type { DagSelection } from "@/lib/dag-layout";
+import { useAutoSelectSuspended } from "@/hooks/useAutoSelectSuspended";
 import {
   PanelRightClose,
   PanelLeftClose,
@@ -106,6 +107,9 @@ export function JobDetailPage() {
       return next;
     });
   }, []);
+
+  // Auto-select newly suspended human steps
+  useAutoSelectSuspended(runs, selection, handleSelectStep);
 
   // Reset state when switching jobs
   useEffect(() => {
