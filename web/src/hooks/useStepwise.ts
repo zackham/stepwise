@@ -7,7 +7,6 @@ export function useJobs(status?: string, topLevel: boolean = true) {
   return useQuery({
     queryKey: ["jobs", status, topLevel],
     queryFn: () => api.fetchJobs(status, topLevel),
-    refetchInterval: 5000,
   });
 }
 
@@ -16,7 +15,6 @@ export function useJob(jobId: string | undefined) {
     queryKey: ["job", jobId],
     queryFn: () => api.fetchJob(jobId!),
     enabled: !!jobId,
-    refetchInterval: 3000,
   });
 }
 
@@ -25,7 +23,6 @@ export function useJobTree(jobId: string | undefined) {
     queryKey: ["jobTree", jobId],
     queryFn: () => api.fetchJobTree(jobId!),
     enabled: !!jobId,
-    refetchInterval: 5000,
   });
 }
 
@@ -34,7 +31,6 @@ export function useRuns(jobId: string | undefined, stepName?: string) {
     queryKey: ["runs", jobId, stepName],
     queryFn: () => api.fetchRuns(jobId!, stepName),
     enabled: !!jobId,
-    refetchInterval: 3000,
   });
 }
 
@@ -43,7 +39,6 @@ export function useEvents(jobId: string | undefined) {
     queryKey: ["events", jobId],
     queryFn: () => api.fetchEvents(jobId!),
     enabled: !!jobId,
-    refetchInterval: 3000,
   });
 }
 
@@ -68,7 +63,6 @@ export function useStepEvents(runId: string | undefined) {
     queryKey: ["stepEvents", runId],
     queryFn: () => api.fetchStepEvents(runId!),
     enabled: !!runId,
-    refetchInterval: 3000,
   });
 }
 
@@ -77,7 +71,6 @@ export function useRunCost(runId: string | undefined) {
     queryKey: ["runCost", runId],
     queryFn: () => api.fetchRunCost(runId!),
     enabled: !!runId,
-    refetchInterval: 5000,
   });
 }
 
@@ -85,7 +78,15 @@ export function useEngineStatus() {
   return useQuery({
     queryKey: ["status"],
     queryFn: api.fetchStatus,
-    refetchInterval: 5000,
+  });
+}
+
+export function useJobOutput(jobId: string | undefined, enabled: boolean = true) {
+  return useQuery({
+    queryKey: ["jobOutput", jobId],
+    queryFn: () => api.fetchJobOutput(jobId!),
+    enabled: !!jobId && enabled,
+    staleTime: Infinity,
   });
 }
 

@@ -39,6 +39,9 @@ export function useStepwiseWebSocket() {
         if (msg.type === "tick" && msg.changed_jobs?.length > 0) {
           queryClient.invalidateQueries({ queryKey: ["jobs"] });
           queryClient.invalidateQueries({ queryKey: ["status"] });
+          // Invalidate all run-level queries too (stepEvents, runCost)
+          queryClient.invalidateQueries({ queryKey: ["stepEvents"] });
+          queryClient.invalidateQueries({ queryKey: ["runCost"] });
           for (const jobId of msg.changed_jobs) {
             queryClient.invalidateQueries({ queryKey: ["job", jobId] });
             queryClient.invalidateQueries({ queryKey: ["runs", jobId] });

@@ -1,19 +1,35 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
-import { useJob, useRuns, useJobTree } from "@/hooks/useStepwise";
+import { useJob, useRuns, useJobTree, useJobOutput } from "@/hooks/useStepwise";
 import { JobList } from "@/components/jobs/JobList";
 import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
 import { FlowDagView } from "@/components/dag/FlowDagView";
 import { StepDetailPanel } from "@/components/jobs/StepDetailPanel";
 import { HumanControls } from "@/components/jobs/HumanControls";
 import { JobStatusBadge } from "@/components/StatusBadge";
+import { JsonView } from "@/components/JsonView";
 import {
   PanelRightClose,
   PanelLeftClose,
+  PanelRightOpen,
   ScrollText,
   GitBranch,
   ChevronRight,
+  Package,
+  Clock,
+  Info,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
+
+function formatDuration(createdAt: string, updatedAt: string): string {
+  const start = new Date(createdAt).getTime();
+  const end = new Date(updatedAt).getTime();
+  const ms = end - start;
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  if (ms < 3600000) return `${(ms / 60000).toFixed(1)}m`;
+  return `${(ms / 3600000).toFixed(1)}h`;
+}
 
 export function JobDetailPage() {
   const { jobId } = useParams({ from: "/jobs/$jobId" });
@@ -25,6 +41,11 @@ export function JobDetailPage() {
   const [selectedStep, setSelectedStep] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
+  const [rightPanelOpen, setRightPanelOpen] = useState<boolean | null>(null);
+
+  const isTerminal =
+    job?.status === "completed" || job?.status === "failed" || job?.status === "cancelled";
+  const { data: outputs } = useJobOutput(job?.id, isTerminal);
 
   const toggleExpand = useCallback((stepName: string) => {
     setExpandedSteps((prev) => {
@@ -35,11 +56,21 @@ export function JobDetailPage() {
     });
   }, []);
 
-  // Reset expansion state when switching jobs
+  // Reset state when switching jobs
   useEffect(() => {
     setExpandedSteps(new Set());
     setSelectedStep(null);
+    setRightPanelOpen(null);
   }, [jobId]);
+
+  // Auto-open right panel for terminal jobs (only on initial load)
+  useEffect(() => {
+    if (rightPanelOpen === null && job) {
+      const terminal =
+        job.status === "completed" || job.status === "failed" || job.status === "cancelled";
+      setRightPanelOpen(terminal);
+    }
+  }, [job, rightPanelOpen]);
 
   // Escape key deselects step
   useEffect(() => {
@@ -69,6 +100,13 @@ export function JobDetailPage() {
   const selectedStepDef = selectedStep
     ? job.workflow.steps[selectedStep]
     : null;
+
+  const stepCount = Object.keys(job.workflow.steps).length;
+  const hasInputs = job.inputs && Object.keys(job.inputs).length > 0;
+  const hasOutputs = outputs && Object.keys(outputs).length > 0;
+
+  // Right panel shows step details when a step is selected, otherwise job details
+  const showRightPanel = rightPanelOpen || !!selectedStepDef;
 
   return (
     <div className="flex h-full">
@@ -109,7 +147,7 @@ export function JobDetailPage() {
         </button>
       )}
 
-      {/* Center: DAG view */}
+      {/* Center: header + controls + DAG */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Sub-job breadcrumb */}
         {job.parent_job_id && (
@@ -129,20 +167,24 @@ export function JobDetailPage() {
         )}
 
         {/* Job header */}
-        <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-zinc-950/30">
+        <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-zinc-950/30 shrink-0">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <h2 className="text-sm font-semibold truncate text-foreground">
                 {job.objective || "Untitled Job"}
               </h2>
               <JobStatusBadge status={job.status} />
+              <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
+                <Clock className="w-2.5 h-2.5" />
+                {formatDuration(job.created_at, job.updated_at)}
+              </span>
             </div>
             <div className="text-[10px] font-mono text-zinc-600 mt-0.5">
               {job.id}
             </div>
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 shrink-0">
             <Link
               to="/jobs/$jobId/events"
               params={{ jobId }}
@@ -159,6 +201,15 @@ export function JobDetailPage() {
               <GitBranch className="w-3.5 h-3.5" />
               Tree
             </Link>
+            {!showRightPanel && (
+              <button
+                onClick={() => setRightPanelOpen(true)}
+                className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-800/50"
+              >
+                <Info className="w-3.5 h-3.5" />
+                Details
+              </button>
+            )}
           </div>
         </div>
 
@@ -179,14 +230,89 @@ export function JobDetailPage() {
         </div>
       </div>
 
-      {/* Right: Step detail panel */}
-      {selectedStepDef && (
-        <div className="w-96 border-l border-border shrink-0 flex flex-col overflow-hidden" style={{ height: 'calc(100vh - 3rem)' }}>
-          <StepDetailPanel
-            jobId={jobId}
-            stepDef={selectedStepDef}
-            onClose={() => setSelectedStep(null)}
-          />
+      {/* Right sidebar: step details or job details */}
+      {showRightPanel && (
+        <div className="w-80 border-l border-border shrink-0 flex flex-col overflow-hidden" style={{ maxHeight: 'calc(100vh - 3rem)' }}>
+          {selectedStepDef ? (
+            <StepDetailPanel
+              jobId={jobId}
+              stepDef={selectedStepDef}
+              onClose={() => setSelectedStep(null)}
+            />
+          ) : (
+            <>
+              {/* Job details header */}
+              <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-zinc-950/50 shrink-0">
+                <span className="text-xs font-medium text-zinc-400">Job Details</span>
+                <button
+                  onClick={() => setRightPanelOpen(false)}
+                  className="text-zinc-600 hover:text-zinc-300 p-0.5"
+                >
+                  <PanelRightOpen className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* Job details content */}
+              <div className="flex-1 overflow-y-auto p-3 space-y-4">
+                {/* Stats */}
+                <div className="text-xs space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-zinc-500 w-16">Status</span>
+                    <JobStatusBadge status={job.status} />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-zinc-500 w-16">Steps</span>
+                    <span className="font-mono text-zinc-300">{stepCount}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-zinc-500 w-16">Duration</span>
+                    <span className="font-mono text-zinc-400">
+                      {formatDuration(job.created_at, job.updated_at)}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-zinc-500 w-16">Created</span>
+                    <span className="font-mono text-zinc-500 text-[10px]">
+                      {new Date(job.created_at).toLocaleString()}
+                    </span>
+                  </div>
+                  {isTerminal && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-zinc-500 w-16">Finished</span>
+                      <span className="font-mono text-zinc-500 text-[10px]">
+                        {new Date(job.updated_at).toLocaleString()}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Inputs */}
+                {hasInputs && (
+                  <div>
+                    <div className="text-[10px] font-medium text-zinc-500 uppercase tracking-wide mb-1.5">
+                      Inputs
+                    </div>
+                    <div className="max-h-40 overflow-y-auto bg-zinc-900/50 rounded border border-zinc-800 p-2">
+                      <JsonView data={job.inputs} defaultExpanded={false} />
+                    </div>
+                  </div>
+                )}
+
+                {/* Outputs */}
+                {isTerminal && hasOutputs && (
+                  <div>
+                    <div className="text-[10px] font-medium text-zinc-500 uppercase tracking-wide mb-1.5 flex items-center gap-1">
+                      <Package className="w-3 h-3" />
+                      Outputs
+                    </div>
+                    <div className="max-h-40 overflow-y-auto bg-zinc-900/50 rounded border border-zinc-800 p-2">
+                      <JsonView data={outputs} defaultExpanded={false} />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>

@@ -8,7 +8,7 @@ export function JobDashboard() {
 
   return (
     <div className="flex h-full">
-      <div className="w-full max-w-md border-r border-border flex flex-col">
+      <div className="w-72 border-r border-border flex flex-col shrink-0">
         <div className="flex items-center justify-between p-3 border-b border-border">
           <h2 className="text-sm font-semibold text-foreground">Jobs</h2>
           <CreateJobDialog
