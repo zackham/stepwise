@@ -788,6 +788,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         report_output=args.report_output,
         output_json=getattr(args, "output_format", None) == "json",
         force_local=getattr(args, "local", False),
+        adapter=_io(args),
     )
 
 
