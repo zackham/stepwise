@@ -1,8 +1,10 @@
 """Shared fixtures for Stepwise tests."""
 
+import asyncio
+
 import pytest
 
-from stepwise.engine import Engine
+from stepwise.engine import AsyncEngine, Engine
 from stepwise.executors import (
     ExecutionContext,
     Executor,
@@ -17,6 +19,8 @@ from stepwise.models import (
     ExecutorRef,
     HandoffEnvelope,
     InputBinding,
+    Job,
+    JobStatus,
     Sidecar,
     StepDefinition,
     WorkflowDefinition,
@@ -105,6 +109,31 @@ class CallableExecutor(Executor):
         pass
 
 
+# ── Async engine helpers ─────────────────────────────────────────────
+
+
+async def run_job(engine: AsyncEngine, job_id: str, timeout: float = 10) -> Job:
+    """Start a job and run the engine until it reaches terminal state."""
+    engine_task = asyncio.create_task(engine.run())
+    try:
+        engine.start_job(job_id)
+        return await asyncio.wait_for(engine.wait_for_job(job_id), timeout)
+    finally:
+        engine_task.cancel()
+        try:
+            await engine_task
+        except asyncio.CancelledError:
+            pass
+
+
+def run_job_sync(engine: AsyncEngine, job_id: str, timeout: float = 10) -> Job:
+    """Sync wrapper — run an async engine job to completion."""
+    return asyncio.run(run_job(engine, job_id, timeout))
+
+
+# ── Fixtures ─────────────────────────────────────────────────────────
+
+
 @pytest.fixture
 def store():
     s = SQLiteStore(":memory:")
@@ -147,7 +176,14 @@ def registry():
 
 @pytest.fixture
 def engine(store, registry):
+    """Sync tick-based engine (legacy — use async_engine for new tests)."""
     return Engine(store=store, registry=registry)
+
+
+@pytest.fixture
+def async_engine(store, registry):
+    """Event-driven async engine."""
+    return AsyncEngine(store=store, registry=registry)
 
 
 @pytest.fixture(autouse=True)

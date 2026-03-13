@@ -792,10 +792,29 @@ class Engine:
         if step_def.executor.type == "sub_flow" and step_def.sub_flow:
             return self._launch_sub_flow(job, step_def)
 
+        # Normal step: prepare, execute synchronously, process result
+        run, exec_ref, inputs, ctx = self._prepare_step_run(job, step_name)
+
+        try:
+            executor = self.registry.create(exec_ref)
+            result = executor.start(inputs, ctx)
+        except Exception as e:
+            self._handle_executor_crash(job, run, step_name, e)
+            return run
+
+        self._process_launch_result(job, run, result)
+        return run
+
+    def _prepare_step_run(
+        self, job: Job, step_name: str,
+    ) -> tuple[StepRun, "ExecutorRef", dict, ExecutionContext]:
+        """Create StepRun, resolve inputs, build ExecutionContext.
+
+        Returns (run, exec_ref, inputs, ctx). Run is saved to store in RUNNING status.
+        """
+        step_def = job.workflow.steps[step_name]
         attempt = self.store.next_attempt(job.id, step_name)
         inputs, dep_run_ids = self._resolve_inputs(job, step_def)
-
-        # M7a: Compile chain context for chain members
         chain_context = self._compile_chain_context(job, step_def, step_name)
 
         run = StepRun(
@@ -826,38 +845,44 @@ class Engine:
             chain_context=chain_context,
         )
 
-        # Inject step output fields into executor config for LLM structured output
         exec_ref = step_def.executor
         if step_def.outputs and "output_fields" not in exec_ref.config:
             exec_ref = exec_ref.with_config({"output_fields": step_def.outputs})
-
-        # M10: Inject flow_dir for script path resolution
         if job.workflow.source_dir and exec_ref.type == "script":
             exec_ref = exec_ref.with_config({"flow_dir": job.workflow.source_dir})
 
-        try:
-            executor = self.registry.create(exec_ref)
-            result = executor.start(inputs, ctx)
-        except Exception as e:
-            import logging
-            logging.getLogger("stepwise.engine").error(
-                f"Step '{step_name}' executor crashed: {type(e).__name__}: {e}", exc_info=True
-            )
-            run.status = StepRunStatus.FAILED
-            run.error = f"Executor crash: {type(e).__name__}: {e}"
-            run.completed_at = _now()
-            self.store.save_run(run)
-            self._emit(job.id, STEP_FAILED, {
-                "step": step_name,
-                "attempt": attempt,
-                "error": str(e),
-            })
-            self._halt_job(job, run)
-            return run
+        return run, exec_ref, inputs, ctx
+
+    def _handle_executor_crash(
+        self, job: Job, run: StepRun, step_name: str, error: Exception,
+    ) -> None:
+        """Handle exception from executor creation or start()."""
+        import logging
+        logging.getLogger("stepwise.engine").error(
+            f"Step '{step_name}' executor crashed: {type(error).__name__}: {error}",
+            exc_info=True,
+        )
+        run.status = StepRunStatus.FAILED
+        run.error = f"Executor crash: {type(error).__name__}: {error}"
+        run.completed_at = _now()
+        self.store.save_run(run)
+        self._emit(job.id, STEP_FAILED, {
+            "step": step_name,
+            "attempt": run.attempt,
+            "error": str(error),
+        })
+        self._halt_job(job, run)
+
+    def _process_launch_result(
+        self, job: Job, run: StepRun, result: ExecutorResult,
+    ) -> None:
+        """Process ExecutorResult after executor.start() returns."""
+        step_name = run.step_name
+        attempt = run.attempt
+        step_def = job.workflow.steps[step_name]
 
         match result.type:
             case "data":
-                # Check for failure
                 is_failure = False
                 error_msg = None
                 if result.executor_state and result.executor_state.get("failed"):
@@ -881,7 +906,6 @@ class Engine:
                     })
                     self._halt_job(job, run)
                 else:
-                    # M1: hard validation — artifact must contain declared outputs
                     validation_error = self._validate_artifact(step_def, result.envelope)
                     if validation_error:
                         run.status = StepRunStatus.FAILED
@@ -904,7 +928,6 @@ class Engine:
                             "step": step_name,
                             "attempt": attempt,
                         })
-                        # Emit effector events from executor_meta
                         self._emit_effector_events(job.id, result.envelope)
                         self._process_completion(job, run)
 
@@ -912,7 +935,6 @@ class Engine:
                 run.status = StepRunStatus.SUSPENDED
                 run.watch = result.watch
                 run.executor_state = result.executor_state
-                # Set fulfillment_outputs from step definition if watch doesn't have them
                 if run.watch and not run.watch.fulfillment_outputs:
                     run.watch.fulfillment_outputs = list(step_def.outputs)
                 self.store.save_run(run)
@@ -924,7 +946,6 @@ class Engine:
                 })
 
             case "async":
-                # M4: Long-running executor — stays RUNNING, polled in tick loop
                 run.executor_state = result.executor_state
                 self.store.save_run(run)
                 self._emit(job.id, STEP_STARTED_ASYNC, {
@@ -932,8 +953,6 @@ class Engine:
                     "attempt": attempt,
                     "executor_type": step_def.executor.type,
                 })
-
-        return run
 
     # ── For-Each Launching ────────────────────────────────────────────────
 
@@ -1875,3 +1894,294 @@ class Engine:
                 evt_data.get("data", {}),
                 is_effector=True,
             )
+
+
+# ── Async Engine ─────────────────────────────────────────────────────────
+
+import asyncio
+import logging as _logging
+from typing import Callable
+
+_async_logger = _logging.getLogger("stepwise.async_engine")
+
+
+class AsyncEngine(Engine):
+    """Event-driven async workflow engine.
+
+    Runs executors in a thread pool via asyncio.to_thread(). Steps complete by
+    pushing events onto an asyncio.Queue; the main loop reacts immediately
+    instead of polling. All business logic (readiness, exit rules, input
+    resolution, currentness) is inherited from Engine.
+    """
+
+    def __init__(
+        self,
+        store: SQLiteStore,
+        registry: ExecutorRegistry | None = None,
+        jobs_dir: str | None = None,
+        project_dir: Path | None = None,
+    ) -> None:
+        super().__init__(store, registry, jobs_dir, project_dir)
+        self._queue: asyncio.Queue = asyncio.Queue()
+        self._tasks: dict[str, asyncio.Task] = {}  # run_id → task
+        self._job_done: dict[str, asyncio.Event] = {}  # job_id → done signal
+        self.on_broadcast: Callable[[dict], None] | None = None
+
+    # ── Main loop ────────────────────────────────────────────────────────
+
+    async def run(self) -> None:
+        """Main event loop — blocks on queue, processes events."""
+        while True:
+            event = await self._queue.get()
+            try:
+                self._handle_queue_event(event)
+            except Exception:
+                _async_logger.error("Error handling queue event", exc_info=True)
+
+    # ── Job lifecycle overrides ──────────────────────────────────────────
+
+    def start_job(self, job_id: str) -> None:
+        """Start a job and dispatch all initially-ready steps."""
+        job = self.store.load_job(job_id)
+        if job.status != JobStatus.PENDING:
+            raise ValueError(f"Cannot start job in status {job.status.value}")
+        job.status = JobStatus.RUNNING
+        job.updated_at = _now()
+        self.store.save_job(job)
+        self._emit(job_id, JOB_STARTED)
+        self._dispatch_ready(job_id)
+
+    def resume_job(self, job_id: str) -> None:
+        job = self.store.load_job(job_id)
+        if job.status != JobStatus.PAUSED:
+            raise ValueError(f"Cannot resume job in status {job.status.value}")
+        job.status = JobStatus.RUNNING
+        job.updated_at = _now()
+        self.store.save_job(job)
+        self._emit(job_id, JOB_RESUMED)
+        self._dispatch_ready(job_id)
+
+    def cancel_job(self, job_id: str) -> None:
+        # Cancel running async tasks before cancelling runs
+        for run in self.store.running_runs(job_id):
+            task = self._tasks.pop(run.id, None)
+            if task:
+                task.cancel()
+        super().cancel_job(job_id)
+        self._signal_job_done(job_id)
+
+    def fulfill_watch(self, run_id: str, payload: dict) -> dict | None:
+        result = super().fulfill_watch(run_id, payload)
+        if result is None:  # success
+            run = self.store.load_run(run_id)
+            self._dispatch_ready(run.job_id)
+            self._check_job_terminal(run.job_id)
+        return result
+
+    def rerun_step(self, job_id: str, step_name: str) -> StepRun:
+        run = super().rerun_step(job_id, step_name)
+        self._dispatch_ready(job_id)
+        self._check_job_terminal(job_id)
+        return run
+
+    async def wait_for_job(self, job_id: str, timeout: float | None = None) -> Job:
+        """Wait for a job to reach a terminal state."""
+        if job_id not in self._job_done:
+            self._job_done[job_id] = asyncio.Event()
+
+        # Already terminal?
+        job = self.store.load_job(job_id)
+        if job.status not in (JobStatus.RUNNING, JobStatus.PENDING):
+            return job
+
+        if timeout:
+            await asyncio.wait_for(self._job_done[job_id].wait(), timeout)
+        else:
+            await self._job_done[job_id].wait()
+        return self.store.load_job(job_id)
+
+    # ── Step dispatch ────────────────────────────────────────────────────
+
+    def _dispatch_ready(self, job_id: str) -> None:
+        """Find and launch all ready steps for a job."""
+        job = self.store.load_job(job_id)
+        if job.status != JobStatus.RUNNING:
+            return
+        for step_name in self._find_ready(job):
+            self._launch(job, step_name)
+            # Reload — _launch may change job status (for_each, route, sub_flow)
+            job = self.store.load_job(job_id)
+            if job.status != JobStatus.RUNNING:
+                return
+
+    def _launch(self, job: Job, step_name: str) -> StepRun:
+        """Override: dispatch normal-step executors to thread pool."""
+        step_def = job.workflow.steps[step_name]
+
+        # Special step types: synchronous (they create sub-jobs)
+        if step_def.for_each and step_def.sub_flow:
+            try:
+                return self._launch_for_each(job, step_def)
+            except (ValueError, KeyError) as e:
+                _async_logger.error(
+                    f"For-each step '{step_name}' failed to launch: {e}", exc_info=True
+                )
+                run = StepRun(
+                    id=_gen_id("run"),
+                    job_id=job.id,
+                    step_name=step_name,
+                    attempt=self.store.next_attempt(job.id, step_name),
+                    status=StepRunStatus.FAILED,
+                    error=str(e),
+                    started_at=_now(),
+                    completed_at=_now(),
+                )
+                self.store.save_run(run)
+                self._emit(job.id, STEP_FAILED, {"step": step_name, "error": str(e)})
+                self._halt_job(job, run)
+                return run
+
+        if step_def.route_def:
+            return self._launch_route(job, step_def)
+
+        if step_def.executor.type == "sub_flow" and step_def.sub_flow:
+            return self._launch_sub_flow(job, step_def)
+
+        # Normal step: prepare run, dispatch executor to thread pool
+        run, exec_ref, inputs, ctx = self._prepare_step_run(job, step_name)
+
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(
+            self._run_executor(job.id, step_name, run.id, exec_ref, inputs, ctx)
+        )
+        self._tasks[run.id] = task
+        return run
+
+    async def _run_executor(
+        self,
+        job_id: str,
+        step_name: str,
+        run_id: str,
+        exec_ref: "ExecutorRef",
+        inputs: dict,
+        ctx: ExecutionContext,
+    ) -> None:
+        """Run executor.start() in thread pool, push result to queue."""
+        try:
+            executor = self.registry.create(exec_ref)
+            result = await asyncio.to_thread(executor.start, inputs, ctx)
+            await self._queue.put(("step_result", job_id, step_name, run_id, result))
+        except asyncio.CancelledError:
+            # Task was cancelled (job cancellation) — don't push event
+            return
+        except Exception as e:
+            await self._queue.put(("step_error", job_id, step_name, run_id, e))
+
+    # ── Event handling ───────────────────────────────────────────────────
+
+    def _handle_queue_event(self, event: tuple) -> None:
+        """Process an event from the queue."""
+        event_type = event[0]
+
+        if event_type == "step_result":
+            _, job_id, step_name, run_id, result = event
+            self._tasks.pop(run_id, None)
+
+            job = self.store.load_job(job_id)
+            if job.status != JobStatus.RUNNING:
+                return
+
+            run = self.store.load_run(run_id)
+            if run.status != StepRunStatus.RUNNING:
+                return  # already handled (e.g. cancelled)
+
+            self._process_launch_result(job, run, result)
+            self._after_step_change(job_id)
+
+        elif event_type == "step_error":
+            _, job_id, step_name, run_id, error = event
+            self._tasks.pop(run_id, None)
+
+            job = self.store.load_job(job_id)
+            if job.status != JobStatus.RUNNING:
+                return
+
+            run = self.store.load_run(run_id)
+            if run.status != StepRunStatus.RUNNING:
+                return
+
+            self._handle_executor_crash(job, run, step_name, error)
+            self._after_step_change(job_id)
+
+    def _after_step_change(self, job_id: str) -> None:
+        """After a step result is processed, dispatch ready steps and check terminal."""
+        self._dispatch_ready(job_id)
+        self._check_job_terminal(job_id)
+
+    def _check_job_terminal(self, job_id: str) -> None:
+        """Check if job reached terminal state; complete if all terminals are current."""
+        job = self.store.load_job(job_id)
+
+        if job.status == JobStatus.RUNNING and self._job_complete(job):
+            job.status = JobStatus.COMPLETED
+            job.updated_at = _now()
+            self.store.save_job(job)
+            self._emit(job.id, JOB_COMPLETED)
+
+        # Signal done if terminal
+        job = self.store.load_job(job_id)
+        if job.status not in (JobStatus.RUNNING, JobStatus.PENDING):
+            self._broadcast({"type": "job_changed", "job_id": job_id, "status": job.status.value})
+            self._signal_job_done(job_id)
+            # Cascade to parent
+            if job.parent_job_id:
+                self._handle_sub_job_done(job)
+
+    def _broadcast(self, event: dict) -> None:
+        """Fire the on_broadcast callback if set."""
+        if self.on_broadcast:
+            self.on_broadcast(event)
+
+    def _signal_job_done(self, job_id: str) -> None:
+        """Signal the asyncio.Event for wait_for_job()."""
+        done = self._job_done.get(job_id)
+        if done:
+            done.set()
+
+    def _handle_sub_job_done(self, sub_job: Job) -> None:
+        """When a sub-job finishes, check parent's delegated runs."""
+        if not sub_job.parent_job_id:
+            return
+
+        try:
+            parent_job = self.store.load_job(sub_job.parent_job_id)
+        except KeyError:
+            return
+        if parent_job.status != JobStatus.RUNNING:
+            return
+
+        for run in self.store.delegated_runs(parent_job.id):
+            # For-each sub-jobs
+            if run.executor_state and run.executor_state.get("for_each"):
+                if self._check_for_each_completion(parent_job, run):
+                    self._after_step_change(parent_job.id)
+            # Single sub-job
+            elif run.sub_job_id == sub_job.id:
+                if sub_job.status == JobStatus.COMPLETED:
+                    run.result = self._terminal_output(sub_job)
+                    run.status = StepRunStatus.COMPLETED
+                    run.completed_at = _now()
+                    self.store.save_run(run)
+                    self._emit(parent_job.id, STEP_COMPLETED, {
+                        "step": run.step_name,
+                        "attempt": run.attempt,
+                    })
+                    self._process_completion(parent_job, run)
+                    self._after_step_change(parent_job.id)
+                elif sub_job.status in (JobStatus.FAILED, JobStatus.CANCELLED):
+                    run.status = StepRunStatus.FAILED
+                    run.error = f"Sub-job {sub_job.status.value}"
+                    run.completed_at = _now()
+                    self.store.save_run(run)
+                    self._halt_job(parent_job, run)
+                    self._check_job_terminal(parent_job.id)
