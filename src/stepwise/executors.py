@@ -96,7 +96,6 @@ class ExecutorRegistry:
         """Create an executor from an ExecutorRef, wrapping with decorators."""
         from stepwise.decorators import (
             FallbackDecorator,
-            NotificationDecorator,
             RetryDecorator,
             TimeoutDecorator,
         )
@@ -113,8 +112,6 @@ class ExecutorRegistry:
                     executor = TimeoutDecorator(executor, dec_ref.config)
                 case "retry":
                     executor = RetryDecorator(executor, dec_ref.config)
-                case "notification":
-                    executor = NotificationDecorator(executor, dec_ref.config)
                 case "fallback":
                     fallback_ref = dec_ref.config.get("fallback_ref")
                     if fallback_ref:
@@ -313,14 +310,11 @@ class ScriptExecutor(Executor):
 class HumanExecutor(Executor):
     """Immediately suspends with a human watch."""
 
-    def __init__(self, prompt: str, notify: str | None = None) -> None:
+    def __init__(self, prompt: str) -> None:
         self.prompt = prompt
-        self.notify = notify
 
     def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
         config: dict[str, Any] = {"prompt": self.prompt}
-        if self.notify:
-            config["notify"] = self.notify
 
         return ExecutorResult(
             type="watch",

@@ -1,4 +1,4 @@
-"""Executor decorators: TimeoutDecorator, RetryDecorator, NotificationDecorator, FallbackDecorator."""
+"""Executor decorators: TimeoutDecorator, RetryDecorator, FallbackDecorator."""
 
 from __future__ import annotations
 
@@ -119,46 +119,6 @@ class RetryDecorator(Executor):
         if last_result and last_result.envelope:
             last_result.envelope.executor_meta.update(retry_meta)
         return last_result  # type: ignore[return-value]
-
-    def check_status(self, state: dict) -> ExecutorStatus:
-        return self._executor.check_status(state)
-
-    def cancel(self, state: dict) -> None:
-        self._executor.cancel(state)
-
-
-class NotificationDecorator(Executor):
-    """Sends notifications on start/complete/fail. M1: just records in executor_meta."""
-
-    def __init__(self, executor: Executor, config: dict) -> None:
-        self._executor = executor
-        self._config = config
-        self.notifications: list[dict] = []
-
-    def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
-        self.notifications.append({
-            "event": "start",
-            "step": context.step_name,
-            "attempt": context.attempt,
-        })
-
-        result = self._executor.start(inputs, context)
-
-        is_failure = False
-        if result.executor_state and result.executor_state.get("failed"):
-            is_failure = True
-
-        self.notifications.append({
-            "event": "failed" if is_failure else "completed",
-            "step": context.step_name,
-            "attempt": context.attempt,
-        })
-
-        notification_meta = {"notification": {"events": list(self.notifications)}}
-        if result.envelope:
-            result.envelope.executor_meta.update(notification_meta)
-
-        return result
 
     def check_status(self, state: dict) -> ExecutorStatus:
         return self._executor.check_status(state)

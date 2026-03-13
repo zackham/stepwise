@@ -2,7 +2,6 @@
 
 from stepwise.decorators import (
     FallbackDecorator,
-    NotificationDecorator,
     RetryDecorator,
     TimeoutDecorator,
 )
@@ -93,7 +92,6 @@ __all__ = [
     "ScriptExecutor",
     # Decorators
     "FallbackDecorator",
-    "NotificationDecorator",
     "RetryDecorator",
     "TimeoutDecorator",
     # Events

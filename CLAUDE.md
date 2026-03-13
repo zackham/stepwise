@@ -82,7 +82,7 @@ All registered in `src/stepwise/registry_factory.py:create_default_registry()`:
 | `mock_llm` | `MockLLMExecutor` | `executors.py` | Test-only LLM stub with configurable failure/latency |
 | `agent` | `AgentExecutor` | `agent.py` | ACP agent via acpx — supports `emit_flow: true` for dynamic flow emission |
 
-Decorators (`src/stepwise/decorators.py`): `TimeoutDecorator`, `RetryDecorator`, `NotificationDecorator`, `FallbackDecorator` — applied via `ExecutorRef.decorators` list.
+Decorators (`src/stepwise/decorators.py`): `TimeoutDecorator`, `RetryDecorator`, `FallbackDecorator` — applied via `ExecutorRef.decorators` list.
 
 ### Executor return types
 
@@ -259,7 +259,7 @@ Other patterns:
 
 ## Key files
 
-**Engine:** `engine.py` (AsyncEngine event queue + legacy Engine tick loop, readiness, launching), `models.py` (all dataclasses), `executors.py` (ABC + built-in executors), `store.py` (SQLite + heartbeat + stale detection), `events.py` (event type constants), `decorators.py` (retry, timeout, fallback, notification)
+**Engine:** `engine.py` (AsyncEngine event queue + legacy Engine tick loop, readiness, launching), `models.py` (all dataclasses), `executors.py` (ABC + built-in executors), `store.py` (SQLite + heartbeat + stale detection), `events.py` (event type constants), `decorators.py` (retry, timeout, fallback)
 
 **CLI/Runner:** `cli.py` (all CLI commands), `runner.py` (headless `stepwise run` + server delegation), `runner_bg.py` (background mode), `agent.py` (AgentExecutor + AcpxBackend), `agent_help.py` (agent instruction generation), `server_detect.py` (PID file + health probe for server detection)
 

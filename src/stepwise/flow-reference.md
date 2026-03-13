@@ -123,7 +123,6 @@ approve:
 | Config field | Type | Required | Description |
 |---|---|---|---|
 | `prompt` | string | yes | Instructions shown to the user |
-| `notify` | string | no | Notification channel/webhook |
 
 In `--watch` mode, the UI shows the prompt and collects output fields. In headless mode, the terminal prompts for each output field.
 

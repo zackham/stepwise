@@ -30,7 +30,7 @@ def make_engine():
     reg = ExecutorRegistry()
     reg.register("callable", lambda config: CallableExecutor(fn_name=config.get("fn_name", "default")))
     reg.register("script", lambda config: ScriptExecutor(command=config.get("command", "echo '{}'")))
-    reg.register("human", lambda config: HumanExecutor(prompt=config.get("prompt", ""), notify=config.get("notify")))
+    reg.register("human", lambda config: HumanExecutor(prompt=config.get("prompt", "")))
     reg.register("mock_llm", lambda config: MockLLMExecutor(
         failure_rate=config.get("failure_rate", 0.0),
         partial_rate=config.get("partial_rate", 0.0),

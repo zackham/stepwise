@@ -44,7 +44,6 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
 
     registry.register("human", lambda cfg: HumanExecutor(
         prompt=cfg.get("prompt", "Awaiting human input"),
-        notify=cfg.get("notify"),
     ))
 
     registry.register("mock_llm", lambda cfg: MockLLMExecutor(

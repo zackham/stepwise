@@ -106,7 +106,7 @@ class StepLimits:
 
 @dataclass
 class DecoratorRef:
-    type: str  # "timeout", "retry", "notification", "fallback"
+    type: str  # "timeout", "retry", "fallback"
     config: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:

@@ -108,7 +108,7 @@ class TestScriptExecutor:
 
 class TestHumanExecutor:
     def test_immediately_returns_watch(self):
-        executor = HumanExecutor(prompt="Approve?", notify="slack:#reviews")
+        executor = HumanExecutor(prompt="Approve?")
         ctx = _ctx()
         result = executor.start({}, ctx)
         assert result.type == "watch"

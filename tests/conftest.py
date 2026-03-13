@@ -160,7 +160,6 @@ def registry():
     # Human executor factory
     reg.register("human", lambda config: HumanExecutor(
         prompt=config.get("prompt", ""),
-        notify=config.get("notify"),
     ))
 
     # Mock LLM factory

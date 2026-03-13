@@ -783,9 +783,10 @@ class TestHookScaffolding:
         from stepwise.hooks import scaffold_hooks
         created = scaffold_hooks(dot_dir)
 
-        assert len(created) == 3
+        assert len(created) == 4
         hooks_dir = dot_dir / "hooks"
         assert (hooks_dir / "on-suspend").exists()
+        assert (hooks_dir / "on-step-complete").exists()
         assert (hooks_dir / "on-complete").exists()
         assert (hooks_dir / "on-fail").exists()
 

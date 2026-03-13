@@ -5,6 +5,7 @@ They receive a JSON payload on stdin with event details.
 
 Events:
   - suspend: A step has been suspended (awaiting human input)
+  - step-complete: A step has completed successfully
   - complete: A job has completed successfully
   - fail: A job or step has failed
 """
@@ -26,6 +27,7 @@ HOOK_LOG_FILE = "hooks.log"
 # Map engine event types to hook event names
 EVENT_MAP = {
     "step.suspended": "suspend",
+    "step.completed": "step-complete",
     "job.completed": "complete",
     "job.failed": "fail",
     "step.failed": "fail",
@@ -177,6 +179,20 @@ HOOK_TEMPLATES = {
 #
 #   # Write to a file for polling
 #   echo "$payload" >> .stepwise/pending-reviews.jsonl
+
+# Uncomment to enable:
+# cat  # read stdin payload
+""",
+    "on-step-complete": """\
+#!/bin/sh
+# Stepwise hook: fired when a step completes successfully.
+# Receives JSON payload on stdin with: event, hook, job_id, step, run_id, timestamp.
+#
+# Examples:
+#   # Log step completions
+#   payload=$(cat)
+#   step=$(echo "$payload" | jq -r '.step')
+#   echo "Step $step completed at $(date)" >> /tmp/stepwise-steps.log
 
 # Uncomment to enable:
 # cat  # read stdin payload
