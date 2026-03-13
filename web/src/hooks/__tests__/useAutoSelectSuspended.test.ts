@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { useAutoSelectSuspended } from "../useAutoSelectSuspended";
 import type { StepRun } from "@/lib/types";
+import type { DagSelection } from "@/lib/dag-layout";
 
 function makeRun(overrides: Partial<StepRun> = {}): StepRun {
   return {
@@ -88,7 +89,7 @@ describe("useAutoSelectSuspended", () => {
 
     const { rerender } = renderHook(
       ({ r, sel }) => useAutoSelectSuspended(r, sel, onSelect),
-      { initialProps: { r: runs, sel: null as null } },
+      { initialProps: { r: runs, sel: null as DagSelection } },
     );
 
     expect(onSelect).toHaveBeenCalledTimes(1);
