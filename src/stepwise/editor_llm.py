@@ -20,7 +20,7 @@ from stepwise.config import load_config
 
 # ── System Prompt ────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """\
+_SYSTEM_PROMPT_TEMPLATE = """\
 You are the Stepwise flow-builder agent. You help users create, modify, and \
 understand workflow YAML files. You have full read/write access to the project \
 directory via your tools.
@@ -36,91 +36,40 @@ must target paths within the flow directory above. Do not modify files outside i
 Use your Write and Edit tools directly to create and modify files — do not output \
 file contents as fenced code blocks for the user to copy. Just write them.
 
-## Stepwise YAML format
+**DO NOT read Stepwise source code to learn the YAML format.** The full reference is below.
 
-A Stepwise flow is a YAML file defining steps with inputs, outputs, and executors.
-
-```yaml
-name: flow-name
-description: "What this flow does"
-
-steps:
-  step_name:
-    run: scripts/fetch.py        # script executor (default) — reference external scripts
-    outputs: [field1, field2]
-
-  llm_step:
-    executor: llm
-    prompt: "Analyze {{input_var}}"
-    model: anthropic/claude-sonnet-4   # OpenRouter model ID
-    outputs: [result]
-    inputs:
-      input_var: step_name.field1
-
-  human_step:
-    executor: human
-    prompt: "Review this output"
-    outputs: [approved, feedback]
-    inputs:
-      content: llm_step.result
-
-  agent_step:
-    executor: agent
-    prompt: "Build a comprehensive report on {{topic}}"
-    outputs: [report]
-    inputs:
-      topic: $job.topic           # $job.X reads from --var flags
-```
-
-## Executor types
-- **script** (default): Runs a shell command (`run:` field). Must output JSON to stdout.
-- **llm**: One-shot LLM call via OpenRouter. Fields: `prompt:`, optional `model:`, `system:`, `temperature:`.
-- **human**: Pauses for human input. Fields: `prompt:` for instructions.
-- **agent**: Long-running AI agent via ACP. Fields: `prompt:`.
-
-## Key rules
-- Steps form a DAG based on input dependencies — parallel by default.
-- `inputs:` maps local names to `step_name.output_field`.
-- `outputs:` declares what the step produces (list of field names).
-- `sequencing: [step_a]` forces ordering without data dependency.
-- Template variables in prompts use `{{var_name}}` (from inputs).
-- `$job.field` reads job-level inputs (passed via `--var` on CLI).
-- Exit rules on steps enable loops (`action: loop`, `target: step_name`).
-- For-each: `for_each: { source: step.list_field, as: item }` fans out.
-- Routes: `routes:` block dispatches to sub-flows based on conditions.
-
-## Directory flow convention
-
-Flows are stored as directories with supporting files:
-```
-my-flow/
-  FLOW.yaml          # Main workflow definition (required)
-  scripts/           # Script files referenced by steps
-    fetch.py
-    process.sh
-  prompts/           # Prompt templates for LLM/agent steps
-    system.md
-```
-
-**Scripts MUST be separate files** — never embed large scripts directly in the YAML `run:` field. \
-Reference them by relative path: `run: scripts/fetch.py`.
-
-Script files MUST output valid JSON to stdout:
-```python
-#!/usr/bin/env python3
-import json
-result = {"data": "value", "count": 42}
-print(json.dumps(result))
-```
+{flow_reference}
 
 ## Your behavior
-1. **ALWAYS use tools first** — read CLAUDE.md, existing flows, skills, scripts, or other files before generating.
+1. Read existing flows, CLAUDE.md, and referenced files to understand project context before generating.
 2. When converting skills into flows, read the SKILL.md and ALL referenced scripts first.
 3. Write files directly using your Write and Edit tools. Create the directory structure as needed.
 4. Keep flows minimal — don't add unnecessary steps.
 5. Use descriptive step names (snake_case).
-6. If the project has a CLAUDE.md, read it to understand conventions.
+6. After generating, validate with `stepwise validate <flow>`.
 """
+
+# Canonical flow reference — lives alongside this module in the package
+_FLOW_REFERENCE_PATH = Path(__file__).parent / "flow-reference.md"
+_flow_reference_cache: str | None = None
+
+
+def _load_flow_reference() -> str:
+    """Load the flow reference doc. Cached after first read."""
+    global _flow_reference_cache
+    if _flow_reference_cache is None:
+        if _FLOW_REFERENCE_PATH.exists():
+            _flow_reference_cache = _FLOW_REFERENCE_PATH.read_text()
+        else:
+            _flow_reference_cache = "(Flow reference not found — expected at src/stepwise/flow-reference.md)"
+    return _flow_reference_cache
+
+
+def get_system_prompt(flow_dir: str = "(no flow selected)") -> str:
+    """Build the full system prompt with flow reference injected."""
+    return _SYSTEM_PROMPT_TEMPLATE.replace("{flow_dir}", flow_dir).replace(
+        "{flow_reference}", _load_flow_reference()
+    )
 
 
 # ── File Block Parser ────────────────────────────────────────────────
@@ -201,7 +150,7 @@ def _build_prompt(
     flow_dir_path: str | None = None,
 ) -> str:
     """Build a single prompt string with system context, history, and user message."""
-    system = SYSTEM_PROMPT.replace("{flow_dir}", flow_dir_path or "(no flow selected)")
+    system = get_system_prompt(flow_dir_path or "(no flow selected)")
     parts = [system]
 
     if flow_dir_listing:
@@ -387,6 +336,7 @@ def _acpx_agent_loop(
         # or reverse proxies close the connection.
         total_tokens = 0
         files_written: list[str] = []
+        tool_kinds: dict[str, str] = {}  # tool_id -> kind
         _KEEPALIVE_INTERVAL = 15  # seconds
 
         event_queue: queue.Queue[bytes | None] = queue.Queue()
@@ -435,6 +385,7 @@ def _acpx_agent_loop(
                 tool_id = update.get("toolCallId", "")
                 title = update.get("title", "")
                 kind = update.get("kind", "")
+                tool_kinds[tool_id] = kind
                 yield {
                     "type": "tool_use",
                     "tool_name": title,
@@ -446,15 +397,19 @@ def _acpx_agent_loop(
             elif event_type == "tool_call_update":
                 tool_id = update.get("toolCallId", "")
                 status = update.get("status")
-                kind = update.get("kind", "")
+                kind = update.get("kind", "") or tool_kinds.get(tool_id, "")
                 title = update.get("title", "")
 
                 # Track file writes for the files_changed event
-                if kind == "edit" and status == "completed":
+                if kind in ("edit", "write") and status == "completed":
+                    prev_len = len(files_written)
                     for loc in update.get("locations", []):
                         path = loc.get("path", "")
                         if path:
                             files_written.append(path)
+                    # locations may be absent for write ops — title has the path
+                    if len(files_written) == prev_len and title:
+                        files_written.append(title)
 
                 if status in ("completed", "failed"):
                     yield {
@@ -471,9 +426,9 @@ def _acpx_agent_loop(
         reader_thread.join(timeout=5)
         proc.wait()
 
-        # Tell the frontend which files were written so it can refresh
-        if files_written:
-            yield {"type": "files_changed", "paths": files_written}
+        # Always tell the frontend to refresh — the agent likely modified files
+        # even if we couldn't extract paths from ACPX events
+        yield {"type": "files_changed", "paths": files_written or []}
 
         yield {
             "type": "done",
@@ -503,7 +458,7 @@ def _openrouter_fallback(
     model = config.default_model or "anthropic/claude-sonnet-4"
     model_id = config.resolve_model(model)
 
-    messages: list[dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages: list[dict[str, str]] = [{"role": "system", "content": get_system_prompt()}]
     if current_yaml:
         ctx = f"Current flow YAML:\n```yaml\n{current_yaml}\n```"
         if selected_step:

@@ -14,7 +14,7 @@ from stepwise.editor_llm import (
     get_or_create_session,
     clear_session,
     chat_stream,
-    SYSTEM_PROMPT,
+    get_system_prompt,
 )
 
 
