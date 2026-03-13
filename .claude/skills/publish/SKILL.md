@@ -68,7 +68,23 @@ git push origin master --tags
 
 Print: "Released vX.Y.Z — users will get it on next `stepwise update`."
 
-**8. Check website for needed updates**
+**8. Review agent-facing documentation**
+
+These files are injected into agent contexts and must accurately reflect current capabilities. Review the changelog entry and commits in this release, then read each file and check for staleness:
+
+- `src/stepwise/_templates/agent-skill/SKILL.md` — Bundled Claude skill for interactive flow running (interaction modes, CLI reference, exit codes)
+- `src/stepwise/_templates/agent-skill/FLOW_REFERENCE.md` — Complete YAML format spec loaded when agents create/modify flows (executor types, input bindings, exit rules, decorators)
+- `src/stepwise/agent_help.py` — `generate_agent_help()` output for `stepwise agent-help`, and `build_emit_flow_instructions()` injected into emit_flow agent prompts
+
+Things to look for:
+- New executor types, config fields, or CLI commands not documented
+- Changed YAML syntax, exit rule behavior, or input binding formats
+- New features (decorators, model labels, etc.) that agents should know about
+- Removed or renamed capabilities still referenced in the docs
+
+Present a summary of what's current and what needs updating. Do NOT edit these files without explicit approval — just flag what you found.
+
+**9. Check website for needed updates**
 
 After the release is complete, check if the stepwise.run website (`~/work/stepwise.run`) needs updates to reflect changes in this release.
 
