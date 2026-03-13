@@ -270,6 +270,54 @@ async def _agent_stream_monitor() -> None:
             await asyncio.sleep(5.0)
 
 
+async def _observe_external_jobs() -> None:
+    """Poll for state changes in CLI-owned jobs and detect stale heartbeats.
+
+    The server doesn't execute CLI-owned jobs, but needs to broadcast their
+    state changes to connected WebSocket clients and detect orphaned jobs.
+    """
+    engine = _get_engine()
+    last_seen: dict[str, str] = {}  # job_id → updated_at
+    while True:
+        try:
+            external = engine.store.running_jobs(exclude_owner="server")
+            changed_ids = []
+            for job in external:
+                updated = job.updated_at.isoformat() if isinstance(job.updated_at, datetime) else str(job.updated_at)
+                if updated != last_seen.get(job.id):
+                    changed_ids.append(job.id)
+                    last_seen[job.id] = updated
+
+            if changed_ids:
+                await _broadcast({
+                    "type": "tick",
+                    "changed_jobs": changed_ids,
+                    "timestamp": _now().isoformat(),
+                })
+
+            # Detect stale jobs and notify WebSocket clients
+            stale = engine.store.stale_jobs(max_age_seconds=60)
+            if stale:
+                await _broadcast({
+                    "type": "stale_jobs",
+                    "jobs": [{"id": j.id, "objective": j.objective,
+                              "last_heartbeat": j.heartbeat_at.isoformat() if j.heartbeat_at else None}
+                             for j in stale],
+                })
+
+            # Clean up tracking for jobs no longer running
+            active_ids = {j.id for j in external}
+            for jid in list(last_seen):
+                if jid not in active_ids:
+                    del last_seen[jid]
+
+            await asyncio.sleep(2)
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            await asyncio.sleep(5)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _engine, _engine_task, _event_loop, _templates_dir, _project_dir
@@ -292,6 +340,7 @@ async def lifespan(app: FastAPI):
     _engine.on_broadcast = _schedule_broadcast
     _engine_task = asyncio.create_task(_engine.run())
     _stream_monitor = asyncio.create_task(_agent_stream_monitor())
+    _observer = asyncio.create_task(_observe_external_jobs())
 
     yield
 
@@ -299,6 +348,12 @@ async def lifespan(app: FastAPI):
     for task in _stream_tasks.values():
         task.cancel()
     _stream_tasks.clear()
+
+    _observer.cancel()
+    try:
+        await _observer
+    except asyncio.CancelledError:
+        pass
 
     _stream_monitor.cancel()
     try:
