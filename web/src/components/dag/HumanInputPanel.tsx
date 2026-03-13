@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect } from "react";
-import { Hand, Send, Loader2 } from "lucide-react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { Send, Loader2 } from "lucide-react";
 import type { WatchSpec } from "@/lib/types";
 
 interface HumanInputPanelProps {
@@ -9,6 +9,47 @@ interface HumanInputPanelProps {
   isPending: boolean;
 }
 
+function AutoTextarea({
+  value,
+  onChange,
+  onKeyDown,
+  placeholder,
+  className,
+  inputRef,
+}: {
+  value: string;
+  onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
+  onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+  placeholder?: string;
+  className?: string;
+  inputRef?: React.Ref<HTMLTextAreaElement>;
+}) {
+  const internalRef = useRef<HTMLTextAreaElement>(null);
+  const ref = (inputRef as React.RefObject<HTMLTextAreaElement>) ?? internalRef;
+
+  const resize = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "0";
+    el.style.height = el.scrollHeight + "px";
+  }, [ref]);
+
+  useEffect(() => resize(), [value, resize]);
+
+  return (
+    <textarea
+      ref={ref}
+      rows={1}
+      value={value}
+      onChange={onChange}
+      onKeyDown={onKeyDown}
+      placeholder={placeholder}
+      className={className}
+      style={{ resize: "none", overflow: "hidden" }}
+    />
+  );
+}
+
 export function HumanInputPanel({
   prompt,
   outputs,
@@ -16,7 +57,7 @@ export function HumanInputPanel({
   isPending,
 }: HumanInputPanelProps) {
   const [values, setValues] = useState<Record<string, string>>({});
-  const firstInputRef = useRef<HTMLInputElement>(null);
+  const firstInputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     firstInputRef.current?.focus();
@@ -38,6 +79,16 @@ export function HumanInputPanel({
 
   const hasValues = outputs.length === 0 || outputs.some((k) => (values[k] ?? "").trim());
 
+  const textareaClass =
+    "w-full min-h-[32px] rounded-md border border-zinc-700 bg-zinc-800/80 px-2.5 py-1.5 text-sm text-foreground placeholder:text-zinc-600 focus:outline-none focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/20 transition-colors";
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey && hasValues) {
+      e.preventDefault();
+      handleSubmit(e);
+    }
+  };
+
   return (
     <div
       className="rounded-lg border border-amber-500/30 bg-zinc-900/95 backdrop-blur-sm shadow-xl shadow-amber-500/5"
@@ -52,10 +103,7 @@ export function HumanInputPanel({
 
       <form onSubmit={handleSubmit} className="p-3 pt-1 space-y-2.5">
         {/* Prompt */}
-        <div className="flex items-start gap-2">
-          <Hand className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
-          <p className="text-xs text-amber-200/80 leading-relaxed">{prompt}</p>
-        </div>
+        <p className="text-xs text-amber-200/80 leading-relaxed">{prompt}</p>
 
         {/* Fields */}
         {outputs.length > 0 ? (
@@ -65,47 +113,30 @@ export function HumanInputPanel({
                 <label className="block text-[10px] font-medium text-zinc-500 uppercase tracking-wide mb-1">
                   {field}
                 </label>
-                <input
-                  ref={i === 0 ? firstInputRef : undefined}
-                  type="text"
+                <AutoTextarea
+                  inputRef={i === 0 ? firstInputRef : undefined}
                   value={values[field] ?? ""}
                   onChange={(e) =>
                     setValues((prev) => ({ ...prev, [field]: e.target.value }))
                   }
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey && hasValues) {
-                      e.preventDefault();
-                      handleSubmit(e);
-                    }
-                  }}
+                  onKeyDown={handleKeyDown}
                   placeholder={field}
-                  className="w-full h-8 rounded-md border border-zinc-700 bg-zinc-800/80 px-2.5 text-sm text-foreground placeholder:text-zinc-600 focus:outline-none focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/20 transition-colors font-mono"
+                  className={textareaClass + " font-mono"}
                 />
               </div>
             ))}
           </div>
         ) : (
-          <div className="space-y-2">
-            <label className="block text-[10px] font-medium text-zinc-500 uppercase tracking-wide mb-1">
-              Response
-            </label>
-            <input
-              ref={firstInputRef}
-              type="text"
-              value={values["_response"] ?? ""}
-              onChange={(e) =>
-                setValues((prev) => ({ ...prev, _response: e.target.value }))
-              }
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSubmit(e);
-                }
-              }}
-              placeholder="Enter response..."
-              className="w-full h-8 rounded-md border border-zinc-700 bg-zinc-800/80 px-2.5 text-sm text-foreground placeholder:text-zinc-600 focus:outline-none focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/20 transition-colors"
-            />
-          </div>
+          <AutoTextarea
+            inputRef={firstInputRef}
+            value={values["_response"] ?? ""}
+            onChange={(e) =>
+              setValues((prev) => ({ ...prev, _response: e.target.value }))
+            }
+            onKeyDown={handleKeyDown}
+            placeholder="Enter response..."
+            className={textareaClass}
+          />
         )}
 
         {/* Submit */}
