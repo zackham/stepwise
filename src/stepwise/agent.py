@@ -706,7 +706,13 @@ class AgentExecutor(Executor):
             emit_path = os.path.join(working_dir, EMIT_FLOW_DIR, EMIT_FLOW_FILENAME)
             if os.path.exists(emit_path):
                 step_outputs = self.config.get("output_fields", [])
-                return self._build_delegate_result(emit_path, state, context, step_outputs)
+                result = self._build_delegate_result(emit_path, state, context, step_outputs)
+                # Consume the emit file so it doesn't persist across loop iterations
+                try:
+                    os.remove(emit_path)
+                except OSError:
+                    pass
+                return result
 
         # Completed — extract outputs based on mode
         envelope = self._extract_output(state, self.output_mode, agent_status)
