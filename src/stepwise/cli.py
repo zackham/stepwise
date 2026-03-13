@@ -801,6 +801,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         report=args.report,
         report_output=args.report_output,
         output_json=getattr(args, "output_format", None) == "json",
+        force_local=getattr(args, "local", False),
     )
 
 
@@ -2100,6 +2101,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--report", action="store_true", help="Generate HTML report after completion")
     p_run.add_argument("--report-output", help="Report output path (default: <flow>-report.html)")
     p_run.add_argument("--no-open", action="store_true", help="Don't auto-open browser (for --watch)")
+    p_run.add_argument("--local", action="store_true", help="Force local execution (skip server delegation)")
 
     # check
     p_check = sub.add_parser("check", help="Verify model resolution for a flow")
