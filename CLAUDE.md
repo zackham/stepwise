@@ -80,7 +80,7 @@ All registered in `src/stepwise/registry_factory.py:create_default_registry()`:
 | `human` | `HumanExecutor` | `executors.py` | Immediately suspends for human input via API |
 | `llm` | `LLMExecutor` | `executors.py` | OpenRouter API call (only registered if API key configured) |
 | `mock_llm` | `MockLLMExecutor` | `executors.py` | Test-only LLM stub with configurable failure/latency |
-| `agent` | `AgentExecutor` | `agent.py` | ACP agent via acpx subprocess — blocks in `start()` via `os.waitpid`, returns `type="data"` |
+| `agent` | `AgentExecutor` | `agent.py` | ACP agent via acpx — supports `emit_flow: true` for dynamic flow emission |
 
 Decorators (`src/stepwise/decorators.py`): `TimeoutDecorator`, `RetryDecorator`, `NotificationDecorator`, `FallbackDecorator` — applied via `ExecutorRef.decorators` list.
 
@@ -93,6 +93,7 @@ Every executor's `start()` returns an `ExecutorResult` with one of these `type` 
 | `"data"` | Synchronous completion | `envelope=HandoffEnvelope(artifact={...}, sidecar=Sidecar(), workspace=..., timestamp=_now())` |
 | `"watch"` | Suspend for external input | `watch=WatchSpec(mode="human"\|"poll", ...)` |
 | `"async"` | Legacy: long-running, poll via `check_status()` | `executor_state={...}` (opaque dict persisted by engine). No built-in executor uses this — prefer blocking in `start()` (safe in AsyncEngine's thread pool). |
+| `"delegate"` | Dynamic sub-flow | `sub_job_def=SubJobDefinition(...)` — engine creates sub-job, run transitions to DELEGATED |
 
 **Failure signaling:** Set `executor_state={"failed": True, "error": "..."}` and `envelope.executor_meta={"failed": True}`. For `type="data"` failures, the engine routes through `_fail_run()` which evaluates exit rules.
 
@@ -170,6 +171,41 @@ steps:
         target: analyze
 ```
 
+Agent step with dynamic flow emission:
+
+```yaml
+steps:
+  implement:
+    executor: agent
+    prompt: "Implement: $spec"
+    emit_flow: true               # agent can write .stepwise/emit.flow.yaml
+    inputs:
+      spec: $job.spec
+    outputs: [result]
+```
+
+Iterative delegation (agent loops with sub-flow results):
+
+```yaml
+steps:
+  agent-phase:
+    executor: agent
+    prompt: |
+      Implement: $spec
+      Previous result: $prev_result
+    emit_flow: true
+    inputs:
+      spec: $job.spec
+      prev_result: agent-phase.result    # self-reference for iteration
+    outputs: [result]
+    exits:
+      - name: continue
+        when: "outputs.get('_delegated', False)"
+        action: loop
+        target: agent-phase
+        max_iterations: 5
+```
+
 ---
 
 ## Testing
@@ -233,7 +269,7 @@ Other patterns:
 
 **Web:** `lib/api.ts` (all fetch calls), `hooks/useStepwise.ts` (React Query), `hooks/useStepwiseWebSocket.ts` (WS connection), `hooks/useAgentStream.ts` (NDJSON stream parser), `lib/dag-layout.ts` (Dagre layout engine), `router.tsx` (route definitions), `components/layout/AppLayout.tsx` (root layout)
 
-**Tests:** `tests/conftest.py` (fixtures: store, registry, engine, async_engine, run_job_sync, CallableExecutor, register_step_fn), `test_job_ownership.py` (ownership, heartbeat, stale, claiming), `test_concurrency.py` (parallel execution, thread safety)
+**Tests:** `tests/conftest.py` (fixtures: store, registry, engine, async_engine, run_job_sync, CallableExecutor, register_step_fn), `test_job_ownership.py` (ownership, heartbeat, stale, claiming), `test_concurrency.py` (parallel execution, thread safety), `test_agent_emit_flow.py` (agent-emitted flows, delegate result type, iterative delegation)
 
 ---
 
@@ -318,6 +354,43 @@ registry.register("http", lambda cfg: HttpExecutor(url=cfg["url"]))
 2. Use fixtures from `conftest.py` (`async_engine`, `store`, `registry`)
 3. Build `WorkflowDefinition` inline (see test example above), create job, use `run_job_sync()`, assert on `runs[].result.artifact`
 4. For executor-specific tests: subclass `Executor` inline or use `register_step_fn()`
+
+### Agent-emitted flow
+
+Agent steps with `emit_flow: true` can dynamically create sub-workflows by writing `.stepwise/emit.flow.yaml` to their working directory. The engine launches the emitted flow as a sub-job and propagates results back.
+
+**Basic pattern:** Agent analyzes task, writes flow, engine executes it:
+```yaml
+steps:
+  implement:
+    executor: agent
+    prompt: "Break this into steps and emit a flow: $spec"
+    emit_flow: true
+    inputs:
+      spec: $job.spec
+    outputs: [result]
+```
+
+**Iterative pattern:** Exit rules loop the agent with sub-flow results:
+```yaml
+steps:
+  agent-phase:
+    executor: agent
+    prompt: "Continue: $spec\nPrevious: $prev_result"
+    emit_flow: true
+    inputs:
+      spec: $job.spec
+      prev_result: agent-phase.result
+    outputs: [result]
+    exits:
+      - name: continue
+        when: "outputs.get('_delegated', False)"
+        action: loop
+        target: agent-phase
+        max_iterations: 5
+```
+
+The `_delegated: True` marker is injected into the artifact when a sub-flow completes, allowing exit rules to distinguish delegation from direct completion. Design doc: `docs/design/dynamic-sub-jobs.md`.
 
 ### Distribution & Releases
 
