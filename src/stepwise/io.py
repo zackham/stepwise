@@ -575,8 +575,9 @@ _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 def _count_panel_lines(content: str) -> int:
     """Estimate terminal lines a rich Panel occupies."""
     # Panel(padding=(1,2)): top border + top pad + content + bottom pad + bottom border
+    # In practice rich renders padding=(1,2) as 1 blank line above + 1 below content
     content_lines = content.strip().count("\n") + 1
-    return content_lines + 4
+    return content_lines + 3
 
 
 def _count_prompt_lines(field_type: str, options: list[str] | None = None) -> int:
