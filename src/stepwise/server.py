@@ -333,10 +333,11 @@ async def lifespan(app: FastAPI):
     store = ThreadSafeStore(db_path)
 
     from stepwise.registry_factory import create_default_registry
-    registry = create_default_registry()
+    config = load_config(_project_dir)
+    registry = create_default_registry(config)
 
     dot_dir = _project_dir / ".stepwise"
-    _engine = AsyncEngine(store, registry, jobs_dir=jobs_dir, project_dir=dot_dir if dot_dir.is_dir() else None)
+    _engine = AsyncEngine(store, registry, jobs_dir=jobs_dir, project_dir=dot_dir if dot_dir.is_dir() else None, billing_mode=config.billing)
     _engine.on_broadcast = _schedule_broadcast
     _engine_task = asyncio.create_task(_engine.run())
     _stream_monitor = asyncio.create_task(_agent_stream_monitor())

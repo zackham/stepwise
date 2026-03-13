@@ -108,6 +108,7 @@ class StepwiseConfig:
     model_registry: list[ModelEntry] = field(default_factory=list)
     default_model: str | None = None
     labels: dict[str, str | dict] = field(default_factory=dict)
+    billing: str = "subscription"  # "subscription" | "api_key"
 
     def resolve_model(self, model_ref: str) -> str:
         """Resolve a model reference (label or concrete ID) to a concrete model ID.
@@ -138,6 +139,8 @@ class StepwiseConfig:
             d["default_model"] = self.default_model
         if self.labels:
             d["labels"] = self.labels
+        if self.billing != "subscription":
+            d["billing"] = self.billing
         return d
 
     @staticmethod
@@ -159,6 +162,7 @@ class StepwiseConfig:
             model_registry=model_registry,
             default_model=d.get("default_model"),
             labels=labels,
+            billing=d.get("billing", "subscription"),
         )
 
 
@@ -283,6 +287,12 @@ def load_config(project_dir: Path | None = None) -> StepwiseConfig:
     registry = _ensure_label_models_in_registry(registry, labels)
     registry = _ensure_defaults_in_registry(registry)
 
+    # Merge billing: local > project > user > default
+    billing = "subscription"
+    for level in (user, project, local):
+        if level.billing != "subscription":
+            billing = level.billing
+
     return StepwiseConfig(
         openrouter_api_key=(local.openrouter_api_key or project.openrouter_api_key
                             or user.openrouter_api_key),
@@ -292,6 +302,7 @@ def load_config(project_dir: Path | None = None) -> StepwiseConfig:
         default_model=(local.default_model or project.default_model
                        or user.default_model or "balanced"),
         labels=labels,
+        billing=billing,
     )
 
 

@@ -72,11 +72,13 @@ class Engine:
         registry: ExecutorRegistry | None = None,
         jobs_dir: str | None = None,
         project_dir: Path | None = None,
+        billing_mode: str = "subscription",
     ) -> None:
         self.store = store
         self.registry = registry or ExecutorRegistry()
         self.jobs_dir = jobs_dir or "jobs"
         self.project_dir = project_dir  # .stepwise/ dir for hooks
+        self.billing_mode = billing_mode  # "subscription" | "api_key"
         self._injected_contexts: dict[str, list[str]] = {}  # job_id -> contexts
 
     # ── Job Lifecycle ─────────────────────────────────────────────────────
@@ -1751,8 +1753,8 @@ class Engine:
                     "category": "timeout",
                 }
 
-        # Cost limit
-        if limits.max_cost_usd:
+        # Cost limit (only enforced for api_key billing)
+        if limits.max_cost_usd and self.billing_mode == "api_key":
             cost = self.store.accumulated_cost(run.id)
             if cost > limits.max_cost_usd:
                 self._emit(run.job_id, STEP_LIMIT_EXCEEDED, {
@@ -1922,8 +1924,9 @@ class AsyncEngine(Engine):
         registry: ExecutorRegistry | None = None,
         jobs_dir: str | None = None,
         project_dir: Path | None = None,
+        billing_mode: str = "subscription",
     ) -> None:
-        super().__init__(store, registry, jobs_dir, project_dir)
+        super().__init__(store, registry, jobs_dir, project_dir, billing_mode=billing_mode)
         self._queue: asyncio.Queue = asyncio.Queue()
         self._tasks: dict = {}  # run_id → Task or Future (for cancellation)
         self._job_done: dict[str, asyncio.Event] = {}  # job_id → done signal
