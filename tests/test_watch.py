@@ -102,7 +102,7 @@ class TestWatchMode:
         flow = self._write_flow(tmp_path)
 
         with patch("uvicorn.run"), \
-             patch("stepwise.cli._open_browser") as mock_browser:
+             patch("stepwise.cli._open_browser_when_ready") as mock_browser:
             main(["run", str(flow), "--watch"])
 
         mock_browser.assert_called_once()

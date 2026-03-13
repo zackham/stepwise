@@ -398,7 +398,7 @@ class TestCreateFlow:
         data = resp.json()
         assert data["name"] == "new-flow"
         assert "path" in data
-        assert (project_dir / "flows" / "new-flow.flow.yaml").exists()
+        assert (project_dir / "flows" / "new-flow" / "FLOW.yaml").exists()
 
     def test_create_flow_appears_in_list(self, client, project_dir):
         client.post("/api/local-flows", json={"name": "listed-flow"})

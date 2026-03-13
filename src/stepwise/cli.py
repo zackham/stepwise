@@ -416,7 +416,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         pass
 
     if not args.no_open:
-        _open_browser(f"http://{host}:{port}")
+        _open_browser_when_ready(host, port)
 
     # Write pidfile for CLI server detection
     from stepwise.server_detect import write_pidfile, remove_pidfile
@@ -616,6 +616,77 @@ def cmd_config(args: argparse.Namespace) -> int:
         return EXIT_USAGE_ERROR
 
 
+def cmd_check(args: argparse.Namespace) -> int:
+    """Verify model resolution for every LLM step in a flow."""
+    from stepwise.config import load_config, DEFAULT_LABELS, label_model_id
+    from stepwise.flow_resolution import FlowResolutionError, resolve_flow
+    import yaml
+
+    project_dir = Path(args.project_dir).resolve() if args.project_dir else Path.cwd().resolve()
+
+    try:
+        flow_path = resolve_flow(args.flow, project_dir)
+    except (FlowResolutionError, Exception) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    with open(flow_path) as f:
+        data = yaml.safe_load(f)
+
+    steps = data.get("steps", {})
+    cfg = load_config(project_dir)
+
+    # Determine source for each label
+    all_labels = {**DEFAULT_LABELS, **cfg.labels}
+    label_sources: dict[str, str] = {n: "default" for n in DEFAULT_LABELS}
+    # Rough: user labels override default, project overrides user
+    for name in cfg.labels:
+        if name in DEFAULT_LABELS:
+            label_sources[name] = "project"
+        else:
+            label_sources[name] = "project"
+
+    print(f"\n  Flow: {flow_path.name}\n")
+
+    providers_needed: set[str] = set()
+    for step_name, step_def in steps.items():
+        if not isinstance(step_def, dict):
+            continue
+        executor = step_def.get("executor", {})
+        exec_type = executor.get("type") if isinstance(executor, dict) else executor
+        if exec_type != "llm":
+            continue
+
+        config_block = executor.get("config", {}) if isinstance(executor, dict) else {}
+        model_ref = config_block.get("model") or cfg.default_model or "balanced"
+        resolved = cfg.resolve_model(model_ref)
+
+        if model_ref in all_labels:
+            source = label_sources.get(model_ref, "default")
+            print(f"  Step: {step_name:20s} model: {model_ref} → {resolved} (source: {source})")
+        else:
+            print(f"  Step: {step_name:20s} model: {resolved} (pinned)")
+
+        if "/" in resolved:
+            providers_needed.add(resolved.split("/")[0])
+
+    # Check API keys
+    print()
+    key_status = []
+    if cfg.openrouter_api_key:
+        key_status.append("openrouter ✓")
+    else:
+        key_status.append("openrouter ✗")
+    if cfg.anthropic_api_key:
+        key_status.append("anthropic ✓")
+    else:
+        key_status.append("anthropic ✗")
+    print(f"  Provider keys: {' | '.join(key_status)}")
+    print()
+
+    return EXIT_SUCCESS
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     from stepwise.flow_resolution import FlowResolutionError, resolve_flow
     from stepwise.runner import run_flow, parse_vars, load_vars_file
@@ -774,7 +845,7 @@ def _run_watch(
     print(f"  Press Ctrl+C to stop.")
 
     if not args.no_open:
-        _open_browser(f"http://{host}:{port}")
+        _open_browser_when_ready(host, port)
 
     uvicorn.run(
         "stepwise.server:app",
@@ -1826,6 +1897,25 @@ def _open_browser(url: str) -> None:
         pass
 
 
+def _open_browser_when_ready(host: str, port: int) -> None:
+    """Wait for server to accept connections, then open browser."""
+    import socket
+    import threading
+
+    def _wait_and_open():
+        url = f"http://{host}:{port}"
+        for _ in range(50):  # up to 5 seconds
+            try:
+                with socket.create_connection((host, port), timeout=0.5):
+                    _open_browser(url)
+                    return
+            except OSError:
+                import time
+                time.sleep(0.1)
+
+    threading.Thread(target=_wait_and_open, daemon=True).start()
+
+
 # ── Parser ───────────────────────────────────────────────────────────
 
 
@@ -1880,6 +1970,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--report", action="store_true", help="Generate HTML report after completion")
     p_run.add_argument("--report-output", help="Report output path (default: <flow>-report.html)")
     p_run.add_argument("--no-open", action="store_true", help="Don't auto-open browser (for --watch)")
+
+    # check
+    p_check = sub.add_parser("check", help="Verify model resolution for a flow")
+    p_check.add_argument("flow", help="Flow name or path to .flow.yaml file")
 
     # validate
     p_validate = sub.add_parser("validate", help="Validate a flow file")
@@ -2013,6 +2107,7 @@ def main(argv: list[str] | None = None) -> int:
         "validate": cmd_validate,
         "templates": cmd_templates,
         "config": cmd_config,
+        "check": cmd_check,
         "share": cmd_share,
         "get": cmd_get,
         "search": cmd_search,
