@@ -319,7 +319,8 @@ class TestStepLimits:
         assert "Duration limit" in run.error
 
     def test_cost_limit_kills_step(self, async_engine, store):
-        """Step exceeding cost limit gets cancelled."""
+        """Step exceeding cost limit gets cancelled (api_key billing only)."""
+        async_engine.billing_mode = "api_key"
         wf = WorkflowDefinition(steps={
             "expensive_step": StepDefinition(
                 name="expensive_step",
@@ -341,6 +342,30 @@ class TestStepLimits:
         assert run.status == StepRunStatus.FAILED
         assert run.error_category == "cost_limit"
         assert "Cost limit" in run.error
+
+    def test_cost_limit_skipped_for_subscription_billing(self, async_engine, store):
+        """Cost limits are NOT enforced when billing_mode is 'subscription' (default)."""
+        assert async_engine.billing_mode == "subscription"  # default
+        wf = WorkflowDefinition(steps={
+            "expensive_step": StepDefinition(
+                name="expensive_step",
+                outputs=["status"],
+                executor=ExecutorRef("slow_async", {}),
+                limits=StepLimits(max_cost_usd=0.50),
+            ),
+        })
+        job = async_engine.create_job("Test no cost enforcement", wf)
+        async_engine.start_job(job.id)
+
+        # Record cost exceeding limit
+        run = store.runs_for_step(job.id, "expensive_step")[0]
+        store.save_step_event(run.id, "cost", {"cost_usd": 0.60})
+
+        async_engine.tick()
+
+        # Step should still be running — cost limit not enforced for subscription
+        run = store.latest_run(job.id, "expensive_step")
+        assert run.status == StepRunStatus.RUNNING
 
     def test_limits_serialization(self):
         """StepLimits serialize/deserialize correctly."""
