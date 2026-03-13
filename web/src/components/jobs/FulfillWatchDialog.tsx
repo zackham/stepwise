@@ -100,7 +100,7 @@ export function FulfillWatchDialog({
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
           <DialogTitle>Fulfill Watch</DialogTitle>
-          <DialogDescription>{prompt}</DialogDescription>
+          <DialogDescription className="whitespace-pre-wrap">{prompt.trim()}</DialogDescription>
         </DialogHeader>
 
         <div className="flex justify-end mb-2">

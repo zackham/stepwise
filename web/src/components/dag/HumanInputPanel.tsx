@@ -147,7 +147,7 @@ export function HumanInputPanel({
 
       <form onSubmit={handleSubmit} className="p-3 pt-1 space-y-2.5">
         {/* Prompt */}
-        <p className="text-xs text-amber-200/80 leading-relaxed">{prompt}</p>
+        <pre className="text-xs font-sans text-amber-200/80 leading-relaxed whitespace-pre-wrap">{prompt.trim()}</pre>
 
         {/* Fields */}
         {outputs.length > 0 ? (

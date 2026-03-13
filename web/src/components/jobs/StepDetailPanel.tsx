@@ -178,9 +178,9 @@ export function StepDetailPanel({
               Boolean(stepDef.executor.config.prompt) && (
                 <div className="mt-2">
                   <div className="text-zinc-500 text-sm mb-1">Prompt</div>
-                  <div className="text-xs bg-zinc-900 border border-amber-500/20 rounded p-2 text-amber-300">
-                    {String(stepDef.executor.config.prompt)}
-                  </div>
+                  <pre className="text-xs font-mono bg-zinc-900 border border-amber-500/20 rounded p-2 text-amber-300 whitespace-pre-wrap break-words max-h-32 overflow-auto">
+{String(stepDef.executor.config.prompt).trim()}
+                  </pre>
                 </div>
               )}
             {stepDef.executor.type === "agent" && (
