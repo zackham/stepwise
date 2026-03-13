@@ -247,6 +247,114 @@ class TestCliLLMClient:
             )
         assert response.latency_ms >= 0
 
+    def test_tmpdir_cleaned_up(self):
+        """Temp directory is removed after call completes."""
+        ndjson = _make_ndjson(_agent_message_chunk("hi"))
+        created_dirs = []
+
+        original_mkdtemp = __import__("tempfile").mkdtemp
+
+        def tracking_mkdtemp(**kwargs):
+            d = original_mkdtemp(**kwargs)
+            created_dirs.append(d)
+            return d
+
+        client = CliLLMClient()
+        with patch("subprocess.run", return_value=_make_completed_process(ndjson)), \
+             patch("tempfile.mkdtemp", side_effect=tracking_mkdtemp):
+            client.chat_completion(
+                model="x", messages=[{"role": "user", "content": "hi"}],
+            )
+
+        assert len(created_dirs) == 1
+        import os
+        assert not os.path.exists(created_dirs[0])
+
+    def test_tmpdir_cleaned_up_on_error(self):
+        """Temp directory is removed even when subprocess raises."""
+        created_dirs = []
+
+        original_mkdtemp = __import__("tempfile").mkdtemp
+
+        def tracking_mkdtemp(**kwargs):
+            d = original_mkdtemp(**kwargs)
+            created_dirs.append(d)
+            return d
+
+        client = CliLLMClient()
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("x", 600)), \
+             patch("tempfile.mkdtemp", side_effect=tracking_mkdtemp):
+            with pytest.raises(RuntimeError):
+                client.chat_completion(
+                    model="x", messages=[{"role": "user", "content": "hi"}],
+                )
+
+        assert len(created_dirs) == 1
+        import os
+        assert not os.path.exists(created_dirs[0])
+
+
+# ── Integration with LLMExecutor._parse_output ──────────────────────
+
+class TestCliLLMWithLLMExecutor:
+    """Verify CLI responses are parsed correctly by LLMExecutor._parse_output."""
+
+    def test_json_in_code_fence_parsed_by_tier2(self):
+        """Agent returns JSON in code fences — LLMExecutor._parse_output handles it."""
+        from stepwise.executors import LLMExecutor
+        from stepwise.llm_client import LLMResponse
+
+        # Simulate what CliLLMClient returns when agent wraps JSON in code fences
+        response = LLMResponse(
+            content='```json\n{"summary": "all good", "score": "0.9"}\n```',
+            tool_calls=None,
+            model="cli:claude",
+        )
+
+        client = CliLLMClient()  # not used for parsing, just needed for constructor
+        executor = LLMExecutor(client=client, model="x", prompt="test")
+        executor._output_fields = ["summary", "score"]
+
+        artifact, method = executor._parse_output(response, ["summary", "score"])
+        assert artifact == {"summary": "all good", "score": "0.9"}
+        assert method == "json_content"
+
+    def test_plain_json_parsed_by_tier2(self):
+        """Agent returns plain JSON without fences."""
+        from stepwise.executors import LLMExecutor
+        from stepwise.llm_client import LLMResponse
+
+        response = LLMResponse(
+            content='{"answer": "42"}',
+            tool_calls=None,
+            model="cli:claude",
+        )
+
+        client = CliLLMClient()
+        executor = LLMExecutor(client=client, model="x", prompt="test")
+
+        artifact, method = executor._parse_output(response, ["answer"])
+        assert artifact == {"answer": "42"}
+        assert method == "json_content"
+
+    def test_single_field_fallback(self):
+        """When agent returns prose and there's one output field, single-field shortcut works."""
+        from stepwise.executors import LLMExecutor
+        from stepwise.llm_client import LLMResponse
+
+        response = LLMResponse(
+            content="The answer is four.",
+            tool_calls=None,
+            model="cli:claude",
+        )
+
+        client = CliLLMClient()
+        executor = LLMExecutor(client=client, model="x", prompt="test")
+
+        artifact, method = executor._parse_output(response, ["answer"])
+        assert artifact == {"answer": "The answer is four."}
+        assert method == "single_field"
+
 
 # ── Fallback registration ────────────────────────────────────────────
 

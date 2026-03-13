@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from pathlib import Path
 
 from stepwise.llm_client import LLMResponse
 
@@ -63,9 +64,16 @@ class CliLLMClient:
 
         # Write prompt to tempfile
         tmpdir = tempfile.mkdtemp(prefix="stepwise-cli-llm-")
+        try:
+            return self._run_acpx(tmpdir, prompt, start)
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def _run_acpx(
+        self, tmpdir: str, prompt: str, start: float,
+    ) -> LLMResponse:
         prompt_file = os.path.join(tmpdir, "prompt.md")
-        with open(prompt_file, "w") as f:
-            f.write(prompt)
+        Path(prompt_file).write_text(prompt)
 
         # Build command
         cmd = [
