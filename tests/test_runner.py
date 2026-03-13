@@ -11,6 +11,7 @@ from unittest.mock import patch, MagicMock
 from stepwise.config import StepwiseConfig
 from stepwise.engine import Engine
 from stepwise.executors import ExecutorRegistry, ScriptExecutor, HumanExecutor, MockLLMExecutor
+from stepwise.io import PlainAdapter, create_adapter
 from stepwise.models import (
     ExecutorRef,
     Job,
@@ -26,8 +27,6 @@ from stepwise.runner import (
     EXIT_JOB_FAILED,
     EXIT_SUCCESS,
     EXIT_USAGE_ERROR,
-    StdinHumanHandler,
-    TerminalReporter,
     load_vars_file,
     parse_vars,
     run_flow,
@@ -194,116 +193,6 @@ steps:
         assert rc == EXIT_SUCCESS
 
 
-class TestTerminalReporter:
-    """TerminalReporter callbacks called in correct order."""
-
-    def test_reports_start_and_completion(self):
-        output = StringIO()
-        reporter = TerminalReporter(quiet=False, _out=output)
-
-        reporter.on_flow_start("test-flow")
-        reporter.on_step_started("build", "script")
-        reporter.on_step_completed("build", 2.3, None)
-
-        text = output.getvalue()
-        assert "entering flow" in text
-        assert "build" in text
-        assert "running" in text
-        assert "completed" in text
-        assert "2.3s" in text
-
-    def test_reports_cost(self):
-        output = StringIO()
-        reporter = TerminalReporter(quiet=False, _out=output)
-        reporter.on_step_completed("deploy", 1.5, 0.042)
-        text = output.getvalue()
-        assert "$0.042" in text
-
-    def test_reports_failure(self):
-        output = StringIO()
-        reporter = TerminalReporter(quiet=False, _out=output)
-        reporter.on_step_failed("deploy", "connection timeout")
-        text = output.getvalue()
-        assert "failed" in text
-        assert "connection timeout" in text
-
-    def test_reports_suspension(self):
-        output = StringIO()
-        reporter = TerminalReporter(quiet=False, _out=output)
-        reporter.on_step_suspended("review")
-        text = output.getvalue()
-        assert "needs input" in text
-
-    def test_quiet_suppresses_output(self):
-        output = StringIO()
-        reporter = TerminalReporter(quiet=True, _out=output)
-        reporter.on_flow_start("test")
-        reporter.on_step_started("build", "script")
-        reporter.on_step_completed("build", 1.0, None)
-        reporter.on_flow_completed(MagicMock(), 1, 1.0)
-        assert output.getvalue() == ""
-
-
-class TestStdinHumanHandler:
-    """StdinHumanHandler detects suspended steps and collects input."""
-
-    def _make_suspended_run(self, fields: list[str], prompt: str = "Enter data") -> StepRun:
-        from stepwise.models import WatchSpec, _gen_id, _now
-        return StepRun(
-            id=_gen_id("run"),
-            job_id="job-test",
-            step_name="human_step",
-            attempt=1,
-            status=StepRunStatus.SUSPENDED,
-            watch=WatchSpec(
-                mode="human",
-                config={"prompt": prompt},
-                fulfillment_outputs=fields,
-            ),
-            started_at=_now(),
-        )
-
-    def test_single_field_prompt(self):
-        input_stream = StringIO("Alice\n")
-        output_stream = StringIO()
-        handler = StdinHumanHandler(input_stream=input_stream, output_stream=output_stream)
-
-        run = self._make_suspended_run(["name"], prompt="What is your name?")
-        engine = MagicMock()
-        handler.handle_suspended_step(engine, run)
-
-        engine.fulfill_watch.assert_called_once_with(run.id, {"name": "Alice"})
-        output_text = output_stream.getvalue()
-        assert "What is your name?" in output_text
-
-    def test_multi_field_prompt(self):
-        input_stream = StringIO("approve\nLooks great!\n")
-        output_stream = StringIO()
-        handler = StdinHumanHandler(input_stream=input_stream, output_stream=output_stream)
-
-        run = self._make_suspended_run(["decision", "feedback"], prompt="Review this draft.")
-        engine = MagicMock()
-        handler.handle_suspended_step(engine, run)
-
-        engine.fulfill_watch.assert_called_once_with(
-            run.id, {"decision": "approve", "feedback": "Looks great!"}
-        )
-
-    def test_calls_fulfill_watch(self):
-        input_stream = StringIO("yes\n")
-        output_stream = StringIO()
-        handler = StdinHumanHandler(input_stream=input_stream, output_stream=output_stream)
-
-        run = self._make_suspended_run(["confirmed"])
-        engine = MagicMock()
-        handler.handle_suspended_step(engine, run)
-
-        engine.fulfill_watch.assert_called_once()
-        call_args = engine.fulfill_watch.call_args
-        assert call_args[0][0] == run.id
-        assert call_args[0][1] == {"confirmed": "yes"}
-
-
 class TestHumanStepEndToEnd:
     """End-to-end: human step in headless mode with mocked stdin."""
 
@@ -313,16 +202,17 @@ class TestHumanStepEndToEnd:
         input_stream = StringIO("Zack\n")
         output_stream = StringIO()
 
+        adapter = PlainAdapter(output=output_stream, input_stream=input_stream)
         rc = run_flow(
             flow, project,
             quiet=False,
             input_stream=input_stream,
             output_stream=output_stream,
             config=StepwiseConfig(),
+            adapter=adapter,
         )
         assert rc == EXIT_SUCCESS
         output_text = output_stream.getvalue()
-        assert "needs input" in output_text
         assert "completed" in output_text
 
     def test_multi_field_human_step(self, tmp_path):
@@ -331,12 +221,14 @@ class TestHumanStepEndToEnd:
         input_stream = StringIO("approve\nLooks good\n")
         output_stream = StringIO()
 
+        adapter = PlainAdapter(output=output_stream, input_stream=input_stream)
         rc = run_flow(
             flow, project,
             quiet=False,
             input_stream=input_stream,
             output_stream=output_stream,
             config=StepwiseConfig(),
+            adapter=adapter,
         )
         assert rc == EXIT_SUCCESS
 

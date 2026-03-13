@@ -17,6 +17,7 @@ from stepwise.models import (
     StepRunStatus,
     WorkflowDefinition,
 )
+from stepwise.io import PlainAdapter, create_adapter
 from stepwise.runner import (
     EXIT_JOB_FAILED,
     EXIT_SUCCESS,
@@ -25,7 +26,6 @@ from stepwise.runner import (
     _ws_url_from_server,
     _report_transitions,
     _fetch_job_state,
-    TerminalReporter,
 )
 from stepwise.server import app
 from stepwise.store import SQLiteStore
@@ -125,34 +125,39 @@ class TestBlockedBySuspensionFromRuns:
 
 
 class TestReportTransitions:
+    def _mock_handle(self):
+        handle = MagicMock()
+        handle.update_step = MagicMock()
+        return handle
+
     def test_reports_completed(self):
-        reporter = TerminalReporter(quiet=True, _out=io.StringIO())
+        handle = self._mock_handle()
         seen_running: set[str] = set()
         seen_completed: set[str] = set()
         runs = [
             {"id": "r1", "status": "completed", "step_name": "a",
              "started_at": "2026-01-01T00:00:00", "completed_at": "2026-01-01T00:00:01"},
         ]
-        count = _report_transitions(runs, reporter, seen_running, seen_completed)
+        count = _report_transitions(runs, handle, seen_running, seen_completed)
         assert count == 1
         assert "r1" in seen_completed
 
     def test_reports_failed(self):
-        reporter = TerminalReporter(quiet=True, _out=io.StringIO())
+        handle = self._mock_handle()
         seen_running: set[str] = set()
         seen_completed: set[str] = set()
         runs = [{"id": "r1", "status": "failed", "step_name": "a", "error": "boom"}]
-        count = _report_transitions(runs, reporter, seen_running, seen_completed)
+        count = _report_transitions(runs, handle, seen_running, seen_completed)
         assert count == 0  # failed doesn't increment completed count
         assert "r1" in seen_completed
 
     def test_deduplicates(self):
-        reporter = TerminalReporter(quiet=True, _out=io.StringIO())
+        handle = self._mock_handle()
         seen_running: set[str] = set()
         seen_completed: set[str] = {"r1"}
         runs = [{"id": "r1", "status": "completed", "step_name": "a",
                  "started_at": "2026-01-01T00:00:00", "completed_at": "2026-01-01T00:00:01"}]
-        count = _report_transitions(runs, reporter, seen_running, seen_completed)
+        count = _report_transitions(runs, handle, seen_running, seen_completed)
         assert count == 0  # already seen
 
 

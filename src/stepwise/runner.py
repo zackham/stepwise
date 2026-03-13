@@ -9,7 +9,6 @@ import logging
 import signal
 import sys
 import time
-from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, TextIO
@@ -21,6 +20,7 @@ import httpx
 from stepwise.config import StepwiseConfig, load_config
 from stepwise.flow_resolution import flow_display_name
 from stepwise.engine import AsyncEngine, Engine
+from stepwise.io import IOAdapter, create_adapter
 from stepwise.models import (
     Job,
     JobStatus,
@@ -41,255 +41,8 @@ EXIT_CONFIG_ERROR = 3
 EXIT_SUSPENDED = 5
 
 
-@dataclass
-class TerminalReporter:
-    """Prints step status updates to terminal."""
 
-    quiet: bool = False
-    _out: TextIO = field(default_factory=lambda: sys.stderr)
-    _started_steps: dict[str, float] = field(default_factory=dict)
-
-    def on_flow_start(self, name: str) -> None:
-        if not self.quiet:
-            self._out.write(f"▸ entering flow...\n\n")
-            self._out.flush()
-
-    def on_step_started(self, step_name: str, executor_type: str) -> None:
-        self._started_steps[step_name] = time.time()
-        if not self.quiet:
-            self._out.write(f"  ⠋ {step_name:<16} running...\n")
-            self._out.flush()
-
-    def on_step_completed(self, step_name: str, duration: float, cost: float | None) -> None:
-        if not self.quiet:
-            parts = [f"{duration:.1f}s"]
-            if cost is not None:
-                parts.append(f"${cost:.3f}")
-            self._out.write(f"  ✓ {step_name:<16} completed  ({', '.join(parts)})\n")
-            self._out.flush()
-
-    def on_step_failed(self, step_name: str, error: str) -> None:
-        if not self.quiet:
-            self._out.write(f"  ✗ {step_name:<16} failed     {error}\n")
-            self._out.flush()
-
-    def on_step_suspended(self, step_name: str) -> None:
-        if not self.quiet:
-            self._out.write(f"  ◆ {step_name:<16} needs input\n")
-            self._out.flush()
-
-    def on_flow_completed(self, job: Job, total_steps: int, total_time: float) -> None:
-        if not self.quiet:
-            self._out.write(f"\n✓ Flow completed ({total_steps} steps, {total_time:.1f}s)\n")
-            self._out.flush()
-
-    def on_flow_failed(self, job: Job, error: str | None = None) -> None:
-        if not self.quiet:
-            msg = f"\n✗ Flow failed"
-            if error:
-                msg += f": {error}"
-            self._out.write(msg + "\n")
-            self._out.flush()
-
-
-class StdinHumanHandler:
-    """Handles human steps by prompting on stdin."""
-
-    def __init__(self, input_stream: TextIO | None = None, output_stream: TextIO | None = None):
-        self._input = input_stream or sys.stdin
-        self._output = output_stream or sys.stderr
-
-    def _collect_field(
-        self, field_name: str, spec: dict | None, is_only_field: bool,
-    ) -> tuple[str, Any]:
-        """Collect a single typed field from stdin.
-
-        Returns (field_name, value). value is None if optional and skipped.
-        """
-        from stepwise.models import OutputFieldSpec
-        s = OutputFieldSpec.from_dict(spec) if spec else OutputFieldSpec()
-
-        indent = "  " if is_only_field else "    "
-        optional_tag = " (optional)" if not s.required else ""
-
-        if s.description:
-            self._output.write(f"{indent}# {s.description}\n")
-            self._output.flush()
-
-        if s.type == "bool":
-            default_str = ""
-            if s.default is not None:
-                default_str = f" [{'yes' if s.default else 'no'}]"
-            self._output.write(f"{indent}{field_name} (y/n){default_str}{optional_tag}: ")
-            self._output.flush()
-            for _ in range(5):
-                raw = self._input.readline().strip().lower()
-                if not raw:
-                    if s.default is not None:
-                        return field_name, s.default
-                    if not s.required:
-                        return field_name, None
-                if raw in ("y", "yes", "true", "1"):
-                    return field_name, True
-                if raw in ("n", "no", "false", "0"):
-                    return field_name, False
-                self._output.write(f"{indent}  Please enter y or n: ")
-                self._output.flush()
-            return field_name, s.default
-
-        if s.type == "number":
-            range_str = ""
-            if s.min is not None and s.max is not None:
-                range_str = f" ({s.min}-{s.max})"
-            elif s.min is not None:
-                range_str = f" (>={s.min})"
-            elif s.max is not None:
-                range_str = f" (<={s.max})"
-            default_str = f" [{s.default}]" if s.default is not None else ""
-            self._output.write(f"{indent}{field_name}{range_str}{default_str}{optional_tag}: ")
-            self._output.flush()
-            for _ in range(5):
-                raw = self._input.readline().strip()
-                if not raw:
-                    if s.default is not None:
-                        return field_name, s.default
-                    if not s.required:
-                        return field_name, None
-                try:
-                    num = float(raw)
-                    if s.min is not None and num < s.min:
-                        self._output.write(f"{indent}  Must be >= {s.min}: ")
-                        self._output.flush()
-                        continue
-                    if s.max is not None and num > s.max:
-                        self._output.write(f"{indent}  Must be <= {s.max}: ")
-                        self._output.flush()
-                        continue
-                    return field_name, num
-                except ValueError:
-                    self._output.write(f"{indent}  Enter a number: ")
-                    self._output.flush()
-            return field_name, s.default
-
-        if s.type == "choice" and s.options:
-            self._output.write(f"{indent}{field_name}{optional_tag}:\n")
-            for i, opt in enumerate(s.options, 1):
-                marker = "*" if s.default == opt else " "
-                self._output.write(f"{indent}  {marker}{i}. {opt}\n")
-            self._output.flush()
-
-            if s.multiple:
-                # Multi-select: toggle numbers, blank to confirm
-                selected: list[str] = list(s.default) if isinstance(s.default, list) else []
-                self._output.write(f"{indent}  Toggle (1-{len(s.options)}), blank to confirm: ")
-                self._output.flush()
-                for _ in range(20):
-                    raw = self._input.readline().strip()
-                    if not raw:
-                        if not selected and not s.required:
-                            return field_name, None
-                        return field_name, selected
-                    try:
-                        idx = int(raw) - 1
-                        if 0 <= idx < len(s.options):
-                            opt = s.options[idx]
-                            if opt in selected:
-                                selected.remove(opt)
-                            else:
-                                selected.append(opt)
-                    except ValueError:
-                        if raw in s.options:
-                            if raw in selected:
-                                selected.remove(raw)
-                            else:
-                                selected.append(raw)
-                    self._output.write(f"{indent}  Selected: {selected}. Toggle or blank: ")
-                    self._output.flush()
-                return field_name, selected
-            else:
-                # Single select
-                default_str = f" [{s.default}]" if s.default else ""
-                self._output.write(f"{indent}  Choice{default_str}: ")
-                self._output.flush()
-                for _ in range(5):
-                    raw = self._input.readline().strip()
-                    if not raw:
-                        if s.default is not None:
-                            return field_name, s.default
-                        if not s.required:
-                            return field_name, None
-                    # Accept by number
-                    try:
-                        idx = int(raw) - 1
-                        if 0 <= idx < len(s.options):
-                            return field_name, s.options[idx]
-                    except ValueError:
-                        pass
-                    # Accept by text
-                    if raw in s.options:
-                        return field_name, raw
-                    self._output.write(f"{indent}  Invalid. Choose 1-{len(s.options)}: ")
-                    self._output.flush()
-                return field_name, s.default
-
-        if s.type == "text":
-            self._output.write(f"{indent}{field_name} (blank line to finish){optional_tag}:\n")
-            self._output.flush()
-            lines: list[str] = []
-            while True:
-                line = self._input.readline()
-                if not line:  # EOF
-                    break
-                stripped = line.rstrip("\n")
-                if stripped == "":
-                    break
-                lines.append(stripped)
-            text = "\n".join(lines)
-            if not text and not s.required:
-                return field_name, None
-            if not text and s.default is not None:
-                return field_name, s.default
-            return field_name, text
-
-        # Default: str type
-        default_str = f" [{s.default}]" if s.default is not None else ""
-        self._output.write(f"{indent}{field_name}{default_str}{optional_tag}: ")
-        self._output.flush()
-        raw = self._input.readline().strip()
-        if not raw:
-            if s.default is not None:
-                return field_name, s.default
-            if not s.required:
-                return field_name, None
-        return field_name, raw
-
-    def handle_suspended_step(self, engine: Engine | AsyncEngine, run: StepRun) -> None:
-        """Print prompt, collect input per field, call engine.fulfill_watch()."""
-        if not run.watch:
-            return
-
-        prompt = (run.watch.config or {}).get("prompt", "")
-        fields = run.watch.fulfillment_outputs
-        schema = run.watch.output_schema or {}
-
-        if prompt:
-            self._output.write(f"\n  {prompt}\n\n")
-            self._output.flush()
-
-        payload: dict[str, Any] = {}
-        is_only = len(fields) == 1
-
-        if not is_only:
-            self._output.write("  Fields:\n")
-            self._output.flush()
-
-        for field_name in fields:
-            spec = schema.get(field_name)
-            _, value = self._collect_field(field_name, spec, is_only)
-            if value is not None:
-                payload[field_name] = value
-
-        engine.fulfill_watch(run.id, payload)
+# TerminalReporter and StdinHumanHandler deleted — replaced by IOAdapter (io.py)
 
 
 def parse_vars(var_list: list[str] | None) -> dict[str, str]:
@@ -348,11 +101,11 @@ async def _fetch_job_state(
 
 def _report_transitions(
     runs: list[dict],
-    reporter: TerminalReporter,
+    handle,
     seen_running: set[str],
     seen_completed: set[str],
 ) -> int:
-    """Report step transitions. Returns count of newly completed steps."""
+    """Report step transitions via LiveFlowHandle. Returns count of newly completed steps."""
     newly_completed = 0
     for run in runs:
         run_id = run["id"]
@@ -360,7 +113,7 @@ def _report_transitions(
 
         if run_id not in seen_running and status in ("running", "suspended", "delegated"):
             seen_running.add(run_id)
-            reporter.on_step_started(run["step_name"], "")
+            handle.update_step(run["step_name"], "running")
 
         if run_id not in seen_completed:
             if status == "completed":
@@ -370,11 +123,13 @@ def _report_transitions(
                     s = datetime.fromisoformat(run["started_at"]).timestamp()
                     e = datetime.fromisoformat(run["completed_at"]).timestamp()
                     duration = e - s
-                reporter.on_step_completed(run["step_name"], duration, None)
+                handle.update_step(run["step_name"], "completed", duration=duration)
                 newly_completed += 1
             elif status == "failed":
                 seen_completed.add(run_id)
-                reporter.on_step_failed(run["step_name"], run.get("error", "unknown error"))
+                handle.update_step(
+                    run["step_name"], "failed", error=run.get("error", "unknown error"),
+                )
     return newly_completed
 
 
@@ -414,7 +169,7 @@ def _delegated_run_flow(
     objective: str,
     inputs: dict | None,
     workspace: str | None,
-    reporter: TerminalReporter,
+    adapter: IOAdapter,
     output_stream: TextIO | None,
     output_json: bool,
     report: bool,
@@ -427,23 +182,25 @@ def _delegated_run_flow(
         _err(err, output_stream)
         return EXIT_JOB_FAILED
 
-    reporter.on_flow_start(objective)
+    adapter.banner(objective)
 
     return asyncio.run(_delegated_ws_loop(
-        server_url, job_id, reporter,
+        server_url, job_id, adapter,
         output_stream, output_json, report, report_output, flow_path,
+        step_names=list(workflow.steps.keys()),
     ))
 
 
 async def _delegated_ws_loop(
     server_url: str,
     job_id: str,
-    reporter: TerminalReporter,
+    adapter: IOAdapter,
     output_stream: TextIO | None,
     output_json: bool,
     report: bool,
     report_output: str | None,
     flow_path: Path,
+    step_names: list[str] | None = None,
 ) -> int:
     """Watch server via WebSocket for job updates, fall back to REST polling."""
     import json as json_mod
@@ -478,135 +235,113 @@ async def _delegated_ws_loop(
             ws_conn = None
 
         try:
-            while True:
-                if shutdown_requested:
-                    try:
-                        await client.post(f"/api/jobs/{job_id}/cancel")
-                    except Exception:
-                        pass
-                    _err("Interrupted — cancelled active runs.", output_stream)
-                    return 130
+            with adapter.live_flow("flow", step_names or []) as handle:
+                while True:
+                    if shutdown_requested:
+                        try:
+                            await client.post(f"/api/jobs/{job_id}/cancel")
+                        except Exception:
+                            pass
+                        _err("Interrupted — cancelled active runs.", output_stream)
+                        return 130
 
-                # Wait for notification or poll
-                if use_ws and ws_conn:
-                    try:
-                        msg = await asyncio.wait_for(ws_conn.recv(), timeout=2.0)
-                        data = json_mod.loads(msg)
-                        # Only fetch if this tick is for our job
-                        changed = data.get("changed_jobs", [])
-                        if data.get("type") != "tick" or (changed and job_id not in changed):
-                            continue
-                    except asyncio.TimeoutError:
-                        # No message in 2s, do a fetch anyway to stay current
-                        pass
-                    except Exception:
-                        # WS died — degrade to polling
-                        logging.getLogger("stepwise.runner").warning(
-                            "WebSocket disconnected, falling back to REST polling"
-                        )
-                        use_ws = False
-                        ws_conn = None
-                else:
-                    await asyncio.sleep(2.0)
-
-                # Fetch state and report
-                try:
-                    job_data, runs = await _fetch_job_state(client, job_id)
-                except Exception as e:
-                    _err(f"Lost connection to server: {e}", output_stream)
-                    return EXIT_JOB_FAILED
-
-                steps_completed += _report_transitions(
-                    runs, reporter, seen_running, seen_completed,
-                )
-
-                # Handle suspended human steps
-                for run in runs:
-                    run_id = run["id"]
-                    status = run["status"]
-                    if status == "suspended" and run_id not in seen_completed:
-                        watch = run.get("watch")
-                        if watch and watch.get("mode") == "human":
-                            reporter.on_step_suspended(run["step_name"])
-                            fields = watch.get("fulfillment_outputs", [])
-                            prompt = (watch.get("config") or {}).get("prompt", "")
-                            payload = await asyncio.to_thread(
-                                _collect_human_input, prompt, fields,
-                                output_stream or sys.stderr, sys.stdin,
+                    # Wait for notification or poll
+                    if use_ws and ws_conn:
+                        try:
+                            msg = await asyncio.wait_for(ws_conn.recv(), timeout=2.0)
+                            data = json_mod.loads(msg)
+                            # Only fetch if this tick is for our job
+                            changed = data.get("changed_jobs", [])
+                            if data.get("type") != "tick" or (changed and job_id not in changed):
+                                continue
+                        except asyncio.TimeoutError:
+                            # No message in 2s, do a fetch anyway to stay current
+                            pass
+                        except Exception:
+                            # WS died — degrade to polling
+                            logging.getLogger("stepwise.runner").warning(
+                                "WebSocket disconnected, falling back to REST polling"
                             )
-                            try:
-                                await client.post(
-                                    f"/api/runs/{run_id}/fulfill",
-                                    json={"payload": payload},
-                                )
-                            except Exception as e:
-                                _err(f"Failed to fulfill step: {e}", output_stream)
-                            seen_completed.add(run_id)
+                            use_ws = False
+                            ws_conn = None
+                    else:
+                        await asyncio.sleep(2.0)
 
-                # Check terminal state
-                job_status = job_data["status"]
-                if job_status == "completed":
-                    total_time = time.time() - start_time
-                    reporter.on_flow_completed(
-                        type("_Job", (), {"status": "completed", "id": job_id})(),
-                        steps_completed, total_time,
+                    # Fetch state and report
+                    try:
+                        job_data, runs = await _fetch_job_state(client, job_id)
+                    except Exception as e:
+                        _err(f"Lost connection to server: {e}", output_stream)
+                        return EXIT_JOB_FAILED
+
+                    steps_completed += _report_transitions(
+                        runs, handle, seen_running, seen_completed,
                     )
-                    if output_json:
-                        _json_stdout({
-                            "status": "completed",
-                            "job_id": job_id,
-                            "duration_seconds": round(total_time, 1),
-                        })
-                    return EXIT_SUCCESS
-                elif job_status in ("failed", "cancelled"):
-                    reporter.on_flow_failed(
-                        type("_Job", (), {"status": job_status, "id": job_id})(),
+
+                    # Handle suspended human steps
+                    for run in runs:
+                        run_id = run["id"]
+                        status = run["status"]
+                        if status == "suspended" and run_id not in seen_completed:
+                            watch = run.get("watch")
+                            if watch and watch.get("mode") == "human":
+                                handle.update_step(run["step_name"], "suspended")
+                                handle.pause_for_input()
+                                fields = watch.get("fulfillment_outputs", [])
+                                prompt = (watch.get("config") or {}).get("prompt", "")
+                                schema = watch.get("output_schema")
+                                payload = await asyncio.to_thread(
+                                    adapter.collect_human_input, prompt, fields, schema,
+                                )
+                                handle.resume_after_input()
+                                try:
+                                    await client.post(
+                                        f"/api/runs/{run_id}/fulfill",
+                                        json={"payload": payload},
+                                    )
+                                except Exception as e:
+                                    _err(f"Failed to fulfill step: {e}", output_stream)
+                                seen_completed.add(run_id)
+
+                    # Update summary
+                    total = len(step_names) if step_names else steps_completed
+                    handle.update_summary(
+                        steps_completed, total, elapsed=time.time() - start_time,
                     )
-                    if output_json:
-                        failed_step = None
+
+                    # Check terminal state
+                    job_status = job_data["status"]
+                    if job_status == "completed":
+                        total_time = time.time() - start_time
+                        adapter.flow_complete(steps_completed, total_time)
+                        if output_json:
+                            _json_stdout({
+                                "status": "completed",
+                                "job_id": job_id,
+                                "duration_seconds": round(total_time, 1),
+                            })
+                        return EXIT_SUCCESS
+                    elif job_status in ("failed", "cancelled"):
                         error_msg = None
+                        failed_step = None
                         for run in runs:
                             if run["status"] == "failed":
                                 failed_step = run["step_name"]
                                 error_msg = run.get("error")
                                 break
-                        _json_stdout({
-                            "status": "failed",
-                            "job_id": job_id,
-                            "error": error_msg or "Unknown error",
-                            "failed_step": failed_step,
-                            "duration_seconds": round(time.time() - start_time, 1),
-                        })
-                    return EXIT_JOB_FAILED
+                        adapter.flow_failed(error_msg)
+                        if output_json:
+                            _json_stdout({
+                                "status": "failed",
+                                "job_id": job_id,
+                                "error": error_msg or "Unknown error",
+                                "failed_step": failed_step,
+                                "duration_seconds": round(time.time() - start_time, 1),
+                            })
+                        return EXIT_JOB_FAILED
         finally:
             if ws_conn:
                 await ws_conn.close()
-
-
-def _collect_human_input(
-    prompt: str, fields: list[str], output: TextIO, input_stream: TextIO,
-    output_schema: dict[str, dict] | None = None,
-) -> dict[str, Any]:
-    """Collect human input for a suspended step (runs in thread)."""
-    handler = StdinHumanHandler(input_stream=input_stream, output_stream=output)
-    if prompt:
-        output.write(f"\n  {prompt}\n\n")
-        output.flush()
-
-    schema = output_schema or {}
-    payload: dict[str, Any] = {}
-    is_only = len(fields) == 1
-
-    if not is_only:
-        output.write("  Fields:\n")
-        output.flush()
-
-    for field_name in fields:
-        spec = schema.get(field_name)
-        _, value = handler._collect_field(field_name, spec, is_only)
-        if value is not None:
-            payload[field_name] = value
-    return payload
 
 
 def run_flow(
@@ -623,6 +358,7 @@ def run_flow(
     report_output: str | None = None,
     output_json: bool = False,
     force_local: bool = False,
+    adapter: IOAdapter | None = None,
 ) -> int:
     """Run a flow headlessly. Returns exit code.
 
@@ -665,20 +401,28 @@ def run_flow(
         _err(f"Invalid flow: {'; '.join(errors)}", output_stream)
         return EXIT_USAGE_ERROR
 
-    # 1b. Check for running server — delegate if available
+    # 1b. Create adapter if not provided
+    if adapter is None:
+        adapter = create_adapter(
+            quiet=quiet,
+            force_plain=bool(output_stream),
+            output=output_stream,
+            input_stream=input_stream,
+        )
+
+    # 1c. Check for running server — delegate if available
     flow_name = objective or flow_display_name(flow_path)
     if not force_local:
         from stepwise.server_detect import detect_server
         server_url = detect_server(project.dot_dir)
         if server_url:
-            reporter = TerminalReporter(quiet=quiet, _out=output_stream or sys.stderr)
             return _delegated_run_flow(
                 server_url=server_url,
                 workflow=workflow,
                 objective=flow_name,
                 inputs=inputs,
                 workspace=workspace,
-                reporter=reporter,
+                adapter=adapter,
                 output_stream=output_stream,
                 output_json=output_json,
                 report=report,
@@ -709,18 +453,12 @@ def run_flow(
     job.runner_pid = os.getpid()
     store.save_job(job)
 
-    reporter = TerminalReporter(quiet=quiet, _out=output_stream or sys.stderr)
-    human_handler = StdinHumanHandler(
-        input_stream=input_stream,
-        output_stream=output_stream or sys.stderr,
-    )
-
-    reporter.on_flow_start(flow_name)
+    adapter.banner(flow_name)
 
     # 4. Run async
     try:
         return asyncio.run(_async_run_flow(
-            engine, job, store, reporter, human_handler,
+            engine, job, store, adapter,
             output_stream, output_json, report, report_output, flow_path,
         ))
     finally:
@@ -731,8 +469,7 @@ async def _async_run_flow(
     engine: AsyncEngine,
     job: Job,
     store: SQLiteStore,
-    reporter: TerminalReporter,
-    human_handler: StdinHumanHandler,
+    adapter: IOAdapter,
     output_stream: TextIO | None,
     output_json: bool,
     report: bool,
@@ -756,106 +493,127 @@ async def _async_run_flow(
     seen_running: set[str] = set()
     seen_completed: set[str] = set()
     steps_completed = 0
+    step_names = list(job.workflow.steps.keys())
 
     try:
         engine.start_job(job.id)
 
-        while True:
-            # Heartbeat every 10s so server can detect stale CLI jobs
-            now = time.time()
-            if now - last_heartbeat > 10:
-                store.heartbeat(job.id)
-                last_heartbeat = now
+        with adapter.live_flow(job.objective or "flow", step_names) as handle:
+            while True:
+                # Heartbeat every 10s so server can detect stale CLI jobs
+                now = time.time()
+                if now - last_heartbeat > 10:
+                    store.heartbeat(job.id)
+                    last_heartbeat = now
 
-            if shutdown_requested:
-                engine.cancel_job(job.id)
-                _err("Interrupted — cancelled active runs.", output_stream)
-                return 130
+                if shutdown_requested:
+                    engine.cancel_job(job.id)
+                    _err("Interrupted — cancelled active runs.", output_stream)
+                    return 130
 
-            job = engine.get_job(job.id)
+                job = engine.get_job(job.id)
 
-            # Report new step transitions
-            all_runs = engine.get_runs(job.id)
-            for run in all_runs:
-                if run.id not in seen_running and run.status in (
-                    StepRunStatus.RUNNING, StepRunStatus.SUSPENDED,
-                    StepRunStatus.DELEGATED,
-                ):
-                    seen_running.add(run.id)
-                    step_def = job.workflow.steps.get(run.step_name)
-                    executor_type = step_def.executor.type if step_def else "unknown"
-                    es = run.executor_state or {}
-                    if es.get("for_each"):
-                        count = es.get("item_count", 0)
-                        reporter.on_step_started(
-                            f"{run.step_name} ({count} items)", executor_type
-                        )
-                    else:
-                        reporter.on_step_started(run.step_name, executor_type)
+                # Report new step transitions
+                all_runs = engine.get_runs(job.id)
+                for run in all_runs:
+                    if run.id not in seen_running and run.status in (
+                        StepRunStatus.RUNNING, StepRunStatus.SUSPENDED,
+                        StepRunStatus.DELEGATED,
+                    ):
+                        seen_running.add(run.id)
+                        es = run.executor_state or {}
+                        name = run.step_name
+                        if es.get("for_each"):
+                            count = es.get("item_count", 0)
+                            name = f"{run.step_name} ({count} items)"
+                        handle.update_step(name, "running")
 
-                if run.id not in seen_completed:
-                    if run.status == StepRunStatus.COMPLETED:
-                        seen_completed.add(run.id)
-                        duration = 0.0
-                        if run.started_at and run.completed_at:
-                            duration = (run.completed_at - run.started_at).total_seconds()
-                        cost = store.accumulated_cost(run.id) or None
-                        reporter.on_step_completed(run.step_name, duration, cost)
-                        steps_completed += 1
-                    elif run.status == StepRunStatus.FAILED:
-                        seen_completed.add(run.id)
-                        reporter.on_step_failed(run.step_name, run.error or "unknown error")
+                    if run.id not in seen_completed:
+                        if run.status == StepRunStatus.COMPLETED:
+                            seen_completed.add(run.id)
+                            duration = 0.0
+                            if run.started_at and run.completed_at:
+                                duration = (run.completed_at - run.started_at).total_seconds()
+                            cost = store.accumulated_cost(run.id) or None
+                            handle.update_step(
+                                run.step_name, "completed", duration=duration, cost=cost,
+                            )
+                            steps_completed += 1
+                        elif run.status == StepRunStatus.FAILED:
+                            seen_completed.add(run.id)
+                            handle.update_step(
+                                run.step_name, "failed",
+                                error=run.error or "unknown error",
+                            )
 
-                # Handle suspended (human) steps
-                if run.status == StepRunStatus.SUSPENDED and run.watch:
-                    if run.watch.mode == "human" and run.id not in seen_completed:
-                        reporter.on_step_suspended(run.step_name)
-                        await asyncio.to_thread(
-                            human_handler.handle_suspended_step, engine, run
-                        )
-                        seen_completed.add(run.id)
+                    # Handle suspended (human) steps
+                    if run.status == StepRunStatus.SUSPENDED and run.watch:
+                        if run.watch.mode == "human" and run.id not in seen_completed:
+                            handle.update_step(run.step_name, "suspended")
+                            handle.pause_for_input()
 
-            # Check job terminal state
-            if job.status == JobStatus.COMPLETED:
-                total_time = time.time() - start_time
-                reporter.on_flow_completed(job, steps_completed, total_time)
-                if output_json:
-                    cost = engine.job_cost(job.id)
-                    _json_stdout({
-                        "status": "completed",
-                        "job_id": job.id,
-                        "outputs": engine.terminal_outputs(job.id),
-                        "cost_usd": round(cost, 4) if cost else 0,
-                        "duration_seconds": round(total_time, 1),
-                    })
-                if report:
-                    _generate_report(job, store, flow_path, report_output, output_stream)
-                return EXIT_SUCCESS
-            elif job.status in (JobStatus.FAILED, JobStatus.CANCELLED):
-                reporter.on_flow_failed(job)
-                if output_json:
-                    cost = engine.job_cost(job.id)
-                    failed_step = None
+                            prompt = (run.watch.config or {}).get("prompt", "")
+                            fields = run.watch.fulfillment_outputs
+                            schema = run.watch.output_schema
+                            payload = await asyncio.to_thread(
+                                adapter.collect_human_input,
+                                prompt, fields, schema,
+                            )
+                            engine.fulfill_watch(run.id, payload)
+
+                            handle.resume_after_input()
+                            seen_completed.add(run.id)
+
+                # Update summary
+                handle.update_summary(
+                    steps_completed, len(step_names),
+                    elapsed=time.time() - start_time,
+                )
+
+                # Check job terminal state
+                if job.status == JobStatus.COMPLETED:
+                    total_time = time.time() - start_time
+                    adapter.flow_complete(steps_completed, total_time)
+                    if output_json:
+                        cost = engine.job_cost(job.id)
+                        _json_stdout({
+                            "status": "completed",
+                            "job_id": job.id,
+                            "outputs": engine.terminal_outputs(job.id),
+                            "cost_usd": round(cost, 4) if cost else 0,
+                            "duration_seconds": round(total_time, 1),
+                        })
+                    if report:
+                        _generate_report(job, store, flow_path, report_output, output_stream)
+                    return EXIT_SUCCESS
+                elif job.status in (JobStatus.FAILED, JobStatus.CANCELLED):
                     error_msg = None
                     for run in engine.get_runs(job.id):
                         if run.status == StepRunStatus.FAILED:
-                            failed_step = run.step_name
                             error_msg = run.error
                             break
-                    _json_stdout({
-                        "status": "failed",
-                        "job_id": job.id,
-                        "error": error_msg or "Unknown error",
-                        "failed_step": failed_step,
-                        "completed_outputs": engine.completed_outputs(job.id),
-                        "cost_usd": round(cost, 4) if cost else 0,
-                        "duration_seconds": round(time.time() - start_time, 1),
-                    })
-                if report:
-                    _generate_report(job, store, flow_path, report_output, output_stream)
-                return EXIT_JOB_FAILED
+                    adapter.flow_failed(error_msg)
+                    if output_json:
+                        cost = engine.job_cost(job.id)
+                        failed_step = None
+                        for run in engine.get_runs(job.id):
+                            if run.status == StepRunStatus.FAILED:
+                                failed_step = run.step_name
+                                break
+                        _json_stdout({
+                            "status": "failed",
+                            "job_id": job.id,
+                            "error": error_msg or "Unknown error",
+                            "failed_step": failed_step,
+                            "completed_outputs": engine.completed_outputs(job.id),
+                            "cost_usd": round(cost, 4) if cost else 0,
+                            "duration_seconds": round(time.time() - start_time, 1),
+                        })
+                    if report:
+                        _generate_report(job, store, flow_path, report_output, output_stream)
+                    return EXIT_JOB_FAILED
 
-            await asyncio.sleep(0.1)
+                await asyncio.sleep(0.1)
 
     finally:
         engine_task.cancel()
