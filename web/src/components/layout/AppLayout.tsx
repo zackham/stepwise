@@ -1,7 +1,7 @@
 import { Outlet, Link, useLocation } from "@tanstack/react-router";
 import { useStepwiseWebSocket } from "@/hooks/useStepwiseWebSocket";
 import { useEngineStatus } from "@/hooks/useStepwise";
-import { Workflow, LayoutGrid, FileCode, Zap } from "lucide-react";
+import { Workflow, LayoutGrid, FileCode, Settings2, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export function AppLayout() {
@@ -13,6 +13,7 @@ export function AppLayout() {
   const isJobsActive =
     currentPath === "/jobs" || currentPath.startsWith("/jobs/");
   const isEditorActive = currentPath.startsWith("/editor");
+  const isSettingsActive = currentPath.startsWith("/settings");
 
   return (
     <div className="h-screen flex flex-col bg-background text-foreground dark">
@@ -49,6 +50,18 @@ export function AppLayout() {
           >
             <FileCode className="w-3.5 h-3.5 inline mr-1.5" />
             Editor
+          </Link>
+          <Link
+            to="/settings"
+            className={cn(
+              "px-3 py-1.5 text-sm rounded-md transition-colors",
+              isSettingsActive
+                ? "bg-zinc-800 text-foreground"
+                : "text-zinc-500 hover:text-foreground hover:bg-zinc-800/50"
+            )}
+          >
+            <Settings2 className="w-3.5 h-3.5 inline mr-1.5" />
+            Settings
           </Link>
         </nav>
 

@@ -141,6 +141,12 @@ export function deleteJob(jobId: string): Promise<{ status: string }> {
   return request(`/jobs/${jobId}`, { method: "DELETE" });
 }
 
+export function fetchJobOutput(
+  jobId: string
+): Promise<Record<string, unknown>> {
+  return request<Record<string, unknown>>(`/jobs/${jobId}/output`);
+}
+
 export function fetchAgentOutput(
   runId: string
 ): Promise<{ events: AgentStreamEvent[] }> {
@@ -235,6 +241,14 @@ export function parseYaml(yaml: string): Promise<ParseResult> {
   return request<ParseResult>("/flows/parse", {
     method: "POST",
     body: JSON.stringify({ yaml }),
+  });
+}
+
+export function deleteFlow(
+  path: string
+): Promise<{ status: string; path: string }> {
+  return request(`/flows/local/${path}`, {
+    method: "DELETE",
   });
 }
 
@@ -355,6 +369,94 @@ export function deleteFlowFile(
 ): Promise<{ status: string; path: string }> {
   return request(`/flows/local/${flowPath}/files/${filePath}`, {
     method: "DELETE",
+  });
+}
+
+// ── Config / Labels / Settings ───────────────────────────────────────
+
+export interface LabelInfo {
+  name: string;
+  model: string;
+  source: "default" | "user" | "project" | "local";
+  is_default: boolean;
+}
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+  provider: string;
+  context_length?: number;
+  max_output_tokens?: number;
+  prompt_cost?: number;       // USD per token (input)
+  completion_cost?: number;   // USD per token (output)
+}
+
+export interface ConfigResponse {
+  has_api_key: boolean;
+  has_anthropic_key: boolean;
+  api_key_source: string | null;
+  model_registry: ModelInfo[];
+  default_model: string;
+  labels: LabelInfo[];
+}
+
+export function fetchConfig(): Promise<ConfigResponse> {
+  return request<ConfigResponse>("/config");
+}
+
+export function fetchLabels(): Promise<{ labels: LabelInfo[]; default_model: string }> {
+  return request("/config/labels");
+}
+
+export function createLabel(name: string, model: string): Promise<{ status: string }> {
+  return request("/config/labels", {
+    method: "POST",
+    body: JSON.stringify({ name, model }),
+  });
+}
+
+export function updateLabel(name: string, model: string): Promise<{ status: string }> {
+  return request(`/config/labels/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    body: JSON.stringify({ model }),
+  });
+}
+
+export function deleteLabel(name: string): Promise<{ status: string }> {
+  return request(`/config/labels/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+}
+
+export function addModel(model: Omit<ModelInfo, "id"> & { id: string }): Promise<{ status: string }> {
+  return request("/config/models", {
+    method: "POST",
+    body: JSON.stringify(model),
+  });
+}
+
+export function searchOpenRouterModels(q: string = "", limit: number = 30): Promise<{ models: ModelInfo[] }> {
+  const params = new URLSearchParams({ q, limit: String(limit) });
+  return request<{ models: ModelInfo[] }>(`/config/models/search?${params}`);
+}
+
+export function removeModel(modelId: string): Promise<{ status: string }> {
+  return request(`/config/models/${encodeURIComponent(modelId)}`, {
+    method: "DELETE",
+  });
+}
+
+export function setApiKey(key: string, value: string, scope: string = "user"): Promise<{ status: string }> {
+  return request("/config/api-key", {
+    method: "PUT",
+    body: JSON.stringify({ key, value, scope }),
+  });
+}
+
+export function setDefaultModel(model: string): Promise<{ status: string }> {
+  return request("/config/default-model", {
+    method: "PUT",
+    body: JSON.stringify({ model }),
   });
 }
 

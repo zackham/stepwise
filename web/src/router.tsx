@@ -10,6 +10,7 @@ import { JobDetailPage } from "@/pages/JobDetailPage";
 import { JobEventsPage } from "@/pages/JobEventsPage";
 import { JobTreePage } from "@/pages/JobTreePage";
 import { EditorPage } from "@/pages/EditorPage";
+import { SettingsPage } from "@/pages/SettingsPage";
 
 // Root route
 const rootRoute = createRootRoute({
@@ -67,6 +68,13 @@ const editorFlowRoute = createRoute({
   component: EditorPage,
 });
 
+// Settings
+const settingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/settings",
+  component: SettingsPage,
+});
+
 // Route tree
 const routeTree = rootRoute.addChildren([
   indexRoute,
@@ -76,6 +84,7 @@ const routeTree = rootRoute.addChildren([
   jobTreeRoute,
   editorRoute,
   editorFlowRoute,
+  settingsRoute,
 ]);
 
 export const router = createRouter({ routeTree });
