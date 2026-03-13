@@ -730,42 +730,41 @@ def cmd_run(args: argparse.Namespace) -> int:
     io = _io(args)
     project = _find_project_or_exit(args)
 
-    # Resolve flow name/path — fall back to registry if not found locally
+    # Resolve flow: @author:name fetches from registry, otherwise local only
     flow_ref = args.flow
-    try:
-        flow_path = resolve_flow(flow_ref, _project_dir(args))
-    except FlowResolutionError:
-        # Try registry if it looks like a name or @author:name
-        is_name = FLOW_NAME_PATTERN.match(flow_ref) or flow_ref.startswith("@")
-        if is_name:
+    if flow_ref.startswith("@"):
+        # Registry ref — fetch if not already local
+        slug = flow_ref.lstrip("@").split(":", 1)[-1] if ":" in flow_ref else flow_ref.lstrip("@")
+        try:
+            flow_path = resolve_flow(slug, _project_dir(args))
+        except FlowResolutionError:
             flow_path = _try_registry_fetch(flow_ref, io)
-            if flow_path:
-                # Re-resolve now that it's downloaded
-                try:
-                    slug = flow_ref.lstrip("@").split(":", 1)[-1] if flow_ref.startswith("@") else flow_ref
-                    flow_path = resolve_flow(slug, _project_dir(args))
-                except FlowResolutionError as e2:
-                    if getattr(args, "wait", False) or getattr(args, "async_mode", False):
-                        from stepwise.runner import _json_error
-                        _json_error(2, str(e2))
-                        return EXIT_USAGE_ERROR
-                    io.log("error", str(e2))
-                    return EXIT_USAGE_ERROR
-            else:
-                msg = f"Flow '{flow_ref}' not found locally or in registry"
+            if not flow_path:
+                msg = f"Flow '{flow_ref}' not found in registry"
                 if getattr(args, "wait", False) or getattr(args, "async_mode", False):
                     from stepwise.runner import _json_error
                     _json_error(2, msg)
                     return EXIT_USAGE_ERROR
                 io.log("error", msg)
                 return EXIT_USAGE_ERROR
-        else:
-            msg = f"Flow not found: {flow_ref}"
+            try:
+                flow_path = resolve_flow(slug, _project_dir(args))
+            except FlowResolutionError as e2:
+                if getattr(args, "wait", False) or getattr(args, "async_mode", False):
+                    from stepwise.runner import _json_error
+                    _json_error(2, str(e2))
+                    return EXIT_USAGE_ERROR
+                io.log("error", str(e2))
+                return EXIT_USAGE_ERROR
+    else:
+        try:
+            flow_path = resolve_flow(flow_ref, _project_dir(args))
+        except FlowResolutionError as e:
             if getattr(args, "wait", False) or getattr(args, "async_mode", False):
                 from stepwise.runner import _json_error
-                _json_error(2, msg)
+                _json_error(2, str(e))
                 return EXIT_USAGE_ERROR
-            io.log("error", msg)
+            io.log("error", str(e))
             return EXIT_USAGE_ERROR
 
     # Parse input variables (shared across all modes)
