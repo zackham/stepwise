@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useJobs } from "@/hooks/useStepwise";
+import { useJobs, useStepwiseMutations } from "@/hooks/useStepwise";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -9,7 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AlertTriangle, Briefcase, Clock, Monitor, Terminal } from "lucide-react";
+import { AlertTriangle, Briefcase, Clock, Monitor, Terminal, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { JobStatus } from "@/lib/types";
 
@@ -41,9 +41,11 @@ function timeAgo(ts: string): string {
 
 export function JobList({ selectedJobId, onSelectJob }: JobListProps) {
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const { data: jobs = [], isLoading } = useJobs(
     statusFilter === "all" ? undefined : statusFilter
   );
+  const mutations = useStepwiseMutations();
 
   const sortedJobs = [...jobs].sort(
     (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
@@ -52,9 +54,9 @@ export function JobList({ selectedJobId, onSelectJob }: JobListProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Filter */}
-      <div className="p-3 border-b border-border">
+      <div className="p-3 border-b border-border flex items-center gap-2">
         <Select value={statusFilter} onValueChange={(v) => { if (v !== null) setStatusFilter(v); }}>
-          <SelectTrigger className="h-8 text-xs">
+          <SelectTrigger className="h-8 text-xs flex-1">
             <SelectValue placeholder="Filter by status" />
           </SelectTrigger>
           <SelectContent>
@@ -67,6 +69,35 @@ export function JobList({ selectedJobId, onSelectJob }: JobListProps) {
             <SelectItem value="cancelled">Cancelled</SelectItem>
           </SelectContent>
         </Select>
+        {confirmDelete ? (
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => {
+                mutations.deleteAllJobs.mutate(undefined, {
+                  onSuccess: () => setConfirmDelete(false),
+                });
+              }}
+              disabled={mutations.deleteAllJobs.isPending}
+              className="text-[10px] text-red-400 hover:text-red-300 px-1.5 py-1 rounded border border-red-500/30 hover:bg-red-500/10 transition-colors"
+            >
+              Confirm
+            </button>
+            <button
+              onClick={() => setConfirmDelete(false)}
+              className="text-[10px] text-zinc-500 hover:text-zinc-300 px-1.5 py-1"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setConfirmDelete(true)}
+            className="text-zinc-600 hover:text-red-400 p-1.5 rounded hover:bg-zinc-800/50 transition-colors shrink-0"
+            title="Delete all jobs"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        )}
       </div>
 
       {/* Job list */}

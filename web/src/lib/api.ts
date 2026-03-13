@@ -149,6 +149,10 @@ export function deleteJob(jobId: string): Promise<{ status: string }> {
   return request(`/jobs/${jobId}`, { method: "DELETE" });
 }
 
+export function deleteAllJobs(): Promise<{ status: string; count: number }> {
+  return request("/jobs", { method: "DELETE" });
+}
+
 export function fetchJobCost(
   jobId: string
 ): Promise<{ job_id: string; cost_usd: number }> {

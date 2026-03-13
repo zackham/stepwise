@@ -531,6 +531,16 @@ def delete_job(job_id: str):
     return {"status": "deleted"}
 
 
+@app.delete("/api/jobs")
+def delete_all_jobs():
+    engine = _get_engine()
+    jobs = engine.store.all_jobs()
+    for job in jobs:
+        engine.store.delete_job(job.id)
+    _broadcast({"type": "jobs_changed"})
+    return {"status": "deleted", "count": len(jobs)}
+
+
 @app.get("/api/jobs/{job_id}/tree")
 def get_job_tree(job_id: str):
     engine = _get_engine()
