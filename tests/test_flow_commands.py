@@ -65,7 +65,12 @@ class TestFlowGet:
 
     def test_get_name_not_found(self, tmp_path, capsys, monkeypatch):
         """get <name> (not URL) tries registry, fails if not found."""
+        from stepwise.registry_client import RegistryError
         monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            "stepwise.registry_client.fetch_flow",
+            lambda slug, **kw: (_ for _ in ()).throw(RegistryError("Flow 'pr-review' not found in registry", 404)),
+        )
         rc = main(["get", "pr-review"])
         assert rc == EXIT_USAGE_ERROR
         err = capsys.readouterr().err
@@ -116,6 +121,7 @@ class TestFlowShare:
 
         mock_response = MagicMock()
         mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
         mock_response.json.return_value = {
             "slug": "downloaded",
             "name": "downloaded",
@@ -147,6 +153,7 @@ class TestFlowSearch:
     def test_search_no_args(self, capsys, monkeypatch):
         mock_response = MagicMock()
         mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
         mock_response.json.return_value = {"flows": [], "total": 0}
 
         mock_client = MagicMock()
@@ -162,6 +169,7 @@ class TestFlowSearch:
     def test_search_with_query(self, capsys, monkeypatch):
         mock_response = MagicMock()
         mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
         mock_response.json.return_value = {
             "flows": [{"slug": "pr-review", "author": "alice", "steps": 3, "downloads": 5, "tags": ["code"]}],
             "total": 1,

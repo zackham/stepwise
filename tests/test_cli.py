@@ -218,13 +218,24 @@ class TestFlowStubs:
         rc = main(["share"])
         assert rc == EXIT_USAGE_ERROR
 
-    def test_search_no_results(self, capsys):
+    def test_search_no_results(self, capsys, monkeypatch):
+        from stepwise.registry_client import RegistryError
+        monkeypatch.setattr(
+            "stepwise.registry_client.search_flows",
+            lambda **kw: {"flows": [], "total": 0},
+        )
         rc = main(["search", "social", "media"])
         assert rc == EXIT_SUCCESS
-        out = capsys.readouterr().out
-        assert "no flows found" in out.lower()
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "no flows found" in combined.lower()
 
-    def test_get_name_not_found(self, capsys):
+    def test_get_name_not_found(self, capsys, monkeypatch):
+        from stepwise.registry_client import RegistryError
+        monkeypatch.setattr(
+            "stepwise.registry_client.fetch_flow",
+            lambda slug, **kw: (_ for _ in ()).throw(RegistryError("Flow 'tweet-generator' not found in registry", 404)),
+        )
         rc = main(["get", "tweet-generator"])
         assert rc == EXIT_USAGE_ERROR
         err = capsys.readouterr().err

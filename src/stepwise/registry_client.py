@@ -88,6 +88,17 @@ def _client() -> httpx.Client:
     return httpx.Client(timeout=30.0)
 
 
+def _ensure_json(resp: httpx.Response, context: str) -> dict[str, Any]:
+    """Parse JSON from response, raising RegistryError if not JSON."""
+    content_type = resp.headers.get("content-type", "")
+    if "application/json" not in content_type:
+        raise RegistryError(
+            f"{context}: expected JSON but got {content_type or 'unknown content type'}",
+            resp.status_code,
+        )
+    return resp.json()
+
+
 def fetch_flow(slug: str, *, use_cache: bool = True) -> dict[str, Any]:
     """Fetch flow metadata + YAML from the registry.
 
@@ -103,7 +114,7 @@ def fetch_flow(slug: str, *, use_cache: bool = True) -> dict[str, Any]:
         raise RegistryError(
             f"Registry error: {resp.status_code} {resp.text}", resp.status_code
         )
-    data = resp.json()
+    data = _ensure_json(resp, f"fetch flow '{slug}'")
     # Cache the YAML content
     if data.get("yaml"):
         cache_flow(slug, data["yaml"])
@@ -151,7 +162,7 @@ def search_flows(
         raise RegistryError(
             f"Registry error: {resp.status_code} {resp.text}", resp.status_code
         )
-    return resp.json()
+    return _ensure_json(resp, "search flows")
 
 
 def publish_flow(
@@ -184,7 +195,7 @@ def publish_flow(
             f"Publish failed: {resp.status_code} {resp.text}", resp.status_code
         )
 
-    data = resp.json()
+    data = _ensure_json(resp, "publish flow")
     # Save the update token
     if data.get("update_token") and data.get("slug"):
         save_token(data["slug"], data["update_token"])
@@ -224,4 +235,4 @@ def update_flow(
         raise RegistryError(
             f"Update failed: {resp.status_code} {resp.text}", resp.status_code
         )
-    return resp.json()
+    return _ensure_json(resp, f"update flow '{slug}'")

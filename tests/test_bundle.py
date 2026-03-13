@@ -252,6 +252,7 @@ class TestShareWithBundle:
 
         mock_response = MagicMock()
         mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
         mock_response.json.return_value = {
             "slug": "my-flow",
             "name": "my-flow",
@@ -296,6 +297,7 @@ class TestShareWithBundle:
 
         mock_response = MagicMock()
         mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
         mock_response.json.return_value = {
             "slug": "my-flow",
             "name": "my-flow",
@@ -326,6 +328,7 @@ class TestShareWithBundle:
 
         mock_response = MagicMock()
         mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
         mock_response.json.return_value = {
             "slug": "my-flow",
             "name": "my-flow",

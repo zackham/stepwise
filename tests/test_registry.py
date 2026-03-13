@@ -89,6 +89,7 @@ class TestFetchFlow:
     def test_fetch_flow_success(self, monkeypatch):
         mock_response = MagicMock()
         mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
         mock_response.json.return_value = {
             "name": "test-flow",
             "slug": "test-flow",
@@ -163,6 +164,7 @@ class TestSearch:
     def test_search_success(self, monkeypatch):
         mock_response = MagicMock()
         mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
         mock_response.json.return_value = {
             "flows": [{"slug": "test-flow", "author": "alice"}],
             "total": 1,
@@ -189,6 +191,7 @@ class TestPublish:
 
         mock_response = MagicMock()
         mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
         mock_response.json.return_value = {
             "slug": "new-flow",
             "name": "new-flow",
