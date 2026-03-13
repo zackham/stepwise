@@ -688,22 +688,31 @@ class _TerminalLiveFlowHandle(LiveFlowHandle):
             self._display.total_cost = cost
 
     def pause_for_input(self) -> None:
-        """Stop live display and save cursor position for cleanup."""
+        """Stop live display, print static step list, mark position for input cleanup."""
         self._live.stop()
-        # Save cursor position so we can erase input prompts on resume
+        # Print the step list as static output (stays on screen)
+        self._console.print(self._display)
+        # Save cursor position — everything below here (input panel + prompts) gets erased
         file = self._console.file or sys.stderr
         file.write("\033[s")  # save cursor position
         file.flush()
         self._pause_cursor_saved = True
 
     def resume_after_input(self) -> None:
-        """Erase input prompts and restart live display."""
+        """Erase input panel/prompts below the step list, restart live display over the step list."""
+        file = self._console.file or sys.stderr
         if self._pause_cursor_saved:
-            file = self._console.file or sys.stderr
-            file.write("\033[u")  # restore cursor position
+            file.write("\033[u")  # restore cursor to just after step list
             file.write("\033[J")  # clear from cursor to end of screen
             file.flush()
             self._pause_cursor_saved = False
+        # Count lines in the static step list so live display overwrites it
+        # (header + steps + blank + summary = len(step_names) + 3)
+        lines_up = len(self._display.step_names) + 3
+        for _ in range(lines_up):
+            file.write("\033[A")  # move cursor up
+        file.write("\r")
+        file.flush()
         self._live.start()
 
     def print_final(self) -> None:
