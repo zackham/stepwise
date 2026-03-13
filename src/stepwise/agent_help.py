@@ -71,10 +71,12 @@ def _build_flow_entries(
         if desc:
             entry["description"] = desc
         if human_steps:
-            entry["human_steps"] = [
-                {"step": hs["step"], "fields": hs["fields"]}
-                for hs in human_steps
-            ]
+            entry["human_steps"] = []
+            for hs in human_steps:
+                hs_entry: dict = {"step": hs["step"], "fields": hs["fields"]}
+                if hs.get("schema"):
+                    hs_entry["schema"] = hs["schema"]
+                entry["human_steps"].append(hs_entry)
 
         entries.append(entry)
 
@@ -178,6 +180,26 @@ def _format_compact(entries: list[dict]) -> str:
                 lines.append(f"  {' | '.join(parts)}")
 
             lines.append("")
+
+    # Typed human inputs
+    lines.extend([
+        "## Typed Human Inputs",
+        "",
+        "Human steps may declare typed output fields. When fulfilling, match the expected types:",
+        "",
+        "| Type | JSON value | Example |",
+        "|------|-----------|---------|",
+        "| `str` | string | `\"name\": \"Alice\"` |",
+        "| `text` | string (multiline) | `\"notes\": \"Line 1\\nLine 2\"` |",
+        "| `number` | number | `\"score\": 8.5` |",
+        "| `bool` | boolean | `\"approved\": true` |",
+        "| `choice` | string from options | `\"priority\": \"high\"` |",
+        "| `choice` (multiple) | array of strings | `\"tags\": [\"a\", \"b\"]` |",
+        "",
+        "Use `stepwise list --suspended --output json` to see `output_schema` for each field.",
+        "The engine validates types and returns errors — fix and retry.",
+        "",
+    ])
 
     # CLI reference
     lines.extend([
