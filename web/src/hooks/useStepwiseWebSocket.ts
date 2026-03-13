@@ -48,6 +48,14 @@ export function useStepwiseWebSocket() {
             queryClient.invalidateQueries({ queryKey: ["events", jobId] });
             queryClient.invalidateQueries({ queryKey: ["jobTree", jobId] });
           }
+        } else if (msg.type === "stale_jobs") {
+          // Stale job detection — refresh job list so UI shows stale indicators
+          queryClient.invalidateQueries({ queryKey: ["jobs"] });
+          if (msg.jobs?.length > 0) {
+            for (const stale of msg.jobs) {
+              queryClient.invalidateQueries({ queryKey: ["job", stale.id] });
+            }
+          }
         } else if (msg.type === "agent_output") {
           for (const fn of agentOutputListeners) fn(msg);
         }
