@@ -31,6 +31,7 @@ import json
 import sys
 from pathlib import Path
 
+from stepwise.io import IOAdapter, create_adapter
 from stepwise.project import (
     DOT_DIR_NAME,
     ProjectNotFoundError,
@@ -170,7 +171,7 @@ def _find_project_or_exit(args: argparse.Namespace) -> StepwiseProject:
     try:
         return find_project(start)
     except ProjectNotFoundError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        _io(args).log("error", str(e))
         sys.exit(EXIT_PROJECT_ERROR)
 
 
@@ -227,30 +228,30 @@ def _try_server(args: argparse.Namespace, fn):
 
 
 def cmd_init(args: argparse.Namespace) -> int:
+    io = _io(args)
     target = Path(args.project_dir) if args.project_dir else None
     root = (target or Path.cwd()).resolve()
 
     try:
         project = init_project(target, force=args.force)
-        print(f"Initialized Stepwise project in {project.dot_dir}")
-        print(f"  Run 'stepwise run <flow.yaml>' to execute a flow.")
+        io.log("success", f"Initialized Stepwise project in {project.dot_dir}")
+        io.log("info", "Run 'stepwise run <flow.yaml>' to execute a flow.")
     except FileExistsError:
         if args.no_skill:
-            print(f"Project already initialized in {root / DOT_DIR_NAME}. "
-                  f"Use --force to reinitialize.", file=sys.stderr)
+            io.log("error", f"Project already initialized in {root / DOT_DIR_NAME}. "
+                   f"Use --force to reinitialize.")
             return EXIT_USAGE_ERROR
-        # .stepwise/ exists but we can still handle skill installation
-        print(f"Project already initialized in {root / DOT_DIR_NAME}.")
+        io.log("info", f"Project already initialized in {root / DOT_DIR_NAME}.")
 
     # Agent skill installation
     if args.no_skill:
         return EXIT_SUCCESS
 
-    _handle_skill_install(root, args.skill)
+    _handle_skill_install(root, args.skill, io)
     return EXIT_SUCCESS
 
 
-def _handle_skill_install(root: Path, skill_target: str | None) -> None:
+def _handle_skill_install(root: Path, skill_target: str | None, io: IOAdapter) -> None:
     """Detect agent frameworks and install/update the stepwise skill."""
     from stepwise.project import (
         AGENT_FRAMEWORK_DIRS,
@@ -267,28 +268,28 @@ def _handle_skill_install(root: Path, skill_target: str | None) -> None:
         if not target_dir.exists():
             target_dir.mkdir(parents=True, exist_ok=True)
         installed = install_agent_skill(target_dir)
-        print(f"  Installed agent skill in {installed}")
+        io.log("success", f"Installed agent skill in {installed}")
         return
 
     # Report symlink detection
     for group in detection.symlinked_groups:
         names = " and ".join(loc.framework_dir for loc in group)
-        print(f"  Note: {names} are symlinked (same directory)")
+        io.log("info", f"Note: {names} are symlinked (same directory)")
 
     # Check if already installed and current
     if detection.any_installed and detection.all_current:
         installed_in = [loc for loc in detection.locations if loc.has_skill]
         dirs = ", ".join(loc.framework_dir for loc in installed_in)
-        print(f"  Agent skill already up to date in {dirs}")
+        io.log("info", f"Agent skill already up to date in {dirs}")
         return
 
     # Check if installed but outdated
     outdated = [loc for loc in detection.locations if loc.has_skill and not loc.skill_current]
     if outdated:
         for loc in outdated:
-            print(f"  Agent skill in {loc.framework_dir} is outdated, updating...")
+            io.log("info", f"Agent skill in {loc.framework_dir} is outdated, updating...")
             install_agent_skill(loc.path)
-            print(f"  Updated {loc.framework_dir}/skills/stepwise/")
+            io.log("success", f"Updated {loc.framework_dir}/skills/stepwise/")
         # If all installed locations are now handled, done
         if detection.any_installed:
             return
@@ -313,81 +314,62 @@ def _handle_skill_install(root: Path, skill_target: str | None) -> None:
 
     if not candidates:
         # No framework dirs exist — ask what to create
-        _prompt_create_framework_dir(root)
+        _prompt_create_framework_dir(root, io)
         return
 
     if len(candidates) == 1:
         framework_dir, candidate = candidates[0]
-        answer = _prompt(
-            f"  Install agent skill in {framework_dir}/skills/stepwise/? [Y/n] "
-        )
-        if answer.lower() not in ("n", "no"):
+        if io.prompt_confirm(f"Install agent skill in {framework_dir}/skills/stepwise/?"):
             installed = install_agent_skill(candidate)
-            print(f"  Installed agent skill in {installed}")
+            io.log("success", f"Installed agent skill in {installed}")
         return
 
     # Multiple candidates
-    print("  Agent skill can be installed in:")
-    for i, (framework_dir, _) in enumerate(candidates, 1):
-        print(f"    [{i}] {framework_dir}/skills/stepwise/")
-    print(f"    [a] All of the above")
-    print(f"    [s] Skip")
-
-    answer = _prompt("  Install to: ").strip().lower()
-    if answer == "s":
+    choices = [f"{fd}/skills/stepwise/" for fd, _ in candidates] + ["All of the above", "Skip"]
+    answer = io.prompt_select("Install agent skill in:", choices)
+    if answer == "Skip":
         return
-    if answer == "a":
+    if answer == "All of the above":
         for framework_dir, candidate in candidates:
             installed = install_agent_skill(candidate)
-            print(f"  Installed agent skill in {installed}")
+            io.log("success", f"Installed agent skill in {installed}")
         return
-    try:
-        idx = int(answer) - 1
-        if 0 <= idx < len(candidates):
-            framework_dir, candidate = candidates[idx]
+    # Find which candidate was selected
+    for i, (framework_dir, candidate) in enumerate(candidates):
+        if answer == f"{framework_dir}/skills/stepwise/":
             installed = install_agent_skill(candidate)
-            print(f"  Installed agent skill in {installed}")
-        else:
-            print("  Skipped agent skill installation.")
-    except ValueError:
-        print("  Skipped agent skill installation.")
+            io.log("success", f"Installed agent skill in {installed}")
+            return
 
 
-def _prompt_create_framework_dir(root: Path) -> None:
+def _prompt_create_framework_dir(root: Path, io: IOAdapter) -> None:
     """No agent framework dirs exist. Ask user what to create."""
-    print("  No agent framework directory found (.claude/ or .agents/).")
-    print("  Install agent skill for:")
-    print("    [1] Claude Code  (.claude/skills/stepwise/)")
-    print("    [2] Agents       (.agents/skills/stepwise/)")
-    print("    [3] Both")
-    print("    [s] Skip")
-
-    answer = _prompt("  Choice: ").strip().lower()
-    if answer == "s":
+    io.log("info", "No agent framework directory found (.claude/ or .agents/).")
+    choices = [
+        "Claude Code  (.claude/skills/stepwise/)",
+        "Agents       (.agents/skills/stepwise/)",
+        "Both",
+        "Skip",
+    ]
+    answer = io.prompt_select("Install agent skill for:", choices)
+    if answer.startswith("Skip"):
         return
 
     from stepwise.project import install_agent_skill
 
     targets = []
-    if answer in ("1", "3"):
+    if answer.startswith("Claude") or answer == "Both":
         targets.append(root / ".claude")
-    if answer in ("2", "3"):
+    if answer.startswith("Agents") or answer == "Both":
         targets.append(root / ".agents")
 
     for target in targets:
         installed = install_agent_skill(target)
-        print(f"  Installed agent skill in {installed}")
-
-
-def _prompt(message: str) -> str:
-    """Read user input, or return empty string if not interactive."""
-    try:
-        return input(message)
-    except (EOFError, KeyboardInterrupt):
-        return ""
+        io.log("success", f"Installed agent skill in {installed}")
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
+    io = _io(args)
     project = _find_project_or_exit(args)
 
     import os
@@ -397,7 +379,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     from stepwise.server_detect import detect_server
     existing_url = detect_server(project.dot_dir)
     if existing_url:
-        print(f"Stepwise is already running at {existing_url}")
+        io.log("info", f"Stepwise is already running at {existing_url}")
         if not args.no_open:
             _open_browser(existing_url)
         return EXIT_SUCCESS
@@ -412,15 +394,15 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     if not args.port and not _port_available(host, port):
         port = _find_free_port()
-        print(f"Port 8340 in use, using {port}", file=sys.stderr)
+        io.log("warn", f"Port 8340 in use, using {port}")
 
-    print(f"Stepwise v{_get_version()} — http://{host}:{port}")
+    io.banner(f"Stepwise v{_get_version()}", f"http://{host}:{port}")
 
     # Non-blocking upgrade check (fail silently)
     try:
         upgrade_msg = _check_for_upgrade()
         if upgrade_msg:
-            print(f"  ↑ {upgrade_msg}")
+            io.log("info", f"↑ {upgrade_msg}")
     except Exception:
         pass
 
@@ -444,22 +426,23 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
+    io = _io(args)
     from stepwise.flow_resolution import FlowResolutionError, resolve_flow
     from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
 
     try:
         flow_path = resolve_flow(args.flow, _project_dir(args))
     except FlowResolutionError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        io.log("error", str(e))
         return EXIT_USAGE_ERROR
 
     try:
         wf = load_workflow_yaml(str(flow_path))
         errors = wf.validate()
         if errors:
-            print(f"✗ {flow_path}:")
+            io.log("error", f"{flow_path}:")
             for err in errors:
-                print(f"  - {err}")
+                io.log("info", f"  - {err}")
             return EXIT_JOB_FAILED
 
         step_count = len(wf.steps)
@@ -471,29 +454,26 @@ def cmd_validate(args: argparse.Namespace) -> int:
         parts = [f"{step_count} steps"]
         if loop_count:
             parts.append(f"{loop_count} loops")
-        print(f"✓ {flow_path} ({', '.join(parts)})")
+        io.log("success", f"{flow_path} ({', '.join(parts)})")
         return EXIT_SUCCESS
     except YAMLLoadError as e:
-        print(f"✗ {flow_path}:")
+        io.log("error", f"{flow_path}:")
         for err in e.errors:
-            print(f"  - {err}")
+            io.log("info", f"  - {err}")
         return EXIT_JOB_FAILED
     except Exception as e:
-        print(f"✗ {flow_path}: {e}", file=sys.stderr)
+        io.log("error", f"{flow_path}: {e}")
         return EXIT_JOB_FAILED
 
 
 def cmd_new(args: argparse.Namespace) -> int:
     """Create a new flow directory with a minimal template."""
+    io = _io(args)
     from stepwise.flow_resolution import FLOW_DIR_MARKER, FLOW_NAME_PATTERN
 
     name = args.name
     if not FLOW_NAME_PATTERN.match(name):
-        print(
-            f"Error: Invalid flow name: '{name}'. "
-            f"Flow names must match [a-zA-Z0-9_-]+",
-            file=sys.stderr,
-        )
+        io.log("error", f"Invalid flow name: '{name}'. Flow names must match [a-zA-Z0-9_-]+")
         return EXIT_USAGE_ERROR
 
     project_dir = Path(args.project_dir).resolve() if args.project_dir else Path.cwd().resolve()
@@ -501,7 +481,7 @@ def cmd_new(args: argparse.Namespace) -> int:
     flow_dir = flows_dir / name
 
     if flow_dir.exists():
-        print(f"Error: Directory already exists: {flow_dir}", file=sys.stderr)
+        io.log("error", f"Directory already exists: {flow_dir}")
         return EXIT_USAGE_ERROR
 
     flow_dir.mkdir(parents=True)
@@ -516,13 +496,14 @@ def cmd_new(args: argparse.Namespace) -> int:
     )
     (flow_dir / FLOW_DIR_MARKER).write_text(template)
 
-    print(f"Created flows/{name}/{FLOW_DIR_MARKER}")
-    print(f"  Edit: {flow_dir / FLOW_DIR_MARKER}")
-    print(f"  Run:  stepwise run {name}")
+    io.log("success", f"Created flows/{name}/{FLOW_DIR_MARKER}")
+    io.log("info", f"Edit: {flow_dir / FLOW_DIR_MARKER}")
+    io.log("info", f"Run:  stepwise run {name}")
     return EXIT_SUCCESS
 
 
 def cmd_templates(args: argparse.Namespace) -> int:
+    io = _io(args)
     # Bundled templates
     bundled_dir = get_bundled_templates_dir()
     bundled = []
@@ -531,12 +512,12 @@ def cmd_templates(args: argparse.Namespace) -> int:
             if f.suffix in (".yaml", ".yml", ".json"):
                 bundled.append(f.stem)
 
-    print("BUILT-IN:")
+    io.log("info", "BUILT-IN:")
     if bundled:
         for name in bundled:
-            print(f"  {name}")
+            io.log("info", f"  {name}")
     else:
-        print("  (none)")
+        io.log("info", "  (none)")
 
     # Project templates
     try:
@@ -547,15 +528,15 @@ def cmd_templates(args: argparse.Namespace) -> int:
                 if f.suffix in (".yaml", ".yml", ".json"):
                     user_templates.append(f.stem)
 
-        print("\nPROJECT:")
+        io.log("info", "PROJECT:")
         if user_templates:
             for name in user_templates:
-                print(f"  {name}")
+                io.log("info", f"  {name}")
         else:
-            print("  (none — save templates via the web UI)")
+            io.log("info", "  (none — save templates via the web UI)")
     except ProjectNotFoundError:
-        print("\nPROJECT:")
-        print("  (no project — run 'stepwise init' first)")
+        io.log("info", "PROJECT:")
+        io.log("info", "  (no project — run 'stepwise init' first)")
 
     return EXIT_SUCCESS
 
@@ -592,7 +573,7 @@ def cmd_config(args: argparse.Namespace) -> int:
             return EXIT_USAGE_ERROR
 
         save_config(config)
-        print(f"✓ Set {args.key}")
+        _io(args).log("success", f"Set {args.key}")
         return EXIT_SUCCESS
 
     elif action == "get":
@@ -655,8 +636,10 @@ def cmd_check(args: argparse.Namespace) -> int:
         else:
             label_sources[name] = "project"
 
-    print(f"\n  Flow: {flow_path.name}\n")
+    io = _io(args)
+    io.log("info", f"Flow: {flow_path.name}")
 
+    rows = []
     providers_needed: set[str] = set()
     for step_name, step_def in steps.items():
         if not isinstance(step_def, dict):
@@ -672,26 +655,27 @@ def cmd_check(args: argparse.Namespace) -> int:
 
         if model_ref in all_labels:
             source = label_sources.get(model_ref, "default")
-            print(f"  Step: {step_name:20s} model: {model_ref} → {resolved} (source: {source})")
+            rows.append([step_name, model_ref, resolved, source])
         else:
-            print(f"  Step: {step_name:20s} model: {resolved} (pinned)")
+            rows.append([step_name, resolved, resolved, "pinned"])
 
         if "/" in resolved:
             providers_needed.add(resolved.split("/")[0])
 
+    if rows:
+        io.table(["STEP", "MODEL", "RESOLVED", "SOURCE"], rows)
+
     # Check API keys
-    print()
-    key_status = []
+    key_parts = []
     if cfg.openrouter_api_key:
-        key_status.append("openrouter ✓")
+        key_parts.append("openrouter ✓")
     else:
-        key_status.append("openrouter ✗")
+        key_parts.append("openrouter ✗")
     if cfg.anthropic_api_key:
-        key_status.append("anthropic ✓")
+        key_parts.append("anthropic ✓")
     else:
-        key_status.append("anthropic ✗")
-    print(f"  Provider keys: {' | '.join(key_status)}")
-    print()
+        key_parts.append("anthropic ✗")
+    io.log("info", f"Provider keys: {' | '.join(key_parts)}")
 
     return EXIT_SUCCESS
 
@@ -1045,18 +1029,20 @@ def cmd_jobs(args: argparse.Namespace) -> int:
             return EXIT_SUCCESS
 
         # Table format
+        io = _io(args)
         if not jobs:
-            print("No jobs found.")
+            io.log("info", "No jobs found.")
             return EXIT_SUCCESS
 
-        print(f"{'ID':<16} {'STATUS':<12} {'OBJECTIVE':<24} {'STEPS':<8} {'CREATED'}")
+        rows = []
         for j in jobs:
             runs = store.runs_for_job(j.id)
             completed = sum(1 for r in runs if r.status.value == "completed")
             total = len(j.workflow.steps)
             obj = (j.objective or "")[:23]
             created = _relative_time(j.created_at) if j.created_at else ""
-            print(f"{j.id:<16} {j.status.value:<12} {obj:<24} {completed}/{total:<5} {created}")
+            rows.append([j.id, j.status.value, obj, f"{completed}/{total}", created])
+        io.table(["ID", "STATUS", "OBJECTIVE", "STEPS", "CREATED"], rows)
 
         return EXIT_SUCCESS
     finally:
@@ -1094,48 +1080,31 @@ def cmd_status(args: argparse.Namespace) -> int:
             return EXIT_SUCCESS
 
         # Table format
-        print(f"Job: {job.id}")
-        print(f"Status: {job.status.value}")
-        print(f"Objective: {job.objective}")
+        io = _io(args)
+        info = f"Job: {job.id}\nStatus: {job.status.value}\nObjective: {job.objective}"
         if job.created_at:
-            print(f"Created: {_relative_time(job.created_at)}")
-        print()
-        print("Steps:")
+            info += f"\nCreated: {_relative_time(job.created_at)}"
+        io.note(info, title="Job Details")
 
         # Group runs by step, show latest
         step_runs: dict[str, list] = {}
         for r in runs:
             step_runs.setdefault(r.step_name, []).append(r)
 
-        status_icons = {
-            "completed": "✓",
-            "failed": "✗",
-            "running": "⠋",
-            "suspended": "◆",
-            "delegated": "↗",
-        }
-
         for step_name in job.workflow.steps:
             step_def = job.workflow.steps[step_name]
-            executor_type = step_def.executor.type
             step_r = step_runs.get(step_name, [])
             if step_r:
                 latest = step_r[-1]
-                icon = status_icons.get(latest.status.value, "○")
                 status_str = latest.status.value
-                extra = f"  {executor_type}"
+                duration = None
+                cost = None
                 if latest.started_at and latest.completed_at:
-                    dur = (latest.completed_at - latest.started_at).total_seconds()
-                    cost = store.accumulated_cost(latest.id)
-                    extra += f"   ({dur:.1f}s"
-                    if cost:
-                        extra += f", ${cost:.3f}"
-                    extra += ")"
-                elif latest.status.value == "suspended":
-                    extra += "   waiting for input..."
-                print(f"  {icon} {step_name:<16} {status_str:<12}{extra}")
+                    duration = (latest.completed_at - latest.started_at).total_seconds()
+                    cost = store.accumulated_cost(latest.id) or None
+                io.step_status(step_name, status_str, duration=duration, cost=cost)
             else:
-                print(f"  ○ {step_name:<16} pending")
+                io.step_status(step_name, "waiting")
 
         return EXIT_SUCCESS
     finally:
@@ -1205,7 +1174,7 @@ def cmd_cancel(args: argparse.Namespace) -> int:
             }, indent=2, default=str))
         else:
             engine.cancel_job(args.job_id)
-            print(f"✓ Cancelled {args.job_id}")
+            _io(args).log("success", f"Cancelled {args.job_id}")
 
         return EXIT_SUCCESS
     finally:
@@ -1319,13 +1288,15 @@ def cmd_list(args: argparse.Namespace) -> int:
         if getattr(args, "output", None) == "json":
             print(json.dumps({"suspended_steps": items, "count": len(items)}, indent=2, default=str))
         else:
+            io = _io(args)
             if not items:
-                print("No suspended steps.")
+                io.log("info", "No suspended steps.")
             else:
-                print(f"{'RUN ID':<16} {'FLOW':<20} {'STEP':<16} {'AGE'}")
+                rows = []
                 for item in items:
                     age = _format_age(item["age_seconds"])
-                    print(f"{item['run_id']:<16} {item['flow_name']:<20} {item['step_name']:<16} {age}")
+                    rows.append([item["run_id"], item["flow_name"], item["step_name"], age])
+                io.table(["RUN ID", "FLOW", "STEP", "AGE"], rows)
 
         return EXIT_SUCCESS
     finally:
@@ -1424,10 +1395,11 @@ def cmd_get(args: argparse.Namespace) -> int:
         origin=origin,
     )
 
+    io = _io(args)
     file_count = len(bundle_files) if bundle_files else 0
     file_msg = f" + {file_count} file(s)" if file_count else ""
-    print(f"✓ Downloaded {target_dir}/{file_msg} ({steps} steps, by {author}, {downloads:,} downloads)")
-    print(f"  Run: stepwise run {flow_path}")
+    io.log("success", f"Downloaded {target_dir}/{file_msg} ({steps} steps, by {author}, {downloads:,} downloads)")
+    io.log("info", f"Run: stepwise run {flow_path}")
     return EXIT_SUCCESS
 
 
@@ -1457,11 +1429,12 @@ def cmd_share(args: argparse.Namespace) -> int:
         print(f"Error: Validation failed: {e}", file=sys.stderr)
         return EXIT_USAGE_ERROR
 
+    io = _io(args)
     yaml_content = flow_path.read_text()
     author = getattr(args, "author", None)
     do_update = getattr(args, "update", False)
 
-    print(f"Validating {flow_path}... ✓ ({len(wf.steps)} steps)")
+    io.log("success", f"Validated {flow_path} ({len(wf.steps)} steps)")
 
     # Collect bundle files if this is a directory flow
     bundle_files: dict[str, str] | None = None
@@ -1470,17 +1443,16 @@ def cmd_share(args: argparse.Namespace) -> int:
         try:
             bundle_files = collect_bundle(flow_path.parent)
         except BundleError as e:
-            print(f"Error: {e}", file=sys.stderr)
+            io.log("error", str(e))
             return EXIT_USAGE_ERROR
 
         if bundle_files:
-            print(f"Bundling {len(bundle_files)} co-located file(s):")
+            io.log("info", f"Bundling {len(bundle_files)} co-located file(s):")
             for rel_path in sorted(bundle_files):
                 size = len(bundle_files[rel_path].encode("utf-8"))
-                print(f"  {rel_path} ({size:,} bytes)")
-            answer = _prompt("Proceed? [Y/n] ")
-            if answer.strip().lower() in ("n", "no"):
-                print("Cancelled.")
+                io.log("info", f"  {rel_path} ({size:,} bytes)")
+            if not io.prompt_confirm("Proceed?"):
+                io.log("info", "Cancelled.")
                 return EXIT_SUCCESS
 
     try:
@@ -1491,18 +1463,18 @@ def cmd_share(args: argparse.Namespace) -> int:
             import re
             slug = re.sub(r"[^a-z0-9]+", "-", name.lower().strip()).strip("-")
             result = update_flow(slug, yaml_content)
-            print(f"✓ Updated: {result.get('url', slug)}")
+            io.log("success", f"Updated: {result.get('url', slug)}")
         else:
             result = publish_flow(yaml_content, author=author, files=bundle_files)
             slug = result.get("slug", "")
             file_msg = f" + {len(bundle_files)} file(s)" if bundle_files else ""
-            print(f"Publishing as \"{result.get('name', '')}\" by {result.get('author', 'anonymous')}...")
-            print(f"✓ Published: {result.get('url', '')}{file_msg}")
-            print(f"  Get: stepwise get {slug}")
+            io.log("info", f"Publishing as \"{result.get('name', '')}\" by {result.get('author', 'anonymous')}...")
+            io.log("success", f"Published: {result.get('url', '')}{file_msg}")
+            io.log("info", f"Get: stepwise get {slug}")
             if result.get("update_token"):
-                print(f"  Token saved to ~/.config/stepwise/tokens.json")
+                io.log("info", "Token saved to ~/.config/stepwise/tokens.json")
     except RegistryError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        io.log("error", str(e))
         return EXIT_USAGE_ERROR
 
     return EXIT_SUCCESS
@@ -1524,8 +1496,9 @@ def cmd_search(args: argparse.Namespace) -> int:
         return EXIT_USAGE_ERROR
 
     flows = result.get("flows", [])
+    io = _io(args)
     if not flows:
-        print("No flows found.")
+        io.log("info", "No flows found.")
         return EXIT_SUCCESS
 
     if output == "json":
@@ -1533,14 +1506,21 @@ def cmd_search(args: argparse.Namespace) -> int:
         return EXIT_SUCCESS
 
     # Table output
-    print(f"{'NAME':<25} {'AUTHOR':<12} {'STEPS':>5}  {'DOWNLOADS':>9}  TAGS")
+    rows = []
     for f in flows:
         tags = ", ".join(f.get("tags", []))
-        print(f"{f['slug']:<25} {f.get('author', '?'):<12} {f.get('steps', '?'):>5}  {f.get('downloads', 0):>9,}  {tags}")
+        rows.append([
+            f["slug"],
+            f.get("author", "?"),
+            str(f.get("steps", "?")),
+            f"{f.get('downloads', 0):,}",
+            tags,
+        ])
+    io.table(["NAME", "AUTHOR", "STEPS", "DOWNLOADS", "TAGS"], rows)
 
     total = result.get("total", len(flows))
     if total > len(flows):
-        print(f"\nShowing {len(flows)} of {total} flows")
+        io.log("info", f"Showing {len(flows)} of {total} flows")
     return EXIT_SUCCESS
 
 
@@ -1559,26 +1539,29 @@ def cmd_info(args: argparse.Namespace) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return EXIT_USAGE_ERROR
 
-    print(f"Name:        {data.get('name', '?')}")
-    print(f"Author:      {data.get('author', '?')}")
-    print(f"Version:     {data.get('version', '?')}")
-    print(f"Description: {data.get('description', '')}")
+    io = _io(args)
     tags = ", ".join(data.get("tags", []))
-    print(f"Tags:        {tags or '(none)'}")
-    print(f"Downloads:   {data.get('downloads', 0):,}")
-    print(f"Published:   {data.get('created_at', '?')}")
-    print(f"URL:         {data.get('url', '?')}")
-
-    # Show steps summary
     executors = data.get("executor_types", [])
     steps = data.get("steps", 0)
     loops = data.get("loops", 0)
-    print(f"\nSteps:       {steps}")
-    if loops:
-        print(f"Loops:       {loops}")
-    if executors:
-        print(f"Executors:   {', '.join(executors)}")
 
+    lines = [
+        f"Name:        {data.get('name', '?')}",
+        f"Author:      {data.get('author', '?')}",
+        f"Version:     {data.get('version', '?')}",
+        f"Description: {data.get('description', '')}",
+        f"Tags:        {tags or '(none)'}",
+        f"Downloads:   {data.get('downloads', 0):,}",
+        f"Published:   {data.get('created_at', '?')}",
+        f"URL:         {data.get('url', '?')}",
+        f"Steps:       {steps}",
+    ]
+    if loops:
+        lines.append(f"Loops:       {loops}")
+    if executors:
+        lines.append(f"Executors:   {', '.join(executors)}")
+
+    io.note("\n".join(lines), title=data.get("name", "Flow Info"))
     return EXIT_SUCCESS
 
 
@@ -1973,8 +1956,9 @@ def cmd_self_update(args: argparse.Namespace) -> int:
         "pip": [sys.executable, "-m", "pip", "install", "--upgrade", GIT_URL],
     }
 
+    io = _io(args)
     cmd = upgrade_cmds[method]
-    print(f"Upgrading via {method}...")
+    io.log("info", f"Upgrading via {method}...")
 
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -2007,20 +1991,17 @@ def cmd_self_update(args: argparse.Namespace) -> int:
         pass
 
     if new_version == old_version:
-        print(f"Already up to date (v{old_version}).")
+        io.log("success", f"Already up to date (v{old_version}).")
         return EXIT_SUCCESS
 
-    print(f"\nUpdated: v{old_version} → v{new_version}\n")
+    io.log("success", f"Updated: v{old_version} → v{new_version}")
 
     # Show what changed
     changelog = _fetch_changelog_sections(old_version, new_version)
     if changelog:
-        print("What's new:")
-        print("─" * 60)
-        print(changelog)
-        print("─" * 60)
+        io.note(changelog, title="What's new")
     elif old_version != new_version:
-        print("Run `stepwise changelog` or see CHANGELOG.md for details.")
+        io.log("info", "Run `stepwise changelog` or see CHANGELOG.md for details.")
 
     return EXIT_SUCCESS
 
@@ -2225,9 +2206,19 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _io(args: argparse.Namespace) -> IOAdapter:
+    """Get the IOAdapter from args (created in main())."""
+    return getattr(args, "_adapter", create_adapter())
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # Create adapter early, attach to args for all commands
+    args._adapter = create_adapter(
+        quiet=getattr(args, "quiet", False),
+    )
 
     if args.version:
         print(f"stepwise {_get_version()}")

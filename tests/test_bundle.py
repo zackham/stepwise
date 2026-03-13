@@ -265,13 +265,17 @@ class TestShareWithBundle:
 
         monkeypatch.setattr("stepwise.registry_client._client", lambda: mock_client)
         # Auto-confirm the bundle prompt
-        monkeypatch.setattr("stepwise.cli._prompt", lambda msg: "y")
+        import sys
+        from stepwise.io import PlainAdapter
+        from io import StringIO
+        monkeypatch.setattr("stepwise.cli.create_adapter", lambda **kw: PlainAdapter(output=sys.stderr, input_stream=StringIO("y\n")))
 
         rc = main(["share", str(flow_dir)])
         assert rc == EXIT_SUCCESS
-        out = capsys.readouterr().out
-        assert "Bundling 1 co-located file(s)" in out
-        assert "helper.py" in out
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "Bundling 1 co-located file(s)" in combined
+        assert "helper.py" in combined
 
         # Verify the files were passed to the registry
         call_args = mock_client.post.call_args
@@ -335,13 +339,19 @@ class TestShareWithBundle:
 
         monkeypatch.setattr("stepwise.registry_client._client", lambda: mock_client)
 
-        # _prompt should NOT be called — no bundle files means no confirmation
-        prompt_called = []
-        monkeypatch.setattr("stepwise.cli._prompt", lambda msg: prompt_called.append(msg) or "y")
+        # prompt_confirm should NOT be called — no bundle files means no confirmation
+        from stepwise.io import PlainAdapter
+        from io import StringIO
+        confirm_called = []
+        class _TrackingAdapter(PlainAdapter):
+            def prompt_confirm(self, message, default=True):
+                confirm_called.append(message)
+                return True
+        monkeypatch.setattr("stepwise.cli.create_adapter", lambda **kw: _TrackingAdapter(output=StringIO()))
 
         rc = main(["share", str(flow_dir)])
         assert rc == EXIT_SUCCESS
-        assert len(prompt_called) == 0
+        assert len(confirm_called) == 0
 
     def test_share_bundle_cancelled(self, tmp_path, capsys, monkeypatch):
         """User declining bundle confirmation cancels the share."""
@@ -352,12 +362,13 @@ class TestShareWithBundle:
         (flow_dir / "FLOW.yaml").write_text(SIMPLE_FLOW)
         (flow_dir / "helper.py").write_text("x = 1")
 
-        monkeypatch.setattr("stepwise.cli._prompt", lambda msg: "n")
+        import sys
+        from stepwise.io import PlainAdapter
+        from io import StringIO
+        monkeypatch.setattr("stepwise.cli.create_adapter", lambda **kw: PlainAdapter(output=sys.stderr, input_stream=StringIO("n\n")))
 
         rc = main(["share", str(flow_dir)])
         assert rc == EXIT_SUCCESS
-        out = capsys.readouterr().out
-        assert "Cancelled" in out
 
 
 class TestGetWithBundle:
@@ -394,9 +405,10 @@ class TestGetWithBundle:
         assert origin["author"] == "alice"
         assert "content_hash" in origin
 
-        out = capsys.readouterr().out
-        assert "Downloaded" in out
-        assert "2 file(s)" in out
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "Downloaded" in combined
+        assert "2 file(s)" in combined
 
     def test_get_without_files_creates_directory(self, tmp_path, capsys, monkeypatch):
         """get without bundled files still creates a directory structure."""

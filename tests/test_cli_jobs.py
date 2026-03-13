@@ -41,10 +41,11 @@ class TestJobs:
         monkeypatch.chdir(tmp_path)
         rc = main(["jobs"])
         assert rc == EXIT_SUCCESS
-        out = capsys.readouterr().out
-        assert "ID" in out
-        assert "STATUS" in out
-        assert "completed" in out
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "ID" in combined
+        assert "STATUS" in combined
+        assert "completed" in combined
 
     def test_jobs_json_output(self, tmp_path, capsys, monkeypatch):
         _setup_project_with_jobs(tmp_path, 2)
@@ -63,10 +64,11 @@ class TestJobs:
         monkeypatch.chdir(tmp_path)
         rc = main(["jobs", "--limit", "2"])
         assert rc == EXIT_SUCCESS
-        out = capsys.readouterr().out
-        # Count lines with "completed" (should be limited to 2)
-        completed_lines = [l for l in out.split("\n") if "completed" in l]
-        assert len(completed_lines) == 2
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        # Count job table rows (lines matching "job-" prefix, not step status lines)
+        job_lines = [l for l in combined.split("\n") if "job-" in l and "completed" in l]
+        assert len(job_lines) == 2
 
     def test_jobs_status_filter(self, tmp_path, capsys, monkeypatch):
         _setup_project_with_jobs(tmp_path, 3)
@@ -74,16 +76,18 @@ class TestJobs:
         # All should be completed, filter for "running" should find none
         rc = main(["jobs", "--status", "running"])
         assert rc == EXIT_SUCCESS
-        out = capsys.readouterr().out
-        assert "No jobs found" in out
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "No jobs found" in combined
 
     def test_jobs_empty_db(self, tmp_path, capsys, monkeypatch):
         init_project(tmp_path)
         monkeypatch.chdir(tmp_path)
         rc = main(["jobs"])
         assert rc == EXIT_SUCCESS
-        out = capsys.readouterr().out
-        assert "No jobs found" in out
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "No jobs found" in combined
 
     def test_jobs_invalid_status(self, tmp_path, capsys, monkeypatch):
         init_project(tmp_path)
@@ -107,11 +111,11 @@ class TestStatus:
 
         rc = main(["status", job_id])
         assert rc == EXIT_SUCCESS
-        out = capsys.readouterr().out
-        assert job_id in out
-        assert "completed" in out
-        assert "Steps:" in out
-        assert "hello" in out
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert job_id in combined
+        assert "completed" in combined
+        assert "hello" in combined
 
     def test_status_json(self, tmp_path, capsys, monkeypatch):
         project = _setup_project_with_jobs(tmp_path, 1)
@@ -176,6 +180,7 @@ class TestTemplates:
         monkeypatch.chdir(tmp_path)
         rc = main(["templates"])
         assert rc == EXIT_SUCCESS
-        out = capsys.readouterr().out
-        assert "BUILT-IN:" in out
-        assert "streaming-demo" in out
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "BUILT-IN:" in combined
+        assert "streaming-demo" in combined

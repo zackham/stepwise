@@ -246,8 +246,9 @@ class TestNewCommand:
         content = marker.read_text()
         assert "name: my-flow" in content
         assert "hello from my-flow" in content
-        out = capsys.readouterr().out
-        assert "Created" in out
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "Created" in combined
 
     def test_existing_directory_errors(self, tmp_path, capsys, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -291,8 +292,9 @@ steps:
         self._setup_project(tmp_path)
         rc = main(["--project-dir", str(tmp_path), "validate", "greet"])
         assert rc == EXIT_SUCCESS
-        out = capsys.readouterr().out
-        assert "1 steps" in out
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "1 steps" in combined
 
     def test_schema_by_name(self, tmp_path, capsys, monkeypatch):
         monkeypatch.chdir(tmp_path)

@@ -81,8 +81,9 @@ class TestFlowGet:
         )
         rc = main(["get", "downloaded"])
         assert rc == EXIT_SUCCESS
-        out = capsys.readouterr().out
-        assert "downloaded" in out.lower()
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "downloaded" in combined.lower()
         assert (tmp_path / "flows" / "downloaded" / "FLOW.yaml").exists()
 
     def test_get_yml_extension_accepted(self, tmp_path, capsys, monkeypatch):
@@ -130,8 +131,9 @@ class TestFlowShare:
 
         rc = main(["share", str(flow)])
         assert rc == EXIT_SUCCESS
-        out = capsys.readouterr().out
-        assert "downloaded" in out.lower()
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "downloaded" in combined.lower()
 
     def test_share_missing_file(self, tmp_path, capsys, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -174,5 +176,6 @@ class TestFlowSearch:
 
         rc = main(["search", "pr", "review"])
         assert rc == EXIT_SUCCESS
-        out = capsys.readouterr().out
-        assert "pr-review" in out.lower()
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "pr-review" in combined.lower()

@@ -39,8 +39,9 @@ class TestInit:
         rc = main(["--project-dir", str(tmp_path), "init", "--no-skill"])
         assert rc == EXIT_SUCCESS
         assert (tmp_path / DOT_DIR_NAME).is_dir()
-        out = capsys.readouterr().out
-        assert "Initialized" in out
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "Initialized" in combined
 
     def test_init_force(self, tmp_path, capsys):
         main(["--project-dir", str(tmp_path), "init", "--no-skill"])
@@ -61,17 +62,19 @@ class TestInit:
         rc = main(["--project-dir", str(tmp_path), "init", "--skill", ".claude"])
         assert rc == EXIT_SUCCESS
         assert (tmp_path / ".claude" / "skills" / "stepwise" / "SKILL.md").exists()
-        out = capsys.readouterr().out
-        assert "already initialized" in out.lower()
-        assert "Installed agent skill" in out
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "already initialized" in combined.lower()
+        assert "Installed agent skill" in combined
 
     def test_init_with_skill_target(self, tmp_path, capsys):
         rc = main(["--project-dir", str(tmp_path), "init", "--skill", ".claude"])
         assert rc == EXIT_SUCCESS
         assert (tmp_path / ".claude" / "skills" / "stepwise" / "SKILL.md").exists()
         assert (tmp_path / ".claude" / "skills" / "stepwise" / "FLOW_REFERENCE.md").exists()
-        out = capsys.readouterr().out
-        assert "Installed agent skill" in out
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "Installed agent skill" in combined
 
     def test_init_skill_auto_detect_existing_dir(self, tmp_path, capsys, monkeypatch):
         """When .agents/ exists, --skill .agents installs there."""
@@ -97,9 +100,10 @@ steps:
 """)
         rc = main(["validate", str(flow)])
         assert rc == EXIT_SUCCESS
-        out = capsys.readouterr().out
-        assert "✓" in out
-        assert "1 steps" in out
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "✓" in combined
+        assert "1 steps" in combined
 
     def test_invalid_flow_missing_file(self, tmp_path, capsys):
         rc = main(["validate", str(tmp_path / "nonexistent.yaml")])
@@ -132,9 +136,10 @@ class TestTemplates:
         monkeypatch.chdir(tmp_path)
         rc = main(["templates"])
         assert rc == EXIT_SUCCESS
-        out = capsys.readouterr().out
-        assert "BUILT-IN:" in out
-        assert "PROJECT:" in out
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "BUILT-IN:" in combined
+        assert "PROJECT:" in combined
 
     def test_templates_with_project(self, tmp_path, capsys, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -143,8 +148,9 @@ class TestTemplates:
         (tmp_path / DOT_DIR_NAME / "templates" / "my-flow.yaml").write_text("name: my-flow\nsteps: {}")
         rc = main(["templates"])
         assert rc == EXIT_SUCCESS
-        out = capsys.readouterr().out
-        assert "my-flow" in out
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "my-flow" in combined
 
 
 class TestConfig:
