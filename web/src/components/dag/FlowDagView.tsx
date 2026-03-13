@@ -399,6 +399,7 @@ export function FlowDagView({
               <HumanInputPanel
                 prompt={watchProps.prompt}
                 outputs={watchProps.outputs}
+                outputSchema={watchProps.outputSchema}
                 onSubmit={(payload) => onFulfillWatch(run.id, payload)}
                 isPending={isFulfilling ?? false}
               />

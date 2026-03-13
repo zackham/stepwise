@@ -11,7 +11,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import type { StepRun } from "@/lib/types";
+import type { StepRun, OutputSchema } from "@/lib/types";
+import { TypedField } from "@/components/dag/TypedField";
+import { validateAll } from "@/lib/validate-fields";
 
 interface FulfillWatchDialogProps {
   open: boolean;
@@ -29,7 +31,21 @@ export function FulfillWatchDialog({
   isPending,
 }: FulfillWatchDialogProps) {
   const outputs = run.watch?.fulfillment_outputs ?? [];
-  const [values, setValues] = useState<Record<string, string>>({});
+  const outputSchema = run.watch?.output_schema as OutputSchema | undefined;
+  const hasSchema = outputSchema && Object.keys(outputSchema).length > 0;
+
+  const [values, setValues] = useState<Record<string, unknown>>(() => {
+    const initial: Record<string, unknown> = {};
+    if (outputSchema) {
+      for (const [name, spec] of Object.entries(outputSchema)) {
+        if (spec.default !== undefined) {
+          initial[name] = spec.default;
+        }
+      }
+    }
+    return initial;
+  });
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const [jsonMode, setJsonMode] = useState(false);
   const [jsonInput, setJsonInput] = useState("{}");
   const [jsonError, setJsonError] = useState<string | null>(null);
@@ -51,14 +67,28 @@ export function FulfillWatchDialog({
         setJsonError("Invalid JSON");
       }
     } else {
+      if (hasSchema) {
+        const validationErrors = validateAll(values, outputs, outputSchema);
+        if (Object.keys(validationErrors).length > 0) {
+          setErrors(validationErrors);
+          return;
+        }
+        setErrors({});
+      }
+
       const payload: Record<string, unknown> = {};
       for (const key of outputs) {
-        const val = values[key] ?? "";
-        // Try to parse as JSON first
-        try {
-          payload[key] = JSON.parse(val);
-        } catch {
-          payload[key] = val;
+        const val = values[key];
+        if (val !== undefined && val !== null) {
+          if (!hasSchema && typeof val === "string") {
+            try {
+              payload[key] = JSON.parse(val);
+            } catch {
+              payload[key] = val;
+            }
+          } else {
+            payload[key] = val;
+          }
         }
       }
       onFulfill(payload);
@@ -105,22 +135,39 @@ export function FulfillWatchDialog({
                 arbitrary data.
               </div>
             ) : (
-              outputs.map((field) => (
-                <div key={field} className="space-y-1">
-                  <Label className="text-sm">{field}</Label>
-                  <Input
-                    value={values[field] ?? ""}
-                    onChange={(e) =>
-                      setValues((prev) => ({
-                        ...prev,
-                        [field]: e.target.value,
-                      }))
-                    }
-                    placeholder={`Value for ${field}`}
-                    className="font-mono text-sm"
-                  />
-                </div>
-              ))
+              outputs.map((field) => {
+                const fieldSchema = outputSchema?.[field];
+                if (fieldSchema) {
+                  return (
+                    <TypedField
+                      key={field}
+                      name={field}
+                      schema={fieldSchema}
+                      value={values[field]}
+                      onChange={(val) =>
+                        setValues((prev) => ({ ...prev, [field]: val }))
+                      }
+                      error={errors[field]}
+                    />
+                  );
+                }
+                return (
+                  <div key={field} className="space-y-1">
+                    <Label className="text-sm">{field}</Label>
+                    <Input
+                      value={(values[field] as string) ?? ""}
+                      onChange={(e) =>
+                        setValues((prev) => ({
+                          ...prev,
+                          [field]: e.target.value,
+                        }))
+                      }
+                      placeholder={`Value for ${field}`}
+                      className="font-mono text-sm"
+                    />
+                  </div>
+                );
+              })
             )}
           </div>
         )}

@@ -1,12 +1,16 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Send, Loader2 } from "lucide-react";
-import type { WatchSpec } from "@/lib/types";
+import type { WatchSpec, OutputSchema } from "@/lib/types";
+import { TypedField } from "./TypedField";
+import { validateAll } from "@/lib/validate-fields";
 
 interface HumanInputPanelProps {
   prompt: string;
   outputs: string[];
+  outputSchema?: OutputSchema;
   onSubmit: (payload: Record<string, unknown>) => void;
   isPending: boolean;
+  submitError?: string;
 }
 
 function AutoTextarea({
@@ -53,31 +57,71 @@ function AutoTextarea({
 export function HumanInputPanel({
   prompt,
   outputs,
+  outputSchema,
   onSubmit,
   isPending,
+  submitError,
 }: HumanInputPanelProps) {
-  const [values, setValues] = useState<Record<string, string>>({});
+  const [values, setValues] = useState<Record<string, unknown>>(() => {
+    // Initialize defaults from schema
+    const initial: Record<string, unknown> = {};
+    if (outputSchema) {
+      for (const [name, spec] of Object.entries(outputSchema)) {
+        if (spec.default !== undefined) {
+          initial[name] = spec.default;
+        }
+      }
+    }
+    return initial;
+  });
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const firstInputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     firstInputRef.current?.focus();
   }, []);
 
+  const hasSchema = outputSchema && Object.keys(outputSchema).length > 0;
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (hasSchema) {
+      const validationErrors = validateAll(values, outputs, outputSchema);
+      if (Object.keys(validationErrors).length > 0) {
+        setErrors(validationErrors);
+        return;
+      }
+      setErrors({});
+    }
+
     const payload: Record<string, unknown> = {};
     for (const key of outputs) {
-      const val = values[key] ?? "";
-      try {
-        payload[key] = JSON.parse(val);
-      } catch {
-        payload[key] = val;
+      const val = values[key];
+      if (val !== undefined && val !== null) {
+        // For untyped fields that are strings, try JSON parse
+        if (!hasSchema && typeof val === "string") {
+          try {
+            payload[key] = JSON.parse(val);
+          } catch {
+            payload[key] = val;
+          }
+        } else {
+          payload[key] = val;
+        }
       }
     }
     onSubmit(payload);
   };
 
-  const hasValues = outputs.length === 0 || outputs.some((k) => (values[k] ?? "").trim());
+  const hasValues =
+    outputs.length === 0 ||
+    outputs.some((k) => {
+      const v = values[k];
+      if (v === undefined || v === null) return false;
+      if (typeof v === "string") return v.trim().length > 0;
+      return true;
+    });
 
   const textareaClass =
     "w-full min-h-[32px] rounded-md border border-zinc-700 bg-zinc-800/80 px-2.5 py-1.5 text-sm text-foreground placeholder:text-zinc-600 focus:outline-none focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/20 transition-colors";
@@ -108,28 +152,50 @@ export function HumanInputPanel({
         {/* Fields */}
         {outputs.length > 0 ? (
           <div className="space-y-2">
-            {outputs.map((field, i) => (
-              <div key={field}>
-                <label className="block text-[10px] font-medium text-zinc-500 uppercase tracking-wide mb-1">
-                  {field}
-                </label>
-                <AutoTextarea
-                  inputRef={i === 0 ? firstInputRef : undefined}
-                  value={values[field] ?? ""}
-                  onChange={(e) =>
-                    setValues((prev) => ({ ...prev, [field]: e.target.value }))
-                  }
-                  onKeyDown={handleKeyDown}
-                  placeholder={field}
-                  className={textareaClass + " font-mono"}
-                />
-              </div>
-            ))}
+            {outputs.map((field, i) => {
+              const fieldSchema = outputSchema?.[field];
+              if (fieldSchema) {
+                return (
+                  <TypedField
+                    key={field}
+                    name={field}
+                    schema={fieldSchema}
+                    value={values[field]}
+                    onChange={(val) =>
+                      setValues((prev) => ({ ...prev, [field]: val }))
+                    }
+                    error={errors[field]}
+                    autoFocus={i === 0}
+                  />
+                );
+              }
+              // Fallback: untyped textarea
+              return (
+                <div key={field}>
+                  <label className="block text-[10px] font-medium text-zinc-500 uppercase tracking-wide mb-1">
+                    {field}
+                  </label>
+                  <AutoTextarea
+                    inputRef={i === 0 ? firstInputRef : undefined}
+                    value={(values[field] as string) ?? ""}
+                    onChange={(e) =>
+                      setValues((prev) => ({
+                        ...prev,
+                        [field]: e.target.value,
+                      }))
+                    }
+                    onKeyDown={handleKeyDown}
+                    placeholder={field}
+                    className={textareaClass + " font-mono"}
+                  />
+                </div>
+              );
+            })}
           </div>
         ) : (
           <AutoTextarea
             inputRef={firstInputRef}
-            value={values["_response"] ?? ""}
+            value={(values["_response"] as string) ?? ""}
             onChange={(e) =>
               setValues((prev) => ({ ...prev, _response: e.target.value }))
             }
@@ -137,6 +203,11 @@ export function HumanInputPanel({
             placeholder="Enter response..."
             className={textareaClass}
           />
+        )}
+
+        {/* Server-side error */}
+        {submitError && (
+          <p className="text-[10px] text-red-400">{submitError}</p>
         )}
 
         {/* Submit */}
@@ -167,5 +238,6 @@ export function getWatchProps(watch: WatchSpec | null | undefined) {
   return {
     prompt: (watch.config?.prompt as string) ?? "Provide the required input",
     outputs: watch.fulfillment_outputs ?? [],
+    outputSchema: watch.output_schema,
   };
 }
