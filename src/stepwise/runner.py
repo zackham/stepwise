@@ -228,6 +228,7 @@ def run_flow(
     engine = AsyncEngine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir)
 
     # 3. Create and start job
+    import os
     flow_name = objective or flow_path.stem
     job = engine.create_job(
         objective=flow_name,
@@ -235,6 +236,9 @@ def run_flow(
         inputs=inputs or {},
         workspace_path=workspace,
     )
+    job.created_by = f"cli:{os.getpid()}"
+    job.runner_pid = os.getpid()
+    store.save_job(job)
 
     reporter = TerminalReporter(quiet=quiet, _out=output_stream or sys.stderr)
     human_handler = StdinHumanHandler(
@@ -279,6 +283,7 @@ async def _async_run_flow(
         shutdown_requested = True
 
     start_time = time.time()
+    last_heartbeat = 0.0
     seen_running: set[str] = set()
     seen_completed: set[str] = set()
     steps_completed = 0
@@ -287,6 +292,12 @@ async def _async_run_flow(
         engine.start_job(job.id)
 
         while True:
+            # Heartbeat every 10s so server can detect stale CLI jobs
+            now = time.time()
+            if now - last_heartbeat > 10:
+                store.heartbeat(job.id)
+                last_heartbeat = now
+
             if shutdown_requested:
                 engine.cancel_job(job.id)
                 _err("Interrupted — cancelled active runs.", output_stream)

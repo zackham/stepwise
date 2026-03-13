@@ -29,6 +29,7 @@ from stepwise.models import (
     Job,
     JobConfig,
     JobStatus,
+    StepRunStatus,
     WorkflowDefinition,
     _now,
 )
@@ -422,6 +423,47 @@ def cancel_job(job_id: str):
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
 
 
+@app.post("/api/jobs/{job_id}/adopt")
+def adopt_job(job_id: str):
+    """Take over an orphaned job from a dead CLI process."""
+    engine = _get_engine()
+    try:
+        job = engine.store.load_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+
+    if job.created_by == "server":
+        raise HTTPException(status_code=400, detail="Job already owned by server")
+    if job.status not in (JobStatus.RUNNING, JobStatus.PENDING):
+        raise HTTPException(status_code=400, detail=f"Cannot adopt job in {job.status.value} state")
+
+    # Fail all orphaned RUNNING steps
+    for run in engine.store.running_runs(job_id):
+        run.status = StepRunStatus.FAILED
+        run.error = "Orphaned: owner process died"
+        run.completed_at = _now()
+        engine.store.save_run(run)
+
+    # Transfer ownership
+    job.created_by = "server"
+    job.runner_pid = None
+    job.updated_at = _now()
+    engine.store.save_job(job)
+
+    # Engine re-evaluates — exit rules handle recovery
+    engine.tick()
+    _notify_change(job_id)
+    return {"status": "adopted", "job_id": job_id}
+
+
+@app.get("/api/jobs/stale")
+def get_stale_jobs():
+    """Return jobs whose CLI owner hasn't heartbeated recently."""
+    engine = _get_engine()
+    stale = engine.store.stale_jobs(max_age_seconds=60)
+    return [j.to_dict() for j in stale]
+
+
 @app.delete("/api/jobs/{job_id}")
 def delete_job(job_id: str):
     engine = _get_engine()
@@ -532,7 +574,6 @@ def cancel_run(run_id: str):
         except Exception:
             pass
 
-    from stepwise.models import StepRunStatus
     run.status = StepRunStatus.FAILED
     run.error = "Cancelled by user"
     run.error_category = "user_cancelled"

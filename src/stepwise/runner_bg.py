@@ -26,6 +26,13 @@ async def _run(args) -> int:
     project_dir = Path(args.project_dir) if args.project_dir else None
     engine = AsyncEngine(store, registry, jobs_dir=args.jobs_dir, project_dir=project_dir)
 
+    import os
+    # Mark job as owned by this background process
+    job = store.load_job(args.job_id)
+    job.created_by = f"cli:{os.getpid()}"
+    job.runner_pid = os.getpid()
+    store.save_job(job)
+
     engine_task = asyncio.create_task(engine.run())
     try:
         engine.start_job(args.job_id)
