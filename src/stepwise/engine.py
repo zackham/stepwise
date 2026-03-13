@@ -954,6 +954,39 @@ class Engine:
                     "executor_type": step_def.executor.type,
                 })
 
+            case "delegate":
+                sub_def = result.sub_job_def
+                if not sub_def:
+                    self._fail_run(job, run, step_def,
+                                   error="Delegate result missing sub_job_def")
+                    return
+
+                run.status = StepRunStatus.DELEGATED
+                run.executor_state = {
+                    **(result.executor_state or {}),
+                    "emitted_flow": True,
+                }
+                self.store.save_run(run)
+
+                try:
+                    sub = self._create_sub_job(job, run, sub_def)
+                except Exception as e:
+                    run.status = StepRunStatus.FAILED
+                    run.error = f"Failed to create sub-job for emitted flow: {e}"
+                    run.completed_at = _now()
+                    self.store.save_run(run)
+                    self._halt_job(job, run)
+                    return
+
+                run.sub_job_id = sub.id
+                self.store.save_run(run)
+                self._emit(job.id, STEP_DELEGATED, {
+                    "step": step_name,
+                    "attempt": attempt,
+                    "sub_job_id": sub.id,
+                    "emitted_flow": True,
+                })
+
     # ── For-Each Launching ────────────────────────────────────────────────
 
     def _launch_for_each(self, job: Job, step_def: StepDefinition) -> StepRun:
@@ -2189,6 +2222,10 @@ class AsyncEngine(Engine):
             elif run.sub_job_id == sub_job.id:
                 if sub_job.status == JobStatus.COMPLETED:
                     run.result = self._terminal_output(sub_job)
+                    # Inject delegation marker for exit rule evaluation
+                    if run.executor_state and run.executor_state.get("emitted_flow"):
+                        if run.result and run.result.artifact is not None:
+                            run.result.artifact["_delegated"] = True
                     run.status = StepRunStatus.COMPLETED
                     run.completed_at = _now()
                     self.store.save_run(run)
