@@ -115,11 +115,11 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
         registry.register("llm", _create_llm_executor)
 
     if llm_backend == "openrouter":
-        logger.info("LLM executor: OpenRouter")
+        logger.debug("LLM executor: OpenRouter")
     elif llm_backend == "cli":
-        logger.info("LLM executor: CLI fallback (%s via %s)", agent, acpx_path)
+        logger.debug("LLM executor: CLI fallback (%s via %s)", agent, acpx_path)
     else:
-        logger.info("LLM executor: not available (no OpenRouter key or CLI)")
+        logger.debug("LLM executor: not available (no OpenRouter key or CLI)")
 
     registry.llm_backend = llm_backend
 

@@ -30,6 +30,7 @@ description: "What this flow does"
 author: alice                    # optional, auto from git config
 version: "1.0"                   # optional
 tags: [research, agent]          # optional
+forked_from: "@bob:original"     # optional, provenance for forked flows
 
 steps:
   step-name:

@@ -54,8 +54,9 @@ stepwise wait <job-id>                        # block on existing job
 stepwise cancel <job-id> --output json        # cancel with step details
 stepwise schema <flow>                        # input/output schema as JSON
 stepwise validate <flow>                      # syntax check
+stepwise run @author:flow-name                # run a registry flow (auto-fetches)
 stepwise share <flow>                         # publish to registry
-stepwise get <name>                           # download from registry
+stepwise get @author:flow-name                # download from registry
 stepwise search "query"                       # search registry
 stepwise info <name>                          # registry flow details
 ```
@@ -92,6 +93,36 @@ Timeout (exit 3):
 ```json
 {"status": "timeout", "job_id": "...", "timeout_seconds": 300, "suspended_at_step": "..."}
 ```
+
+## Registry Flows
+
+Flows fetched from the registry are cached in `.stepwise/registry/@author/slug/`. These are **read-only** — never modify them in place.
+
+```
+.stepwise/registry/
+  @alice/code-review/FLOW.yaml      ← alice's flow, do not edit
+  @stepwise/tui-demo/FLOW.yaml      ← stepwise's flow, do not edit
+flows/
+  my-code-review/FLOW.yaml          ← your local fork, fully yours
+```
+
+**To run a registry flow:** `stepwise run @author:flow-name`
+
+**To fork a registry flow for modification:**
+1. Copy from `.stepwise/registry/@author/slug/` to `flows/your-name/`
+2. Set `author:` to the current user
+3. Add `forked_from: "@author:original-name"` to the YAML metadata
+4. Modify freely — it's now a local flow
+
+```yaml
+name: my-code-review
+author: zack
+forked_from: "@alice:code-review"
+steps:
+  # ... your modifications
+```
+
+**Important:** Bare flow names (e.g. `stepwise run my-flow`) only resolve to local flows in `flows/`. Registry flows always require the `@author:name` format.
 
 ## Creating & Modifying Flows
 
