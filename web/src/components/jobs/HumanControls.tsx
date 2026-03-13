@@ -17,7 +17,6 @@ import {
   RotateCcw,
   XCircle,
   MessageSquare,
-  Zap,
   AlertTriangle,
   ShieldCheck,
 } from "lucide-react";
@@ -140,16 +139,6 @@ export function HumanControls({ job }: HumanControlsProps) {
           Inject Context
         </Button>
 
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => mutations.triggerTick.mutate()}
-          disabled={mutations.triggerTick.isPending}
-          className="text-zinc-400"
-        >
-          <Zap className="w-3.5 h-3.5 mr-1.5" />
-          Tick
-        </Button>
       </div>
 
       {/* Inject Context Dialog */}

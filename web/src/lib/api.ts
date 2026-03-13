@@ -181,10 +181,6 @@ export function fetchEvents(
 
 // ── Engine ────────────────────────────────────────────────────────────
 
-export function triggerTick(): Promise<{ status: string }> {
-  return request("/tick", { method: "POST" });
-}
-
 export function fetchStatus(): Promise<EngineStatus> {
   return request<EngineStatus>("/status");
 }

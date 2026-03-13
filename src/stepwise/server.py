@@ -793,16 +793,6 @@ def _parse_server_duration(s: str) -> float | None:
 # ── Engine ────────────────────────────────────────────────────────────
 
 
-@app.post("/api/tick")
-def manual_tick():
-    """Legacy tick endpoint — triggers engine to re-evaluate all active jobs."""
-    engine = _get_engine()
-    for job in engine.store.active_jobs():
-        engine._dispatch_ready(job.id)
-        engine._check_job_terminal(job.id)
-    return {"status": "ticked"}
-
-
 @app.get("/api/status")
 def engine_status():
     engine = _get_engine()

@@ -171,11 +171,6 @@ export function useStepwiseMutations() {
     onSuccess: invalidateAll,
   });
 
-  const triggerTickMutation = useMutation({
-    mutationFn: api.triggerTick,
-    onSuccess: invalidateAll,
-  });
-
   const saveTemplateMutation = useMutation({
     mutationFn: api.saveTemplate,
     onSuccess: () => {
@@ -207,7 +202,6 @@ export function useStepwiseMutations() {
     cancelRun: cancelRunMutation,
     deleteJob: deleteJobMutation,
     adoptJob: adoptJobMutation,
-    triggerTick: triggerTickMutation,
     saveTemplate: saveTemplateMutation,
     deleteTemplate: deleteTemplateMutation,
   };

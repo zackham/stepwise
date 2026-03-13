@@ -11,7 +11,6 @@ import {
   fetchTemplates,
   saveTemplate,
   deleteTemplate,
-  triggerTick,
 } from "./api";
 
 // Mock global fetch
@@ -192,17 +191,6 @@ describe("API client", () => {
   });
 
   describe("engine endpoints", () => {
-    it("triggerTick sends POST to /tick", async () => {
-      mockFetch.mockReturnValueOnce(jsonResponse({ status: "ok" }));
-
-      await triggerTick();
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        "/api/tick",
-        expect.objectContaining({ method: "POST" })
-      );
-    });
-
     it("fetchStatus hits /status", async () => {
       const status = { active_jobs: 2, total_jobs: 10, registered_executors: [] };
       mockFetch.mockReturnValueOnce(jsonResponse(status));
