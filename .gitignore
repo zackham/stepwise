@@ -22,7 +22,7 @@ venv/
 /jobs/
 
 # Node
-web/node_modules/
+node_modules/
 web/dist/
 
 # IDE
@@ -39,3 +39,8 @@ Thumbs.db
 # Misc
 analysis.json
 .stepwise/
+data/
+
+# Scratch flow files at repo root
+/*.flow.yaml
+/*.flow.yaml.bak

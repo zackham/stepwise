@@ -67,3 +67,23 @@ git push origin master --tags
 **7. Confirm**
 
 Print: "Released vX.Y.Z — users will get it on next `stepwise update`."
+
+**8. Check website for needed updates**
+
+After the release is complete, check if the stepwise.run website (`~/work/stepwise.run`) needs updates to reflect changes in this release.
+
+Review the changelog entry you just wrote and the commits in this release. Then read these website files and compare against current stepwise capabilities:
+
+- `~/work/stepwise.run/site/sections/features.html` — feature cards describing executor types and capabilities
+- `~/work/stepwise.run/site/sections/code-example.html` — YAML syntax examples and terminal output
+- `~/work/stepwise.run/site/sections/quickstart.html` — installation instructions and CLI commands
+- `~/work/stepwise.run/site/sections/meta-story.html` — description of the generation flow
+- `~/work/stepwise.run/site/index.html` — hero section copy and DAG visualization
+
+Things to look for:
+- New executor types not reflected in feature descriptions or badge color schemes
+- CLI commands or YAML syntax that changed
+- New capabilities described in the changelog that the marketing copy doesn't mention
+- Outdated descriptions that no longer match how stepwise works
+
+If nothing needs updating, say so and move on. If updates are warranted, present a summary of suggested changes with specific file paths and what to update, then ask the user what they'd like to do. Do NOT make changes to the website without explicit approval — just present recommendations.
