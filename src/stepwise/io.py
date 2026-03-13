@@ -253,6 +253,22 @@ class _PlainLiveFlowHandle(LiveFlowHandle):
         pass
 
 
+class _NoopLiveFlowHandle(LiveFlowHandle):
+    """No-op live flow handle for quiet mode."""
+
+    def update_step(self, name: str, status: str, **kw: Any) -> None:
+        pass
+
+    def update_summary(self, completed: int, total: int, **kw: Any) -> None:
+        pass
+
+    def pause_for_input(self) -> None:
+        pass
+
+    def resume_after_input(self) -> None:
+        pass
+
+
 class PlainAdapter(IOAdapter):
     """Plain text adapter for non-TTY / piped output."""
 
@@ -527,7 +543,7 @@ class QuietAdapter(IOAdapter):
     def live_flow(
         self, flow_name: str, step_names: list[str],
     ) -> Generator[LiveFlowHandle, None, None]:
-        yield _PlainLiveFlowHandle(PlainAdapter(output=sys.stderr))
+        yield _NoopLiveFlowHandle()
 
     def prompt_confirm(self, message: str, default: bool = True) -> bool:
         return self._plain.prompt_confirm(message, default)
