@@ -314,7 +314,10 @@ class HumanExecutor(Executor):
         self.prompt = prompt
 
     def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
-        config: dict[str, Any] = {"prompt": self.prompt}
+        # Interpolate $var placeholders in prompt with resolved inputs
+        str_inputs = {k: str(v) if v is not None else "" for k, v in inputs.items()}
+        prompt = Template(self.prompt).safe_substitute(str_inputs)
+        config: dict[str, Any] = {"prompt": prompt}
 
         return ExecutorResult(
             type="watch",
