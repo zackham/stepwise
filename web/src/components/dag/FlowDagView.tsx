@@ -306,6 +306,7 @@ export function FlowDagView({
           height={layout.height}
           onClickLabel={onSelectDataFlow ? handleClickLabel : undefined}
           selectedLabel={selectedLabel}
+          latestRuns={latestRuns}
         />
 
         {/* Flow port nodes (input/output) */}

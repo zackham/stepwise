@@ -1,4 +1,6 @@
+import { useState } from "react";
 import type { DagEdge, LoopEdge } from "@/lib/dag-layout";
+import type { StepRun } from "@/lib/types";
 
 interface SelectedLabel {
   fromStep: string;
@@ -13,6 +15,27 @@ interface DagEdgesProps {
   height: number;
   onClickLabel?: (from: string, to: string, field: string) => void;
   selectedLabel?: SelectedLabel | null;
+  latestRuns?: Record<string, StepRun>;
+}
+
+function formatPreviewValue(value: unknown, maxLen: number): string {
+  if (value === null || value === undefined) return "null";
+  if (typeof value === "boolean") return String(value);
+  if (typeof value === "number") return String(value);
+  if (typeof value === "string") {
+    if (value.length <= maxLen) return `"${value}"`;
+    return `"${value.slice(0, maxLen - 2)}…"`;
+  }
+  if (Array.isArray(value)) return `[${value.length}]`;
+  if (typeof value === "object") return `{${Object.keys(value as Record<string, unknown>).length}}`;
+  return String(value);
+}
+
+function formatTooltipValue(value: unknown): string {
+  if (value === null || value === undefined) return "null";
+  if (typeof value === "string") return value;
+  if (typeof value === "boolean" || typeof value === "number") return String(value);
+  return JSON.stringify(value, null, 2);
 }
 
 function buildPath(points: Array<{ x: number; y: number }>): string {
@@ -63,8 +86,16 @@ function edgeMidpoint(
 
 const LABEL_LINE_HEIGHT = 14;
 
-export function DagEdges({ edges, loopEdges, width, height, onClickLabel, selectedLabel }: DagEdgesProps) {
+export function DagEdges({ edges, loopEdges, width, height, onClickLabel, selectedLabel, latestRuns }: DagEdgesProps) {
+  const [hoveredLabel, setHoveredLabel] = useState<{
+    x: number;
+    y: number;
+    field: string;
+    value: unknown;
+  } | null>(null);
+
   return (
+    <>
     <svg
       className="absolute inset-0 pointer-events-none"
       width={width}
@@ -126,8 +157,15 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
                 selectedLabel.toStep === edge.to &&
                 selectedLabel.fieldName === field;
               const ly = startY + fi * LABEL_LINE_HEIGHT;
+
+              // Look up artifact value for this field
+              const artifactValue = latestRuns?.[edge.from]?.result?.artifact?.[field];
+              const hasValue = artifactValue !== undefined;
+              const valuePreview = hasValue ? `: ${formatPreviewValue(artifactValue, 12)}` : "";
+              const displayLen = field.length + valuePreview.length;
+
               // Estimate text width (~6px per char at 10px mono)
-              const textW = field.length * 6.5 + 12;
+              const textW = displayLen * 6.5 + 12;
               const textH = 14;
               return (
                 <g
@@ -138,6 +176,10 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
                     e.stopPropagation();
                     onClickLabel(edge.from, edge.to, field);
                   }}
+                  onMouseEnter={() => {
+                    if (hasValue) setHoveredLabel({ x: mid.x, y: ly, field, value: artifactValue });
+                  }}
+                  onMouseLeave={() => setHoveredLabel(null)}
                 >
                   <rect
                     x={mid.x - textW / 2}
@@ -156,13 +198,24 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
                     className={
                       isSelected
                         ? "fill-blue-400 text-[10px]"
-                        : onClickLabel
-                          ? "fill-zinc-500 text-[10px] hover:fill-zinc-300"
-                          : "fill-zinc-500 text-[10px]"
+                        : hasValue
+                          ? "text-[10px]"
+                          : onClickLabel
+                            ? "fill-zinc-500 text-[10px] hover:fill-zinc-300"
+                            : "fill-zinc-500 text-[10px]"
                     }
                     style={{ fontFamily: "monospace" }}
                   >
-                    {field}
+                    {hasValue && !isSelected ? (
+                      <>
+                        <tspan className="fill-zinc-400">{field}</tspan>
+                        <tspan className="fill-zinc-600">{valuePreview}</tspan>
+                      </>
+                    ) : hasValue ? (
+                      <>{field}{valuePreview}</>
+                    ) : (
+                      field
+                    )}
                   </text>
                 </g>
               );
@@ -195,5 +248,23 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
         </g>
       ))}
     </svg>
+
+    {/* Hover tooltip for edge field values */}
+    {hoveredLabel && (
+      <div
+        className="absolute pointer-events-none z-50"
+        style={{ left: hoveredLabel.x, top: hoveredLabel.y + 14 }}
+      >
+        <div className="bg-zinc-900 border border-zinc-700 rounded-md shadow-xl p-2 -translate-x-1/2">
+          <div className="text-[10px] font-medium text-zinc-400 uppercase tracking-wide mb-1">
+            {hoveredLabel.field}
+          </div>
+          <pre className="text-[11px] font-mono text-zinc-200 whitespace-pre-wrap break-words max-w-[280px] max-h-[200px] overflow-auto m-0">
+            {formatTooltipValue(hoveredLabel.value)}
+          </pre>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
