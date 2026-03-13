@@ -568,6 +568,30 @@ class QuietAdapter(IOAdapter):
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
+class _LineCountingFile:
+    """Wraps a file to count newlines, forwarding everything through."""
+
+    def __init__(self, real_file: TextIO, handle: _AppendFlowHandle):
+        self._real_file = real_file
+        self._handle = handle
+
+    def write(self, s: str) -> int:
+        self._handle._pause_lines += s.count("\n")
+        return self._real_file.write(s)
+
+    def flush(self) -> None:
+        self._real_file.flush()
+
+    def fileno(self) -> int:
+        return self._real_file.fileno()
+
+    def isatty(self) -> bool:
+        return hasattr(self._real_file, "isatty") and self._real_file.isatty()
+
+    def __getattr__(self, name: str):
+        return getattr(self._real_file, name)
+
+
 class _AppendFlowHandle(LiveFlowHandle):
     """Append-only flow handle — prints each transition as a permanent line.
 
@@ -580,6 +604,7 @@ class _AppendFlowHandle(LiveFlowHandle):
         self._console = console
         self._flow_name = flow_name
         self._running_step: str | None = None  # track the "running" line to overwrite
+        self._pause_lines = 0  # lines printed during input pause
 
     def _step_line(
         self, name: str, status: str,
@@ -611,6 +636,12 @@ class _AppendFlowHandle(LiveFlowHandle):
             line.append(" " + "  ".join(parts), style="dim")
         self._console.print(line, highlight=False)
 
+    def _erase_last_line(self) -> None:
+        """Move up one line and clear it."""
+        file = self._console.file or sys.stderr
+        file.write("\033[A\033[2K\r")
+        file.flush()
+
     def update_step(
         self,
         name: str,
@@ -619,29 +650,17 @@ class _AppendFlowHandle(LiveFlowHandle):
         cost: float | None = None,
         error: str | None = None,
     ) -> None:
-        file = self._console.file or sys.stderr
-
         if status == "running":
-            # Print "running" line — we'll overwrite it when the step finishes
             self._running_step = name
             self._step_line(name, "running")
-            # Save position so we can overwrite this line
-            file.write("\033[s")
-            file.flush()
         elif status in ("completed", "failed"):
             if self._running_step == name:
-                # Overwrite the "running" line with the final status
-                file.write("\033[u")  # restore to start of running line
-                file.write("\033[J")  # clear to end of screen
-                file.flush()
+                self._erase_last_line()
                 self._running_step = None
             self._step_line(name, status, duration, cost, error)
         elif status == "suspended":
             if self._running_step == name:
-                # Overwrite the "running" line
-                file.write("\033[u")
-                file.write("\033[J")
-                file.flush()
+                self._erase_last_line()
                 self._running_step = None
             self._step_line(name, "suspended")
 
@@ -652,17 +671,27 @@ class _AppendFlowHandle(LiveFlowHandle):
         pass  # no live summary — printed at the end by flow_complete
 
     def pause_for_input(self) -> None:
-        """Save cursor position before input prompts."""
-        file = self._console.file or sys.stderr
-        file.write("\033[s")
-        file.flush()
+        """Start tracking lines so we can erase them on resume."""
+        self._pause_lines = 0
+        # Intercept both stderr (rich console) and stdout (questionary) to count newlines
+        self._real_console_file = self._console.file or sys.stderr
+        self._real_stdout = sys.stdout
+        self._console.file = _LineCountingFile(self._real_console_file, self)
+        sys.stdout = _LineCountingFile(self._real_stdout, self)  # type: ignore
 
     def resume_after_input(self) -> None:
-        """Erase the input prompts, leaving the step list clean."""
-        file = self._console.file or sys.stderr
-        file.write("\033[u")  # restore cursor to before input
-        file.write("\033[J")  # clear everything below
-        file.flush()
+        """Erase everything printed during the pause."""
+        # Restore real files
+        self._console.file = self._real_console_file
+        sys.stdout = self._real_stdout  # type: ignore
+        file = self._real_console_file
+        # Move up and clear each line printed during the pause
+        for _ in range(self._pause_lines):
+            file.write("\033[A\033[2K")
+        if self._pause_lines > 0:
+            file.write("\r")
+            file.flush()
+        self._pause_lines = 0
 
 
 class TerminalAdapter(IOAdapter):
