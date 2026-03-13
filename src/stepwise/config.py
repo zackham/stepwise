@@ -109,6 +109,7 @@ class StepwiseConfig:
     default_model: str | None = None
     labels: dict[str, str | dict] = field(default_factory=dict)
     billing: str = "subscription"  # "subscription" | "api_key"
+    default_agent: str | None = None  # "claude" | "codex" | etc.
 
     def resolve_model(self, model_ref: str) -> str:
         """Resolve a model reference (label or concrete ID) to a concrete model ID.
@@ -141,6 +142,8 @@ class StepwiseConfig:
             d["labels"] = self.labels
         if self.billing != "subscription":
             d["billing"] = self.billing
+        if self.default_agent is not None:
+            d["default_agent"] = self.default_agent
         return d
 
     @staticmethod
@@ -163,6 +166,7 @@ class StepwiseConfig:
             default_model=d.get("default_model"),
             labels=labels,
             billing=d.get("billing", "subscription"),
+            default_agent=d.get("default_agent"),
         )
 
 
@@ -303,6 +307,8 @@ def load_config(project_dir: Path | None = None) -> StepwiseConfig:
                        or user.default_model or "balanced"),
         labels=labels,
         billing=billing,
+        default_agent=(local.default_agent or project.default_agent
+                       or user.default_agent),
     )
 
 
@@ -366,6 +372,8 @@ def load_config_with_sources(project_dir: Path | None = None) -> ConfigWithSourc
                        or user.default_model or "balanced"),
         labels=merged_labels,
         billing=billing,
+        default_agent=(local.default_agent or project.default_agent
+                       or user.default_agent),
     )
 
     return ConfigWithSources(config=config, label_info=label_info, api_key_source=api_key_source)
