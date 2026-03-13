@@ -178,8 +178,6 @@ def _delegated_run_flow(
         _err(err, output_stream)
         return EXIT_JOB_FAILED
 
-    adapter.banner(objective)
-
     return asyncio.run(_delegated_ws_loop(
         server_url, job_id, adapter,
         output_stream, output_json, report, report_output, flow_path,
@@ -449,9 +447,7 @@ def run_flow(
     job.runner_pid = os.getpid()
     store.save_job(job)
 
-    adapter.banner(flow_name)
-
-    # 4. Run async
+    # 4. Run async (live_flow display handles the banner)
     try:
         return asyncio.run(_async_run_flow(
             engine, job, store, adapter,
