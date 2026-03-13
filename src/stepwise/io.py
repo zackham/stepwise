@@ -698,38 +698,40 @@ class _AppendFlowHandle(LiveFlowHandle):
     def pause_for_input(self) -> None:
         """Start counting all terminal output lines for cleanup on resume.
 
-        Interposes on stderr fd to catch prompt_toolkit output too.
-        The suspended step line was just printed, so we add 1 to erase it.
+        Interposes on both stderr (rich) and stdout (questionary) fds.
+        The suspended step line was just printed, so we add 1 on resume.
         """
         import os
-        file = self._console.file or sys.stderr
-        try:
-            fd = file.fileno()
-            if os.isatty(fd):
-                # Flush before interposing
-                file.flush()
-                sys.stdout.flush()
-                self._fd_counter = _FdLineCounter(fd)
-        except (AttributeError, OSError):
-            pass
+        sys.stdout.flush()
+        sys.stderr.flush()
+        (self._console.file or sys.stderr).flush()
+        self._fd_counters: list[_FdLineCounter] = []
+        seen_fds: set[int] = set()
+        for stream in (self._console.file or sys.stderr, sys.stderr, sys.stdout):
+            try:
+                fd = stream.fileno()
+                if fd not in seen_fds and os.isatty(fd):
+                    seen_fds.add(fd)
+                    self._fd_counters.append(_FdLineCounter(fd))
+            except (AttributeError, OSError):
+                pass
 
     def resume_after_input(self) -> None:
         """Erase everything printed during the pause (including the suspended line)."""
-        file = self._console.file or sys.stderr
+        import os, time
+        sys.stdout.flush()
+        sys.stderr.flush()
+        time.sleep(0.05)  # let relay threads drain
+
         lines = 0
-        if self._fd_counter is not None:
-            file.flush()
-            sys.stdout.flush()
-            import time; time.sleep(0.05)  # let relay thread drain
-            lines = self._fd_counter.stop()
-            self._fd_counter = None
-            lines += 1  # include the suspended step line printed before pause
+        for counter in self._fd_counters:
+            lines += counter.stop()
+        self._fd_counters = []
+        lines += 1  # include the suspended step line printed before pause
 
         if lines > 0:
-            # Write erase sequences to the real fd directly
-            import os
             try:
-                fd = file.fileno()
+                fd = (self._console.file or sys.stderr).fileno()
                 erase = b"".join(b"\033[A\033[2K" for _ in range(lines)) + b"\r"
                 os.write(fd, erase)
             except (AttributeError, OSError):
