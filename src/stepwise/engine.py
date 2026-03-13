@@ -917,6 +917,7 @@ class Engine:
                         self._halt_job(job, run)
                     else:
                         run.result = result.envelope
+                        run.executor_state = result.executor_state
                         run.status = StepRunStatus.COMPLETED
                         run.completed_at = _now()
                         self.store.save_run(run)
@@ -2076,6 +2077,13 @@ class AsyncEngine(Engine):
         """Run executor.start() in thread pool, push result to queue."""
         try:
             executor = self.registry.create(exec_ref)
+
+            def update_state(state: dict) -> None:
+                run = self.store.load_run(run_id)
+                run.executor_state = state
+                self.store.save_run(run)
+            ctx.state_update_fn = update_state
+
             result = await asyncio.to_thread(executor.start, inputs, ctx)
             await self._queue.put(("step_result", job_id, step_name, run_id, result))
         except asyncio.CancelledError:

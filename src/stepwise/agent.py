@@ -575,6 +575,17 @@ class AgentExecutor(Executor):
         prompt = self._render_prompt(inputs, context)
         process = self.backend.spawn(prompt, self.config, context)
 
+        if context.state_update_fn:
+            context.state_update_fn({
+                "pid": process.pid,
+                "pgid": process.pgid,
+                "output_path": process.output_path,
+                "working_dir": process.working_dir,
+                "session_name": process.session_name,
+                "output_mode": self.output_mode,
+                "output_file": output_file,
+            })
+
         # Block until agent exits (safe — AsyncEngine runs this in thread pool)
         agent_status = self.backend.wait(process)
 
