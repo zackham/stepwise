@@ -1,8 +1,9 @@
 import { useMemo, useRef, useCallback, useEffect, useLayoutEffect, useState } from "react";
-import { computeHierarchicalLayout } from "@/lib/dag-layout";
+import { computeHierarchicalLayout, NODE_WIDTH } from "@/lib/dag-layout";
 import { StepNode } from "./StepNode";
 import { DagEdges } from "./DagEdges";
 import { ExpandedStepContainer } from "./ExpandedStepContainer";
+import { HumanInputPanel, getWatchProps } from "./HumanInputPanel";
 import type { FlowDefinition, StepRun, JobTreeNode } from "@/lib/types";
 
 interface FlowDagViewProps {
@@ -14,6 +15,8 @@ interface FlowDagViewProps {
   selectedStep: string | null;
   onSelectStep: (stepName: string | null) => void;
   onNavigateSubJob?: (subJobId: string) => void;
+  onFulfillWatch?: (runId: string, payload: Record<string, unknown>) => void;
+  isFulfilling?: boolean;
 }
 
 export function FlowDagView({
@@ -25,9 +28,12 @@ export function FlowDagView({
   selectedStep,
   onSelectStep,
   onNavigateSubJob,
+  onFulfillWatch,
+  isFulfilling,
 }: FlowDagViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
+  const inputPanelRef = useRef<HTMLDivElement>(null);
   const transformRef = useRef({ x: 0, y: 0, scale: 1 });
   const isDraggingRef = useRef(false);
   const didDragRef = useRef(false);
@@ -46,6 +52,10 @@ export function FlowDagView({
     if (!el) return;
     const { x, y, scale } = transformRef.current;
     el.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+    // Counter-scale the input panel so it stays at screen-pixel size
+    if (inputPanelRef.current) {
+      inputPanelRef.current.style.transform = `scale(${1 / scale})`;
+    }
   }, []);
 
   // Re-center when workflow or expansion state changes
@@ -326,6 +336,38 @@ export function FlowDagView({
             </div>
           );
         })}
+
+        {/* Inline human input panel — counter-scaled to stay at screen size */}
+        {(() => {
+          if (!selectedStep || !onFulfillWatch) return null;
+          const run = latestRuns[selectedStep];
+          if (!run || run.status !== "suspended") return null;
+          const watchProps = getWatchProps(run.watch);
+          if (!watchProps) return null;
+          const node = layout.nodes.find((n) => n.id === selectedStep);
+          if (!node) return null;
+          const panelWidth = 320;
+          return (
+            <div
+              ref={inputPanelRef}
+              style={{
+                position: "absolute",
+                left: node.x + node.width / 2 - panelWidth / 2,
+                top: node.y + node.height + 12,
+                transformOrigin: "top center",
+                transform: `scale(${1 / transformRef.current.scale})`,
+                zIndex: 50,
+              }}
+            >
+              <HumanInputPanel
+                prompt={watchProps.prompt}
+                outputs={watchProps.outputs}
+                onSubmit={(payload) => onFulfillWatch(run.id, payload)}
+                isPending={isFulfilling ?? false}
+              />
+            </div>
+          );
+        })()}
       </div>
 
       {/* Zoom controls */}

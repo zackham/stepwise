@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
-import { useJob, useRuns, useJobTree, useJobOutput } from "@/hooks/useStepwise";
+import { useJob, useRuns, useJobTree, useJobOutput, useStepwiseMutations } from "@/hooks/useStepwise";
 import { JobList } from "@/components/jobs/JobList";
 import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
 import { FlowDagView } from "@/components/dag/FlowDagView";
@@ -64,6 +64,7 @@ export function JobDetailPage() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
   const [rightPanelOpen, setRightPanelOpen] = useState<boolean | null>(null);
+  const mutations = useStepwiseMutations();
 
   const isTerminal =
     job?.status === "completed" || job?.status === "failed" || job?.status === "cancelled";
@@ -260,6 +261,10 @@ export function JobDetailPage() {
             onNavigateSubJob={(subJobId) =>
               navigate({ to: "/jobs/$jobId", params: { jobId: subJobId } })
             }
+            onFulfillWatch={(runId, payload) =>
+              mutations.fulfillWatch.mutate({ runId, payload })
+            }
+            isFulfilling={mutations.fulfillWatch.isPending}
           />
         </div>
       </div>
