@@ -572,49 +572,22 @@ class QuietAdapter(IOAdapter):
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
-class _FdLineCounter:
-    """Count newlines written to a file descriptor by interposing a pipe.
+def _count_panel_lines(content: str) -> int:
+    """Estimate terminal lines a rich Panel occupies."""
+    # Panel(padding=(1,2)): top border + top pad + content + bottom pad + bottom border
+    content_lines = content.strip().count("\n") + 1
+    return content_lines + 4
 
-    Used to catch output from prompt_toolkit which writes directly to the fd,
-    bypassing Python file objects.
+
+def _count_prompt_lines(field_type: str, options: list[str] | None = None) -> int:
+    """Estimate terminal lines a questionary prompt leaves after answering.
+
+    Questionary collapses interactive prompts to a single answered line.
+    Multiline text falls back to plain input() which leaves more lines.
     """
-
-    def __init__(self, target_fd: int):
-        import os
-        self._target_fd = target_fd
-        self._original_fd = os.dup(target_fd)  # save original
-        self._read_fd, self._write_fd = os.pipe()
-        os.dup2(self._write_fd, target_fd)  # redirect fd to our pipe
-        self.lines = 0
-        self._running = True
-        # Background thread reads from pipe, counts newlines, forwards to original
-        import threading
-        self._thread = threading.Thread(target=self._relay, daemon=True)
-        self._thread.start()
-
-    def _relay(self):
-        import os
-        while self._running:
-            try:
-                data = os.read(self._read_fd, 4096)
-                if not data:
-                    break
-                self.lines += data.count(b"\n")
-                os.write(self._original_fd, data)
-            except OSError:
-                break
-
-    def stop(self) -> int:
-        """Restore original fd and return line count."""
-        import os
-        self._running = False
-        # Restore original fd
-        os.dup2(self._original_fd, self._target_fd)
-        os.close(self._original_fd)
-        os.close(self._write_fd)
-        os.close(self._read_fd)
-        self._thread.join(timeout=0.1)
-        return self.lines
+    if field_type == "text":
+        return 3  # prompt header + at least one input line + blank terminator
+    return 1  # confirm, select, number, str all collapse to 1 line
 
 
 class _AppendFlowHandle(LiveFlowHandle):
@@ -629,7 +602,7 @@ class _AppendFlowHandle(LiveFlowHandle):
         self._console = console
         self._flow_name = flow_name
         self._running_step: str | None = None  # track the "running" line to overwrite
-        self._fd_counter: _FdLineCounter | None = None
+        self._pause_line_count = 0  # lines to erase on resume
 
     def _step_line(
         self, name: str, status: str,
@@ -695,47 +668,24 @@ class _AppendFlowHandle(LiveFlowHandle):
     ) -> None:
         pass  # no live summary — printed at the end by flow_complete
 
-    def pause_for_input(self) -> None:
-        """Start counting all terminal output lines for cleanup on resume.
+    def set_pause_lines(self, count: int) -> None:
+        """Set the number of lines to erase on resume (called by collect_human_input)."""
+        self._pause_line_count = count
 
-        Interposes on both stderr (rich) and stdout (questionary) fds.
-        The suspended step line was just printed, so we add 1 on resume.
-        """
-        import os
-        sys.stdout.flush()
-        sys.stderr.flush()
-        (self._console.file or sys.stderr).flush()
-        self._fd_counters: list[_FdLineCounter] = []
-        seen_fds: set[int] = set()
-        for stream in (self._console.file or sys.stderr, sys.stderr, sys.stdout):
-            try:
-                fd = stream.fileno()
-                if fd not in seen_fds and os.isatty(fd):
-                    seen_fds.add(fd)
-                    self._fd_counters.append(_FdLineCounter(fd))
-            except (AttributeError, OSError):
-                pass
+    def pause_for_input(self) -> None:
+        """Mark that we're pausing. Line count set externally via set_pause_lines."""
+        pass  # line count is calculated by the adapter's collect_human_input
 
     def resume_after_input(self) -> None:
-        """Erase everything printed during the pause (including the suspended line)."""
-        import os, time
-        sys.stdout.flush()
-        sys.stderr.flush()
-        time.sleep(0.05)  # let relay threads drain
-
-        lines = 0
-        for counter in self._fd_counters:
-            lines += counter.stop()
-        self._fd_counters = []
-        lines += 1  # include the suspended step line printed before pause
-
+        """Erase the input area (suspended line + prompt + fields)."""
+        lines = self._pause_line_count + 1  # +1 for the suspended step line
         if lines > 0:
-            try:
-                fd = (self._console.file or sys.stderr).fileno()
-                erase = b"".join(b"\033[A\033[2K" for _ in range(lines)) + b"\r"
-                os.write(fd, erase)
-            except (AttributeError, OSError):
-                pass
+            file = self._console.file or sys.stderr
+            file.flush()
+            sys.stdout.flush()
+            file.write("".join("\033[A\033[2K" for _ in range(lines)) + "\r")
+            file.flush()
+        self._pause_line_count = 0
 
 
 class TerminalAdapter(IOAdapter):
@@ -844,7 +794,37 @@ class TerminalAdapter(IOAdapter):
     ) -> Generator[LiveFlowHandle, None, None]:
         self._console.print()
         self.banner(flow_name)
-        yield _AppendFlowHandle(self._console, flow_name)
+        handle = _AppendFlowHandle(self._console, flow_name)
+        self._active_handle = handle
+        try:
+            yield handle
+        finally:
+            self._active_handle = None
+
+    def collect_human_input(
+        self,
+        prompt: str,
+        fields: list[str],
+        schema: dict[str, dict] | None = None,
+    ) -> dict[str, Any]:
+        """Collect input, tracking line count for erase-on-resume."""
+        # Calculate expected line count before printing
+        lines = 0
+        if prompt:
+            lines += _count_panel_lines(prompt)
+        for field_name in fields:
+            spec = (schema or {}).get(field_name, {})
+            field_type = spec.get("type", "str")
+            options = spec.get("options")
+            lines += _count_prompt_lines(field_type, options)
+
+        # Tell the handle how many lines to erase
+        handle = getattr(self, "_active_handle", None)
+        if handle is not None:
+            handle.set_pause_lines(lines)
+
+        # Delegate to base class for actual collection
+        return super().collect_human_input(prompt, fields, schema)
 
     def prompt_confirm(self, message: str, default: bool = True) -> bool:
         try:
