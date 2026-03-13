@@ -272,6 +272,58 @@ class RouteDefinition:
         )
 
 
+# ── Output Field Spec ─────────────────────────────────────────────────
+
+
+VALID_FIELD_TYPES = {"str", "text", "number", "bool", "choice"}
+
+
+@dataclass
+class OutputFieldSpec:
+    """Typed output field specification for human steps."""
+    type: str = "str"        # str, text, number, bool, choice
+    required: bool = True
+    default: Any = None
+    description: str = ""
+    options: list[str] | None = None   # choice
+    multiple: bool = False             # choice: multi-select
+    min: float | None = None           # number
+    max: float | None = None           # number
+
+    def to_dict(self) -> dict:
+        d: dict = {}
+        if self.type != "str":
+            d["type"] = self.type
+        if not self.required:
+            d["required"] = False
+        if self.default is not None:
+            d["default"] = self.default
+        if self.description:
+            d["description"] = self.description
+        if self.options is not None:
+            d["options"] = self.options
+        if self.multiple:
+            d["multiple"] = True
+        if self.min is not None:
+            d["min"] = self.min
+        if self.max is not None:
+            d["max"] = self.max
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> OutputFieldSpec:
+        return cls(
+            type=d.get("type", "str"),
+            required=d.get("required", True),
+            default=d.get("default"),
+            description=d.get("description", ""),
+            options=d.get("options"),
+            multiple=d.get("multiple", False),
+            min=d.get("min"),
+            max=d.get("max"),
+        )
+
+
 # ── Step Definition ────────────────────────────────────────────────────
 
 
@@ -288,6 +340,7 @@ class StepDefinition:
     limits: StepLimits | None = None  # M4: cost/time/iteration limits
     for_each: ForEachSpec | None = None  # iteration over upstream list
     sub_flow: WorkflowDefinition | None = None  # embedded flow for for_each
+    output_schema: dict[str, OutputFieldSpec] = field(default_factory=dict)
     chain: str | None = None  # M7a: context chain membership
     chain_label: str | None = None  # M7a: label shown in chain prefix
     route_def: RouteDefinition | None = None  # M8: conditional sub-flow dispatch
@@ -302,6 +355,8 @@ class StepDefinition:
             "exit_rules": [r.to_dict() for r in self.exit_rules],
             "idempotency": self.idempotency,
         }
+        if self.output_schema:
+            d["output_schema"] = {k: v.to_dict() for k, v in self.output_schema.items()}
         if self.limits:
             d["limits"] = self.limits.to_dict()
         if self.for_each:
@@ -326,6 +381,7 @@ class StepDefinition:
             sequencing=d.get("sequencing", []),
             exit_rules=[ExitRule.from_dict(r) for r in d.get("exit_rules", [])],
             idempotency=d.get("idempotency", "idempotent"),
+            output_schema={k: OutputFieldSpec.from_dict(v) for k, v in d.get("output_schema", {}).items()},
             limits=StepLimits.from_dict(d["limits"]) if d.get("limits") else None,
             for_each=ForEachSpec.from_dict(d["for_each"]) if d.get("for_each") else None,
             sub_flow=WorkflowDefinition.from_dict(d["sub_flow"]) if d.get("sub_flow") else None,
@@ -739,13 +795,17 @@ class WatchSpec:
     mode: str  # "poll", "human", "timeout"
     config: dict = field(default_factory=dict)
     fulfillment_outputs: list[str] = field(default_factory=list)
+    output_schema: dict[str, dict] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "mode": self.mode,
             "config": self.config,
             "fulfillment_outputs": self.fulfillment_outputs,
         }
+        if self.output_schema:
+            d["output_schema"] = self.output_schema
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> WatchSpec:
@@ -753,6 +813,7 @@ class WatchSpec:
             mode=d["mode"],
             config=d.get("config", {}),
             fulfillment_outputs=d.get("fulfillment_outputs", []),
+            output_schema=d.get("output_schema", {}),
         )
 
 

@@ -20,10 +20,12 @@ from stepwise.models import (
     FlowMetadata,
     ForEachSpec,
     InputBinding,
+    OutputFieldSpec,
     RouteDefinition,
     RouteSpec,
     StepDefinition,
     StepLimits,
+    VALID_FIELD_TYPES,
     WorkflowDefinition,
 )
 
@@ -581,6 +583,86 @@ def _parse_route(
     return RouteDefinition(routes=all_routes)
 
 
+def _parse_output_field_spec(
+    field_name: str, spec_data: Any, step_name: str,
+) -> OutputFieldSpec:
+    """Parse a single output field spec from YAML data."""
+    if spec_data is None:
+        return OutputFieldSpec()
+    if not isinstance(spec_data, dict):
+        raise ValueError(
+            f"Step '{step_name}': output field '{field_name}' spec must be a mapping or null"
+        )
+
+    field_type = spec_data.get("type", "str")
+    if field_type not in VALID_FIELD_TYPES:
+        raise ValueError(
+            f"Step '{step_name}': output field '{field_name}' has invalid type '{field_type}'. "
+            f"Must be one of: {', '.join(sorted(VALID_FIELD_TYPES))}"
+        )
+
+    options = spec_data.get("options")
+    multiple = spec_data.get("multiple", False)
+    min_val = spec_data.get("min")
+    max_val = spec_data.get("max")
+
+    # Validate type-specific constraints
+    if field_type == "choice":
+        if options is None or not isinstance(options, list) or len(options) == 0:
+            raise ValueError(
+                f"Step '{step_name}': output field '{field_name}' (type=choice) requires non-empty 'options' list"
+            )
+    else:
+        if options is not None:
+            raise ValueError(
+                f"Step '{step_name}': output field '{field_name}' (type={field_type}) cannot have 'options' — only choice fields can"
+            )
+        if multiple:
+            raise ValueError(
+                f"Step '{step_name}': output field '{field_name}' (type={field_type}) cannot have 'multiple' — only choice fields can"
+            )
+
+    if field_type != "number":
+        if min_val is not None or max_val is not None:
+            raise ValueError(
+                f"Step '{step_name}': output field '{field_name}' (type={field_type}) cannot have 'min'/'max' — only number fields can"
+            )
+
+    return OutputFieldSpec(
+        type=field_type,
+        required=spec_data.get("required", True),
+        default=spec_data.get("default"),
+        description=spec_data.get("description", ""),
+        options=options,
+        multiple=multiple,
+        min=min_val,
+        max=max_val,
+    )
+
+
+def _parse_outputs(
+    step_data: dict, step_name: str,
+) -> tuple[list[str], dict[str, OutputFieldSpec]]:
+    """Parse outputs from step YAML data.
+
+    Returns (outputs_list, output_schema).
+    Supports list format (backward compat) and dict format (typed).
+    """
+    raw = step_data.get("outputs", [])
+
+    if isinstance(raw, list):
+        return raw, {}
+
+    if isinstance(raw, dict):
+        outputs: list[str] = list(raw.keys())
+        schema: dict[str, OutputFieldSpec] = {}
+        for field_name, spec_data in raw.items():
+            schema[field_name] = _parse_output_field_spec(field_name, spec_data, step_name)
+        return outputs, schema
+
+    raise ValueError(f"Step '{step_name}': 'outputs' must be a list or mapping")
+
+
 def _parse_step(
     step_name: str,
     step_data: dict,
@@ -590,9 +672,7 @@ def _parse_step(
 ) -> StepDefinition:
     """Parse a single step from YAML data."""
     # Outputs
-    outputs = step_data.get("outputs", [])
-    if not isinstance(outputs, list):
-        raise ValueError(f"Step '{step_name}': 'outputs' must be a list")
+    outputs, output_schema = _parse_outputs(step_data, step_name)
 
     # Check for routes (before for_each — mutual exclusivity checked later)
     route_def = _parse_route(step_data, step_name, outputs, base_dir, loading_files, project_dir)
@@ -638,6 +718,7 @@ def _parse_step(
             name=step_name,
             description=step_data.get("description", ""),
             outputs=outputs,
+            output_schema=output_schema,
             executor=executor,
             inputs=input_bindings,
             sequencing=sequencing,
@@ -701,6 +782,7 @@ def _parse_step(
             name=step_name,
             description=step_data.get("description", ""),
             outputs=outputs,
+            output_schema=output_schema,
             executor=ExecutorRef("sub_flow", {"flow_ref": flow_ref} if flow_ref else {}),
             inputs=input_bindings,
             sequencing=sequencing,
@@ -745,6 +827,7 @@ def _parse_step(
             name=step_name,
             description=step_data.get("description", ""),
             outputs=outputs,
+            output_schema=output_schema,
             executor=executor,
             inputs=input_bindings,
             sequencing=sequencing,
@@ -805,6 +888,7 @@ def _parse_step(
         name=step_name,
         description=step_data.get("description", ""),
         outputs=outputs,
+        output_schema=output_schema,
         executor=executor,
         inputs=input_bindings,
         sequencing=sequencing,

@@ -49,6 +49,7 @@ from stepwise.models import (
     Job,
     JobConfig,
     JobStatus,
+    OutputFieldSpec,
     Sidecar,
     StepDefinition,
     StepRun,
@@ -225,6 +226,83 @@ class Engine:
         run = self._launch(job, step_name)
         return run
 
+    @staticmethod
+    def _validate_fulfill_payload(
+        payload: dict, schema: dict[str, dict],
+    ) -> tuple[dict, list[str]]:
+        """Validate and coerce a fulfillment payload against an output schema.
+
+        Returns (coerced_payload, errors).
+        """
+        coerced = dict(payload)
+        errors: list[str] = []
+
+        for field_name, spec_dict in schema.items():
+            spec = OutputFieldSpec.from_dict(spec_dict)
+            value = coerced.get(field_name)
+
+            # Handle missing/None
+            if value is None or (isinstance(value, str) and not value.strip()):
+                if not spec.required:
+                    if spec.default is not None:
+                        coerced[field_name] = spec.default
+                    elif field_name in coerced:
+                        del coerced[field_name]
+                    continue
+                # required fields checked by the key-presence loop below
+                continue
+
+            # Type coercion/validation
+            if spec.type == "number":
+                try:
+                    num = float(value)
+                    if spec.min is not None and num < spec.min:
+                        errors.append(f"Field '{field_name}': value {num} below minimum {spec.min}")
+                    if spec.max is not None and num > spec.max:
+                        errors.append(f"Field '{field_name}': value {num} above maximum {spec.max}")
+                    coerced[field_name] = num
+                except (ValueError, TypeError):
+                    errors.append(f"Field '{field_name}': expected a number, got {value!r}")
+
+            elif spec.type == "bool":
+                if isinstance(value, bool):
+                    coerced[field_name] = value
+                elif isinstance(value, str):
+                    lower = value.strip().lower()
+                    if lower in ("true", "yes", "1"):
+                        coerced[field_name] = True
+                    elif lower in ("false", "no", "0"):
+                        coerced[field_name] = False
+                    else:
+                        errors.append(f"Field '{field_name}': expected bool, got {value!r}")
+                else:
+                    errors.append(f"Field '{field_name}': expected bool, got {value!r}")
+
+            elif spec.type == "choice":
+                if spec.multiple:
+                    if not isinstance(value, list):
+                        errors.append(f"Field '{field_name}': expected a list for multi-select choice")
+                    elif spec.options:
+                        invalid = [v for v in value if v not in spec.options]
+                        if invalid:
+                            errors.append(
+                                f"Field '{field_name}': invalid choice(s) {invalid}. "
+                                f"Valid: {spec.options}"
+                            )
+                else:
+                    if spec.options and value not in spec.options:
+                        errors.append(
+                            f"Field '{field_name}': invalid choice {value!r}. "
+                            f"Valid: {spec.options}"
+                        )
+
+            # str and text: accept anything stringable
+            elif spec.type in ("str", "text"):
+                if not isinstance(value, str):
+                    coerced[field_name] = str(value)
+
+        return coerced, errors
+
     def fulfill_watch(self, run_id: str, payload: dict) -> dict | None:
         """Complete a suspended step's watch with the provided payload.
 
@@ -247,12 +325,26 @@ class Engine:
         if not run.watch:
             raise ValueError(f"Run {run_id} has no watch spec")
 
-        # Validate payload has fulfillment_outputs
+        schema = run.watch.output_schema or {}
+
+        # Validate payload has required fulfillment_outputs
         for field in run.watch.fulfillment_outputs:
-            if field not in payload:
+            # Skip required-check for optional fields
+            field_spec = schema.get(field, {})
+            if not field_spec.get("required", True):
+                continue
+            if field not in payload or (isinstance(payload.get(field), str) and not payload[field].strip()):
                 raise ValueError(
                     f"Payload missing required field '{field}' "
                     f"(expected: {run.watch.fulfillment_outputs})"
+                )
+
+        # Validate typed fields if schema exists
+        if schema:
+            payload, validation_errors = self._validate_fulfill_payload(payload, schema)
+            if validation_errors:
+                raise ValueError(
+                    "Payload validation failed: " + "; ".join(validation_errors)
                 )
 
         job = self.store.load_job(run.job_id)
@@ -352,12 +444,15 @@ class Engine:
         suspended: list[dict] = []
         for run in runs:
             if run.status == StepRunStatus.SUSPENDED and run.watch:
-                suspended.append({
+                entry: dict = {
                     "run_id": run.id,
                     "step": run.step_name,
                     "prompt": (run.watch.config or {}).get("prompt", ""),
                     "fields": run.watch.fulfillment_outputs,
-                })
+                }
+                if run.watch.output_schema:
+                    entry["output_schema"] = run.watch.output_schema
+                suspended.append(entry)
         return suspended
 
     def job_cost(self, job_id: str) -> float:
@@ -952,6 +1047,8 @@ class Engine:
                 run.executor_state = result.executor_state
                 if run.watch and not run.watch.fulfillment_outputs:
                     run.watch.fulfillment_outputs = list(step_def.outputs)
+                if run.watch and not run.watch.output_schema and step_def.output_schema:
+                    run.watch.output_schema = {k: v.to_dict() for k, v in step_def.output_schema.items()}
                 self.store.save_run(run)
                 self._emit(job.id, STEP_SUSPENDED, {
                     "step": step_name,
@@ -1720,11 +1817,27 @@ class Engine:
         if not step_def.outputs:
             return None  # No declared outputs to validate
         if not envelope or not envelope.artifact:
+            # Check if all outputs are optional
+            if step_def.output_schema:
+                all_optional = all(
+                    not step_def.output_schema[f].required
+                    for f in step_def.outputs
+                    if f in step_def.output_schema
+                )
+                if all_optional:
+                    return None
             return (
                 f"Step '{step_def.name}' declares outputs {step_def.outputs} "
                 f"but artifact is empty"
             )
-        missing = [f for f in step_def.outputs if f not in envelope.artifact]
+        missing = []
+        for f in step_def.outputs:
+            if f in envelope.artifact:
+                continue
+            # Skip optional fields
+            if f in step_def.output_schema and not step_def.output_schema[f].required:
+                continue
+            missing.append(f)
         if missing:
             return (
                 f"Step '{step_def.name}' artifact missing declared outputs: {missing} "
