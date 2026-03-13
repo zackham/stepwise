@@ -237,6 +237,9 @@ export function JobDetailPage() {
             onToggleExpand={toggleExpand}
             selectedStep={selectedStep}
             onSelectStep={setSelectedStep}
+            onNavigateSubJob={(subJobId) =>
+              navigate({ to: "/jobs/$jobId", params: { jobId: subJobId } })
+            }
           />
         </div>
       </div>

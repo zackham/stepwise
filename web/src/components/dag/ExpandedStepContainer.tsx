@@ -18,6 +18,7 @@ interface ExpandedStepContainerProps {
   selectedStep: string | null;
   onSelectStep: (key: string | null) => void;
   onToggleExpand: (stepName: string) => void;
+  onNavigateSubJob?: (subJobId: string) => void;
   depth: number;
 }
 
@@ -47,6 +48,7 @@ export function ExpandedStepContainer({
   selectedStep,
   onSelectStep,
   onToggleExpand,
+  onNavigateSubJob,
   depth,
 }: ExpandedStepContainerProps) {
   const borderColor = DEPTH_BORDER_COLORS[Math.min(depth, DEPTH_BORDER_COLORS.length - 1)];
@@ -181,6 +183,7 @@ export function ExpandedStepContainer({
                     selectedStep={selectedStep}
                     onSelectStep={onSelectStep}
                     onToggleExpand={onToggleExpand}
+                    onNavigateSubJob={onNavigateSubJob}
                     depth={depth + 1}
                   />
                 </div>
@@ -197,6 +200,7 @@ export function ExpandedStepContainer({
                   onClick={() =>
                     onSelectStep(selectedStep === childNode.id ? null : childNode.id)
                   }
+                  onNavigateSubJob={onNavigateSubJob}
                   onToggleExpand={
                     childNode.hasSubFlow ? () => onToggleExpand(childNode.id) : undefined
                   }

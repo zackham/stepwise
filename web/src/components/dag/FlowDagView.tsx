@@ -13,6 +13,7 @@ interface FlowDagViewProps {
   onToggleExpand: (stepName: string) => void;
   selectedStep: string | null;
   onSelectStep: (stepName: string | null) => void;
+  onNavigateSubJob?: (subJobId: string) => void;
 }
 
 export function FlowDagView({
@@ -23,6 +24,7 @@ export function FlowDagView({
   onToggleExpand,
   selectedStep,
   onSelectStep,
+  onNavigateSubJob,
 }: FlowDagViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -293,6 +295,7 @@ export function FlowDagView({
                   selectedStep={selectedStep}
                   onSelectStep={onSelectStep}
                   onToggleExpand={onToggleExpand}
+                  onNavigateSubJob={onNavigateSubJob}
                   depth={0}
                 />
               </div>
@@ -309,6 +312,7 @@ export function FlowDagView({
                 onClick={() =>
                   onSelectStep(selectedStep === node.id ? null : node.id)
                 }
+                onNavigateSubJob={onNavigateSubJob}
                 onToggleExpand={
                   node.hasSubFlow ? () => onToggleExpand(node.id) : undefined
                 }
