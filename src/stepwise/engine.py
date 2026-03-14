@@ -2299,6 +2299,16 @@ class AsyncEngine(Engine):
     def _after_step_change(self, job_id: str) -> None:
         """After a step result is processed, broadcast, dispatch ready steps, check terminal."""
         self._broadcast({"type": "job_changed", "job_id": job_id})
+        # Also broadcast ancestor jobs so the UI refreshes parent tree views
+        try:
+            job = self.store.load_job(job_id)
+            parent_id = job.parent_job_id
+            while parent_id:
+                self._broadcast({"type": "job_changed", "job_id": parent_id})
+                parent_job = self.store.load_job(parent_id)
+                parent_id = parent_job.parent_job_id
+        except KeyError:
+            pass
         self._dispatch_ready(job_id)
         self._check_job_terminal(job_id)
 
