@@ -24,21 +24,17 @@ curl -fsSL https://raw.githubusercontent.com/zackham/stepwise/master/install.sh 
 ## Get started in 30 seconds
 
 ```bash
-stepwise init                          # set up a .stepwise/ project
-
-cat > hello.flow.yaml << 'EOF'
-name: hello-world
-steps:
-  greet:
-    run: 'echo "{\"message\": \"Hello from Stepwise!\"}"'
-    outputs: [message]
-EOF
-
-stepwise run hello.flow.yaml           # headless
-stepwise run hello.flow.yaml --watch   # live web UI
+# Try the interactive demo — plan, implement, review, deploy
+stepwise run @stepwise:welcome --watch
 ```
 
 `--watch` opens a browser with a real-time DAG visualization. Steps execute automatically — agents stream output live, human steps pause and wait for your input.
+
+```bash
+# Or create your own flow
+stepwise new my-flow                   # scaffold flows/my-flow/FLOW.yaml
+stepwise run my-flow --watch           # run it in the browser
+```
 
 ## How it works
 
