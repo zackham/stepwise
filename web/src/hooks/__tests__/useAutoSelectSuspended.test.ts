@@ -46,7 +46,7 @@ describe("useAutoSelectSuspended", () => {
     expect(onSelect).toHaveBeenCalledWith("review");
   });
 
-  it("does not auto-select when something is already selected", () => {
+  it("auto-selects even when another step is already selected", () => {
     const onSelect = vi.fn();
     const runs: StepRun[] = [
       makeRun({
@@ -69,7 +69,7 @@ describe("useAutoSelectSuspended", () => {
       ),
     );
 
-    expect(onSelect).not.toHaveBeenCalled();
+    expect(onSelect).toHaveBeenCalledWith("review");
   });
 
   it("does not re-trigger for already-known suspended steps", () => {

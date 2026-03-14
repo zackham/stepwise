@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
 import { useJob, useRuns, useJobTree, useJobOutput, useJobCost, useConfig, useStepwiseMutations } from "@/hooks/useStepwise";
 import { JobList } from "@/components/jobs/JobList";
@@ -110,6 +110,22 @@ export function JobDetailPage() {
 
   // Auto-select newly suspended human steps
   useAutoSelectSuspended(runs, selection, handleSelectStep);
+
+  // Auto-expand steps that have sub-jobs (delegated status)
+  const prevDelegatedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const currentDelegated = new Set(
+      runs
+        .filter((r) => r.status === "delegated" && r.sub_job_id)
+        .map((r) => r.step_name),
+    );
+    for (const name of currentDelegated) {
+      if (!prevDelegatedRef.current.has(name) && !expandedSteps.has(name)) {
+        setExpandedSteps((prev) => new Set([...prev, name]));
+      }
+    }
+    prevDelegatedRef.current = currentDelegated;
+  }, [runs, expandedSteps]);
 
   // Reset state when switching jobs
   useEffect(() => {
