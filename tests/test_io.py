@@ -422,11 +422,12 @@ class TestQuietAdapter:
         assert adapter.prompt_confirm("ok?") is True
 
     def test_live_flow_works(self):
+        from stepwise.io import StepNode
         adapter = QuietAdapter()
         with adapter.live_flow("test", ["a", "b"]) as handle:
-            handle.update_step("a", "running")
-            handle.update_step("a", "completed", duration=1.0)
-            handle.update_summary(1, 2)
+            handle.render_tree([StepNode("a", "running")])
+            handle.render_tree([StepNode("a", "completed", duration=1.0)])
+            handle.flush_all()
 
 
 # ── PlainAdapter live_flow ────────────────────────────────────────────
@@ -434,13 +435,13 @@ class TestQuietAdapter:
 
 class TestPlainLiveFlow:
     def test_updates_produce_output(self):
+        from stepwise.io import StepNode
         out = StringIO()
         adapter = PlainAdapter(output=out)
         with adapter.live_flow("test-flow", ["a", "b"]) as handle:
-            handle.update_step("a", "running")
-            handle.update_step("a", "completed", duration=1.0)
+            handle.render_tree([StepNode("a", "running")])
+            handle.render_tree([StepNode("a", "completed", duration=1.0)])
         text = out.getvalue()
-        assert "running" in text
         assert "completed" in text
 
     def test_pause_resume_noop(self):

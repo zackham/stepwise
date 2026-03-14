@@ -24,7 +24,7 @@ from stepwise.runner import (
     EXIT_SUSPENDED,
     _is_blocked_by_suspension_from_runs,
     _ws_url_from_server,
-    _report_transitions,
+    _build_tree_from_dicts,
     _fetch_job_state,
 )
 from stepwise.server import app
@@ -124,41 +124,35 @@ class TestBlockedBySuspensionFromRuns:
         assert _is_blocked_by_suspension_from_runs(runs) is False
 
 
-class TestReportTransitions:
-    def _mock_handle(self):
-        handle = MagicMock()
-        handle.update_step = MagicMock()
-        return handle
-
-    def test_reports_completed(self):
-        handle = self._mock_handle()
-        seen_running: set[str] = set()
-        seen_completed: set[str] = set()
+class TestBuildTreeFromDicts:
+    def test_builds_completed_node(self):
         runs = [
             {"id": "r1", "status": "completed", "step_name": "a",
              "started_at": "2026-01-01T00:00:00", "completed_at": "2026-01-01T00:00:01"},
         ]
-        count = _report_transitions(runs, handle, seen_running, seen_completed)
-        assert count == 1
-        assert "r1" in seen_completed
+        tree = _build_tree_from_dicts(runs)
+        assert len(tree) == 1
+        assert tree[0].name == "a"
+        assert tree[0].status == "completed"
+        assert tree[0].duration is not None
 
-    def test_reports_failed(self):
-        handle = self._mock_handle()
-        seen_running: set[str] = set()
-        seen_completed: set[str] = set()
+    def test_builds_failed_node(self):
         runs = [{"id": "r1", "status": "failed", "step_name": "a", "error": "boom"}]
-        count = _report_transitions(runs, handle, seen_running, seen_completed)
-        assert count == 0  # failed doesn't increment completed count
-        assert "r1" in seen_completed
+        tree = _build_tree_from_dicts(runs)
+        assert len(tree) == 1
+        assert tree[0].status == "failed"
+        assert tree[0].error == "boom"
 
-    def test_deduplicates(self):
-        handle = self._mock_handle()
-        seen_running: set[str] = set()
-        seen_completed: set[str] = {"r1"}
-        runs = [{"id": "r1", "status": "completed", "step_name": "a",
-                 "started_at": "2026-01-01T00:00:00", "completed_at": "2026-01-01T00:00:01"}]
-        count = _report_transitions(runs, handle, seen_running, seen_completed)
-        assert count == 0  # already seen
+    def test_builds_multiple_nodes(self):
+        runs = [
+            {"id": "r1", "status": "completed", "step_name": "a",
+             "started_at": "2026-01-01T00:00:00", "completed_at": "2026-01-01T00:00:01"},
+            {"id": "r2", "status": "running", "step_name": "b"},
+        ]
+        tree = _build_tree_from_dicts(runs)
+        assert len(tree) == 2
+        assert tree[0].status == "completed"
+        assert tree[1].status == "running"
 
 
 class TestFetchJobState:

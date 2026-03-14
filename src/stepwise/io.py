@@ -17,34 +17,36 @@ from typing import Any, Generator, TextIO
 # ── Live flow handle ──────────────────────────────────────────────────
 
 
+@dataclass
+class StepNode:
+    """A step's current state for display."""
+
+    name: str
+    status: str  # pending, running, completed, failed, suspended
+    duration: float | None = None
+    cost: float | None = None
+    outputs: dict | None = None
+    is_retry: bool = False
+    error: str | None = None
+    label: str | None = None  # for-each item label (e.g., "data-model")
+    children: list["StepNode"] = field(default_factory=list)
+
+
 class LiveFlowHandle(abc.ABC):
     """Handle returned by live_flow() context manager."""
 
     @abc.abstractmethod
-    def update_step(
-        self,
-        name: str,
-        status: str,
-        duration: float | None = None,
-        cost: float | None = None,
-        error: str | None = None,
-        indent: int = 0,
-        outputs: dict | None = None,
-        is_retry: bool = False,
-    ) -> None: ...
+    def render_tree(self, steps: list[StepNode]) -> None:
+        """Render the full step tree. Called each tick.
 
-    def print_label(self, text: str, indent: int = 0) -> None:
-        """Print a non-step label line (e.g., for-each item header)."""
-        pass
+        Completed root-level steps get flushed permanently.
+        Active steps (running/suspended + their subtrees) form a
+        re-renderable block at the bottom.
+        """
 
     @abc.abstractmethod
-    def update_summary(
-        self,
-        completed: int,
-        total: int,
-        cost: float | None = None,
-        elapsed: float | None = None,
-    ) -> None: ...
+    def flush_all(self) -> None:
+        """Flush any remaining active block as permanent output."""
 
     @abc.abstractmethod
     def pause_for_input(self) -> None: ...
@@ -238,28 +240,26 @@ class IOAdapter(abc.ABC):
 class _PlainLiveFlowHandle(LiveFlowHandle):
     """Line-by-line live flow handle for non-TTY environments."""
 
-    def __init__(self, adapter: PlainAdapter):
+    def __init__(self, adapter: "PlainAdapter"):
         self._adapter = adapter
+        self._flushed: set[str] = set()
 
-    def update_step(
-        self,
-        name: str,
-        status: str,
-        duration: float | None = None,
-        cost: float | None = None,
-        error: str | None = None,
-        indent: int = 0,
-        outputs: dict | None = None,
-        is_retry: bool = False,
-    ) -> None:
-        prefix = "  " * indent
-        self._adapter.step_status(f"{prefix}{name}", status, duration, cost, error)
+    def render_tree(self, steps: list[StepNode]) -> None:
+        def _walk(nodes: list[StepNode], indent: int = 0) -> None:
+            for node in nodes:
+                key = f"{node.name}:{node.status}:{id(node)}"
+                if node.status in ("completed", "failed") and key not in self._flushed:
+                    self._flushed.add(key)
+                    prefix = "  " * indent
+                    self._adapter.step_status(
+                        f"{prefix}{node.name}", node.status,
+                        node.duration, node.cost, node.error,
+                    )
+                _walk(node.children, indent + 1)
+        _walk(steps)
 
-    def update_summary(
-        self, completed: int, total: int,
-        cost: float | None = None, elapsed: float | None = None,
-    ) -> None:
-        pass  # no summary line in plain mode
+    def flush_all(self) -> None:
+        pass
 
     def pause_for_input(self) -> None:
         pass
@@ -271,10 +271,10 @@ class _PlainLiveFlowHandle(LiveFlowHandle):
 class _NoopLiveFlowHandle(LiveFlowHandle):
     """No-op live flow handle for quiet mode."""
 
-    def update_step(self, name: str, status: str, **kw: Any) -> None:
+    def render_tree(self, steps: list[StepNode]) -> None:
         pass
 
-    def update_summary(self, completed: int, total: int, **kw: Any) -> None:
+    def flush_all(self) -> None:
         pass
 
     def pause_for_input(self) -> None:
@@ -636,126 +636,124 @@ def _format_output_preview(outputs: dict, max_len: int = 50) -> str:
     return val
 
 
-class _AppendFlowHandle(LiveFlowHandle):
-    """Append-only flow handle — prints each transition as a permanent line.
+class _LiveBlockFlowHandle(LiveFlowHandle):
+    """Hybrid flow handle: permanent lines for completed root steps,
+    re-renderable active block for everything in progress.
 
-    No live display, no screen clearing. Output builds up top-to-bottom.
-    Human input appears inline, gets erased after collection so the step
-    shows as a clean one-liner like all others.
+    Each call to render_tree() erases the previous active block and
+    redraws it from the current step tree. When root-level steps
+    complete, they get flushed as permanent output above the block.
     """
 
     def __init__(self, console, flow_name: str):
         self._console = console
         self._flow_name = flow_name
-        self._running_step: str | None = None  # track the "running" line to overwrite
-        self._pause_line_count = 0  # lines to erase on resume
+        self._active_lines = 0  # lines in the current active block
+        self._flushed_roots: set[str] = set()  # root step names already permanent
+        self._pause_line_count = 0
 
-    def _step_line(
-        self, name: str, status: str,
-        duration: float | None = None,
-        cost: float | None = None,
-        error: str | None = None,
-        indent: int = 0,
-        outputs: dict | None = None,
-        is_retry: bool = False,
-    ) -> None:
+    def _format_node(self, node: StepNode, indent: int = 0) -> list:
+        """Build Rich Text lines for a step node and its children."""
         from rich.text import Text
 
+        lines = []
         icons = {
             "running": ("⠋", "cyan"),
             "completed": ("✓", "green"),
             "failed": ("✗", "red"),
             "suspended": ("◆", "yellow"),
             "delegated": ("↗", "blue"),
+            "pending": ("○", "dim"),
         }
-        icon, style = icons.get(status, ("○", "dim"))
-        if is_retry and status in ("completed", "running"):
+        icon, style = icons.get(node.status, ("○", "dim"))
+        if node.is_retry and node.status in ("completed", "running"):
             icon = "⟳"
+
+        # Item label line (for for-each items)
+        if node.label:
+            label_line = Text()
+            label_line.append(f"{'  ' * (indent + 1)}[{node.label}]", style="dim bold")
+            lines.append(label_line)
+
         prefix = "  " + "  " * indent
         line = Text()
         line.append(f"{prefix}{icon} ", style=style)
-        line.append(f"{name:<20}", style=style if indent == 0 else "dim")
+        line.append(f"{node.name:<20}", style=style if indent == 0 else "dim")
+
         parts: list[str] = []
-        if duration is not None:
-            parts.append(f"{duration:.1f}s")
-        if cost is not None:
-            parts.append(f"${cost:.3f}")
-        if error:
-            parts.append(error)
+        if node.duration is not None:
+            parts.append(f"{node.duration:.1f}s")
+        if node.cost is not None:
+            parts.append(f"${node.cost:.3f}")
+        if node.error:
+            parts.append(node.error)
         if parts:
             line.append(" " + "  ".join(parts), style="dim")
-        # Output preview
-        if outputs and status == "completed":
-            preview = _format_output_preview(outputs)
+
+        if node.outputs and node.status == "completed":
+            preview = _format_output_preview(node.outputs)
             if preview:
                 line.append(f"  → {preview}", style="dim italic")
-        self._console.print(line, highlight=False)
 
-    def print_label(self, text: str, indent: int = 0) -> None:
-        """Print a dim label line (e.g., for-each item header)."""
-        from rich.text import Text
-        prefix = "  " + "  " * indent
-        line = Text()
-        line.append(f"{prefix}{text}", style="dim bold")
-        self._console.print(line, highlight=False)
+        lines.append(line)
 
-    def _erase_last_line(self) -> None:
-        """Move up one line and clear it."""
-        file = self._console.file or sys.stderr
-        file.write("\033[A\033[2K\r")
-        file.flush()
+        for child in node.children:
+            lines.extend(self._format_node(child, indent + 1))
 
-    def update_step(
-        self,
-        name: str,
-        status: str,
-        duration: float | None = None,
-        cost: float | None = None,
-        error: str | None = None,
-        indent: int = 0,
-        outputs: dict | None = None,
-        is_retry: bool = False,
-    ) -> None:
-        if status == "running":
-            self._running_step = name
-            self._step_line(name, "running", indent=indent, is_retry=is_retry)
-        elif status in ("completed", "failed"):
-            if self._running_step == name:
-                self._erase_last_line()
-                self._running_step = None
-            self._step_line(
-                name, status, duration, cost, error,
-                indent=indent, outputs=outputs, is_retry=is_retry,
-            )
-        elif status == "suspended":
-            if self._running_step == name:
-                self._erase_last_line()
-                self._running_step = None
-            self._step_line(name, "suspended", indent=indent)
+        return lines
 
-    def update_summary(
-        self, completed: int, total: int,
-        cost: float | None = None, elapsed: float | None = None,
-    ) -> None:
-        pass  # no live summary — printed at the end by flow_complete
-
-    def set_pause_lines(self, count: int) -> None:
-        """Set the number of lines to erase on resume (called by collect_human_input)."""
-        self._pause_line_count = count
-
-    def pause_for_input(self) -> None:
-        """Mark that we're pausing. Line count set externally via set_pause_lines."""
-        pass  # line count is calculated by the adapter's collect_human_input
-
-    def resume_after_input(self) -> None:
-        """Erase the input area (suspended line + prompt + fields)."""
-        lines = self._pause_line_count + 1  # +1 for the suspended step line
-        if lines > 0:
+    def _erase_block(self, count: int) -> None:
+        """Erase the last N lines."""
+        if count > 0:
             file = self._console.file or sys.stderr
             file.flush()
             sys.stdout.flush()
-            file.write("".join("\033[A\033[2K" for _ in range(lines)) + "\r")
+            file.write("".join("\033[A\033[2K" for _ in range(count)) + "\r")
             file.flush()
+
+    def _print_lines(self, lines: list) -> int:
+        """Print Rich Text lines, return count."""
+        for line in lines:
+            self._console.print(line, highlight=False)
+        return len(lines)
+
+    def render_tree(self, steps: list[StepNode]) -> None:
+        # Erase previous active block
+        self._erase_block(self._active_lines)
+        self._active_lines = 0
+
+        active_lines = []
+        for node in steps:
+            node_lines = self._format_node(node)
+            is_done = node.status in ("completed", "failed")
+            root_key = f"{node.name}:{node.is_retry}"
+
+            if is_done and root_key not in self._flushed_roots:
+                # Flush as permanent output
+                self._flushed_roots.add(root_key)
+                self._print_lines(node_lines)
+            elif not is_done:
+                # Part of the active block
+                active_lines.extend(node_lines)
+            # Already flushed + done → skip
+
+        # Render active block
+        self._active_lines = self._print_lines(active_lines)
+
+    def flush_all(self) -> None:
+        """Flush remaining active block as permanent (on flow complete)."""
+        self._active_lines = 0
+
+    def set_pause_lines(self, count: int) -> None:
+        self._pause_line_count = count
+
+    def pause_for_input(self) -> None:
+        pass
+
+    def resume_after_input(self) -> None:
+        lines = self._pause_line_count + self._active_lines
+        self._erase_block(lines)
+        self._active_lines = 0
         self._pause_line_count = 0
 
 
@@ -865,7 +863,7 @@ class TerminalAdapter(IOAdapter):
     ) -> Generator[LiveFlowHandle, None, None]:
         self._console.print()
         self.banner(flow_name)
-        handle = _AppendFlowHandle(self._console, flow_name)
+        handle = _LiveBlockFlowHandle(self._console, flow_name)
         self._active_handle = handle
         try:
             yield handle

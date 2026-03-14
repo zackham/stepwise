@@ -20,7 +20,7 @@ import httpx
 from stepwise.config import StepwiseConfig, load_config
 from stepwise.flow_resolution import flow_display_name
 from stepwise.engine import AsyncEngine, Engine
-from stepwise.io import IOAdapter, LiveFlowHandle, create_adapter
+from stepwise.io import IOAdapter, LiveFlowHandle, StepNode, create_adapter
 from stepwise.models import (
     Job,
     JobStatus,
@@ -95,38 +95,26 @@ async def _fetch_job_state(
     return job_resp.json(), runs_resp.json()
 
 
-def _report_transitions(
-    runs: list[dict],
-    handle,
-    seen_running: set[str],
-    seen_completed: set[str],
-) -> int:
-    """Report step transitions via LiveFlowHandle. Returns count of newly completed steps."""
-    newly_completed = 0
+def _build_tree_from_dicts(runs: list[dict]) -> list[StepNode]:
+    """Build step tree from REST API run dicts (server delegation path)."""
+    nodes = []
     for run in runs:
-        run_id = run["id"]
-        status = run["status"]
-
-        if run_id not in seen_running and status in ("running", "suspended", "delegated"):
-            seen_running.add(run_id)
-            handle.update_step(run["step_name"], "running")
-
-        if run_id not in seen_completed:
-            if status == "completed":
-                seen_completed.add(run_id)
-                duration = 0.0
-                if run.get("started_at") and run.get("completed_at"):
-                    s = datetime.fromisoformat(run["started_at"]).timestamp()
-                    e = datetime.fromisoformat(run["completed_at"]).timestamp()
-                    duration = e - s
-                handle.update_step(run["step_name"], "completed", duration=duration)
-                newly_completed += 1
-            elif status == "failed":
-                seen_completed.add(run_id)
-                handle.update_step(
-                    run["step_name"], "failed", error=run.get("error", "unknown error"),
-                )
-    return newly_completed
+        status_map = {"running": "running", "completed": "completed",
+                      "failed": "failed", "suspended": "suspended",
+                      "delegated": "running"}
+        status = status_map.get(run["status"], "pending")
+        duration = None
+        if run.get("started_at") and run.get("completed_at"):
+            s = datetime.fromisoformat(run["started_at"]).timestamp()
+            e = datetime.fromisoformat(run["completed_at"]).timestamp()
+            duration = e - s
+        nodes.append(StepNode(
+            name=run["step_name"],
+            status=status,
+            duration=duration,
+            error=run.get("error"),
+        ))
+    return nodes
 
 
 def _delegated_create_and_start(
@@ -209,9 +197,7 @@ async def _delegated_ws_loop(
         shutdown_requested = True
 
     start_time = time.time()
-    seen_running: set[str] = set()
-    seen_completed: set[str] = set()
-    steps_completed = 0
+    seen_completed: set[str] = set()  # human steps already prompted
     base_url = server_url.rstrip("/")
 
     async with httpx.AsyncClient(base_url=base_url, timeout=10) as client:
@@ -268,9 +254,8 @@ async def _delegated_ws_loop(
                         _err(f"Lost connection to server: {e}", output_stream)
                         return EXIT_JOB_FAILED
 
-                    steps_completed += _report_transitions(
-                        runs, handle, seen_running, seen_completed,
-                    )
+                    tree = _build_tree_from_dicts(runs)
+                    handle.render_tree(tree)
 
                     # Handle suspended human steps
                     for run in runs:
@@ -279,7 +264,6 @@ async def _delegated_ws_loop(
                         if status == "suspended" and run_id not in seen_completed:
                             watch = run.get("watch")
                             if watch and watch.get("mode") == "human":
-                                handle.update_step(run["step_name"], "suspended")
                                 handle.pause_for_input()
                                 fields = watch.get("fulfillment_outputs", [])
                                 prompt = (watch.get("config") or {}).get("prompt", "")
@@ -297,17 +281,13 @@ async def _delegated_ws_loop(
                                     _err(f"Failed to fulfill step: {e}", output_stream)
                                 seen_completed.add(run_id)
 
-                    # Update summary
-                    total = len(step_names) if step_names else steps_completed
-                    handle.update_summary(
-                        steps_completed, total, elapsed=time.time() - start_time,
-                    )
-
                     # Check terminal state
                     job_status = job_data["status"]
                     if job_status == "completed":
+                        handle.flush_all()
                         total_time = time.time() - start_time
-                        adapter.flow_complete(steps_completed, total_time)
+                        completed = sum(1 for n in tree if n.status == "completed")
+                        adapter.flow_complete(completed, total_time)
                         if output_json:
                             _json_stdout({
                                 "status": "completed",
@@ -457,65 +437,87 @@ def run_flow(
         store.close()
 
 
-async def _report_runs(
+def _build_step_tree(
     engine: AsyncEngine,
     store: SQLiteStore,
+    job_id: str,
+) -> list[StepNode]:
+    """Build a tree of StepNodes from current job state, recursively walking sub-jobs."""
+    nodes: list[StepNode] = []
+    # Group runs by step_name, keep latest per step (highest attempt)
+    all_runs = engine.get_runs(job_id)
+    # Process all runs — multiple attempts of same step become separate nodes
+    for run in all_runs:
+        status_map = {
+            StepRunStatus.RUNNING: "running",
+            StepRunStatus.COMPLETED: "completed",
+            StepRunStatus.FAILED: "failed",
+            StepRunStatus.SUSPENDED: "suspended",
+            StepRunStatus.DELEGATED: "running",
+        }
+        status = status_map.get(run.status, "pending")
+        duration = None
+        if run.started_at and run.completed_at:
+            duration = (run.completed_at - run.started_at).total_seconds()
+
+        es = run.executor_state or {}
+        name = run.step_name
+        if es.get("for_each"):
+            count = es.get("item_count", 0)
+            name = f"{run.step_name} ({count} items)"
+
+        node = StepNode(
+            name=name,
+            status=status,
+            duration=duration,
+            cost=store.accumulated_cost(run.id) or None,
+            outputs=run.result.artifact if run.result else None,
+            is_retry=run.attempt > 1,
+            error=run.error,
+        )
+
+        # Recurse into sub-jobs (sub-flows, routes)
+        if run.sub_job_id:
+            node.children = _build_step_tree(engine, store, run.sub_job_id)
+
+        # Recurse into for_each sub-jobs with item labels
+        if es.get("for_each"):
+            parent_job = engine.get_job(job_id)
+            step_def = parent_job.workflow.steps.get(run.step_name)
+            item_var = "item"
+            if step_def and step_def.for_each:
+                item_var = step_def.for_each.item_var
+
+            for sub_id in es.get("sub_job_ids", []):
+                try:
+                    sub_job = engine.get_job(sub_id)
+                    item_val = str(sub_job.inputs.get(item_var, ""))
+                except KeyError:
+                    item_val = ""
+                # Create a wrapper node for the item group
+                item_children = _build_step_tree(engine, store, sub_id)
+                if item_children:
+                    # Set label on first child to act as item header
+                    item_children[0].label = item_val or None
+                    node.children.extend(item_children)
+
+        nodes.append(node)
+    return nodes
+
+
+async def _handle_human_input(
+    engine: AsyncEngine,
     adapter: IOAdapter,
     handle: LiveFlowHandle,
     job_id: str,
-    indent: int,
-    seen_running: set[str],
-    seen_completed: set[str],
     seen_prompted: set[str],
-    seen_labels: set[str] | None = None,
 ) -> None:
-    """Report step transitions for a job, recursively walking sub-jobs."""
-    if seen_labels is None:
-        seen_labels = set()  # only for recursive calls from within
-
+    """Check for and handle suspended human steps, recursively through sub-jobs."""
     all_runs = engine.get_runs(job_id)
     for run in all_runs:
-        is_retry = run.attempt > 1
-
-        if run.id not in seen_running and run.status in (
-            StepRunStatus.RUNNING, StepRunStatus.SUSPENDED,
-            StepRunStatus.DELEGATED,
-        ):
-            seen_running.add(run.id)
-            es = run.executor_state or {}
-            name = run.step_name
-            if es.get("for_each"):
-                count = es.get("item_count", 0)
-                name = f"{run.step_name} ({count} items)"
-            handle.update_step(
-                name, "running", indent=indent, is_retry=is_retry,
-            )
-
-        if run.id not in seen_completed:
-            if run.status == StepRunStatus.COMPLETED:
-                seen_completed.add(run.id)
-                duration = 0.0
-                if run.started_at and run.completed_at:
-                    duration = (run.completed_at - run.started_at).total_seconds()
-                cost = store.accumulated_cost(run.id) or None
-                outputs = run.result.artifact if run.result else None
-                handle.update_step(
-                    run.step_name, "completed", duration=duration, cost=cost,
-                    indent=indent, outputs=outputs, is_retry=is_retry,
-                )
-            elif run.status == StepRunStatus.FAILED:
-                seen_completed.add(run.id)
-                handle.update_step(
-                    run.step_name, "failed",
-                    error=run.error or "unknown error",
-                    indent=indent,
-                )
-
-        # Handle suspended (human) steps
         if run.status == StepRunStatus.SUSPENDED and run.watch:
             if run.watch.mode == "human" and run.id not in seen_prompted:
                 seen_prompted.add(run.id)
-                handle.update_step(run.step_name, "suspended", indent=indent)
                 handle.pause_for_input()
 
                 prompt = (run.watch.config or {}).get("prompt", "")
@@ -528,38 +530,18 @@ async def _report_runs(
                 engine.fulfill_watch(run.id, payload)
 
                 handle.resume_after_input()
+                return  # handle one at a time
 
-        # Recurse into sub-jobs (sub-flows, routes)
+        # Check sub-jobs
         if run.sub_job_id:
-            await _report_runs(
-                engine, store, adapter, handle, run.sub_job_id, indent + 1,
-                seen_running, seen_completed, seen_prompted, seen_labels,
+            await _handle_human_input(
+                engine, adapter, handle, run.sub_job_id, seen_prompted,
             )
-
-        # Recurse into for_each sub-jobs with item labels
         es = run.executor_state or {}
         if es.get("for_each"):
             for sub_id in es.get("sub_job_ids", []):
-                # Print item label header
-                label_key = f"{sub_id}"
-                if label_key not in seen_labels:
-                    seen_labels.add(label_key)
-                    try:
-                        sub_job = engine.get_job(sub_id)
-                        # Find the item variable name from the parent step def
-                        parent_job = engine.get_job(job_id)
-                        step_def = parent_job.workflow.steps.get(run.step_name)
-                        item_var = "item"
-                        if step_def and step_def.for_each:
-                            item_var = step_def.for_each.item_var
-                        item_val = sub_job.inputs.get(item_var, "")
-                        if item_val:
-                            handle.print_label(f"[{item_val}]", indent=indent + 1)
-                    except (KeyError, AttributeError):
-                        pass
-                await _report_runs(
-                    engine, store, adapter, handle, sub_id, indent + 1,
-                    seen_running, seen_completed, seen_prompted, seen_labels,
+                await _handle_human_input(
+                    engine, adapter, handle, sub_id, seen_prompted,
                 )
 
 
@@ -588,10 +570,7 @@ async def _async_run_flow(
 
     start_time = time.time()
     last_heartbeat = 0.0
-    seen_running: set[str] = set()
-    seen_completed: set[str] = set()
     seen_prompted: set[str] = set()  # human steps we've already prompted for
-    seen_labels: set[str] = set()  # for-each item labels already printed
     step_names = list(job.workflow.steps.keys())
 
     try:
@@ -612,28 +591,23 @@ async def _async_run_flow(
 
                 job = engine.get_job(job.id)
 
-                # Report new step transitions (recursively walk sub-jobs)
-                await _report_runs(
-                    engine, store, adapter, handle, job.id, 0,
-                    seen_running, seen_completed, seen_prompted, seen_labels,
-                )
+                # Build step tree and render
+                tree = _build_step_tree(engine, store, job.id)
+                handle.render_tree(tree)
 
-                # Update summary
-                handle.update_summary(
-                    len(seen_completed), len(step_names),
-                    elapsed=time.time() - start_time,
+                # Handle human input (separate from rendering)
+                await _handle_human_input(
+                    engine, adapter, handle, job.id, seen_prompted,
                 )
 
                 # Check job terminal state
                 if job.status == JobStatus.COMPLETED:
-                    # Final sweep — catch any transitions missed in this tick
-                    await _report_runs(
-                        engine, store, adapter, handle, job.id, 0,
-                        seen_running, seen_completed, seen_prompted, seen_labels,
-                    )
+                    tree = _build_step_tree(engine, store, job.id)
+                    handle.render_tree(tree)
+                    handle.flush_all()
                     total_time = time.time() - start_time
-                    handle.update_summary(len(seen_completed), len(step_names), elapsed=total_time)
-                    adapter.flow_complete(len(seen_completed), total_time)
+                    completed = sum(1 for n in tree if n.status == "completed")
+                    adapter.flow_complete(completed, total_time)
                     if output_json:
                         cost = engine.job_cost(job.id)
                         _json_stdout({
