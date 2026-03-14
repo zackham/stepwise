@@ -301,20 +301,6 @@ export function StepDetailPanel({
 
           {/* Actions */}
           <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={!canRerun || mutations.rerunStep.isPending}
-              onClick={() =>
-                mutations.rerunStep.mutate({
-                  jobId,
-                  stepName: stepDef.name,
-                })
-              }
-            >
-              <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
-              Rerun
-            </Button>
             {activeRun && (
               <Button
                 variant="outline"

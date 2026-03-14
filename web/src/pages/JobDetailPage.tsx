@@ -308,7 +308,7 @@ export function JobDetailPage() {
         </div>
 
         {/* Controls */}
-        <HumanControls job={job} />
+        <HumanControls job={job} selectedStep={selectedStep} runs={runs} />
 
         {/* DAG */}
         <div className="flex-1 overflow-hidden">

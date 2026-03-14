@@ -10,11 +10,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
-import type { Job } from "@/lib/types";
+import type { Job, StepRun } from "@/lib/types";
 import {
   Play,
   Pause,
   RotateCcw,
+  RefreshCw,
   XCircle,
   MessageSquare,
   AlertTriangle,
@@ -23,6 +24,8 @@ import {
 
 interface HumanControlsProps {
   job: Job;
+  selectedStep?: string | null;
+  runs?: StepRun[];
 }
 
 function isStale(job: { status: string; created_by: string; heartbeat_at: string | null }): boolean {
@@ -32,11 +35,21 @@ function isStale(job: { status: string; created_by: string; heartbeat_at: string
   return age > 60_000;
 }
 
-export function HumanControls({ job }: HumanControlsProps) {
+export function HumanControls({ job, selectedStep, runs }: HumanControlsProps) {
   const mutations = useStepwiseMutations();
   const [contextDialogOpen, setContextDialogOpen] = useState(false);
   const [contextText, setContextText] = useState("");
   const stale = isStale(job);
+
+  // Rerun logic for selected step
+  const selectedRun = selectedStep && runs
+    ? runs.filter((r) => r.step_name === selectedStep).sort((a, b) => b.attempt - a.attempt)[0] ?? null
+    : null;
+  const canRerun = selectedStep && (
+    !selectedRun ||
+    selectedRun.status === "completed" ||
+    selectedRun.status === "failed"
+  );
 
   const handleInjectContext = () => {
     if (!contextText.trim()) return;
@@ -124,6 +137,24 @@ export function HumanControls({ job }: HumanControlsProps) {
               Take Over
             </Button>
           </>
+        )}
+
+        {/* Rerun selected step */}
+        {selectedStep && canRerun && (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={mutations.rerunStep.isPending}
+            onClick={() =>
+              mutations.rerunStep.mutate({
+                jobId: job.id,
+                stepName: selectedStep,
+              })
+            }
+          >
+            <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+            Rerun {selectedStep}
+          </Button>
         )}
 
         <div className="flex-1" />
