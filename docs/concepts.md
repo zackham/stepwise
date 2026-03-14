@@ -20,7 +20,7 @@ Stepwise has three runtime concepts, a dependency system, and a control flow mec
 A **job** is a unit of work with an objective, initial inputs, and a workflow.
 
 ```bash
-stepwise run code-review.flow.yaml --var repo="/path/to/repo" --var branch="feature-x"
+stepwise run code-review --var repo="/path/to/repo" --var branch="feature-x"
 ```
 
 Jobs track their own lifecycle: created → running → completed/failed. They persist to SQLite — if the process restarts, the job resumes where it left off.
@@ -322,7 +322,7 @@ A Stepwise flow is a prompted workflow run with a working directory. The input i
 
 ```bash
 # Agent calls a flow and gets JSON back
-stepwise run council.flow.yaml --wait --var question="Should we use Postgres?"
+stepwise run council --wait --var question="Should we use Postgres?"
 
 # Self-documenting: generate the instructions block for CLAUDE.md
 stepwise agent-help --update CLAUDE.md

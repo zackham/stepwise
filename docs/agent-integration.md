@@ -63,7 +63,7 @@ Claude Code reads `CLAUDE.md` automatically. After running `agent-help --update`
 Before calling a flow, inspect its contract:
 
 ```bash
-stepwise schema council.flow.yaml
+stepwise schema council
 ```
 
 ```json
@@ -86,7 +86,7 @@ Key fields:
 The primary pattern — run the flow and wait for the result:
 
 ```bash
-stepwise run council.flow.yaml --wait --var question="Should we use Postgres?"
+stepwise run council --wait --var question="Should we use Postgres?"
 ```
 
 **Stdout purity**: `--wait` prints exactly one JSON object to stdout. Nothing else. All logging goes to stderr. You can safely parse stdout as JSON.

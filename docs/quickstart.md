@@ -84,7 +84,7 @@ Dependencies are implicit from `inputs:` — `review` waits for `gather-context`
 ### Headless (CLI output only)
 
 ```bash
-stepwise run code-review.flow.yaml
+stepwise run code-review
 ```
 
 Prints step-by-step progress to the terminal. Exits when the job completes or fails.
@@ -92,7 +92,7 @@ Prints step-by-step progress to the terminal. Exits when the job completes or fa
 ### With live UI
 
 ```bash
-stepwise run code-review.flow.yaml --watch
+stepwise run code-review --watch
 ```
 
 Starts an ephemeral web server and opens the browser. You see the DAG execute in real time — steps light up as they run, agents stream output live, and human steps show an inline input form.
@@ -100,7 +100,7 @@ Starts an ephemeral web server and opens the browser. You see the DAG execute in
 ### Generate a report
 
 ```bash
-stepwise run code-review.flow.yaml --report
+stepwise run code-review --report
 ```
 
 Runs the flow and generates a self-contained HTML report with DAG visualization, step timeline, expandable details for every step, and the YAML source.
@@ -161,7 +161,7 @@ When the flow reaches this step, it suspends. With `--watch`, you see the prompt
 Stepwise flows are callable as tools by AI agents (Claude Code, Codex, etc.) via plain CLI:
 
 ```bash
-stepwise run code-review.flow.yaml --wait --var repo_path="/path/to/repo"
+stepwise run code-review --wait --var repo_path="/path/to/repo"
 ```
 
 ```json
