@@ -380,15 +380,14 @@ export function computeHierarchicalLayout(
     const childLayout = childLayouts.get(name);
     const feInstances = forEachLayouts.get(name);
     if (feInstances) {
-      // for_each expanded: height = sum of instance layouts + headers + gaps + container
-      const maxW = Math.max(...feInstances.map((i) => i.layout.width));
-      const totalH = feInstances.reduce(
-        (sum, inst, idx) =>
-          sum + FOR_EACH_INSTANCE_HEADER + inst.layout.height + (idx > 0 ? FOR_EACH_INSTANCE_GAP : 0),
+      // for_each expanded: laid out horizontally — width = sum, height = max
+      const totalW = feInstances.reduce(
+        (sum, inst, idx) => sum + inst.layout.width + (idx > 0 ? FOR_EACH_INSTANCE_GAP : 0),
         0,
       );
-      const w = maxW + CONTAINER_PAD_X * 2;
-      const h = totalH + CONTAINER_HEADER + CONTAINER_PAD_BOTTOM;
+      const maxH = Math.max(...feInstances.map((i) => FOR_EACH_INSTANCE_HEADER + i.layout.height));
+      const w = totalW + CONTAINER_PAD_X * 2;
+      const h = maxH + CONTAINER_HEADER + CONTAINER_PAD_BOTTOM;
       nodeSizes.set(name, { width: Math.max(w, NODE_WIDTH), height: h });
     } else if (childLayout) {
       // Standard expanded: inflate to contain child DAG

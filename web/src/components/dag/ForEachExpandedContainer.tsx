@@ -88,13 +88,14 @@ export function ForEachExpandedContainer({
         <ChevronUp className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
       </div>
 
-      {/* Instances */}
+      {/* Instances — horizontal layout */}
       <div
+        className="flex"
         style={{
           position: "relative",
           left: node.containerPadding.left,
           top: 4,
-          width: node.width - node.containerPadding.left - node.containerPadding.right,
+          gap: 8,
         }}
       >
         {instances.map((instance, idx) => {
@@ -150,7 +151,7 @@ export function ForEachExpandedContainer({
           return (
             <div
               key={instance.jobId}
-              className={cn(idx > 0 && "mt-2")}
+              className={cn(idx > 0 && "border-l border-purple-500/15 pl-2")}
             >
               {/* Instance header */}
               <div className="flex items-center gap-2 px-2 h-7 text-[11px]">
