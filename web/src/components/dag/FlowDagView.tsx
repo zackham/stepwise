@@ -68,6 +68,16 @@ export function FlowDagView({
     () => computeHierarchicalLayout(workflow, expandedSteps, jobTree),
     [workflow, expandedSteps, jobTree],
   );
+  const prevLayoutRef = useRef(layout);
+
+  // When layout changes (expand/collapse, new sub-jobs), clear spring
+  // velocities so stale momentum doesn't cause jank
+  useEffect(() => {
+    if (prevLayoutRef.current !== layout) {
+      prevLayoutRef.current = layout;
+      cameraRef.current.onLayoutChange();
+    }
+  }, [layout]);
 
   // Apply transform directly to DOM (no re-render)
   const applyTransform = useCallback(() => {
@@ -127,8 +137,8 @@ export function FlowDagView({
   const HUMAN_PANEL_SCREEN_HEIGHT = 280;
   const HUMAN_PANEL_GAP = 12; // gap between node bottom and panel top
 
-  // Collect active node rects for the camera
-  const activeRects = useMemo(() => {
+  // Collect active step IDs (stable identity, independent of layout positions)
+  const activeStepInfo = useMemo(() => {
     const activeNodeIds: string[] = [];
     const suspendedIds = new Set<string>();
     for (const [name, run] of Object.entries(latestRuns)) {
@@ -154,12 +164,19 @@ export function FlowDagView({
         }
       }
     }
+    // Key based on step names — only changes on actual step transitions,
+    // not when positions shift due to layout recalculation (expand/collapse)
+    const key = activeNodeIds.sort().join(",");
+    return { activeNodeIds, suspendedIds, key };
+  }, [latestRuns, jobTree, runs]);
+
+  // Build rects from layout positions (changes on layout recalc too)
+  const activeRects = useMemo(() => {
+    const { activeNodeIds, suspendedIds } = activeStepInfo;
     const scale = transformRef.current.scale;
     const rects: Rect[] = [];
     for (const n of layout.nodes) {
       if (activeNodeIds.includes(n.id)) {
-        // If this is a selected suspended step with a human input panel,
-        // extend the rect to include the popover below the node
         const hasPopover = selectedStep === n.id && suspendedIds.has(n.id);
         const popoverExtra = hasPopover
           ? HUMAN_PANEL_GAP + HUMAN_PANEL_SCREEN_HEIGHT / scale
@@ -173,7 +190,7 @@ export function FlowDagView({
       }
     }
     return rects;
-  }, [layout, latestRuns, jobTree, runs, selectedStep]);
+  }, [layout, activeStepInfo, selectedStep]);
 
   // Feed active rects to camera whenever they change
   useEffect(() => {
@@ -185,8 +202,9 @@ export function FlowDagView({
     cameraRef.current.setActiveNodes(
       activeRects,
       { width: rect.width, height: rect.height },
+      activeStepInfo.key,
     );
-  }, [followFlow, activeRects]);
+  }, [followFlow, activeRects, activeStepInfo.key]);
 
   // Animation loop: spring physics, independent of data changes
   useEffect(() => {
