@@ -56,6 +56,8 @@ export function FlowDagView({
   const dragStart = useRef({ x: 0, y: 0, tx: 0, ty: 0 });
   const [zoomDisplay, setZoomDisplay] = useState(100);
   const hasCenteredRef = useRef(false);
+  const [followFlow, setFollowFlow] = useState(true);
+  const followAnimRef = useRef<number | null>(null);
 
   const layout = useMemo(
     () => computeHierarchicalLayout(workflow, expandedSteps, jobTree),
@@ -81,32 +83,27 @@ export function FlowDagView({
   // Re-center only when the workflow changes (new job), not on expand/collapse
   useEffect(() => {
     hasCenteredRef.current = false;
+    setFollowFlow(true);
   }, [workflow]);
 
-  // Fit-to-view: runs synchronously before paint to avoid flash
-  const fitToView = useCallback(() => {
+  // Initial view: 100% zoom, centered horizontally, near top
+  const initView = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
-    const pad = 64;
-    const scale = Math.min(
-      (rect.width - pad) / layout.width,
-      (rect.height - pad) / layout.height,
-      1.0
-    );
-    const x = (rect.width - layout.width * scale) / 2;
-    const y = (rect.height - layout.height * scale) / 2;
-    transformRef.current = { x, y, scale };
+    const x = (rect.width - layout.width) / 2;
+    const y = 32;
+    transformRef.current = { x, y, scale: 1 };
     applyTransform();
-    setZoomDisplay(Math.round(scale * 100));
+    setZoomDisplay(100);
     hasCenteredRef.current = true;
   }, [layout, applyTransform]);
 
   useLayoutEffect(() => {
     if (hasCenteredRef.current) return;
-    fitToView();
-  }, [fitToView]);
+    initView();
+  }, [initView]);
 
   // Build a map of step_name -> latest run
   const latestRuns = useMemo(() => {
@@ -119,6 +116,71 @@ export function FlowDagView({
     }
     return map;
   }, [runs]);
+
+  // Follow flow: smoothly pan to keep active nodes centered
+  const panToActiveNodes = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+
+    // Find active nodes (running or suspended)
+    const activeNodeIds: string[] = [];
+    for (const [name, run] of Object.entries(latestRuns)) {
+      if (run.status === "running" || run.status === "suspended") {
+        activeNodeIds.push(name);
+      }
+    }
+    if (activeNodeIds.length === 0) return;
+
+    // Compute center of active nodes in canvas coords
+    const activeLayoutNodes = layout.nodes.filter((n) => activeNodeIds.includes(n.id));
+    if (activeLayoutNodes.length === 0) return;
+
+    let cx = 0, cy = 0;
+    for (const n of activeLayoutNodes) {
+      cx += n.x + n.width / 2;
+      cy += n.y + n.height / 2;
+    }
+    cx /= activeLayoutNodes.length;
+    cy /= activeLayoutNodes.length;
+
+    // Target: center active nodes in viewport
+    const t = transformRef.current;
+    const targetX = rect.width / 2 - cx * t.scale;
+    const targetY = rect.height / 2 - cy * t.scale;
+
+    // Lerp toward target
+    const lerp = 0.12;
+    const dx = targetX - t.x;
+    const dy = targetY - t.y;
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) {
+      t.x = targetX;
+      t.y = targetY;
+      applyTransform();
+      return;
+    }
+    t.x += dx * lerp;
+    t.y += dy * lerp;
+    applyTransform();
+    followAnimRef.current = requestAnimationFrame(panToActiveNodes);
+  }, [layout, latestRuns, applyTransform]);
+
+  useEffect(() => {
+    if (!followFlow) {
+      if (followAnimRef.current) cancelAnimationFrame(followAnimRef.current);
+      return;
+    }
+    // Start animation loop
+    if (followAnimRef.current) cancelAnimationFrame(followAnimRef.current);
+    followAnimRef.current = requestAnimationFrame(panToActiveNodes);
+    return () => {
+      if (followAnimRef.current) cancelAnimationFrame(followAnimRef.current);
+    };
+  }, [followFlow, panToActiveNodes]);
+
+  // Keep reference for fitToView (used by Reset button)
+  const fitToView = initView;
 
   // Wheel zoom centered on cursor position
   const handleWheel = useCallback(
@@ -139,6 +201,7 @@ export function FlowDagView({
       t.scale = newScale;
       applyTransform();
       setZoomDisplay(Math.round(newScale * 100));
+      setFollowFlow(false);
     },
     [applyTransform]
   );
@@ -167,6 +230,7 @@ export function FlowDagView({
       if (!didDragRef.current) {
         didDragRef.current = true;
         if (containerRef.current) containerRef.current.style.cursor = "grabbing";
+        setFollowFlow(false);
       }
       transformRef.current.x = dragStart.current.tx + dx;
       transformRef.current.y = dragStart.current.ty + dy;
@@ -462,37 +526,55 @@ export function FlowDagView({
         )}
       </div>
 
-      {/* Zoom controls */}
-      <div className="absolute bottom-3 left-3 flex items-center gap-1 bg-zinc-900/80 rounded-md border border-zinc-700/50 px-2 py-1 z-10">
-        <button
-          onClick={() => {
-            transformRef.current.scale = Math.min(transformRef.current.scale * 1.2, 3);
-            applyTransform();
-            setZoomDisplay(Math.round(transformRef.current.scale * 100));
-          }}
-          className="text-zinc-400 hover:text-foreground text-sm px-1"
-        >
-          +
-        </button>
-        <span className="text-zinc-500 text-xs min-w-[3rem] text-center">
-          {zoomDisplay}%
-        </span>
-        <button
-          onClick={() => {
-            transformRef.current.scale = Math.max(transformRef.current.scale * 0.8, 0.3);
-            applyTransform();
-            setZoomDisplay(Math.round(transformRef.current.scale * 100));
-          }}
-          className="text-zinc-400 hover:text-foreground text-sm px-1"
-        >
-          -
-        </button>
-        <button
-          onClick={() => fitToView()}
-          className="text-zinc-500 hover:text-zinc-300 text-xs ml-1"
-        >
-          Reset
-        </button>
+      {/* Zoom controls + follow flow */}
+      <div className="absolute bottom-3 left-3 flex items-center gap-3 z-10">
+        <label className="flex items-center gap-1.5 bg-zinc-900/80 rounded-md border border-zinc-700/50 px-2 py-1 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={followFlow}
+            onChange={(e) => {
+              setFollowFlow(e.target.checked);
+            }}
+            className="accent-blue-500 w-3 h-3"
+          />
+          <span className="text-zinc-400 text-xs">Follow flow</span>
+        </label>
+        <div className="flex items-center gap-1 bg-zinc-900/80 rounded-md border border-zinc-700/50 px-2 py-1">
+          <button
+            onClick={() => {
+              transformRef.current.scale = Math.min(transformRef.current.scale * 1.2, 3);
+              applyTransform();
+              setZoomDisplay(Math.round(transformRef.current.scale * 100));
+              setFollowFlow(false);
+            }}
+            className="text-zinc-400 hover:text-foreground text-sm px-1"
+          >
+            +
+          </button>
+          <span className="text-zinc-500 text-xs min-w-[3rem] text-center">
+            {zoomDisplay}%
+          </span>
+          <button
+            onClick={() => {
+              transformRef.current.scale = Math.max(transformRef.current.scale * 0.8, 0.3);
+              applyTransform();
+              setZoomDisplay(Math.round(transformRef.current.scale * 100));
+              setFollowFlow(false);
+            }}
+            className="text-zinc-400 hover:text-foreground text-sm px-1"
+          >
+            -
+          </button>
+          <button
+            onClick={() => {
+              initView();
+              setFollowFlow(true);
+            }}
+            className="text-zinc-500 hover:text-zinc-300 text-xs ml-1"
+          >
+            Reset
+          </button>
+        </div>
       </div>
     </div>
   );
