@@ -111,18 +111,17 @@ export function JobDetailPage() {
   // Auto-select newly suspended human steps
   useAutoSelectSuspended(runs, selection, handleSelectStep);
 
-  // Auto-expand steps that have sub-jobs (delegated status)
-  const prevDelegatedRef = useRef<Set<string>>(new Set());
+  // Auto-expand steps that have sub-jobs
+  const prevSubJobRunsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const stepsToExpand: string[] = [];
     for (const run of runs) {
-      if (run.status === "delegated" && run.sub_job_id && !prevDelegatedRef.current.has(run.id)) {
+      if (run.sub_job_id && !prevSubJobRunsRef.current.has(run.id)) {
         stepsToExpand.push(run.step_name);
       }
     }
-    // Update tracking with all current delegated run IDs
-    prevDelegatedRef.current = new Set(
-      runs.filter((r) => r.status === "delegated" && r.sub_job_id).map((r) => r.id),
+    prevSubJobRunsRef.current = new Set(
+      runs.filter((r) => r.sub_job_id).map((r) => r.id),
     );
     if (stepsToExpand.length > 0) {
       setExpandedSteps((prev) => {
