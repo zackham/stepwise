@@ -106,18 +106,45 @@ Every executor's `start()` returns an `ExecutorResult` with one of these `type` 
 - `AsyncEngine` runs as an `asyncio.Task` in the server lifespan — no tick loop
 - `_observe_external_jobs()` loop: polls for state changes in CLI-owned jobs, broadcasts stale job warnings via WebSocket
 - Agent output: NDJSON file tailing → broadcast to all WebSocket clients
-- Job adoption: `POST /api/jobs/{id}/adopt` — takes over orphaned CLI jobs, fails running steps, re-evaluates via engine
-- Stale detection: `GET /api/jobs/stale` — returns RUNNING CLI jobs with old heartbeats
 - Web UI served from `src/stepwise/_web/` via static file mount
+
+**API endpoint groups:**
+- `/api/jobs/*` — CRUD, adopt, stale detection, rerun, cancel, resume, fulfill
+- `/api/config/*` — Model labels, API keys, default model, OpenRouter model search
+- `/api/editor/*` — Chat endpoint (streaming NDJSON via `editor_llm.py`)
+- `/api/flows/*` — Local flow listing, YAML parse/save, step CRUD, workspace file management
+- `/api/registry/*` — Search, fetch, install flows from stepwise.run registry
 
 ### Web UI (`web/src/`)
 
 - Routes in `web/src/router.tsx` via `createRoute()`. Layout: `components/layout/AppLayout.tsx`
-- Pages in `web/src/pages/`: JobDashboard, JobDetailPage, JobEventsPage, JobTreePage, EditorPage
+- Pages in `web/src/pages/`: JobDashboard, JobDetailPage, JobEventsPage, JobTreePage, EditorPage, SettingsPage
 - All API calls through `lib/api.ts` — never use raw `fetch()` elsewhere
-- React Query hooks in `hooks/useStepwise.ts`. WebSocket: `hooks/useStepwiseWebSocket.ts`. Agent stream: `hooks/useAgentStream.ts`
 - Dark mode only. Tailwind 4 + shadcn/ui for all styling — do not add CSS files or inline styles
 - Dev proxy: Vite forwards `/api` and `/ws` to `localhost:8340` (`web/vite.config.ts`)
+
+**Hooks** (split by domain):
+- `hooks/useStepwise.ts` — React Query hooks for jobs, runs, events, fulfillment
+- `hooks/useStepwiseWebSocket.ts` — WebSocket connection for live updates
+- `hooks/useAgentStream.ts` — NDJSON stream parser for agent output
+- `hooks/useEditor.ts` — Flow file CRUD, YAML parsing, step editing, registry search/install
+- `hooks/useEditorChat.ts` — Agent-assisted flow editing (streaming chat with YAML generation)
+- `hooks/useConfig.ts` — Config management (model labels, API keys, default model, OpenRouter search)
+- `hooks/useAutoSelectSuspended.ts` — Auto-select first suspended human step
+
+**Component directories:**
+- `components/dag/` — Interactive DAG visualization: `FlowDagView` (pan/zoom/follow-flow), `StepNode`, `DagEdges` (animated intake/loopback edges), `ExpandedStepContainer` (sub-flow rendering), `ForEachExpandedContainer` (fan-out instances), `HumanInputPanel`, `DataFlowPanel`, `TypedField`
+- `components/editor/` — Visual flow editor: `YamlEditor` (CodeMirror), `ChatPanel` (agent-assisted editing with Claude/Codex/Simple modes), `StepDefinitionPanel`, `AddStepDialog`, `RegistryBrowser`, `FlowFileTree`, `EditorToolbar`
+- `components/jobs/` — Job detail views: `StepDetailPanel`, `JobDetailSidebar`, `AgentStreamView`, `HandoffEnvelopeView`, `FulfillWatchDialog` (schema-driven human input form), `JobTreeView`, `JobList`, `CreateJobDialog`
+- `components/ui/` — shadcn/ui primitives
+
+**Libraries:**
+- `lib/api.ts` — All fetch calls (jobs, config, editor, registry, flow files)
+- `lib/dag-layout.ts` — Dagre layout engine
+- `lib/types.ts` — TypeScript interfaces for all backend models
+- `lib/status-colors.ts` — Centralized color schemes for job/step statuses
+- `lib/validate-fields.ts` — Output field validation against `OutputFieldSchema`
+- `lib/utils.ts` — Tailwind class merger (`cn()`)
 
 ---
 
@@ -259,17 +286,17 @@ Other patterns:
 
 ## Key files
 
-**Engine:** `engine.py` (AsyncEngine event queue + legacy Engine tick loop, readiness, launching), `models.py` (all dataclasses), `executors.py` (ABC + built-in executors), `store.py` (SQLite + heartbeat + stale detection), `events.py` (event type constants), `decorators.py` (retry, timeout, fallback)
+**Engine:** `engine.py` (AsyncEngine event queue + legacy Engine tick loop, readiness, launching), `models.py` (all dataclasses), `executors.py` (ABC + built-in executors), `store.py` (SQLite + heartbeat + stale detection), `events.py` (event type constants), `decorators.py` (retry, timeout, fallback), `hooks.py` (project hooks — fires shell scripts on engine events like suspend, complete, fail)
 
-**CLI/Runner:** `cli.py` (all CLI commands), `runner.py` (headless `stepwise run` + server delegation), `runner_bg.py` (background mode), `agent.py` (AgentExecutor + AcpxBackend), `agent_help.py` (agent instruction generation), `server_detect.py` (PID file + health probe for server detection)
+**CLI/Runner:** `cli.py` (all CLI commands), `runner.py` (headless `stepwise run` + server delegation), `runner_bg.py` (background mode), `agent.py` (AgentExecutor + AcpxBackend), `agent_help.py` (agent instruction generation), `server_detect.py` (PID file + health probe for server detection), `io.py` (terminal I/O adapter — TerminalAdapter/PlainAdapter/QuietAdapter for rendering flows and collecting input), `api_client.py` (HTTP client for CLI→server delegation)
 
-**Server:** `server.py` (FastAPI REST + WS + ThreadSafeStore + observation loop + adoption), `registry_factory.py` (shared executor registration)
+**Server:** `server.py` (FastAPI REST + WS + ThreadSafeStore + observation loop + adoption + config/editor/registry endpoints), `registry_factory.py` (shared executor registration), `editor_llm.py` (agent-assisted flow editing via acpx or OpenRouter, streaming NDJSON)
 
-**Config/Parsing:** `yaml_loader.py` (.flow.yaml parser), `project.py` (.stepwise/ directory), `config.py` (StepwiseConfig + model aliases), `context.py` (LLM context chain compilation), `report.py` (HTML job reports), `openrouter.py` (OpenRouter API client), `llm_client.py` (LLM client ABC), `registry_client.py` (stepwise.run registry client)
+**Config/Parsing:** `yaml_loader.py` (.flow.yaml parser), `project.py` (.stepwise/ directory), `config.py` (StepwiseConfig + model aliases), `context.py` (LLM context chain compilation), `report.py` (HTML job reports), `openrouter.py` (OpenRouter API client), `openrouter_models.py` (model catalog fetcher + cache), `llm_client.py` (LLM client ABC), `cli_llm_client.py` (LLM via acpx fallback), `registry_client.py` (stepwise.run registry client), `flow_resolution.py` (flow discovery + name→path resolution), `bundle.py` (collect/unpack flow directories for sharing), `schema.py` (JSON tool contract generation from flow definitions)
 
-**Web:** `lib/api.ts` (all fetch calls), `hooks/useStepwise.ts` (React Query), `hooks/useStepwiseWebSocket.ts` (WS connection), `hooks/useAgentStream.ts` (NDJSON stream parser), `lib/dag-layout.ts` (Dagre layout engine), `router.tsx` (route definitions), `components/layout/AppLayout.tsx` (root layout)
+**Web:** `router.tsx` (route definitions), `components/layout/AppLayout.tsx` (root layout), `lib/api.ts` (all fetch calls), `lib/dag-layout.ts` (Dagre layout engine), `lib/types.ts` (TypeScript model interfaces), `lib/status-colors.ts` (status color schemes), `lib/validate-fields.ts` (output field validation)
 
-**Tests:** `tests/conftest.py` (fixtures: store, registry, engine, async_engine, run_job_sync, CallableExecutor, register_step_fn), `test_job_ownership.py` (ownership, heartbeat, stale, claiming), `test_concurrency.py` (parallel execution, thread safety), `test_agent_emit_flow.py` (agent-emitted flows, delegate result type, iterative delegation)
+**Tests:** `tests/conftest.py` (fixtures: store, registry, engine, async_engine, run_job_sync, CallableExecutor, register_step_fn). ~40 test files covering engine, executors, models, CLI, server endpoints, editor, config, delegation, for-each, agent emit flow, streaming, etc.
 
 ---
 
@@ -340,7 +367,7 @@ registry.register("http", lambda cfg: HttpExecutor(url=cfg["url"]))
 1. Add Pydantic request model in `src/stepwise/server.py`
 2. Add FastAPI route: `@app.post("/api/my-endpoint")`
 3. Add fetch function in `web/src/lib/api.ts`
-4. Add React Query hook in `web/src/hooks/useStepwise.ts`
+4. Add React Query hook in the appropriate hooks file: `useStepwise.ts` (jobs/runs), `useEditor.ts` (flows/registry), `useConfig.ts` (settings/models)
 
 ### Add a new web page
 
