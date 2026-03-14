@@ -279,28 +279,50 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
       })}
 
       {/* Loop-back edges */}
-      {loopEdges.map((le) => (
-        <g key={`loop-${le.from}-${le.to}`}>
-          <path
-            d={le.path}
-            fill="none"
-            stroke="oklch(0.55 0.15 300)"
-            strokeWidth={1.5}
-            strokeDasharray="6 3"
-            markerEnd="url(#loop-arrow)"
-            opacity={0.6}
-          />
-          <text
-            x={le.labelPos.x}
-            y={le.labelPos.y}
-            textAnchor="start"
-            className="fill-purple-400/80 text-[10px] font-medium"
-            style={{ fontFamily: "monospace" }}
-          >
-            {le.label}
-          </text>
-        </g>
-      ))}
+      {loopEdges.map((le) => {
+        const targetStatus = latestRuns?.[le.to]?.status;
+        const isRunning = targetStatus === "running";
+        const isSuspended = targetStatus === "suspended";
+        const isActive = isRunning || isSuspended;
+
+        return (
+          <g key={`loop-${le.from}-${le.to}`}>
+            {isActive && (
+              <path
+                d={le.path}
+                fill="none"
+                stroke={isSuspended ? "oklch(0.7 0.15 85)" : "oklch(0.6 0.15 250)"}
+                strokeWidth={6}
+                opacity={0.15}
+                strokeLinecap="round"
+              />
+            )}
+            <path
+              d={le.path}
+              fill="none"
+              stroke={
+                isActive
+                  ? isSuspended ? "oklch(0.7 0.15 85)" : "oklch(0.6 0.15 250)"
+                  : "oklch(0.55 0.15 300)"
+              }
+              strokeWidth={isActive ? 2 : 1.5}
+              strokeDasharray={isActive ? "8 12" : "6 3"}
+              markerEnd={isActive ? (isSuspended ? "url(#arrowhead-suspended)" : "url(#arrowhead-active)") : "url(#loop-arrow)"}
+              opacity={isActive ? 0.8 : 0.6}
+              className={isActive ? "edge-active" : undefined}
+            />
+            <text
+              x={le.labelPos.x}
+              y={le.labelPos.y}
+              textAnchor="start"
+              className={isActive ? (isSuspended ? "fill-amber-400 text-[10px] font-medium" : "fill-blue-400 text-[10px] font-medium") : "fill-purple-400/80 text-[10px] font-medium"}
+              style={{ fontFamily: "monospace" }}
+            >
+              {le.label}
+            </text>
+          </g>
+        );
+      })}
     </svg>
   );
 }
