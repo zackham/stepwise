@@ -38,6 +38,7 @@ Thumbs.db
 
 # Misc
 analysis.json
+plans/
 .stepwise/
 data/
 
