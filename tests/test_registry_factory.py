@@ -35,7 +35,7 @@ class TestCreateDefaultRegistry:
     def test_output_matches_server_types(self):
         """Registry has same executor types as server.py registration."""
         # The expected types that server.py registers (without API key or CLI)
-        expected_types = {"script", "human", "mock_llm", "agent"}
+        expected_types = {"script", "human", "poll", "mock_llm", "agent"}
         config = StepwiseConfig()
         with patch("stepwise.cli_llm_client.detect_cli_backend", return_value=None):
             registry = create_default_registry(config)

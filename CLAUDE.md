@@ -58,7 +58,7 @@ models → llm_client → executors → engine → server
 
 Two engine classes: `AsyncEngine` (primary, event-driven) and `Engine` (legacy, tick-based).
 
-**AsyncEngine** — event-driven with `asyncio.Queue`. Executors run in the thread pool via `asyncio.to_thread()`. Steps complete → push result event → engine dispatches newly ready steps. No polling, no tick interval.
+**AsyncEngine** — event-driven with `asyncio.Queue`. Executors run in the thread pool via `asyncio.to_thread()`. Steps complete → push result event → engine dispatches newly ready steps. Poll watches are driven by `_schedule_poll_watch()` which creates an asyncio task that pushes `poll_check` events at the configured interval.
 
 **Engine** (legacy) — tick-based `engine.tick()` loop. Still used by some tests. All business logic (readiness, exit rules, input resolution) is shared between both engines.
 
@@ -78,6 +78,7 @@ All registered in `src/stepwise/registry_factory.py:create_default_registry()`:
 |---|---|---|---|
 | `script` | `ScriptExecutor` | `executors.py` | Synchronous shell command, parses stdout as JSON |
 | `human` | `HumanExecutor` | `executors.py` | Immediately suspends for human input via API |
+| `poll` | `PollExecutor` | `executors.py` | Suspends with poll watch — engine runs `check_command` at `interval_seconds`; JSON dict on stdout = fulfilled |
 | `llm` | `LLMExecutor` | `executors.py` | OpenRouter API call (only registered if API key configured) |
 | `mock_llm` | `MockLLMExecutor` | `executors.py` | Test-only LLM stub with configurable failure/latency |
 | `agent` | `AgentExecutor` | `agent.py` | ACP agent via acpx — supports `emit_flow: true` for dynamic flow emission |
@@ -197,6 +198,24 @@ steps:
         action: loop
         target: analyze
 ```
+
+Poll step (wait for external condition):
+
+```yaml
+steps:
+  wait-for-review:
+    executor: poll
+    check_command: |
+      gh pr view $pr_number --json reviewDecision \
+        --jq 'select(.reviewDecision != "") | {decision: .reviewDecision}'
+    interval_seconds: 30
+    prompt: "Waiting for PR #$pr_number review"
+    inputs:
+      pr_number: create-pr.pr_number
+    outputs: [decision]
+```
+
+The `check_command` runs every `interval_seconds`. Empty stdout or non-zero exit = not ready. JSON dict on stdout = fulfilled (dict becomes the artifact). `$var` placeholders in `check_command` and `prompt` are interpolated from inputs.
 
 Agent step with dynamic flow emission:
 

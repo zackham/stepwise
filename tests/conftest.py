@@ -13,6 +13,7 @@ from stepwise.executors import (
     ExecutorStatus,
     HumanExecutor,
     MockLLMExecutor,
+    PollExecutor,
     ScriptExecutor,
 )
 from stepwise.models import (
@@ -168,6 +169,13 @@ def registry():
         partial_rate=config.get("partial_rate", 0.0),
         latency_range=tuple(config.get("latency_range", (0.0, 0.0))),
         responses=config.get("responses"),
+    ))
+
+    # Poll executor factory
+    reg.register("poll", lambda config: PollExecutor(
+        check_command=config.get("check_command", "echo"),
+        interval_seconds=config.get("interval_seconds", 60),
+        prompt=config.get("prompt", ""),
     ))
 
     return reg
