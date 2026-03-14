@@ -322,7 +322,6 @@ export function FlowDagView({
           width: layout.width,
           height: layout.height,
           position: "relative",
-          willChange: "transform",
         }}
       >
         <DagEdges
