@@ -42,13 +42,15 @@ export function HumanControls({ job, selectedStep, runs }: HumanControlsProps) {
   const stale = isStale(job);
 
   // Rerun logic for selected step
+  const isTerminal = job.status === "completed" || job.status === "failed" || job.status === "cancelled";
   const selectedRun = selectedStep && runs
     ? runs.filter((r) => r.step_name === selectedStep).sort((a, b) => b.attempt - a.attempt)[0] ?? null
     : null;
-  const canRerun = selectedStep && (
+  const canRerunStep = selectedStep && (
     !selectedRun ||
     selectedRun.status === "completed" ||
-    selectedRun.status === "failed"
+    selectedRun.status === "failed" ||
+    selectedRun.status === "cancelled"
   );
 
   const handleInjectContext = () => {
@@ -139,8 +141,22 @@ export function HumanControls({ job, selectedStep, runs }: HumanControlsProps) {
           </>
         )}
 
+        {/* Resume for terminal states */}
+        {isTerminal && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => mutations.resumeJob.mutate(job.id)}
+            disabled={mutations.resumeJob.isPending}
+            className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+          >
+            <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
+            Resume
+          </Button>
+        )}
+
         {/* Rerun selected step */}
-        {selectedStep && canRerun && (
+        {selectedStep && canRerunStep && (
           <Button
             variant="outline"
             size="sm"
