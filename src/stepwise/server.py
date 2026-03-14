@@ -538,7 +538,11 @@ def delete_all_jobs():
     jobs = engine.store.all_jobs()
     for job in jobs:
         engine.store.delete_job(job.id)
-    _broadcast({"type": "jobs_changed"})
+    if _event_loop is not None:
+        _event_loop.call_soon_threadsafe(
+            _event_loop.create_task,
+            _broadcast({"type": "jobs_changed"}),
+        )
     return {"status": "deleted", "count": len(jobs)}
 
 
