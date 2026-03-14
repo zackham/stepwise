@@ -10,208 +10,171 @@ curl -fsSL https://raw.githubusercontent.com/zackham/stepwise/master/install.sh 
 
 Or install directly: `uv tool install stepwise-run@git+https://github.com/zackham/stepwise.git`
 
-## Initialize a Project
+## Try it instantly
+
+Run a real-world code-review flow from the Stepwise registry — no setup, no files to create:
 
 ```bash
-mkdir my-project && cd my-project
-stepwise init
+stepwise run @stepwise:code-review --watch
 ```
 
-This creates a `.stepwise/` directory for job storage (SQLite DB, workspace, templates).
+This downloads and runs a multi-step code review workflow, opening a browser with real-time DAG visualization. An agent reviews your code, a human step pauses for your decision, and the flow continues based on your input.
 
-## Your First Flow
+No API keys? Try the welcome tour instead:
 
-Create `hello.flow.yaml`:
+```bash
+stepwise run @stepwise:welcome --watch
+```
+
+## Create your own flow
+
+Create `code-review.flow.yaml`:
 
 ```yaml
-name: hello-world
-description: Fetch a quote, score it, decide if it's good enough
+name: code-review
+description: AI-powered code review with human approval
 
 steps:
-  fetch:
+  gather-context:
     run: |
-      python3 -c "
-      import json, random
-      quotes = [
-        'The best way to predict the future is to invent it.',
-        'Talk is cheap. Show me the code.',
-        'Simplicity is the ultimate sophistication.',
-      ]
-      q = random.choice(quotes)
-      print(json.dumps({'quote': q, 'length': len(q)}))
-      "
-    outputs: [quote, length]
+      git diff main --stat && git log main..HEAD --oneline
+    outputs: [diff_summary, commits]
 
-  score:
-    executor: llm
-    model: anthropic/claude-sonnet-4
+  review:
+    executor: agent
     prompt: |
-      Rate this quote for insight and memorability.
-      Quote: "$quote"
-      Return JSON: {"score": 0.0-1.0, "reasoning": "why"}
-    temperature: 0.3
-    max_tokens: 256
-    outputs: [score, reasoning]
+      Review this code change. Identify bugs, style issues, and suggest improvements.
+      Diff: $diff_summary
+      Commits: $commits
     inputs:
-      quote: fetch.quote
+      diff_summary: gather-context.diff_summary
+      commits: gather-context.commits
+    outputs: [verdict, issues, suggestions]
 
-  publish:
-    run: |
-      python3 -c "
-      import json, os
-      print(json.dumps({
-        'message': f'Published quote (score: {os.environ[\"score\"]})',
-        'published': True
-      }))
-      "
-    outputs: [message, published]
+  decide:
+    executor: human
+    prompt: |
+      Review found these issues: $issues
+
+      Apply fixes or skip?
+    outputs: [decision]
     inputs:
-      score: score.score
-    sequencing: [score]
+      issues: review.issues
+
+  apply-fixes:
+    executor: agent
+    prompt: "Apply these fixes: $suggestions"
+    inputs:
+      suggestions: review.suggestions
+    outputs: [result]
+    sequencing: [decide]
 ```
 
-Three steps: a script fetches a random quote, an LLM scores it, another script "publishes" it.
+Four steps, three executor types:
 
-## Run It
+- **gather-context** — a `script` step (the `run:` shorthand). Runs shell commands, parses JSON from stdout.
+- **review** — an `agent` step. An autonomous AI agent reviews the diff with tool access and streaming output.
+- **decide** — a `human` step. The job pauses and waits for your input via the web UI or terminal.
+- **apply-fixes** — another agent step. Only runs after `decide` completes (via `sequencing`).
+
+Dependencies are implicit from `inputs:` — `review` waits for `gather-context` because it needs `diff_summary` and `commits`. Steps with no data dependencies run in parallel automatically.
+
+## Run it
 
 ### Headless (CLI output only)
 
 ```bash
-stepwise run hello.flow.yaml
+stepwise run code-review.flow.yaml
 ```
 
-Prints step-by-step progress to the terminal. Exits when the job completes.
+Prints step-by-step progress to the terminal. Exits when the job completes or fails.
 
-### With Live UI
+### With live UI
 
 ```bash
-stepwise run hello.flow.yaml --watch
+stepwise run code-review.flow.yaml --watch
 ```
 
-Starts an ephemeral web server and opens the browser. You see the DAG execute in real-time — steps light up as they run, and you can click into any step to inspect inputs, outputs, and timing.
+Starts an ephemeral web server and opens the browser. You see the DAG execute in real time — steps light up as they run, agents stream output live, and human steps show an inline input form.
 
-### Generate a Report
+### Generate a report
 
 ```bash
-stepwise run hello.flow.yaml --report
+stepwise run code-review.flow.yaml --report
 ```
 
-Runs the flow and generates `hello-report.html` — a self-contained HTML document with:
-- SVG DAG visualization
-- Step timeline with durations
-- Expandable details for every step (inputs, outputs, errors, cost)
-- YAML source appendix
+Runs the flow and generates a self-contained HTML report with DAG visualization, step timeline, expandable details for every step, and the YAML source.
 
-Open it in any browser. No server needed.
+## Adding a loop
 
-## Adding a Loop
-
-Make the workflow iterative — if the score is too low, fetch a new quote and try again:
+Make the review iterative — if the human requests changes, loop back to the review step:
 
 ```yaml
-name: best-quote
-description: Keep fetching quotes until we find a great one
-
-steps:
-  fetch:
-    run: |
-      python3 -c "
-      import json, random
-      quotes = [
-        'The best way to predict the future is to invent it.',
-        'Talk is cheap. Show me the code.',
-        'Move fast and break things.',
-        'Simplicity is the ultimate sophistication.',
-        'The only way to do great work is to love what you do.',
-      ]
-      q = random.choice(quotes)
-      print(json.dumps({'quote': q, 'length': len(q)}))
-      "
-    outputs: [quote, length]
-
-  score:
-    executor: llm
-    model: anthropic/claude-sonnet-4
-    prompt: |
-      Rate this quote for insight and memorability (0.0-1.0).
-      Be harsh — only truly great quotes score above 0.8.
-      Quote: "$quote"
-      Return JSON: {"score": 0.0, "reasoning": "why"}
-    temperature: 0.3
-    max_tokens: 256
-    outputs: [score, reasoning]
-    inputs:
-      quote: fetch.quote
-
-    exits:
-      - name: great
-        when: "outputs.score >= 0.8"
-        action: advance
-
-      - name: try_again
-        when: "outputs.score < 0.8 and attempt < 5"
-        action: loop
-        target: fetch
-
-      - name: settle
-        when: "attempt >= 5"
-        action: advance
-
-  publish:
-    run: |
-      python3 -c "
-      import json, os
-      print(json.dumps({
-        'message': f'Published: {os.environ[\"quote\"]} (score: {os.environ[\"score\"]})',
-        'published': True
-      }))
-      "
-    outputs: [message, published]
-    inputs:
-      quote: fetch.quote
-      score: score.score
-```
-
-Now the flow loops: fetch → score → (if score < 0.8, loop back to fetch). Up to 5 attempts. The report shows every attempt with its score.
-
-## Adding a Human Gate
-
-Replace the automatic advance with a human approval step:
-
-```yaml
-  review:
+  decide:
     executor: human
     prompt: |
-      Best quote found:
+      Review verdict: $verdict
+      Issues: $issues
 
-      "$quote"
-
-      Score: $score — $reasoning
-
-      Approve for publishing?
-    outputs: [approved, note]
+      Accept, or request changes?
+    outputs: [decision]
     inputs:
-      quote: fetch.quote
-      score: score.score
-      reasoning: score.reasoning
+      verdict: review.verdict
+      issues: review.issues
+    exits:
+      - name: accept
+        when: "outputs.decision == 'accept'"
+        action: advance
 
-  publish:
-    run: |
-      python3 -c "
-      import json, os
-      print(json.dumps({'url': '/quotes/' + os.environ['quote'][:20].replace(' ', '-'), 'published': True}))
-      "
-    outputs: [url, published]
-    inputs:
-      quote: fetch.quote
-    sequencing: [review]
+      - name: request-changes
+        when: "outputs.decision == 'request-changes'"
+        action: loop
+        target: review
+
+      - name: give-up
+        when: "attempt >= 3"
+        action: advance
 ```
 
-When the flow reaches the `review` step, it pauses. Open the web UI (`stepwise run --watch`), and you'll see the prompt with the quote and score. Provide your decision, and the flow continues.
+The `exits:` block evaluates rules in order after the step completes. `action: loop` with `target: review` re-runs the review step with fresh context. The `attempt` variable tracks how many times a step has run, so you can set a ceiling.
 
-## What's Next
+## Adding a human gate
 
-- [Concepts](concepts.md) — understand the full mental model
-- [Executors](executors.md) — deep dive into the four executor types
+Any step can be replaced with a human executor to add an approval gate:
+
+```yaml
+  approve-deploy:
+    executor: human
+    prompt: |
+      All fixes applied. Deploy to production?
+
+      Changes: $result
+    outputs: [approved, note]
+    inputs:
+      result: apply-fixes.result
+```
+
+When the flow reaches this step, it suspends. With `--watch`, you see the prompt in the web UI with typed input fields. Provide your decision and the flow continues. In headless mode, the step pauses at the terminal prompt.
+
+## Call it from your agent
+
+Stepwise flows are callable as tools by AI agents (Claude Code, Codex, etc.) via plain CLI:
+
+```bash
+stepwise run code-review.flow.yaml --wait --var repo_path="/path/to/repo"
+```
+
+```json
+{"status": "completed", "job_id": "job-abc123", "outputs": [{"verdict": "approve", "issues": [], "suggestions": []}]}
+```
+
+`--wait` prints **only** JSON to stdout — zero logging, zero progress noise. Your agent parses the output and acts on it. Missing an input? The error tells you exactly which `--var` flags to add.
+
+See [Agent Integration](agent-integration.md) for the full guide.
+
+## What's next
+
+- [Concepts](concepts.md) — understand the full mental model (jobs, steps, runs, currency)
+- [Executors](executors.md) — deep dive into all executor types
 - [YAML Format](yaml-format.md) — complete reference for flow files
 - [Why Stepwise](why-stepwise.md) — the motivation and design philosophy
