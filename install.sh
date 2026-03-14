@@ -49,6 +49,5 @@ echo ""
 info "Stepwise installed successfully!"
 echo ""
 
-# Launch interactive welcome prompt
-stepwise welcome
-echo ""
+# Launch interactive welcome prompt (restore tty stdin since we're piped from curl)
+stepwise welcome </dev/tty
