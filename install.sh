@@ -49,34 +49,20 @@ echo ""
 info "Stepwise installed successfully!"
 echo ""
 
-# Interactive welcome prompt (plain shell — works when piped from curl)
-echo "  The welcome flow walks through a simulated dev workflow:"
-echo "    plan → implement (parallel) → test → review → deploy"
+echo "  Try the demo (browser):"
 echo ""
-echo "  Try it now?"
-echo "    1) Browser  (opens a live web UI)"
-echo "    2) Terminal  (runs in your terminal)"
-echo "    3) Skip"
+echo "    stepwise run @stepwise:welcome --watch"
 echo ""
-printf "  Choice [1/2/3]: "
-read -r choice </dev/tty
-case "$choice" in
-    1)
-        echo ""
-        exec stepwise run @stepwise:welcome --watch </dev/tty
-        ;;
-    2)
-        echo ""
-        exec stepwise run @stepwise:welcome </dev/tty
-        ;;
-    *)
-        echo ""
-        echo "  No problem! Get started:"
-        echo "    stepwise new my-flow                    # scaffold a flow"
-        echo "    stepwise run my-flow --watch            # run it in the browser"
-        echo ""
-        echo "  Update later:"
-        echo "    stepwise update"
-        echo ""
-        ;;
-esac
+echo "  Or in the terminal:"
+echo ""
+echo "    stepwise run @stepwise:welcome"
+echo ""
+echo "  Create your own flow:"
+echo ""
+echo "    stepwise new my-flow"
+echo "    stepwise run my-flow --watch"
+echo ""
+echo "  Update later:"
+echo ""
+echo "    stepwise update"
+echo ""
