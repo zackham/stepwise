@@ -471,7 +471,7 @@ async def _report_runs(
 ) -> None:
     """Report step transitions for a job, recursively walking sub-jobs."""
     if seen_labels is None:
-        seen_labels = set()
+        seen_labels = set()  # only for recursive calls from within
 
     all_runs = engine.get_runs(job_id)
     for run in all_runs:
@@ -591,6 +591,7 @@ async def _async_run_flow(
     seen_running: set[str] = set()
     seen_completed: set[str] = set()
     seen_prompted: set[str] = set()  # human steps we've already prompted for
+    seen_labels: set[str] = set()  # for-each item labels already printed
     step_names = list(job.workflow.steps.keys())
 
     try:
@@ -614,7 +615,7 @@ async def _async_run_flow(
                 # Report new step transitions (recursively walk sub-jobs)
                 await _report_runs(
                     engine, store, adapter, handle, job.id, 0,
-                    seen_running, seen_completed, seen_prompted,
+                    seen_running, seen_completed, seen_prompted, seen_labels,
                 )
 
                 # Update summary
@@ -628,7 +629,7 @@ async def _async_run_flow(
                     # Final sweep — catch any transitions missed in this tick
                     await _report_runs(
                         engine, store, adapter, handle, job.id, 0,
-                        seen_running, seen_completed, seen_prompted,
+                        seen_running, seen_completed, seen_prompted, seen_labels,
                     )
                     total_time = time.time() - start_time
                     handle.update_summary(len(seen_completed), len(step_names), elapsed=total_time)

@@ -604,9 +604,14 @@ def _count_prompt_lines(field_type: str, options: list[str] | None = None) -> in
 
 def _format_output_preview(outputs: dict, max_len: int = 50) -> str:
     """Format step outputs as a compact preview string."""
-    # Filter out internal keys
-    items = {k: v for k, v in outputs.items() if not k.startswith("_")}
-    if not items:
+    # Filter out internal/routing keys
+    skip_keys = {"status", "task"}
+    items = {
+        k: v for k, v in outputs.items()
+        if not k.startswith("_") and k not in skip_keys
+    }
+    # Skip if all values are boring booleans
+    if not items or all(isinstance(v, bool) for v in items.values()):
         return ""
 
     def _fmt_value(v: object) -> str:
