@@ -2282,7 +2282,40 @@ def build_parser() -> argparse.ArgumentParser:
     # update
     sub.add_parser("update", help="Upgrade stepwise to the latest version")
 
+    # welcome
+    sub.add_parser("welcome", help="Try the interactive welcome demo")
+
     return parser
+
+
+def cmd_welcome(args: argparse.Namespace) -> int:
+    """Interactive welcome demo prompt."""
+    io = _io(args)
+    io.log("info", "Welcome to Stepwise!")
+    io.log("info", "The welcome flow walks you through a simulated dev workflow:")
+    io.log("info", "  plan → implement (parallel) → test → review → deploy")
+    print()
+
+    choice = io.prompt_select(
+        "How would you like to try it?",
+        choices=[
+            "Browser (stepwise run @stepwise:welcome --watch)",
+            "Terminal (stepwise run @stepwise:welcome)",
+            "Skip for now",
+        ],
+    )
+
+    if choice.startswith("Skip"):
+        io.log("info", "No problem! Run 'stepwise new my-flow' to create your own flow.")
+        return EXIT_SUCCESS
+
+    import os
+    watch = "--watch" if choice.startswith("Browser") else ""
+    cmd = f"stepwise run @stepwise:welcome {watch}".strip()
+    io.log("info", f"Running: {cmd}")
+    print()
+    os.execvp("stepwise", cmd.split())
+    return EXIT_SUCCESS  # unreachable after exec
 
 
 def _io(args: argparse.Namespace) -> IOAdapter:
@@ -2330,6 +2363,7 @@ def main(argv: list[str] | None = None) -> int:
         "fulfill": cmd_fulfill,
         "agent-help": cmd_agent_help,
         "update": cmd_self_update,
+        "welcome": cmd_welcome,
     }
 
     handler = handlers.get(args.command)

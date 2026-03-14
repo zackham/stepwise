@@ -72,13 +72,7 @@ fi
 echo ""
 info "Stepwise installed successfully!"
 echo ""
-echo "  Try the demo:"
-echo "    stepwise run @stepwise:welcome --watch       # interactive demo in the browser"
-echo ""
-echo "  Create your own:"
-echo "    stepwise new my-flow                         # scaffold a flow"
-echo "    stepwise run my-flow --watch                 # run it in the browser"
-echo ""
-echo "  Update later:"
-echo "    stepwise update"
+
+# Launch interactive welcome prompt
+stepwise welcome
 echo ""
