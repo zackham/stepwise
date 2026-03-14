@@ -197,6 +197,42 @@ def resolve_registry_flow(author: str, slug: str, project_dir: Path | None = Non
     )
 
 
+@dataclass
+class RegistryFlowInfo:
+    """A discovered registry flow."""
+    author: str
+    slug: str
+    path: Path  # path to FLOW.yaml
+
+    @property
+    def ref(self) -> str:
+        return f"@{self.author}:{self.slug}"
+
+
+def discover_registry_flows(project_dir: Path) -> list[RegistryFlowInfo]:
+    """Find all cached registry flows in .stepwise/registry/."""
+    registry_dir = project_dir / ".stepwise" / "registry"
+    if not registry_dir.is_dir():
+        return []
+
+    flows: list[RegistryFlowInfo] = []
+    for author_dir in sorted(registry_dir.iterdir()):
+        if not author_dir.is_dir() or not author_dir.name.startswith("@"):
+            continue
+        author = author_dir.name[1:]  # strip @
+        for slug_dir in sorted(author_dir.iterdir()):
+            if not slug_dir.is_dir():
+                continue
+            marker = slug_dir / FLOW_DIR_MARKER
+            if marker.is_file():
+                flows.append(RegistryFlowInfo(
+                    author=author,
+                    slug=slug_dir.name,
+                    path=marker,
+                ))
+    return flows
+
+
 def registry_flow_dir(author: str, slug: str, project_dir: Path) -> Path:
     """Return the directory path for a registry flow cache."""
     return project_dir / ".stepwise" / "registry" / f"@{author}" / slug
