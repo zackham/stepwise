@@ -10,8 +10,9 @@ import json
 import re
 from pathlib import Path
 
-from stepwise.flow_resolution import FlowInfo
+from stepwise.flow_resolution import FlowInfo, RegistryFlowInfo
 from stepwise.flow_resolution import discover_flows as _discover_flows
+from stepwise.flow_resolution import discover_registry_flows as _discover_registry_flows
 from stepwise.schema import generate_schema
 from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
 
@@ -83,6 +84,57 @@ def _build_flow_entries(
     return entries
 
 
+def _build_registry_entries(
+    registry_flows: list[RegistryFlowInfo], project_dir: Path
+) -> list[dict]:
+    """Parse registry flows and return structured entries."""
+    entries = []
+    for rf in registry_flows:
+        try:
+            wf = load_workflow_yaml(str(rf.path))
+            schema = generate_schema(wf)
+        except (YAMLLoadError, Exception):
+            continue
+
+        name = rf.ref
+        inputs = schema.get("inputs", [])
+        outputs = schema.get("outputs", [])
+        human_steps = schema.get("humanSteps", [])
+        desc = schema.get("description", "")
+
+        var_args = " ".join(f'--var {inp}="..."' for inp in inputs)
+        cmd = f"stepwise run {rf.ref} --wait"
+        if var_args:
+            cmd += f" {var_args}"
+
+        try:
+            rel_path = str(rf.path.relative_to(project_dir))
+        except ValueError:
+            rel_path = str(rf.path)
+
+        entry: dict = {
+            "name": name,
+            "file": rel_path,
+            "inputs": inputs,
+            "outputs": outputs,
+            "run": cmd,
+            "registry": True,
+        }
+        if desc:
+            entry["description"] = desc
+        if human_steps:
+            entry["human_steps"] = []
+            for hs in human_steps:
+                hs_entry: dict = {"step": hs["step"], "fields": hs["fields"]}
+                if hs.get("schema"):
+                    hs_entry["schema"] = hs["schema"]
+                entry["human_steps"].append(hs_entry)
+
+        entries.append(entry)
+
+    return entries
+
+
 def generate_agent_help(
     project_dir: Path,
     flows_dir: Path | None = None,
@@ -103,23 +155,29 @@ def generate_agent_help(
     else:
         flows = _discover_flows(project_dir)
 
-    if not flows:
+    # Also discover registry flows
+    registry_flows = _discover_registry_flows(project_dir)
+
+    if not flows and not registry_flows:
         if fmt == "json":
             return json.dumps({"flows": [], "count": 0})
-        return "No flows found. Create a .flow.yaml file to get started."
+        return "No flows found. Create one with `stepwise new <name>` or install from the registry with `stepwise get @author:name`."
 
     entries = _build_flow_entries(flows, project_dir)
+    registry_entries = _build_registry_entries(registry_flows, project_dir)
+
+    all_entries = entries + registry_entries
 
     if fmt == "json":
-        return json.dumps({"flows": entries, "count": len(entries)}, indent=2)
+        return json.dumps({"flows": all_entries, "count": len(all_entries)}, indent=2)
 
     if fmt == "full":
-        return _format_full(entries)
+        return _format_full(all_entries)
 
-    return _format_compact(entries)
+    return _format_compact(entries, registry_entries)
 
 
-def _format_compact(entries: list[dict]) -> str:
+def _format_compact(entries: list[dict], registry_entries: list[dict] | None = None) -> str:
     """Tight, self-sufficient output for agent consumption.
 
     Includes 5-mode interaction model, flow catalog, and CLI reference
@@ -158,6 +216,33 @@ def _format_compact(entries: list[dict]) -> str:
     if entries:
         lines.extend(["## Flows", ""])
         for entry in entries:
+            name = entry["name"]
+            desc = entry.get("description", "")
+
+            header = f"**{name}**"
+            if desc:
+                header += f" — {desc}"
+            lines.append(header)
+
+            lines.append(f"  `{entry['run']}`")
+
+            parts = []
+            if entry["inputs"]:
+                parts.append(f"in: {', '.join(entry['inputs'])}")
+            if entry["outputs"]:
+                parts.append(f"out: {', '.join(entry['outputs'])}")
+            if entry.get("human_steps"):
+                step_names = [hs["step"] for hs in entry["human_steps"]]
+                parts.append(f"human: {', '.join(step_names)}")
+            if parts:
+                lines.append(f"  {' | '.join(parts)}")
+
+            lines.append("")
+
+    # Registry flows
+    if registry_entries:
+        lines.extend(["## Registry Flows (read-only)", ""])
+        for entry in registry_entries:
             name = entry["name"]
             desc = entry.get("description", "")
 
