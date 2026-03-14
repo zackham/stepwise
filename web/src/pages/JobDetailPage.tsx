@@ -112,33 +112,64 @@ export function JobDetailPage() {
   useAutoSelectSuspended(runs, selection, handleSelectStep);
 
   // Auto-expand steps that have sub-jobs (runtime or design-time)
+  // Walks the full job tree recursively so sub-sub-jobs also auto-expand
   const prevSubJobKeysRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const stepsToExpand: string[] = [];
     const currentKeys = new Set<string>();
 
-    // Runtime sub-jobs: runs with sub_job_id
-    for (const run of runs) {
-      if (run.sub_job_id) {
-        const key = `run:${run.id}`;
-        currentKeys.add(key);
-        if (!prevSubJobKeysRef.current.has(key)) {
-          stepsToExpand.push(run.step_name);
+    function scanTree(treeNode: JobTreeNode | null) {
+      if (!treeNode) return;
+      const nodeRuns = treeNode.runs;
+      const workflow = treeNode.job.workflow;
+
+      // Runtime sub-jobs: runs with sub_job_id or for_each sub_job_ids
+      for (const run of nodeRuns) {
+        if (run.sub_job_id) {
+          const key = `run:${run.id}`;
+          currentKeys.add(key);
+          if (!prevSubJobKeysRef.current.has(key)) {
+            stepsToExpand.push(run.step_name);
+          }
+        }
+        if (run.executor_state?.for_each === true) {
+          const key = `fe:${run.id}`;
+          currentKeys.add(key);
+          if (!prevSubJobKeysRef.current.has(key)) {
+            stepsToExpand.push(run.step_name);
+          }
         }
       }
-    }
 
-    // Design-time sub-flows: steps with sub_flow that have started running
-    if (job) {
-      for (const [name, step] of Object.entries(job.workflow.steps)) {
+      // Design-time sub-flows: steps with sub_flow that have started running
+      for (const [name, step] of Object.entries(workflow.steps)) {
         if (step.sub_flow) {
-          const hasRun = runs.some((r) => r.step_name === name);
+          const hasRun = nodeRuns.some((r) => r.step_name === name);
           if (hasRun) {
-            const key = `def:${name}`;
+            const key = `def:${treeNode.job.id}:${name}`;
             currentKeys.add(key);
             if (!prevSubJobKeysRef.current.has(key)) {
               stepsToExpand.push(name);
             }
+          }
+        }
+      }
+
+      // Recurse into sub-jobs
+      for (const child of treeNode.sub_jobs) {
+        scanTree(child);
+      }
+    }
+
+    scanTree(jobTree ?? null);
+    // Also scan top-level runs/job for the case where jobTree hasn't loaded yet
+    if (!jobTree && job) {
+      for (const run of runs) {
+        if (run.sub_job_id) {
+          const key = `run:${run.id}`;
+          currentKeys.add(key);
+          if (!prevSubJobKeysRef.current.has(key)) {
+            stepsToExpand.push(run.step_name);
           }
         }
       }
@@ -152,7 +183,7 @@ export function JobDetailPage() {
         return next;
       });
     }
-  }, [runs, job]);
+  }, [runs, job, jobTree]);
 
   // Reset state when switching jobs
   useEffect(() => {
