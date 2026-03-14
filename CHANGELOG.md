@@ -5,6 +5,34 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic V
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-03-14
+
+**Async Engine, Live DAG, Agent Emit Flow** — real-time execution with dynamic workflows.
+
+### Added
+- **AsyncEngine** — event-driven engine replaces tick-based polling. Parallel step dispatch via `asyncio.Queue`, executor runs in thread pool. No more tick interval
+- **Agent Emit Flow** — agent steps with `emit_flow: true` can dynamically create sub-workflows by writing `.stepwise/emit.flow.yaml`. Engine launches emitted flow as sub-job and propagates results back. Supports iterative delegation with exit rule loops
+- **CLI Server Delegation** — `stepwise run` auto-delegates to a running server for lower latency. `--wait` and `--async` modes use WebSocket for live updates, falling back to REST polling
+- **Job Ownership** — `created_by`, `runner_pid`, `heartbeat_at` fields track who owns each job. Stale detection for orphaned CLI jobs. Server adoption via `POST /api/jobs/{id}/adopt`
+- **Typed Human Inputs** — `OutputFieldSchema` with `type: choice|number|text`, validation, auto-generated UI controls in web and CLI
+- **Follow-Flow Mode** — DAG view auto-pans to track active steps at 100% zoom
+- **Welcome Flow** — interactive product tour: plan, implement (for-each), test (retry loops), review (route steps), deploy. Available as `@stepwise:welcome` from registry
+- **`STEPWISE_ATTEMPT`** — attempt number exposed as env var to script executors
+- **Inline Human Input** — human step panels render directly below suspended DAG nodes
+- **Auto-Expand Sub-Jobs** — delegated sub-flows and for-each instances expand automatically in the DAG
+- **Animated DAG Edges** — intake and loopback edges animate with glow and flowing dashes for active steps
+- **Data Flow Labels** — artifact values shown on DAG edges with hover tooltips
+- **Settings Page** — model labels, API keys, default model configuration in the web UI
+- **Billing Mode** — `billing: subscription` skips cost limit enforcement for subscription users
+- **IOAdapter** — unified CLI output abstraction (PlainAdapter, QuietAdapter, TerminalAdapter)
+- 500+ new tests (1144 total)
+
+### Changed
+- Server uses `AsyncEngine` instead of tick-based `Engine`
+- `ThreadSafeStore` with `_LockedConnection` proxy serializes all SQLite calls
+- Removed `/api/tick` endpoint (no longer needed)
+- Install and README quickstart now lead with `@stepwise:welcome` demo
+
 ## [0.2.0] — 2026-03-12
 
 **Editor, Visual Editing, Registry Browser, AI Chat** — full flow authoring experience.
