@@ -2,25 +2,20 @@
 
 Complete YAML format specification for authoring Stepwise flows.
 
-## Flow Formats
+## Flow Format
 
-Flows can be either a single file or a directory:
-
-**Single file:** `my-flow.flow.yaml` — self-contained, everything in one file.
-
-**Directory flow:** `my-flow/FLOW.yaml` — the flow definition lives in `FLOW.yaml` inside a directory. Co-located scripts, prompts, and data files sit alongside it.
+Flows use a directory format: `flows/<name>/FLOW.yaml`. Co-located scripts, prompts, and data files live alongside the definition.
 
 ```
-my-flow/
-  FLOW.yaml              # flow definition (required)
-  analyze.py             # co-located script
-  prompts/
-    system.md            # prompt loaded via prompt_file
+flows/
+  my-flow/
+    FLOW.yaml              # flow definition (required)
+    analyze.py             # co-located script
+    prompts/
+      system.md            # prompt loaded via prompt_file
 ```
 
-Both formats work everywhere: `stepwise run`, `stepwise validate`, `stepwise share`, etc. Create directory flows with `stepwise new <name>`.
-
-If `name` is omitted, it defaults from the filename (`my-flow.flow.yaml` → `my-flow`).
+Create new flows with `stepwise new <name>`. If `name` is omitted in the YAML, it defaults from the directory name.
 
 ## Structure
 
@@ -127,6 +122,34 @@ approve:
 | `notify` | string | no | Notification channel/webhook |
 
 In `--watch` mode, the UI shows the prompt and collects output fields. In headless mode, the terminal prompts for each output field.
+
+### poll
+
+Suspends and periodically runs a shell command to check for an external condition. Useful for waiting on CI, PR reviews, deployments, etc.
+
+```yaml
+wait-for-review:
+  executor: poll
+  check_command: |
+    gh pr view $pr_number --json reviewDecision \
+      --jq 'select(.reviewDecision != "") | {decision: .reviewDecision}'
+  interval_seconds: 30
+  prompt: "Waiting for PR #$pr_number review"
+  outputs: [decision]
+  inputs:
+    pr_number: create-pr.pr_number
+```
+
+| Config field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `check_command` | string | yes | — | Shell command to run periodically. `$var` placeholders from inputs |
+| `interval_seconds` | int | no | 60 | Seconds between checks |
+| `prompt` | string | no | — | Human-readable description of what is being waited on |
+
+**How it works:** The engine runs `check_command` every `interval_seconds`:
+- **JSON dict on stdout** → step is fulfilled, dict becomes the artifact
+- **Empty stdout** → not ready, check again next interval
+- **Non-zero exit** → error, retry next interval
 
 ### llm
 
