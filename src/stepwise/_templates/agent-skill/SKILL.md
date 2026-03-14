@@ -15,19 +15,17 @@ Activate when:
 - User wants to run, create, or manage a workflow
 - User asks about step orchestration, DAGs, or multi-step processes
 
-## Using Flows
+## Discovering Flows
 
-To discover available flows and how to run them:
+**IMPORTANT: Always use `stepwise agent-help` to find available flows.** Do NOT search for files manually — flows live in multiple locations that only the CLI knows about (local directories, registry cache, global installs). The command outputs a complete catalog with inputs, outputs, and exact run commands.
 
 ```bash
 stepwise agent-help
 ```
 
-This outputs the current flow catalog with inputs, outputs, and exact run commands.
-
 ### Flow locations
 
-Flows live in directory format: `flows/<name>/FLOW.yaml`. The directory can contain co-located scripts, prompts, and data files alongside the FLOW.yaml.
+Flows use directory format: `flows/<name>/FLOW.yaml` with co-located scripts and prompts alongside.
 
 ```
 flows/
@@ -37,13 +35,9 @@ flows/
     prompts/system.md      # prompt file
 ```
 
-**Discovery order:** The CLI resolves bare flow names across these directories:
-1. Project root
-2. `flows/`
-3. `.stepwise/flows/`
-4. `~/.stepwise/flows/`
+The CLI resolves bare flow names across: project root → `flows/` → `.stepwise/flows/` → `~/.stepwise/flows/`.
 
-**Registry flows** (downloaded via `stepwise get @author:name`) are cached in `.stepwise/registry/@author/slug/FLOW.yaml`. These are read-only. Run them with `stepwise run @stepwise:flow-name`.
+Registry flows (downloaded via `stepwise get @author:name`) are cached in `.stepwise/registry/@author/slug/FLOW.yaml`. Run them with `stepwise run @author:flow-name`.
 
 ### Interaction Modes
 
