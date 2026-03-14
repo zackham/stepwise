@@ -114,18 +114,24 @@ export function JobDetailPage() {
   // Auto-expand steps that have sub-jobs (delegated status)
   const prevDelegatedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    const currentDelegated = new Set(
-      runs
-        .filter((r) => r.status === "delegated" && r.sub_job_id)
-        .map((r) => r.step_name),
-    );
-    for (const name of currentDelegated) {
-      if (!prevDelegatedRef.current.has(name) && !expandedSteps.has(name)) {
-        setExpandedSteps((prev) => new Set([...prev, name]));
+    const stepsToExpand: string[] = [];
+    for (const run of runs) {
+      if (run.status === "delegated" && run.sub_job_id && !prevDelegatedRef.current.has(run.id)) {
+        stepsToExpand.push(run.step_name);
       }
     }
-    prevDelegatedRef.current = currentDelegated;
-  }, [runs, expandedSteps]);
+    // Update tracking with all current delegated run IDs
+    prevDelegatedRef.current = new Set(
+      runs.filter((r) => r.status === "delegated" && r.sub_job_id).map((r) => r.id),
+    );
+    if (stepsToExpand.length > 0) {
+      setExpandedSteps((prev) => {
+        const next = new Set(prev);
+        for (const name of stepsToExpand) next.add(name);
+        return next;
+      });
+    }
+  }, [runs]);
 
   // Reset state when switching jobs
   useEffect(() => {
