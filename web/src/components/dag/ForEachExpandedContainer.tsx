@@ -2,7 +2,7 @@ import { ChevronUp, Layers } from "lucide-react";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { StepNode } from "./StepNode";
 import { DagEdges } from "./DagEdges";
-import { FlowPortNode } from "./FlowPortNode";
+import { ContainerPortEdges } from "./ContainerPortEdges";
 import { ExpandedStepContainer } from "./ExpandedStepContainer";
 import type { HierarchicalDagNode, ForEachInstance } from "@/lib/dag-layout";
 import type { FlowDefinition, StepRun, JobTreeNode, JobStatus } from "@/lib/types";
@@ -175,16 +175,13 @@ export function ForEachExpandedContainer({
                   latestRuns={latestRuns}
                 />
 
-                {/* Flow port nodes */}
-                {instance.layout.flowPorts.map((port) => (
-                  <FlowPortNode
-                    key={port.id}
-                    port={port}
-                    selection={null}
-                    onSelect={() => {}}
-                    latestRuns={latestRuns}
-                  />
-                ))}
+                {/* Container port edges */}
+                <ContainerPortEdges
+                  containerPorts={instance.layout.containerPorts}
+                  nodes={instance.layout.nodes}
+                  layoutWidth={instance.layout.width}
+                  layoutHeight={instance.layout.height}
+                />
 
                 {instance.layout.nodes.map((childNode) => {
                   const stepDef = childWorkflow.steps[childNode.id];

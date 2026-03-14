@@ -72,9 +72,17 @@ export interface FlowPortNode {
   fieldSources?: Record<string, string>;
 }
 
+/** Edge from container boundary to an entry/terminal step (no box, just a line + label) */
+export interface ContainerPort {
+  stepName: string;
+  labels: string[];
+  type: "input" | "output";
+}
+
 export interface HierarchicalDagLayout extends DagLayout {
   nodes: HierarchicalDagNode[];
   flowPorts: FlowPortNode[];
+  containerPorts: ContainerPort[];
 }
 
 export interface ExpandedNodeData {
@@ -431,33 +439,18 @@ export function computeHierarchicalLayout(
     }
   }
 
-  // Flow port nodes (at all depths — each sub-job gets its own ports)
+  // Compute entry/terminal step info (used for flow ports at depth 0 and container ports at depth > 0)
   const FLOW_INPUT_ID = "__flow_input__";
   const FLOW_OUTPUT_ID = "__flow_output__";
   let hasFlowInput = false;
   let hasFlowOutput = false;
-  // Collect all unique $job input fields
   const allJobInputFields = new Set<string>();
-  // Output port: terminal steps and their outputs
-  const terminalStepOutputs = new Map<string, string[]>(); // stepName -> outputs[]
+  const terminalStepOutputs = new Map<string, string[]>();
 
-  // Input port: steps that consume $job inputs
   for (const fields of jobInputConsumers.values()) {
     for (const f of fields) allJobInputFields.add(f);
   }
-  if (allJobInputFields.size > 0) {
-    hasFlowInput = true;
-    g.setNode(FLOW_INPUT_ID, { width: FLOW_PORT_WIDTH, height: FLOW_PORT_HEIGHT });
-    // Edge from input port to each consumer step
-    for (const [stepName, fields] of jobInputConsumers) {
-      const key = `${FLOW_INPUT_ID}->${stepName}`;
-      g.setEdge(FLOW_INPUT_ID, stepName);
-      edgeSet.add(key);
-      edgeLabels[key] = [...fields];
-    }
-  }
 
-  // Output port: terminal steps (not referenced as source_step by any other step)
   const referencedAsSource = new Set<string>();
   for (const step of Object.values(workflow.steps)) {
     for (const binding of step.inputs) {
@@ -473,14 +466,28 @@ export function computeHierarchicalLayout(
       }
     }
   }
-  if (terminalStepOutputs.size > 0) {
-    hasFlowOutput = true;
-    g.setNode(FLOW_OUTPUT_ID, { width: FLOW_PORT_WIDTH, height: FLOW_PORT_HEIGHT });
-    for (const [stepName, outputs] of terminalStepOutputs) {
-      const key = `${stepName}->${FLOW_OUTPUT_ID}`;
-      g.setEdge(stepName, FLOW_OUTPUT_ID);
-      edgeSet.add(key);
-      edgeLabels[key] = outputs;
+
+  // Flow port dagre nodes (top-level only — boxes with edges)
+  if (depth === 0) {
+    if (allJobInputFields.size > 0) {
+      hasFlowInput = true;
+      g.setNode(FLOW_INPUT_ID, { width: FLOW_PORT_WIDTH, height: FLOW_PORT_HEIGHT });
+      for (const [stepName, fields] of jobInputConsumers) {
+        const key = `${FLOW_INPUT_ID}->${stepName}`;
+        g.setEdge(FLOW_INPUT_ID, stepName);
+        edgeSet.add(key);
+        edgeLabels[key] = [...fields];
+      }
+    }
+    if (terminalStepOutputs.size > 0) {
+      hasFlowOutput = true;
+      g.setNode(FLOW_OUTPUT_ID, { width: FLOW_PORT_WIDTH, height: FLOW_PORT_HEIGHT });
+      for (const [stepName, outputs] of terminalStepOutputs) {
+        const key = `${stepName}->${FLOW_OUTPUT_ID}`;
+        g.setEdge(stepName, FLOW_OUTPUT_ID);
+        edgeSet.add(key);
+        edgeLabels[key] = outputs;
+      }
     }
   }
 
@@ -617,6 +624,17 @@ export function computeHierarchicalLayout(
     }
   }
 
+  // Container ports: lightweight edge-line metadata for child layouts (depth > 0)
+  const containerPorts: ContainerPort[] = [];
+  if (depth > 0) {
+    for (const [stepName, fields] of jobInputConsumers) {
+      containerPorts.push({ stepName, labels: [...fields], type: "input" });
+    }
+    for (const [stepName, outputs] of terminalStepOutputs) {
+      containerPorts.push({ stepName, labels: outputs, type: "output" });
+    }
+  }
+
   const graphMeta = g.graph();
   const loopExtraWidth = loopEdges.length > 0 ? 120 : 0;
   const outerPad = isChild ? 0 : 80;
@@ -625,6 +643,7 @@ export function computeHierarchicalLayout(
     edges,
     loopEdges,
     flowPorts,
+    containerPorts,
     width: (graphMeta?.width ?? 600) + outerPad + loopExtraWidth,
     height: (graphMeta?.height ?? 400) + outerPad,
   };
