@@ -280,10 +280,12 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
 
       {/* Loop-back edges */}
       {loopEdges.map((le) => {
+        const sourceRun = latestRuns?.[le.from];
+        const sourceHasRun = sourceRun && (sourceRun.status === "completed" || sourceRun.status === "failed");
         const targetStatus = latestRuns?.[le.to]?.status;
         const isRunning = targetStatus === "running";
         const isSuspended = targetStatus === "suspended";
-        const isActive = isRunning || isSuspended;
+        const isActive = sourceHasRun && (isRunning || isSuspended);
 
         return (
           <g key={`loop-${le.from}-${le.to}`}>
