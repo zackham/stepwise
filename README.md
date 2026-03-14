@@ -6,221 +6,137 @@
 
 <p align="center">
   <strong>Step into your flow.</strong><br/>
-  Portable workflow orchestration for agents and humans.
+  Define workflows in YAML. Run them with a real-time web UI. Your AI agents call them as tools.
 </p>
 
 <p align="center">
-  <a href="https://stepwise.run"><strong>Homepage</strong></a> · <a href="docs/quickstart.md">Quickstart</a> · <a href="docs/concepts.md">Concepts</a> · <a href="docs/cli.md">CLI Reference</a> · <a href="docs/api.md">API Reference</a> · <a href="docs/agent-integration.md">Agent Integration</a>
+  <a href="https://stepwise.run"><strong>Homepage</strong></a> · <a href="docs/quickstart.md">Quickstart</a> · <a href="docs/agent-integration.md">Agent Integration</a> · <a href="docs/concepts.md">Concepts</a> · <a href="docs/cli.md">CLI Reference</a> · <a href="docs/api.md">API Reference</a>
 </p>
 
 ---
 
-Stepwise is a workflow engine that coordinates multi-step jobs where each step can be a **shell script**, an **LLM call**, an **autonomous AI agent**, or a **human decision**. Define your workflow as a YAML file, run it from the CLI, and optionally watch it execute in a real-time web UI.
+Stepwise is a workflow engine that coordinates multi-step jobs where each step can be a **shell script**, an **LLM call**, an **autonomous AI agent**, or a **human decision**. Write a `.flow.yaml`, run it from the terminal, and watch it execute in a real-time web UI with DAG visualization and live agent streaming.
+
+## Install + try it
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zackham/stepwise/master/install.sh | sh
 ```
 
-## Get started in 30 seconds
-
 ```bash
-# Try the interactive demo — plan, implement, review, deploy
-stepwise run @stepwise:welcome --watch
+stepwise run @stepwise:welcome --watch       # interactive demo
+stepwise run @stepwise:code-review --watch   # real-world flow
 ```
 
 `--watch` opens a browser with a real-time DAG visualization. Steps execute automatically — agents stream output live, human steps pause and wait for your input.
 
-```bash
-# Or create your own flow
-stepwise new my-flow                   # scaffold flows/my-flow/FLOW.yaml
-stepwise run my-flow --watch           # run it in the browser
-```
-
-## How it works
-
-You write a `.flow.yaml` file describing your steps and their dependencies. Stepwise builds a DAG, figures out what can run in parallel, and executes everything in the right order. When a step needs human input, the whole job pauses until you respond.
-
-### A simple pipeline
-
-```yaml
-name: deploy-pipeline
-steps:
-  build:
-    run: scripts/build.sh
-    outputs: [artifact, version]
-
-  test:
-    run: scripts/test.sh
-    outputs: [passed, coverage]
-    inputs:
-      artifact: build.artifact
-
-  deploy:
-    run: scripts/deploy.sh
-    outputs: [url]
-    inputs:
-      artifact: build.artifact
-      version: build.version
-```
-
-`test` waits for `build` because it needs `build.artifact`. `deploy` waits for both. Steps with no data dependencies run in parallel automatically.
-
-### Loops and human review
-
-```yaml
-name: iterative-review
-steps:
-  draft:
-    run: scripts/draft.py
-    outputs: [content, word_count]
-    inputs:
-      topic: $job.topic
-      prior_feedback: review.feedback
-
-  review:
-    executor: human
-    prompt: "Review this draft. Approve or request revisions."
-    outputs: [decision, feedback]
-    inputs:
-      content: draft.content
-    exits:
-      - name: approve
-        when: "outputs.decision == 'approve'"
-        action: advance
-      - name: revise
-        when: "outputs.decision == 'revise' and attempt < 5"
-        action: loop
-        target: draft
-      - name: max_revisions
-        when: "attempt >= 5"
-        action: escalate
-
-  publish:
-    run: scripts/publish.py
-    outputs: [url]
-    inputs:
-      content: draft.content
-    sequencing: [review]
-```
-
-The reviewer picks "revise" and the engine loops back to `draft` with the feedback attached. After 5 attempts it escalates. On "approve" it advances to `publish`.
-
-## Executor types
-
-| Type | What it does |
-|------|-------------|
-| **script** | Runs any shell command, parses JSON from stdout |
-| **llm** | Single LLM call via OpenRouter with structured output |
-| **agent** | Autonomous AI agent via [ACP](https://agentclientprotocol.com) with real-time streaming |
-| **human** | Pauses the job and waits for input (web UI or stdin) |
-
-## Calling flows from agents
+## Flows your agents can call
 
 Stepwise flows are callable as tools by AI agents (Claude Code, Codex, etc.) via plain CLI. No MCP servers, no protocol layers — just bash commands that return JSON.
 
 ```bash
-# Run a flow and get structured output
 stepwise run council.flow.yaml --wait --var question="Should we use Postgres?"
-# → {"status": "completed", "job_id": "job-...", "outputs": [{...}]}
+```
 
-# Generate per-flow instructions for your agent
-stepwise agent-help --update CLAUDE.md
+```json
+{"status": "completed", "job_id": "job-abc123", "outputs": [{"verdict": "yes", "reasoning": "..."}]}
 ```
 
 `--wait` prints **only** JSON to stdout — zero logging, zero progress noise. Missing an input? The error tells you exactly which `--var` flags to add.
 
-## CLI at a glance
+To generate per-flow instructions your agent can reference:
 
-```
-stepwise init                        # Create .stepwise/ project
-stepwise run <flow> [--watch|--wait|--async]  # Run a flow
-stepwise run <flow> --var K=V        # Pass inputs
-stepwise serve                       # Persistent server mode
-stepwise validate <flow>             # Check for errors
-stepwise jobs                        # List jobs
-stepwise status <job-id>             # Step-by-step detail
-stepwise cancel <job-id>             # Cancel a running job
-stepwise fulfill <run-id> '{...}'    # Satisfy a human step
-stepwise schema <flow>               # Input/output schema (JSON)
-stepwise output <job-id>             # Retrieve job outputs
-stepwise agent-help                  # Generate agent instructions
-stepwise update                 # Upgrade to latest version
-stepwise templates                   # List available templates
-stepwise config set <key> <value>    # Configure (API keys, models)
-stepwise get <name-or-url>           # Download a flow from registry
-stepwise share <flow>                # Publish a flow to registry
-stepwise search <query>              # Search the registry
-stepwise new <name>                  # Create a new flow
+```bash
+stepwise agent-help --update CLAUDE.md
 ```
 
-See [`docs/cli.md`](docs/cli.md) for the full reference with all flags, examples, and exit codes.
+This appends tool-calling docs (input schemas, example commands, expected output shapes) to your project's `CLAUDE.md` so agents know how to invoke your flows without any extra configuration.
+
+## How it works
+
+You write a `.flow.yaml` describing steps and their dependencies. Stepwise builds a DAG, runs independent steps in parallel, and executes everything in the right order. When a step needs human input, the job pauses until you respond.
+
+```yaml
+name: code-review
+steps:
+  gather-context:
+    run: |
+      git diff main --stat && git log main..HEAD --oneline
+    outputs: [diff_summary, commits]
+
+  review:
+    executor: agent
+    prompt: |
+      Review this code change. Identify bugs, style issues, and suggest improvements.
+      Diff: $diff_summary
+      Commits: $commits
+    inputs:
+      diff_summary: gather-context.diff_summary
+      commits: gather-context.commits
+    outputs: [verdict, issues, suggestions]
+
+  decide:
+    executor: human
+    prompt: "Review found $issue_count issues. Apply fixes or skip?"
+    outputs: [decision]
+    inputs:
+      issue_count: review.issues
+    exits:
+      - name: fix
+        when: "outputs.decision == 'fix'"
+        action: advance
+      - name: skip
+        when: "outputs.decision == 'skip'"
+        action: advance
+
+  apply-fixes:
+    executor: agent
+    prompt: "Apply these fixes: $suggestions"
+    inputs:
+      suggestions: review.suggestions
+    outputs: [result]
+    sequencing: [decide]
+```
+
+`review` waits for `gather-context` because it needs its outputs. `decide` waits for `review`. Steps with no data dependencies run in parallel automatically.
+
+## Executor types
+
+| Type | What it does | When to use |
+|------|-------------|-------------|
+| **script** | Runs any shell command, parses JSON from stdout | Data processing, API calls, file operations |
+| **llm** | Single LLM call via OpenRouter with structured output | Scoring, classification, text generation |
+| **agent** | Autonomous AI agent via [ACP](https://agentclientprotocol.com) with real-time streaming | Complex tasks requiring tool use, research |
+| **human** | Pauses the job and waits for input (web UI or stdin) | Approvals, creative judgment, decisions |
+| **poll** | Runs a check command on an interval until it returns JSON | Waiting for CI, deployments, external APIs |
 
 ## Features
 
 - **DAG engine** — automatic parallelism, conditional loops, route steps, expression-based branching
 - **Three CLI modes** — headless `run`, ephemeral `--watch` UI, persistent `serve`
-- **Human-in-the-loop** — stdin prompts in headless mode, web form in watch mode
-- **Real-time streaming** — agent output (text + tool calls) via WebSocket
+- **Human-in-the-loop** — stdin prompts in headless mode, schema-driven web forms in watch mode
+- **Real-time streaming** — agent output (text + tool calls) streamed live via WebSocket
 - **Context chains** — session continuity across agent steps via compiled transcripts
-- **Expression exit rules** — `outputs.score >= 0.8`, `attempt < 5`, etc.
+- **Expression exit rules** — `outputs.score >= 0.8`, `attempt < 5`, route on any output value
 - **Cost tracking** — cap spend, duration, or iterations per step
-- **Decorators** — timeout, retry, fallback, notification (composable per step)
-- **SQLite persistence** with WAL mode and crash recovery
-- **Project-local `.stepwise/`** directory (like `.git/`)
+- **Decorators** — timeout, retry, fallback (composable per step)
 
-## Architecture
+## CLI
 
 ```
-┌────────────────────────────────────────────────────────┐
-│                   Web UI (React)                       │
-│  DAG Visualization · Step Panels · Agent Streaming     │
-└───────────────────────┬────────────────────────────────┘
-                        │ WebSocket + REST
-┌───────────────────────┴────────────────────────────────┐
-│                  FastAPI Server                         │
-│  /api/jobs · /api/runs · /api/templates · /ws          │
-├───────────────────────┬────────────────────────────────┤
-│       Engine          │       SQLite Store             │
-│  DAG resolution       │  Jobs, steps, runs, events     │
-│  Exit rule eval       │  Crash recovery                │
-│  Loop management      │  Agent output streams          │
-├─────────┬──────┬──────┴───┬───────────┐               │
-│ Script  │ LLM  │  Agent   │  Human    │  ← Executors  │
-│         │      │  (ACP)   │           │               │
-└─────────┴──────┴──────────┴───────────┘
+stepwise init                                  Create .stepwise/ project
+stepwise run <flow> [--watch|--wait|--async]   Run a flow
+stepwise serve                                 Persistent server with web UI
+stepwise validate <flow>                       Check a flow for errors
+stepwise jobs                                  List all jobs
+stepwise status <job-id>                       Step-by-step detail
+stepwise fulfill <run-id> '{...}'              Satisfy a human step
+stepwise schema <flow>                         Input/output schema (JSON)
+stepwise agent-help                            Generate agent instructions
+stepwise update                                Upgrade to latest version
 ```
 
-## Configuration
-
-```bash
-stepwise config set openrouter_api_key sk-or-...
-stepwise config set default_model anthropic/claude-sonnet-4-20250514
-stepwise config get openrouter_api_key       # **********xyz
-```
-
-Config lives in `~/.config/stepwise/config.json`.
-
-## Development
-
-```bash
-git clone https://github.com/zackham/stepwise.git
-cd stepwise
-
-# Backend
-uv sync
-uv run pytest tests/
-
-# Frontend
-cd web
-npm install
-npm run dev        # dev server at :5173, proxies to :8340
-npm test
-
-# Build web assets into package
-make build-web
-```
-
-**Requirements:** Python 3.12+, Node 20+ (for frontend development)
+See [`docs/cli.md`](docs/cli.md) for the full reference with all flags, examples, and exit codes.
 
 ## Docs
 
@@ -235,6 +151,26 @@ make build-web
 | [CLI Reference](docs/cli.md) | All commands, flags, examples, exit codes |
 | [API Reference](docs/api.md) | REST endpoints, WebSocket protocol, error handling |
 | [Flow Sharing](docs/flow-sharing.md) | Registry commands (`get`, `share`, `search`, `info`) |
+
+## Development
+
+**Backend** (Python 3.12+):
+
+```bash
+git clone https://github.com/zackham/stepwise.git && cd stepwise
+uv sync
+uv run pytest tests/
+uv run stepwise --help
+```
+
+**Frontend** (Node 20+):
+
+```bash
+cd web && npm install
+npm run dev          # dev server at :5173, proxies API to :8340
+npm test             # vitest
+make build-web       # bundle into src/stepwise/_web/
+```
 
 ## License
 

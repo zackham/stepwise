@@ -2,6 +2,19 @@
 
 Stepwise has three runtime concepts, a dependency system, and a control flow mechanism. Everything else is built on top of these.
 
+### Quick reference
+
+| Concept | What it is | Key detail |
+|---------|-----------|------------|
+| **Job** | A unit of work with inputs and a workflow | Persists to SQLite, can spawn sub-jobs |
+| **Step** | A typed node in the workflow graph | Declares outputs, executor, inputs, exit rules |
+| **Executor** | What does the work inside a step | script, llm, agent, human, poll |
+| **Input binding** | Pulls data from upstream outputs | `findings: research.findings` |
+| **Exit rule** | Decides what happens after step completion | advance, loop, escalate, abandon |
+| **For-each** | Iterates over a list with embedded sub-flows | Items execute in parallel |
+| **Route step** | Conditional dispatch (switch statement) | First-match semantics |
+| **Context chain** | Session continuity across agent steps | Prior transcripts compiled into context |
+
 ## Jobs
 
 A **job** is a unit of work with an objective, initial inputs, and a workflow.

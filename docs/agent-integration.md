@@ -1,5 +1,7 @@
 # Agent Integration
 
+> **TL;DR:** `stepwise run flow.yaml --wait --var key=value` → JSON on stdout. `stepwise agent-help --update CLAUDE.md` to teach your agent about available flows. No MCP, no background services.
+
 How to make your AI agent call Stepwise flows as tools. This guide covers the complete workflow — from discovery to execution to handling every response shape.
 
 ## Overview
@@ -37,6 +39,24 @@ The `--update` flag finds `<!-- stepwise-agent-help -->` / `<!-- /stepwise-agent
 # Scan a specific directory instead of the project root
 stepwise agent-help --flows-dir ./workflows --update CLAUDE.md
 ```
+
+## 1b. From Claude Code
+
+If you're using Claude Code, the fastest setup is:
+
+```bash
+# Add flow instructions to your project
+stepwise agent-help --update CLAUDE.md
+
+# Claude Code now knows how to call your flows
+# It will use --wait for blocking calls, --async for background work
+```
+
+Claude Code reads `CLAUDE.md` automatically. After running `agent-help --update`, Claude can discover and call your flows without additional prompting. It will:
+- Use `stepwise schema <flow>` to check inputs before calling
+- Use `--wait` for flows it needs results from
+- Use `--timeout` for flows with human steps
+- Handle errors based on exit codes
 
 ## 2. Discover What a Flow Needs
 
