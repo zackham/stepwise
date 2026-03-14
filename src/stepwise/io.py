@@ -28,6 +28,7 @@ class LiveFlowHandle(abc.ABC):
         duration: float | None = None,
         cost: float | None = None,
         error: str | None = None,
+        indent: int = 0,
     ) -> None: ...
 
     @abc.abstractmethod
@@ -241,8 +242,10 @@ class _PlainLiveFlowHandle(LiveFlowHandle):
         duration: float | None = None,
         cost: float | None = None,
         error: str | None = None,
+        indent: int = 0,
     ) -> None:
-        self._adapter.step_status(name, status, duration, cost, error)
+        prefix = "  " * indent
+        self._adapter.step_status(f"{prefix}{name}", status, duration, cost, error)
 
     def update_summary(
         self, completed: int, total: int,
@@ -610,6 +613,7 @@ class _AppendFlowHandle(LiveFlowHandle):
         duration: float | None = None,
         cost: float | None = None,
         error: str | None = None,
+        indent: int = 0,
     ) -> None:
         from rich.text import Text
 
@@ -621,9 +625,10 @@ class _AppendFlowHandle(LiveFlowHandle):
             "delegated": ("↗", "blue"),
         }
         icon, style = icons.get(status, ("○", "dim"))
+        prefix = "  " + "  " * indent
         line = Text()
-        line.append(f"  {icon} ", style=style)
-        line.append(f"{name:<20}", style=style)
+        line.append(f"{prefix}{icon} ", style=style)
+        line.append(f"{name:<20}", style=style if indent == 0 else "dim")
         parts: list[str] = []
         if duration is not None:
             parts.append(f"{duration:.1f}s")
@@ -648,20 +653,21 @@ class _AppendFlowHandle(LiveFlowHandle):
         duration: float | None = None,
         cost: float | None = None,
         error: str | None = None,
+        indent: int = 0,
     ) -> None:
         if status == "running":
             self._running_step = name
-            self._step_line(name, "running")
+            self._step_line(name, "running", indent=indent)
         elif status in ("completed", "failed"):
             if self._running_step == name:
                 self._erase_last_line()
                 self._running_step = None
-            self._step_line(name, status, duration, cost, error)
+            self._step_line(name, status, duration, cost, error, indent=indent)
         elif status == "suspended":
             if self._running_step == name:
                 self._erase_last_line()
                 self._running_step = None
-            self._step_line(name, "suspended")
+            self._step_line(name, "suspended", indent=indent)
 
     def update_summary(
         self, completed: int, total: int,
