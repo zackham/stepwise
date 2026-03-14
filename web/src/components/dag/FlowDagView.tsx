@@ -146,6 +146,8 @@ export function FlowDagView({
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       if (e.button !== 0) return;
+      // Don't start drag if clicking inside the input panel
+      if (inputPanelRef.current?.contains(e.target as Node)) return;
       isDraggingRef.current = true;
       didDragRef.current = false;
       const t = transformRef.current;
@@ -180,6 +182,8 @@ export function FlowDagView({
 
   // Swallow click events after a drag so nodes don't get selected/toggled
   const handleClickCapture = useCallback((e: React.MouseEvent) => {
+    // Never swallow clicks on the input panel
+    if (inputPanelRef.current?.contains(e.target as Node)) return;
     if (didDragRef.current) {
       e.stopPropagation();
       didDragRef.current = false;
