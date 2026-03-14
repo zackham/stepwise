@@ -1,107 +1,362 @@
 name: welcome
-description: Interactive product tour — learn stepwise by watching it run
+description: "From issue to deploy — a real dev workflow in one YAML file"
 
 steps:
-  # ─── Phase 1: Gather Info ───────────────────────────────────────────
-
-  gather-info:
+  # ─── 1. The "Issue" ──────────────────────────────────────────────
+  pick-feature:
     executor: human
-    description: "Human-in-the-loop: gathering your info"
+    description: "GitHub issue"
     prompt: |
-      Welcome to Stepwise! This flow teaches you by running.
-      Watch the DAG above — steps will light up, data will flow.
+      Welcome to Stepwise — workflow orchestration for agents and humans.
+
+      We're going to simulate a real dev workflow: plan, implement
+      in parallel, open a PR, loop through code review, and deploy.
+      Everything you see is defined in a single YAML file.
+
+      Pick a feature to "build":
     outputs:
-      name:
-        type: str
-        description: "Your first name"
-      use_case:
+      feature:
         type: choice
-        options: [agent-tools, ci-cd, team-workflows, just-exploring]
-        description: "What interests you most?"
+        options: [todo-list, auth-system, search-api]
+        description: "Feature to implement"
 
-  # ─── Phase 2: Parallel Tips (fan-out) ──────────────────────────────
-  #
-  # These three steps run simultaneously — watch the DAG!
-  # Each one produces a tip tailored with the user's name.
-
-  tip-dag:
-    description: "Parallel: visual DAGs"
+  # ─── 2. Plan ─────────────────────────────────────────────────────
+  plan:
+    description: "Planning tasks"
     run: |
-      printf '{"tip": "Hey %s — steps are DAG nodes, edges carry your data"}' "$name"
-    outputs: [tip]
-    inputs:
-      name: gather-info.name
-
-  tip-hitl:
-    description: "Parallel: human-in-the-loop"
-    run: |
-      printf '{"tip": "%s just used a human step — any step can pause for input"}' "$name"
-    outputs: [tip]
-    inputs:
-      name: gather-info.name
-
-  tip-persistence:
-    description: "Parallel: persistence & durability"
-    run: |
-      printf '{"tip": "Every run persists to SQLite, %s — close and come back anytime"}' "$name"
-    outputs: [tip]
-    inputs:
-      name: gather-info.name
-
-  # ─── Phase 3: Use-Case Advice ──────────────────────────────────────
-
-  build-advice:
-    description: "Routing: advice based on your choice"
-    run: |
-      case "$use_case" in
-        agent-tools)
-          printf '{"advice": "Run stepwise agent-help for AI agent integration", "next_step": "stepwise agent-help"}'
+      sleep 1
+      rev_file=".plan-revision"
+      if [ -f "$rev_file" ]; then
+        rev=$(cat "$rev_file")
+        rev=$((rev + 1))
+      else
+        rev=1
+      fi
+      printf '%d' "$rev" > "$rev_file"
+      case "$feature" in
+        todo-list)
+          printf '{"tasks": ["data-model", "api-routes", "react-ui"], "plan": "3 tasks", "revision": %d}' "$rev"
           ;;
-        ci-cd)
-          printf '{"advice": "Use stepwise run --wait in CI for structured output", "next_step": "stepwise run --wait"}'
-          ;;
-        team-workflows)
-          printf '{"advice": "Run stepwise serve and share the URL with your team", "next_step": "stepwise serve"}'
+        auth-system)
+          printf '{"tasks": ["user-model", "jwt-auth", "login-page"], "plan": "3 tasks", "revision": %d}' "$rev"
           ;;
         *)
-          printf '{"advice": "Scaffold a flow and iterate with --watch mode", "next_step": "stepwise new my-flow"}'
+          printf '{"tasks": ["indexer", "query-parser", "results-api"], "plan": "3 tasks", "revision": %d}' "$rev"
           ;;
       esac
-    outputs: [advice, next_step]
+    outputs: [tasks, plan, revision]
     inputs:
-      use_case: gather-info.use_case
+      feature: pick-feature.feature
 
-  # ─── Phase 4: Assemble (fan-in) ────────────────────────────────────
-
-  assemble:
-    description: "Converging: assembling your personalized guide"
-    run: |
-      cat <<WELCOME_EOF
-      {"welcome_message": "Hey $name! Here's your Stepwise guide.\n\n1. $tip_dag\n\n2. $tip_hitl\n\n3. $tip_persistence\n\nFor $use_case: $advice\n\nTry next: $next_step"}
-      WELCOME_EOF
-    outputs: [welcome_message]
-    inputs:
-      name: gather-info.name
-      use_case: gather-info.use_case
-      tip_dag: tip-dag.tip
-      tip_hitl: tip-hitl.tip
-      tip_persistence: tip-persistence.tip
-      advice: build-advice.advice
-      next_step: build-advice.next_step
-
-  # ─── Phase 5: Present Result ────────────────────────────────────────
-
-  present:
+  # ─── 3. Approve Plan ────────────────────────────────────────────
+  approve-plan:
     executor: human
-    description: "Your personalized welcome"
+    description: "Plan review"
     prompt: |
-      $welcome_message
+      Feature: $feature — $plan (revision $revision)
+      Tasks: $tasks
 
-      That's the tour! See flows/welcome/FLOW.yaml for the source.
+      Human steps like this one pause the entire workflow. In production, this could send a Slack message or email instead.
+
+      If you approve, each task fans out as a parallel sub-pipeline. Or revise to re-plan.
     outputs:
-      ready:
+      decision:
         type: choice
-        options: [lets-go, show-me-more]
-        description: "Ready to build your own?"
+        options: [approve, revise]
+        description: "Approve or revise the plan"
     inputs:
-      welcome_message: assemble.welcome_message
+      feature: pick-feature.feature
+      tasks: plan.tasks
+      plan: plan.plan
+      revision: plan.revision
+    exits:
+      - name: approved
+        when: "outputs.decision == 'approve'"
+        action: advance
+      - name: revise
+        when: "outputs.decision == 'revise'"
+        action: loop
+        target: plan
+
+  # ─── 4. Write Code (for-each: fan-out per task) ─────────────────
+  #     Each task: implement → run tests → route (pass or fix loop)
+  write-code:
+    description: "For-each: writing code"
+    for_each: plan.tasks
+    as: task
+    inputs:
+      tasks: plan.tasks
+    sequencing: [approve-plan]
+    outputs: [results]
+    flow:
+      steps:
+        task-implement:
+          description: "Implementing"
+          run: |
+            sleep 2
+            printf '{"files": 3, "task": "%s"}' "$task"
+          outputs: [files, task]
+          inputs:
+            task: $job.task
+        task-run-tests:
+          description: "Running unit tests"
+          run: |
+            sleep 1
+            printf '{"passed": 4, "failed": 2, "status": "fail"}'
+          outputs: [passed, failed, status]
+          sequencing: [task-implement]
+        task-resolve:
+          description: "Check test results"
+          inputs:
+            status: task-run-tests.status
+          routes:
+            pass:
+              when: "status == 'pass'"
+              flow:
+                steps:
+                  task-done:
+                    description: "Tests passed"
+                    run: |
+                      printf '{"result": "passed"}'
+                    outputs: [result]
+            default:
+              flow:
+                steps:
+                  task-fix:
+                    description: "Fixing tests"
+                    run: |
+                      sleep 1
+                      printf '{"fixes": "applied"}'
+                    outputs: [fixes]
+                  task-retest:
+                    description: "Re-running tests"
+                    run: |
+                      sleep 1
+                      if [ "$STEPWISE_ATTEMPT" -ge 2 ]; then
+                        printf '{"result": "passed"}'
+                      else
+                        printf '{"result": "still failing"}'
+                      fi
+                    outputs: [result]
+                    inputs:
+                      fixes: task-fix.fixes
+                    exits:
+                      - name: pass
+                        when: "outputs.result == 'passed'"
+                        action: advance
+                      - name: fail
+                        when: "True"
+                        action: loop
+                        target: task-fix
+          outputs: [result]
+
+  # ─── 5. Integration Tests ───────────────────────────────────────
+  #     Run tests → route: pass (advance) or fail (fix loop)
+  run-tests:
+    description: "Running integration tests"
+    run: |
+      sleep 1
+      printf '{"passed": 8, "failed": 3, "status": "fail"}'
+    outputs: [passed, failed, status]
+    sequencing: [write-code]
+
+  test-resolve:
+    description: "Check integration tests"
+    inputs:
+      status: run-tests.status
+    routes:
+      pass:
+        when: "status == 'pass'"
+        flow:
+          steps:
+            tests-ok:
+              description: "Tests passed"
+              run: |
+                printf '{"result": "passed"}'
+              outputs: [result]
+      default:
+        flow:
+          steps:
+            fix-tests:
+              description: "Fixing tests"
+              run: |
+                sleep 1
+                printf '{"fixes": "applied"}'
+              outputs: [fixes]
+            rerun-tests:
+              description: "Re-running tests"
+              run: |
+                sleep 1
+                if [ "$STEPWISE_ATTEMPT" -ge 2 ]; then
+                  printf '{"result": "passed"}'
+                else
+                  printf '{"result": "still failing"}'
+                fi
+              outputs: [result]
+              inputs:
+                fixes: fix-tests.fixes
+              exits:
+                - name: pass
+                  when: "outputs.result == 'passed'"
+                  action: advance
+                - name: fail
+                  when: "True"
+                  action: loop
+                  target: fix-tests
+    outputs: [result]
+
+  # ─── 6. Open PR (sub-job: push + create) ────────────────────────
+  open-pr:
+    description: "Opening PR"
+    flow:
+      steps:
+        push-initial:
+          description: "Pushing code"
+          run: |
+            sleep 1
+            printf '{"commit": "initial push"}'
+          outputs: [commit]
+        create-pr:
+          description: "Creating PR"
+          run: |
+            sleep 1
+            raw=$(od -A n -N 1 -t u1 /dev/urandom | tr -d ' \n')
+            raw=${raw:-128}
+            pr=$((raw % 900 + 100))
+            printf '{"pr": "#%d", "branch": "feat/%s", "pr_title": "New Feature: %s"}' "$pr" "$feature" "$feature"
+          outputs: [pr, branch, pr_title]
+          inputs:
+            commit: push-initial.commit
+            feature: $job.feature
+    outputs: [pr, branch, pr_title]
+    inputs:
+      feature: pick-feature.feature
+    sequencing: [test-resolve]
+
+  # ─── 7. Code Review ─────────────────────────────────────────────
+  #     Await review → route: approved (advance) or changes (fix loop)
+  await-review:
+    description: "Code review"
+    run: |
+      sleep 2
+      printf '{"result": "changes", "reviewer": "alice"}'
+    outputs: [result, reviewer]
+    inputs:
+      pr: open-pr.pr
+
+  review-resolve:
+    description: "Check review result"
+    inputs:
+      result: await-review.result
+      pr: open-pr.pr
+    routes:
+      approved:
+        when: "result == 'approved'"
+        flow:
+          steps:
+            review-ok:
+              description: "Review approved"
+              run: |
+                printf '{"outcome": "approved"}'
+              outputs: [outcome]
+      default:
+        flow:
+          steps:
+            revise-code:
+              description: "Revising code"
+              run: |
+                sleep 2
+                printf '{"changes": "revised"}'
+              outputs: [changes]
+            push-fix:
+              description: "Pushing fixes"
+              run: |
+                sleep 1
+                printf '{"pushed": true}'
+              outputs: [pushed]
+              inputs:
+                changes: revise-code.changes
+            re-review:
+              description: "Re-reviewing"
+              run: |
+                sleep 2
+                if [ "$STEPWISE_ATTEMPT" -ge 2 ]; then
+                  printf '{"outcome": "approved"}'
+                else
+                  printf '{"outcome": "changes"}'
+                fi
+              outputs: [outcome]
+              inputs:
+                pushed: push-fix.pushed
+              exits:
+                - name: approved
+                  when: "outputs.outcome == 'approved'"
+                  action: advance
+                - name: changes
+                  when: "True"
+                  action: loop
+                  target: revise-code
+    outputs: [outcome]
+
+  # ─── 8. Deploy Decision ─────────────────────────────────────────
+  ship-it:
+    executor: human
+    description: "Deploy decision"
+    prompt: |
+      "$pr_title" ($pr) approved by $reviewer!
+
+      The review loop just resolved — revise-code, push-fix, and re-review cycled until approved. That loop-back edge in the DAG is an exit rule.
+
+      Now a route step branches to different pipelines based on your choice — only one path executes.
+    outputs:
+      decision:
+        type: choice
+        options: [deploy, close]
+        description: "Ship it?"
+    inputs:
+      pr: open-pr.pr
+      pr_title: open-pr.pr_title
+      reviewer: await-review.reviewer
+    sequencing: [review-resolve]
+
+  # ─── 9. Route: deploy pipeline or close ─────────────────────────
+  outcome:
+    description: "Route: ship or close"
+    inputs:
+      decision: ship-it.decision
+      pr: open-pr.pr
+      pr_title: open-pr.pr_title
+    routes:
+      deploy:
+        when: "decision == 'deploy'"
+        flow:
+          steps:
+            merge:
+              description: "Merging PR"
+              run: |
+                sleep 1
+                printf '{"action": "merged", "pr": "%s"}' "$pr"
+              outputs: [action, pr]
+              inputs:
+                pr: $job.pr
+            deploy-prod:
+              description: "Deploying to prod"
+              run: |
+                sleep 2
+                printf '{"status": "live", "pr_title": "%s"}' "$pr_title"
+              outputs: [status, pr_title]
+              inputs:
+                action: merge.action
+                pr_title: $job.pr_title
+      default:
+        flow:
+          steps:
+            close-pr:
+              description: "Closing PR"
+              run: |
+                sleep 1
+                printf '{"status": "closed", "pr_title": "%s"}' "$pr_title"
+              outputs: [status, pr_title]
+              inputs:
+                pr_title: $job.pr_title
+    outputs: [status, pr_title]

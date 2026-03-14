@@ -202,6 +202,7 @@ class ScriptExecutor(Executor):
             "JOB_ENGINE_WORKSPACE": str(workspace),
             "STEPWISE_STEP_IO": str(step_io_dir),
             "STEPWISE_PROJECT_DIR": project_dir,
+            "STEPWISE_ATTEMPT": str(context.attempt),
         }
         # Prepend project root to PYTHONPATH so flow scripts can import project modules
         existing_pypath = os.environ.get("PYTHONPATH", "")
