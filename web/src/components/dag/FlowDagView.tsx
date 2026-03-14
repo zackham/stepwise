@@ -5,6 +5,7 @@ import { StepNode } from "./StepNode";
 import { DagEdges } from "./DagEdges";
 import type { HoveredLabelInfo } from "./DagEdges";
 import { ExpandedStepContainer } from "./ExpandedStepContainer";
+import { ForEachExpandedContainer } from "./ForEachExpandedContainer";
 import { FlowPortNode } from "./FlowPortNode";
 import { HumanInputPanel, getWatchProps } from "./HumanInputPanel";
 import type { FlowDefinition, StepRun, JobTreeNode } from "@/lib/types";
@@ -137,7 +138,11 @@ export function FlowDagView({
         for (const run of subJob.runs) {
           if (run.status === "running" || run.status === "suspended") {
             // Find which parent step owns this sub-job
-            const parentRun = runs.find((r) => r.sub_job_id === subJob.job.id);
+            const parentRun = runs.find((r) =>
+              r.sub_job_id === subJob.job.id ||
+              (r.executor_state?.for_each === true &&
+                (r.executor_state?.sub_job_ids as string[] | undefined)?.includes(subJob.job.id))
+            );
             if (parentRun && !activeNodeIds.includes(parentRun.step_name)) {
               activeNodeIds.push(parentRun.step_name);
             }
@@ -269,24 +274,45 @@ export function FlowDagView({
     }
   }, []);
 
-  // Build a map of step_name -> sub-job tree node (runtime data)
+  // Build a map of step_name -> sub-job tree node(s) (runtime data)
+  // Arrays: length 1 for standard sub-jobs, length N for for_each
   const subJobMap = useMemo(() => {
-    if (!jobTree) return new Map<string, JobTreeNode>();
-    const map = new Map<string, JobTreeNode>();
-    const subJobByParentRunId = new Map<string, JobTreeNode>();
+    if (!jobTree) return new Map<string, JobTreeNode[]>();
+    const map = new Map<string, JobTreeNode[]>();
+    // Build lookup by sub-job ID
+    const subJobById = new Map<string, JobTreeNode>();
     for (const sj of jobTree.sub_jobs) {
-      if (sj.job.parent_step_run_id) {
-        subJobByParentRunId.set(sj.job.parent_step_run_id, sj);
+      subJobById.set(sj.job.id, sj);
+    }
+    // Find latest run per step with sub-job info
+    const latestByStep = new Map<string, StepRun>();
+    for (const run of runs) {
+      const isForEach = run.executor_state?.for_each === true;
+      const hasSub = !!run.sub_job_id;
+      if (!isForEach && !hasSub) continue;
+      const existing = latestByStep.get(run.step_name);
+      if (!existing || run.attempt > existing.attempt) {
+        latestByStep.set(run.step_name, run);
       }
     }
-    for (const run of runs) {
-      if (!run.sub_job_id) continue;
-      const subTree = subJobByParentRunId.get(run.id);
-      if (subTree) {
-        const existing = map.get(run.step_name);
-        if (!existing) {
-          map.set(run.step_name, subTree);
+    for (const [sName, run] of latestByStep) {
+      if (run.executor_state?.for_each === true) {
+        const ids = (run.executor_state?.sub_job_ids as string[]) ?? [];
+        const nodes: JobTreeNode[] = [];
+        for (const id of ids) {
+          const n = subJobById.get(id);
+          if (n) nodes.push(n);
         }
+        if (nodes.length > 0) map.set(sName, nodes);
+      } else if (run.sub_job_id) {
+        const subJobByParentRunId = new Map<string, JobTreeNode>();
+        for (const sj of jobTree.sub_jobs) {
+          if (sj.job.parent_step_run_id) {
+            subJobByParentRunId.set(sj.job.parent_step_run_id, sj);
+          }
+        }
+        const subTree = subJobByParentRunId.get(run.id);
+        if (subTree) map.set(sName, [subTree]);
       }
     }
     return map;
@@ -429,13 +455,33 @@ export function FlowDagView({
         {layout.nodes.map((node) => {
           const stepDef = workflow.steps[node.id];
           if (!stepDef) return null;
-          const subTree = subJobMap.get(node.id);
+          const subTrees = subJobMap.get(node.id);
           const subFlowDef = subFlowDefs.get(node.id);
+
+          if (node.isForEach && node.forEachChildren && subTrees) {
+            return (
+              <div key={node.id} data-step-node>
+                <ForEachExpandedContainer
+                  node={node}
+                  stepName={node.id}
+                  instances={node.forEachChildren}
+                  subTrees={subTrees}
+                  expandedSteps={expandedSteps}
+                  selectedStep={selectedStep}
+                  onSelectStep={onSelectStep}
+                  onToggleExpand={onToggleExpand}
+                  onNavigateSubJob={onNavigateSubJob}
+                  depth={0}
+                />
+              </div>
+            );
+          }
 
           if (node.isExpanded && node.childLayout) {
             // Runtime sub-job tree takes priority, fall back to design-time sub_flow
-            const childWorkflow = subTree?.job.workflow ?? subFlowDef ?? { steps: {} };
-            const childRuns = subTree?.runs ?? [];
+            const firstTree = subTrees?.[0] ?? null;
+            const childWorkflow = firstTree?.job.workflow ?? subFlowDef ?? { steps: {} };
+            const childRuns = firstTree?.runs ?? [];
             return (
               <div key={node.id} data-step-node>
                 <ExpandedStepContainer
@@ -444,8 +490,8 @@ export function FlowDagView({
                   childLayout={node.childLayout}
                   childWorkflow={childWorkflow}
                   childRuns={childRuns}
-                  childJobTree={subTree ?? null}
-                  childStatus={subTree?.job.status ?? null}
+                  childJobTree={firstTree}
+                  childStatus={firstTree?.job.status ?? null}
                   expandedSteps={expandedSteps}
                   selectedStep={selectedStep}
                   onSelectStep={onSelectStep}
@@ -472,7 +518,7 @@ export function FlowDagView({
                   node.hasSubFlow ? () => onToggleExpand(node.id) : undefined
                 }
                 childStepCount={node.childStepCount}
-                childJobStatus={subTree?.job.status ?? null}
+                childJobStatus={subTrees?.[0]?.job.status ?? null}
                 x={node.x}
                 y={node.y}
                 width={node.width}

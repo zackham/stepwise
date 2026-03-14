@@ -52,6 +52,15 @@ export interface StepLimits {
   max_iterations: number | null;
 }
 
+// ── For-Each Spec ─────────────────────────────────────────────────────
+
+export interface ForEachSpec {
+  source_step: string;
+  source_field: string;
+  item_var: string;
+  on_error: string; // "fail_fast" | "continue"
+}
+
 // ── Step Definition ────────────────────────────────────────────────────
 
 export interface StepDefinition {
@@ -64,6 +73,7 @@ export interface StepDefinition {
   exit_rules: ExitRule[];
   idempotency: string;
   limits: StepLimits | null;
+  for_each?: ForEachSpec;
   sub_flow?: FlowDefinition;
 }
 

@@ -42,6 +42,13 @@ export interface DagLayout {
 }
 
 // Hierarchical layout types for expand-in-place sub-jobs
+export interface ForEachInstance {
+  index: number;
+  jobId: string;
+  status: string | null;
+  layout: HierarchicalDagLayout;
+}
+
 export interface HierarchicalDagNode extends DagNode {
   isExpanded: boolean;
   hasSubFlow: boolean;
@@ -49,6 +56,8 @@ export interface HierarchicalDagNode extends DagNode {
   childJobId: string | null;
   childStepCount: number;
   containerPadding: { top: number; left: number; right: number; bottom: number };
+  isForEach: boolean;
+  forEachChildren: ForEachInstance[] | null;
 }
 
 export interface FlowPortNode {
@@ -80,6 +89,8 @@ const CONTAINER_PAD_X = 24;
 const CONTAINER_PAD_BOTTOM = 16;
 const FLOW_PORT_WIDTH = 160;
 const FLOW_PORT_HEIGHT = 40;
+const FOR_EACH_INSTANCE_HEADER = 28;
+const FOR_EACH_INSTANCE_GAP = 8;
 
 export function nodeHeight(workflow: FlowDefinition, stepName: string): number {
   const step = workflow.steps[stepName];
@@ -215,34 +226,61 @@ export function computeDagLayout(workflow: FlowDefinition): DagLayout {
 // ── Hierarchical layout (expand-in-place sub-jobs) ─────────────────
 
 /**
- * Build a map of step_name -> sub-job tree node by matching
- * step runs with sub_job_id to their corresponding sub-tree entries.
+ * Build a map of step_name -> sub-job tree node(s) by matching
+ * step runs with sub_job_id (or for_each sub_job_ids) to their
+ * corresponding sub-tree entries.
+ *
+ * Returns arrays: length 1 for standard sub-jobs, length N for for_each.
  */
 function buildSubJobMap(
   runs: StepRun[],
   subJobs: JobTreeNode[],
-): Map<string, JobTreeNode> {
-  const map = new Map<string, JobTreeNode>();
-  // Build run_id -> sub_job lookup
-  const subJobByParentRunId = new Map<string, JobTreeNode>();
+): Map<string, JobTreeNode[]> {
+  const map = new Map<string, JobTreeNode[]>();
+  // Build lookup: sub_job.id -> sub-tree node
+  const subJobById = new Map<string, JobTreeNode>();
+  // Build lookup: parent_step_run_id -> sub-tree nodes
+  const subJobsByParentRunId = new Map<string, JobTreeNode[]>();
   for (const sj of subJobs) {
+    subJobById.set(sj.job.id, sj);
     if (sj.job.parent_step_run_id) {
-      subJobByParentRunId.set(sj.job.parent_step_run_id, sj);
+      const list = subJobsByParentRunId.get(sj.job.parent_step_run_id) ?? [];
+      list.push(sj);
+      subJobsByParentRunId.set(sj.job.parent_step_run_id, list);
     }
   }
-  // Find latest run per step that has a sub_job_id
+
+  // Find latest run per step (prefer for_each runs, then sub_job_id runs)
   const latestByStep = new Map<string, StepRun>();
   for (const run of runs) {
-    if (!run.sub_job_id) continue;
+    const isForEach = run.executor_state?.for_each === true;
+    const hasSub = !!run.sub_job_id;
+    if (!isForEach && !hasSub) continue;
     const existing = latestByStep.get(run.step_name);
     if (!existing || run.attempt > existing.attempt) {
       latestByStep.set(run.step_name, run);
     }
   }
+
   for (const [stepName, run] of latestByStep) {
-    const subTree = subJobByParentRunId.get(run.id);
-    if (subTree) {
-      map.set(stepName, subTree);
+    const isForEach = run.executor_state?.for_each === true;
+    if (isForEach) {
+      // for_each: gather sub-jobs by their IDs stored in executor_state
+      const subJobIds = (run.executor_state?.sub_job_ids as string[]) ?? [];
+      const nodes: JobTreeNode[] = [];
+      for (const id of subJobIds) {
+        const node = subJobById.get(id);
+        if (node) nodes.push(node);
+      }
+      if (nodes.length > 0) {
+        map.set(stepName, nodes);
+      }
+    } else {
+      // Standard single sub-job
+      const subTree = subJobsByParentRunId.get(run.id);
+      if (subTree && subTree.length > 0) {
+        map.set(stepName, [subTree[0]]);
+      }
     }
   }
   return map;
@@ -263,10 +301,10 @@ export function computeHierarchicalLayout(
   jobTree: JobTreeNode | null,
   depth: number = 0,
 ): HierarchicalDagLayout {
-  // Build sub-job map from tree data
+  // Build sub-job map from tree data (arrays: length 1 for standard, N for for_each)
   const subJobMap = jobTree
     ? buildSubJobMap(jobTree.runs, jobTree.sub_jobs)
-    : new Map<string, JobTreeNode>();
+    : new Map<string, JobTreeNode[]>();
 
   // Build a map of step_name -> sub_flow from step definitions (design-time fallback)
   const subFlowDefs = new Map<string, FlowDefinition>();
@@ -278,29 +316,48 @@ export function computeHierarchicalLayout(
 
   // Pass 1: compute child layouts for expanded nodes (bottom-up)
   const childLayouts = new Map<string, HierarchicalDagLayout>();
+  // For for_each nodes, store per-instance layouts
+  const forEachLayouts = new Map<string, ForEachInstance[]>();
+
   for (const stepName of expandedSteps) {
-    const subTree = subJobMap.get(stepName);
+    const subTrees = subJobMap.get(stepName);
     const subFlowDef = subFlowDefs.get(stepName);
-    if (!subTree && !subFlowDef) continue;
+    if (!subTrees && !subFlowDef) continue;
 
-    // Build child expanded steps (filter to those scoped under this sub-job)
-    const childExpandedSteps = new Set<string>();
-    for (const key of expandedSteps) {
-      // Child steps are tracked with their own step names in the child's scope
-      // We pass all expanded steps through — the child will only match its own steps
-      childExpandedSteps.add(key);
+    // Build child expanded steps — pass all through, child will only match its own
+    const childExpandedSteps = new Set(expandedSteps);
+
+    if (subTrees && subTrees.length > 1) {
+      // for_each: compute a layout for each instance
+      const instances: ForEachInstance[] = [];
+      for (let i = 0; i < subTrees.length; i++) {
+        const tree = subTrees[i];
+        const instanceLayout = computeHierarchicalLayout(
+          tree.job.workflow,
+          childExpandedSteps,
+          tree,
+          depth + 1,
+        );
+        instances.push({
+          index: i,
+          jobId: tree.job.id,
+          status: tree.job.status,
+          layout: instanceLayout,
+        });
+      }
+      forEachLayouts.set(stepName, instances);
+    } else {
+      // Standard single sub-job or design-time
+      const firstTree = subTrees?.[0] ?? null;
+      const childWorkflow = firstTree ? firstTree.job.workflow : subFlowDef!;
+      const childLayout = computeHierarchicalLayout(
+        childWorkflow,
+        childExpandedSteps,
+        firstTree,
+        depth + 1,
+      );
+      childLayouts.set(stepName, childLayout);
     }
-
-    const childWorkflow = subTree ? subTree.job.workflow : subFlowDef!;
-    const childTree = subTree ?? null;
-
-    const childLayout = computeHierarchicalLayout(
-      childWorkflow,
-      childExpandedSteps,
-      childTree,
-      depth + 1,
-    );
-    childLayouts.set(stepName, childLayout);
   }
 
   // Pass 2: dagre layout with inflated dimensions for expanded nodes
@@ -321,8 +378,20 @@ export function computeHierarchicalLayout(
 
   for (const name of stepNames) {
     const childLayout = childLayouts.get(name);
-    if (childLayout) {
-      // Expanded: inflate to contain child DAG
+    const feInstances = forEachLayouts.get(name);
+    if (feInstances) {
+      // for_each expanded: height = sum of instance layouts + headers + gaps + container
+      const maxW = Math.max(...feInstances.map((i) => i.layout.width));
+      const totalH = feInstances.reduce(
+        (sum, inst, idx) =>
+          sum + FOR_EACH_INSTANCE_HEADER + inst.layout.height + (idx > 0 ? FOR_EACH_INSTANCE_GAP : 0),
+        0,
+      );
+      const w = maxW + CONTAINER_PAD_X * 2;
+      const h = totalH + CONTAINER_HEADER + CONTAINER_PAD_BOTTOM;
+      nodeSizes.set(name, { width: Math.max(w, NODE_WIDTH), height: h });
+    } else if (childLayout) {
+      // Standard expanded: inflate to contain child DAG
       const w = childLayout.width + CONTAINER_PAD_X * 2;
       const h = childLayout.height + CONTAINER_HEADER + CONTAINER_PAD_BOTTOM;
       nodeSizes.set(name, { width: Math.max(w, NODE_WIDTH), height: h });
@@ -363,7 +432,7 @@ export function computeHierarchicalLayout(
     }
   }
 
-  // Flow port nodes (top-level only)
+  // Flow port nodes (at all depths — each sub-job gets its own ports)
   const FLOW_INPUT_ID = "__flow_input__";
   const FLOW_OUTPUT_ID = "__flow_output__";
   let hasFlowInput = false;
@@ -373,48 +442,46 @@ export function computeHierarchicalLayout(
   // Output port: terminal steps and their outputs
   const terminalStepOutputs = new Map<string, string[]>(); // stepName -> outputs[]
 
-  if (depth === 0) {
-    // Input port: steps that consume $job inputs
-    for (const fields of jobInputConsumers.values()) {
-      for (const f of fields) allJobInputFields.add(f);
+  // Input port: steps that consume $job inputs
+  for (const fields of jobInputConsumers.values()) {
+    for (const f of fields) allJobInputFields.add(f);
+  }
+  if (allJobInputFields.size > 0) {
+    hasFlowInput = true;
+    g.setNode(FLOW_INPUT_ID, { width: FLOW_PORT_WIDTH, height: FLOW_PORT_HEIGHT });
+    // Edge from input port to each consumer step
+    for (const [stepName, fields] of jobInputConsumers) {
+      const key = `${FLOW_INPUT_ID}->${stepName}`;
+      g.setEdge(FLOW_INPUT_ID, stepName);
+      edgeSet.add(key);
+      edgeLabels[key] = [...fields];
     }
-    if (allJobInputFields.size > 0) {
-      hasFlowInput = true;
-      g.setNode(FLOW_INPUT_ID, { width: FLOW_PORT_WIDTH, height: FLOW_PORT_HEIGHT });
-      // Edge from input port to each consumer step
-      for (const [stepName, fields] of jobInputConsumers) {
-        const key = `${FLOW_INPUT_ID}->${stepName}`;
-        g.setEdge(FLOW_INPUT_ID, stepName);
-        edgeSet.add(key);
-        edgeLabels[key] = [...fields];
-      }
-    }
+  }
 
-    // Output port: terminal steps (not referenced as source_step by any other step)
-    const referencedAsSource = new Set<string>();
-    for (const step of Object.values(workflow.steps)) {
-      for (const binding of step.inputs) {
-        if (binding.source_step !== "$job") referencedAsSource.add(binding.source_step);
-      }
-      for (const seq of step.sequencing) referencedAsSource.add(seq);
+  // Output port: terminal steps (not referenced as source_step by any other step)
+  const referencedAsSource = new Set<string>();
+  for (const step of Object.values(workflow.steps)) {
+    for (const binding of step.inputs) {
+      if (binding.source_step !== "$job") referencedAsSource.add(binding.source_step);
     }
-    for (const name of stepNames) {
-      if (!referencedAsSource.has(name)) {
-        const step = workflow.steps[name];
-        if (step.outputs.length > 0) {
-          terminalStepOutputs.set(name, step.outputs);
-        }
+    for (const seq of step.sequencing) referencedAsSource.add(seq);
+  }
+  for (const name of stepNames) {
+    if (!referencedAsSource.has(name)) {
+      const step = workflow.steps[name];
+      if (step.outputs.length > 0) {
+        terminalStepOutputs.set(name, step.outputs);
       }
     }
-    if (terminalStepOutputs.size > 0) {
-      hasFlowOutput = true;
-      g.setNode(FLOW_OUTPUT_ID, { width: FLOW_PORT_WIDTH, height: FLOW_PORT_HEIGHT });
-      for (const [stepName, outputs] of terminalStepOutputs) {
-        const key = `${stepName}->${FLOW_OUTPUT_ID}`;
-        g.setEdge(stepName, FLOW_OUTPUT_ID);
-        edgeSet.add(key);
-        edgeLabels[key] = outputs;
-      }
+  }
+  if (terminalStepOutputs.size > 0) {
+    hasFlowOutput = true;
+    g.setNode(FLOW_OUTPUT_ID, { width: FLOW_PORT_WIDTH, height: FLOW_PORT_HEIGHT });
+    for (const [stepName, outputs] of terminalStepOutputs) {
+      const key = `${stepName}->${FLOW_OUTPUT_ID}`;
+      g.setEdge(stepName, FLOW_OUTPUT_ID);
+      edgeSet.add(key);
+      edgeLabels[key] = outputs;
     }
   }
 
@@ -427,11 +494,13 @@ export function computeHierarchicalLayout(
     if (!node) continue;
     const size = nodeSizes.get(name)!;
     const childLayout = childLayouts.get(name) ?? null;
-    const subTree = subJobMap.get(name);
+    const feInstances = forEachLayouts.get(name) ?? null;
+    const subTrees = subJobMap.get(name);
     const subFlowDef = subFlowDefs.get(name);
-    const hasSubFlow = !!(subTree || subFlowDef);
-    const childStepCount = subTree
-      ? Object.keys(subTree.job.workflow.steps).length
+    const hasSubFlow = !!(subTrees || subFlowDef);
+    const isForEach = (subTrees && subTrees.length > 1) || false;
+    const childStepCount = subTrees
+      ? Object.keys(subTrees[0].job.workflow.steps).length
       : subFlowDef
         ? Object.keys(subFlowDef.steps).length
         : 0;
@@ -442,10 +511,10 @@ export function computeHierarchicalLayout(
       y: node.y - size.height / 2,
       width: size.width,
       height: size.height,
-      isExpanded: childLayout !== null,
+      isExpanded: childLayout !== null || feInstances !== null,
       hasSubFlow,
       childLayout,
-      childJobId: subTree?.job.id ?? null,
+      childJobId: subTrees?.[0]?.job.id ?? null,
       childStepCount,
       containerPadding: {
         top: CONTAINER_HEADER,
@@ -453,6 +522,8 @@ export function computeHierarchicalLayout(
         right: CONTAINER_PAD_X,
         bottom: CONTAINER_PAD_BOTTOM,
       },
+      isForEach,
+      forEachChildren: feInstances,
     });
   }
 
