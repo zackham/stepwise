@@ -1,6 +1,8 @@
 import { useMemo, useRef, useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { computeHierarchicalLayout } from "@/lib/dag-layout";
 import type { DagSelection } from "@/lib/dag-layout";
+import { DagCamera } from "@/lib/dag-camera";
+import type { Rect } from "@/lib/dag-camera";
 import { StepNode } from "./StepNode";
 import { DagEdges } from "./DagEdges";
 import type { HoveredLabelInfo } from "./DagEdges";
@@ -59,6 +61,8 @@ export function FlowDagView({
   const hasCenteredRef = useRef(false);
   const [followFlow, setFollowFlow] = useState(true);
   const followAnimRef = useRef<number | null>(null);
+  const cameraRef = useRef(new DagCamera());
+  const lastFrameTimeRef = useRef<number | null>(null);
 
   const layout = useMemo(
     () => computeHierarchicalLayout(workflow, expandedSteps, jobTree),
@@ -96,6 +100,7 @@ export function FlowDagView({
     const x = (rect.width - layout.width) / 2;
     const y = 32;
     transformRef.current = { x, y, scale: 1 };
+    cameraRef.current.syncFromManualInput(x, y, 1);
     applyTransform();
     setZoomDisplay(100);
     hasCenteredRef.current = true;
@@ -118,26 +123,18 @@ export function FlowDagView({
     return map;
   }, [runs]);
 
-  // Follow flow: smoothly pan to keep active nodes centered
-  const panToActiveNodes = useCallback(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return;
-
-    // Find active nodes (running, suspended, or delegated with active children)
+  // Collect active node rects for the camera
+  const activeRects = useMemo(() => {
     const activeNodeIds: string[] = [];
     for (const [name, run] of Object.entries(latestRuns)) {
       if (run.status === "running" || run.status === "suspended" || run.status === "delegated") {
         activeNodeIds.push(name);
       }
     }
-    // Also check sub-job runs for active children inside expanded steps
     if (jobTree) {
       for (const subJob of jobTree.sub_jobs) {
         for (const run of subJob.runs) {
           if (run.status === "running" || run.status === "suspended") {
-            // Find which parent step owns this sub-job
             const parentRun = runs.find((r) =>
               r.sub_job_id === subJob.job.id ||
               (r.executor_state?.for_each === true &&
@@ -151,72 +148,63 @@ export function FlowDagView({
         }
       }
     }
-    if (activeNodeIds.length === 0) return;
-
-    // Compute bounding box of active nodes in canvas coords
-    const activeLayoutNodes = layout.nodes.filter((n) => activeNodeIds.includes(n.id));
-    if (activeLayoutNodes.length === 0) return;
-
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const n of activeLayoutNodes) {
-      minX = Math.min(minX, n.x);
-      minY = Math.min(minY, n.y);
-      maxX = Math.max(maxX, n.x + n.width);
-      maxY = Math.max(maxY, n.y + n.height);
+    const rects: Rect[] = [];
+    for (const n of layout.nodes) {
+      if (activeNodeIds.includes(n.id)) {
+        rects.push({ x: n.x, y: n.y, width: n.width, height: n.height });
+      }
     }
+    return rects;
+  }, [layout, latestRuns, jobTree, runs]);
 
-    // Center of active nodes
-    const cx = (minX + maxX) / 2;
-    const cy = (minY + maxY) / 2;
+  // Feed active rects to camera whenever they change
+  useEffect(() => {
+    if (!followFlow) return;
+    const el = containerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    cameraRef.current.setActiveNodes(
+      activeRects,
+      { width: rect.width, height: rect.height },
+    );
+  }, [followFlow, activeRects]);
 
-    // Zoom to fit: compute scale so all active nodes fit with padding
-    const padding = 80;
-    const contentW = maxX - minX + padding * 2;
-    const contentH = maxY - minY + padding * 2;
-    const fitScaleX = rect.width / contentW;
-    const fitScaleY = rect.height / contentH;
-    const fitScale = Math.min(fitScaleX, fitScaleY);
-    // Clamp between 70% and 100%
-    const targetScale = Math.max(0.7, Math.min(1.0, fitScale));
-
-    // Target: active nodes centered in upper third of viewport
-    const t = transformRef.current;
-    const targetX = rect.width / 2 - cx * targetScale;
-    const targetY = rect.height * 0.3 - cy * targetScale;
-
-    // Smooth lerp toward target (pan + zoom)
-    const lerp = 0.04;
-    const dx = targetX - t.x;
-    const dy = targetY - t.y;
-    const ds = targetScale - t.scale;
-    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5 && Math.abs(ds) < 0.002) {
-      t.x = targetX;
-      t.y = targetY;
-      t.scale = targetScale;
-      applyTransform();
-      setZoomDisplay(Math.round(targetScale * 100));
-      return;
-    }
-    t.x += dx * lerp;
-    t.y += dy * lerp;
-    t.scale += ds * lerp;
-    applyTransform();
-    setZoomDisplay(Math.round(t.scale * 100));
-    followAnimRef.current = requestAnimationFrame(panToActiveNodes);
-  }, [layout, latestRuns, jobTree, runs, applyTransform]);
-
+  // Animation loop: spring physics, independent of data changes
   useEffect(() => {
     if (!followFlow) {
       if (followAnimRef.current) cancelAnimationFrame(followAnimRef.current);
+      lastFrameTimeRef.current = null;
       return;
     }
-    // Start animation loop
-    if (followAnimRef.current) cancelAnimationFrame(followAnimRef.current);
-    followAnimRef.current = requestAnimationFrame(panToActiveNodes);
+
+    const animate = (timestamp: number) => {
+      const lastTime = lastFrameTimeRef.current;
+      lastFrameTimeRef.current = timestamp;
+      if (lastTime === null) {
+        followAnimRef.current = requestAnimationFrame(animate);
+        return;
+      }
+      const dt = (timestamp - lastTime) / 1000;
+      const { x, y, scale, settled } = cameraRef.current.tick(dt);
+      transformRef.current = { x, y, scale };
+      applyTransform();
+      setZoomDisplay(Math.round(scale * 100));
+
+      if (!settled) {
+        followAnimRef.current = requestAnimationFrame(animate);
+      } else {
+        followAnimRef.current = null;
+        lastFrameTimeRef.current = null;
+      }
+    };
+
+    followAnimRef.current = requestAnimationFrame(animate);
     return () => {
       if (followAnimRef.current) cancelAnimationFrame(followAnimRef.current);
+      lastFrameTimeRef.current = null;
     };
-  }, [followFlow, panToActiveNodes]);
+  }, [followFlow, activeRects, applyTransform]);
 
   // Keep reference for fitToView (used by Reset button)
   const fitToView = initView;
@@ -238,6 +226,7 @@ export function FlowDagView({
       t.x = mx - (mx - t.x) * (newScale / oldScale);
       t.y = my - (my - t.y) * (newScale / oldScale);
       t.scale = newScale;
+      cameraRef.current.syncFromManualInput(t.x, t.y, t.scale);
       applyTransform();
       setZoomDisplay(Math.round(newScale * 100));
       setFollowFlow(false);
@@ -273,6 +262,8 @@ export function FlowDagView({
       }
       transformRef.current.x = dragStart.current.tx + dx;
       transformRef.current.y = dragStart.current.ty + dy;
+      const t = transformRef.current;
+      cameraRef.current.syncFromManualInput(t.x, t.y, t.scale);
       applyTransform();
     },
     [applyTransform]
@@ -623,8 +614,10 @@ export function FlowDagView({
           <button
             onClick={() => {
               transformRef.current.scale = Math.min(transformRef.current.scale * 1.2, 3);
+              const t = transformRef.current;
+              cameraRef.current.syncFromManualInput(t.x, t.y, t.scale);
               applyTransform();
-              setZoomDisplay(Math.round(transformRef.current.scale * 100));
+              setZoomDisplay(Math.round(t.scale * 100));
               setFollowFlow(false);
             }}
             className="text-zinc-400 hover:text-foreground text-sm px-1"
@@ -637,8 +630,10 @@ export function FlowDagView({
           <button
             onClick={() => {
               transformRef.current.scale = Math.max(transformRef.current.scale * 0.8, 0.3);
+              const t = transformRef.current;
+              cameraRef.current.syncFromManualInput(t.x, t.y, t.scale);
               applyTransform();
-              setZoomDisplay(Math.round(transformRef.current.scale * 100));
+              setZoomDisplay(Math.round(t.scale * 100));
               setFollowFlow(false);
             }}
             className="text-zinc-400 hover:text-foreground text-sm px-1"
