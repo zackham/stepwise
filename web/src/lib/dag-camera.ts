@@ -124,15 +124,32 @@ export class DagCamera {
   }
 
   /**
+   * Notify the camera that the layout has changed (e.g. node expand/collapse).
+   * Clears spring velocities so stale momentum doesn't fight the new layout,
+   * but preserves positions so the camera smoothly adjusts from where it is.
+   */
+  onLayoutChange(): void {
+    this.panX.vel = 0;
+    this.panY.vel = 0;
+    this.zoom.vel = 0;
+    this.isBlending = false;
+    this.settled = false;
+  }
+
+  /**
    * Update active nodes. Stores rects for per-frame target computation
    * and determines zoom target.
    *
    * @param activeRects - bounding rects of active nodes in canvas coords
    * @param viewport - viewport dimensions { width, height }
+   * @param activeKey - identity key for the active set (e.g. sorted step names).
+   *   Target blending only triggers when this key changes, not when
+   *   node positions shift due to layout recalculation.
    */
   setActiveNodes(
     activeRects: Rect[],
     viewport: { width: number; height: number },
+    activeKey?: string,
   ): void {
     if (activeRects.length === 0) {
       this.hasTarget = false;
@@ -145,8 +162,10 @@ export class DagCamera {
     this.viewport = viewport;
     this.activeBounds = boundingBox(activeRects);
 
-    // Check if active set changed (for target blending)
-    const newKey = activeRects.map(r => `${r.x},${r.y}`).sort().join("|");
+    // Check if the set of active steps changed (for target blending).
+    // Use the caller-provided key (step names) so layout recalculations
+    // don't trigger blending — only actual step transitions do.
+    const newKey = activeKey ?? activeRects.map(r => `${r.x},${r.y}`).sort().join("|");
     if (newKey !== this.activeNodeKey) {
       const hadPreviousTarget = this.activeNodeKey !== "";
       this.activeNodeKey = newKey;
