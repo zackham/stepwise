@@ -153,36 +153,55 @@ export function FlowDagView({
     }
     if (activeNodeIds.length === 0) return;
 
-    // Compute center of active nodes in canvas coords
+    // Compute bounding box of active nodes in canvas coords
     const activeLayoutNodes = layout.nodes.filter((n) => activeNodeIds.includes(n.id));
     if (activeLayoutNodes.length === 0) return;
 
-    let cx = 0, cy = 0;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const n of activeLayoutNodes) {
-      cx += n.x + n.width / 2;
-      cy += n.y + n.height / 2;
+      minX = Math.min(minX, n.x);
+      minY = Math.min(minY, n.y);
+      maxX = Math.max(maxX, n.x + n.width);
+      maxY = Math.max(maxY, n.y + n.height);
     }
-    cx /= activeLayoutNodes.length;
-    cy /= activeLayoutNodes.length;
 
-    // Target: active nodes in upper third of viewport
+    // Center of active nodes
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+
+    // Zoom to fit: compute scale so all active nodes fit with padding
+    const padding = 80;
+    const contentW = maxX - minX + padding * 2;
+    const contentH = maxY - minY + padding * 2;
+    const fitScaleX = rect.width / contentW;
+    const fitScaleY = rect.height / contentH;
+    const fitScale = Math.min(fitScaleX, fitScaleY);
+    // Clamp between 70% and 100%
+    const targetScale = Math.max(0.7, Math.min(1.0, fitScale));
+
+    // Target: active nodes centered in upper third of viewport
     const t = transformRef.current;
-    const targetX = rect.width / 2 - cx * t.scale;
-    const targetY = rect.height * 0.3 - cy * t.scale;
+    const targetX = rect.width / 2 - cx * targetScale;
+    const targetY = rect.height * 0.3 - cy * targetScale;
 
-    // Lerp toward target
-    const lerp = 0.12;
+    // Smooth lerp toward target (pan + zoom)
+    const lerp = 0.04;
     const dx = targetX - t.x;
     const dy = targetY - t.y;
-    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) {
+    const ds = targetScale - t.scale;
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5 && Math.abs(ds) < 0.002) {
       t.x = targetX;
       t.y = targetY;
+      t.scale = targetScale;
       applyTransform();
+      setZoomDisplay(Math.round(targetScale * 100));
       return;
     }
     t.x += dx * lerp;
     t.y += dy * lerp;
+    t.scale += ds * lerp;
     applyTransform();
+    setZoomDisplay(Math.round(t.scale * 100));
     followAnimRef.current = requestAnimationFrame(panToActiveNodes);
   }, [layout, latestRuns, jobTree, runs, applyTransform]);
 
