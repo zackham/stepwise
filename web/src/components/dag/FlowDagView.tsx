@@ -78,10 +78,10 @@ export function FlowDagView({
     }
   }, []);
 
-  // Re-center when workflow or expansion state changes
+  // Re-center only when the workflow changes (new job), not on expand/collapse
   useEffect(() => {
     hasCenteredRef.current = false;
-  }, [workflow, expandedSteps]);
+  }, [workflow]);
 
   // Fit-to-view: runs synchronously before paint to avoid flash
   const fitToView = useCallback(() => {
