@@ -5,6 +5,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic V
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-03-14
+
+**CLI display overhaul** — rich, readable terminal output.
+
+### Added
+- **Live block rendering** — active steps redraw in place, completed steps scroll up permanently. No more interleaving of parallel for-each items
+- **Output previews** — completed steps show `→ key: value` inline
+- **For-each item labels** — `[data-model]`, `[api-routes]`, etc. group sub-steps under their item
+- **Loop icon** — `⟳` for retry attempts
+- **`stepwise welcome`** — interactive post-install demo prompt
+
+### Changed
+- Install script uses `--force --reinstall` for reliable upgrades
+- Cleaner post-install message with copy-pasteable commands
+
 ## [0.3.0] — 2026-03-14
 
 **Async Engine, Live DAG, Agent Emit Flow** — real-time execution with dynamic workflows.
