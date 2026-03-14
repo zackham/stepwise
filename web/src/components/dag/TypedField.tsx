@@ -56,7 +56,7 @@ function StrField({
       type="text"
       value={(value as string) ?? ""}
       onChange={(e) => onChange(e.target.value)}
-      className={inputClass + " font-mono"}
+      className={inputClass + " font-mono h-9"}
       autoFocus={autoFocus}
     />
   );
@@ -109,7 +109,7 @@ function NumberField({
       min={schema.min}
       max={schema.max}
       step="any"
-      className={inputClass + " font-mono"}
+      className={inputClass + " font-mono h-9"}
       autoFocus={autoFocus}
     />
   );
