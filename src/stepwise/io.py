@@ -29,7 +29,13 @@ class LiveFlowHandle(abc.ABC):
         cost: float | None = None,
         error: str | None = None,
         indent: int = 0,
+        outputs: dict | None = None,
+        is_retry: bool = False,
     ) -> None: ...
+
+    def print_label(self, text: str, indent: int = 0) -> None:
+        """Print a non-step label line (e.g., for-each item header)."""
+        pass
 
     @abc.abstractmethod
     def update_summary(
@@ -243,6 +249,8 @@ class _PlainLiveFlowHandle(LiveFlowHandle):
         cost: float | None = None,
         error: str | None = None,
         indent: int = 0,
+        outputs: dict | None = None,
+        is_retry: bool = False,
     ) -> None:
         prefix = "  " * indent
         self._adapter.step_status(f"{prefix}{name}", status, duration, cost, error)
@@ -594,6 +602,35 @@ def _count_prompt_lines(field_type: str, options: list[str] | None = None) -> in
     return 1  # confirm, select, number, str all collapse to 1 line
 
 
+def _format_output_preview(outputs: dict, max_len: int = 50) -> str:
+    """Format step outputs as a compact preview string."""
+    # Filter out internal keys
+    items = {k: v for k, v in outputs.items() if not k.startswith("_")}
+    if not items:
+        return ""
+
+    def _fmt_value(v: object) -> str:
+        if isinstance(v, list):
+            return ", ".join(str(x) for x in v)
+        if isinstance(v, bool):
+            return str(v).lower()
+        return str(v)
+
+    if len(items) == 1:
+        # Single output: just show the value
+        val = _fmt_value(next(iter(items.values())))
+    else:
+        # Multiple outputs: key: value pairs
+        parts = []
+        for k, v in items.items():
+            parts.append(f"{k}: {_fmt_value(v)}")
+        val = ", ".join(parts)
+
+    if len(val) > max_len:
+        val = val[: max_len - 1] + "…"
+    return val
+
+
 class _AppendFlowHandle(LiveFlowHandle):
     """Append-only flow handle — prints each transition as a permanent line.
 
@@ -614,6 +651,8 @@ class _AppendFlowHandle(LiveFlowHandle):
         cost: float | None = None,
         error: str | None = None,
         indent: int = 0,
+        outputs: dict | None = None,
+        is_retry: bool = False,
     ) -> None:
         from rich.text import Text
 
@@ -625,6 +664,8 @@ class _AppendFlowHandle(LiveFlowHandle):
             "delegated": ("↗", "blue"),
         }
         icon, style = icons.get(status, ("○", "dim"))
+        if is_retry and status in ("completed", "running"):
+            icon = "⟳"
         prefix = "  " + "  " * indent
         line = Text()
         line.append(f"{prefix}{icon} ", style=style)
@@ -638,6 +679,19 @@ class _AppendFlowHandle(LiveFlowHandle):
             parts.append(error)
         if parts:
             line.append(" " + "  ".join(parts), style="dim")
+        # Output preview
+        if outputs and status == "completed":
+            preview = _format_output_preview(outputs)
+            if preview:
+                line.append(f"  → {preview}", style="dim italic")
+        self._console.print(line, highlight=False)
+
+    def print_label(self, text: str, indent: int = 0) -> None:
+        """Print a dim label line (e.g., for-each item header)."""
+        from rich.text import Text
+        prefix = "  " + "  " * indent
+        line = Text()
+        line.append(f"{prefix}{text}", style="dim bold")
         self._console.print(line, highlight=False)
 
     def _erase_last_line(self) -> None:
@@ -654,15 +708,20 @@ class _AppendFlowHandle(LiveFlowHandle):
         cost: float | None = None,
         error: str | None = None,
         indent: int = 0,
+        outputs: dict | None = None,
+        is_retry: bool = False,
     ) -> None:
         if status == "running":
             self._running_step = name
-            self._step_line(name, "running", indent=indent)
+            self._step_line(name, "running", indent=indent, is_retry=is_retry)
         elif status in ("completed", "failed"):
             if self._running_step == name:
                 self._erase_last_line()
                 self._running_step = None
-            self._step_line(name, status, duration, cost, error, indent=indent)
+            self._step_line(
+                name, status, duration, cost, error,
+                indent=indent, outputs=outputs, is_retry=is_retry,
+            )
         elif status == "suspended":
             if self._running_step == name:
                 self._erase_last_line()

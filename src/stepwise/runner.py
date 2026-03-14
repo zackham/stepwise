@@ -467,10 +467,16 @@ async def _report_runs(
     seen_running: set[str],
     seen_completed: set[str],
     seen_prompted: set[str],
+    seen_labels: set[str] | None = None,
 ) -> None:
     """Report step transitions for a job, recursively walking sub-jobs."""
+    if seen_labels is None:
+        seen_labels = set()
+
     all_runs = engine.get_runs(job_id)
     for run in all_runs:
+        is_retry = run.attempt > 1
+
         if run.id not in seen_running and run.status in (
             StepRunStatus.RUNNING, StepRunStatus.SUSPENDED,
             StepRunStatus.DELEGATED,
@@ -481,7 +487,9 @@ async def _report_runs(
             if es.get("for_each"):
                 count = es.get("item_count", 0)
                 name = f"{run.step_name} ({count} items)"
-            handle.update_step(name, "running", indent=indent)
+            handle.update_step(
+                name, "running", indent=indent, is_retry=is_retry,
+            )
 
         if run.id not in seen_completed:
             if run.status == StepRunStatus.COMPLETED:
@@ -490,9 +498,10 @@ async def _report_runs(
                 if run.started_at and run.completed_at:
                     duration = (run.completed_at - run.started_at).total_seconds()
                 cost = store.accumulated_cost(run.id) or None
+                outputs = run.result.artifact if run.result else None
                 handle.update_step(
                     run.step_name, "completed", duration=duration, cost=cost,
-                    indent=indent,
+                    indent=indent, outputs=outputs, is_retry=is_retry,
                 )
             elif run.status == StepRunStatus.FAILED:
                 seen_completed.add(run.id)
@@ -524,16 +533,33 @@ async def _report_runs(
         if run.sub_job_id:
             await _report_runs(
                 engine, store, adapter, handle, run.sub_job_id, indent + 1,
-                seen_running, seen_completed, seen_prompted,
+                seen_running, seen_completed, seen_prompted, seen_labels,
             )
 
-        # Recurse into for_each sub-jobs
+        # Recurse into for_each sub-jobs with item labels
         es = run.executor_state or {}
         if es.get("for_each"):
             for sub_id in es.get("sub_job_ids", []):
+                # Print item label header
+                label_key = f"{sub_id}"
+                if label_key not in seen_labels:
+                    seen_labels.add(label_key)
+                    try:
+                        sub_job = engine.get_job(sub_id)
+                        # Find the item variable name from the parent step def
+                        parent_job = engine.get_job(job_id)
+                        step_def = parent_job.workflow.steps.get(run.step_name)
+                        item_var = "item"
+                        if step_def and step_def.for_each:
+                            item_var = step_def.for_each.item_var
+                        item_val = sub_job.inputs.get(item_var, "")
+                        if item_val:
+                            handle.print_label(f"[{item_val}]", indent=indent + 1)
+                    except (KeyError, AttributeError):
+                        pass
                 await _report_runs(
                     engine, store, adapter, handle, sub_id, indent + 1,
-                    seen_running, seen_completed, seen_prompted,
+                    seen_running, seen_completed, seen_prompted, seen_labels,
                 )
 
 
