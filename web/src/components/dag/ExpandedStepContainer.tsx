@@ -158,6 +158,7 @@ export function ExpandedStepContainer({
             loopEdges={childLayout.loopEdges}
             width={childLayout.width}
             height={childLayout.height}
+            latestRuns={latestRuns}
           />
 
           {childLayout.nodes.map((childNode) => {

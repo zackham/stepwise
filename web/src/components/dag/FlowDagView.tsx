@@ -124,11 +124,26 @@ export function FlowDagView({
     const rect = el.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
 
-    // Find active nodes (running or suspended)
+    // Find active nodes (running, suspended, or delegated with active children)
     const activeNodeIds: string[] = [];
     for (const [name, run] of Object.entries(latestRuns)) {
-      if (run.status === "running" || run.status === "suspended") {
+      if (run.status === "running" || run.status === "suspended" || run.status === "delegated") {
         activeNodeIds.push(name);
+      }
+    }
+    // Also check sub-job runs for active children inside expanded steps
+    if (jobTree) {
+      for (const subJob of jobTree.sub_jobs) {
+        for (const run of subJob.runs) {
+          if (run.status === "running" || run.status === "suspended") {
+            // Find which parent step owns this sub-job
+            const parentRun = runs.find((r) => r.sub_job_id === subJob.job.id);
+            if (parentRun && !activeNodeIds.includes(parentRun.step_name)) {
+              activeNodeIds.push(parentRun.step_name);
+            }
+            break;
+          }
+        }
       }
     }
     if (activeNodeIds.length === 0) return;
@@ -164,7 +179,7 @@ export function FlowDagView({
     t.y += dy * lerp;
     applyTransform();
     followAnimRef.current = requestAnimationFrame(panToActiveNodes);
-  }, [layout, latestRuns, applyTransform]);
+  }, [layout, latestRuns, jobTree, runs, applyTransform]);
 
   useEffect(() => {
     if (!followFlow) {
