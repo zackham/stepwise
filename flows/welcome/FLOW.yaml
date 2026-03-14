@@ -8,12 +8,8 @@ steps:
     executor: human
     description: "Human-in-the-loop: gathering your info"
     prompt: |
-      Welcome to Stepwise! This flow is a self-guided tour.
-
-      As it runs, watch the DAG above — you'll see steps light up,
-      data flow between them, and the whole pipeline come alive.
-
-      Let's start with a couple quick questions.
+      Welcome to Stepwise! This flow teaches you by running.
+      Watch the DAG above — steps will light up, data will flow.
     outputs:
       name:
         type: str
@@ -29,25 +25,25 @@ steps:
   # Each one produces a tip tailored with the user's name.
 
   tip-dag:
-    description: "Parallel: explaining visual DAGs"
+    description: "Parallel: visual DAGs"
     run: |
-      printf '{"tip": "Flows are visual DAGs. Each node is a step, each edge carries data. You can watch execution in real time — no logs to grep, no black boxes."}'
+      printf '{"tip": "Hey %s — steps are DAG nodes, edges carry your data"}' "$name"
     outputs: [tip]
     inputs:
       name: gather-info.name
 
   tip-hitl:
-    description: "Parallel: explaining human-in-the-loop"
+    description: "Parallel: human-in-the-loop"
     run: |
-      printf '{"tip": "Any step can pause for human input. You just experienced this! Agents can run flows and pause for your approval before continuing."}'
+      printf '{"tip": "%s just used a human step — any step can pause for input"}' "$name"
     outputs: [tip]
     inputs:
       name: gather-info.name
 
   tip-persistence:
-    description: "Parallel: explaining persistence"
+    description: "Parallel: persistence & durability"
     run: |
-      printf '{"tip": "Every run is saved to SQLite. Close your browser, come back tomorrow — your flow is right where you left it. No work lost."}'
+      printf '{"tip": "Every run persists to SQLite, %s — close and come back anytime"}' "$name"
     outputs: [tip]
     inputs:
       name: gather-info.name
@@ -59,16 +55,16 @@ steps:
     run: |
       case "$use_case" in
         agent-tools)
-          printf '{"advice": "Run stepwise agent-help to generate instructions your AI agent can use to discover and call flows. Try: stepwise schema <flow> for a JSON tool contract.", "next_step": "stepwise agent-help --format compact"}'
+          printf '{"advice": "Run stepwise agent-help for AI agent integration", "next_step": "stepwise agent-help"}'
           ;;
         ci-cd)
-          printf '{"advice": "Use stepwise run --wait in your CI pipeline. It blocks until the flow completes and returns structured JSON. Add human gates for deploy approvals.", "next_step": "stepwise run <flow> --wait"}'
+          printf '{"advice": "Use stepwise run --wait in CI for structured output", "next_step": "stepwise run --wait"}'
           ;;
         team-workflows)
-          printf '{"advice": "Run stepwise serve to start the web server. Share the URL with your team. Everyone can see running jobs, fulfill human steps, and track progress.", "next_step": "stepwise serve"}'
+          printf '{"advice": "Run stepwise serve and share the URL with your team", "next_step": "stepwise serve"}'
           ;;
         *)
-          printf '{"advice": "Start with stepwise new my-flow to scaffold a flow, then stepwise run my-flow --watch to see it execute. Edit the YAML, re-run, iterate.", "next_step": "stepwise new my-flow"}'
+          printf '{"advice": "Scaffold a flow and iterate with --watch mode", "next_step": "stepwise new my-flow"}'
           ;;
       esac
     outputs: [advice, next_step]
@@ -81,7 +77,7 @@ steps:
     description: "Converging: assembling your personalized guide"
     run: |
       cat <<WELCOME_EOF
-      {"welcome_message": "Hey $name! Here is your personalized Stepwise guide.\n\n1. $tip_dag\n\n2. $tip_hitl\n\n3. $tip_persistence\n\nBased on your interest in $use_case:\n$advice\n\nTry this next: $next_step"}
+      {"welcome_message": "Hey $name! Here's your Stepwise guide.\n\n1. $tip_dag\n\n2. $tip_hitl\n\n3. $tip_persistence\n\nFor $use_case: $advice\n\nTry next: $next_step"}
       WELCOME_EOF
     outputs: [welcome_message]
     inputs:
@@ -97,20 +93,11 @@ steps:
 
   present:
     executor: human
-    description: "Your personalized welcome message"
+    description: "Your personalized welcome"
     prompt: |
       $welcome_message
 
-      ---
-
-      That's the tour! You just experienced:
-      - A human-in-the-loop step (this one, and the first)
-      - Parallel execution (the three tip steps)
-      - Data flowing between steps (check the edge labels)
-      - Conditional logic (your advice was customized)
-
-      This flow itself is YAML — check flows/welcome/FLOW.yaml.
-      Everything you just saw, you can build.
+      That's the tour! See flows/welcome/FLOW.yaml for the source.
     outputs:
       ready:
         type: choice
