@@ -344,6 +344,7 @@ export function FlowDagView({
             port={port}
             selection={selection ?? null}
             onSelect={onSelectDataFlow ?? (() => {})}
+            latestRuns={latestRuns}
           />
         ))}
 
