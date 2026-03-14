@@ -16,6 +16,7 @@ from stepwise.executors import (
     ExecutorRegistry,
     HumanExecutor,
     MockLLMExecutor,
+    PollExecutor,
     ScriptExecutor,
 )
 
@@ -44,6 +45,12 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
 
     registry.register("human", lambda cfg: HumanExecutor(
         prompt=cfg.get("prompt", "Awaiting human input"),
+    ))
+
+    registry.register("poll", lambda cfg: PollExecutor(
+        check_command=cfg.get("check_command", "echo"),
+        interval_seconds=cfg.get("interval_seconds", 60),
+        prompt=cfg.get("prompt", ""),
     ))
 
     registry.register("mock_llm", lambda cfg: MockLLMExecutor(

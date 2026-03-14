@@ -187,6 +187,23 @@ def _parse_executor(
             raise ValueError(
                 f"Step '{step_name}': Agent executor requires 'prompt'"
             )
+    elif executor_type == "poll":
+        check_command = step_data.get("check_command")
+        if not check_command:
+            raw_config = step_data.get("config", {})
+            check_command = raw_config.get("check_command")
+        if not check_command:
+            raise ValueError(
+                f"Step '{step_name}': Poll executor requires 'check_command'"
+            )
+        config["check_command"] = check_command
+        if "interval_seconds" in step_data:
+            config["interval_seconds"] = step_data["interval_seconds"]
+        elif "config" in step_data and "interval_seconds" in step_data["config"]:
+            config["interval_seconds"] = step_data["config"]["interval_seconds"]
+        prompt = prompt_from_file or step_data.get("prompt", "")
+        if prompt:
+            config["prompt"] = prompt
     elif executor_type == "llm":
         for k in ("prompt", "model", "system", "temperature", "max_tokens"):
             if k in step_data:

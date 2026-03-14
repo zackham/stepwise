@@ -2092,6 +2092,7 @@ class AsyncEngine(Engine):
         super().__init__(store, registry, jobs_dir, project_dir, billing_mode=billing_mode, config=config)
         self._queue: asyncio.Queue = asyncio.Queue()
         self._tasks: dict = {}  # run_id → Task or Future (for cancellation)
+        self._poll_tasks: dict = {}  # run_id → asyncio.Task (poll watch timers)
         self._job_done: dict[str, asyncio.Event] = {}  # job_id → done signal
         self._loop: asyncio.AbstractEventLoop | None = None  # set by run()
         self.on_broadcast: Callable[[dict], None] | None = None
@@ -2138,10 +2139,14 @@ class AsyncEngine(Engine):
             task = self._tasks.pop(run.id, None)
             if task:
                 task.cancel()
+        # Cancel poll watch timers for suspended runs
+        for run in self.store.suspended_runs(job_id):
+            self._cancel_poll_task(run.id)
         super().cancel_job(job_id)
         self._signal_job_done(job_id)
 
     def fulfill_watch(self, run_id: str, payload: dict) -> dict | None:
+        self._cancel_poll_task(run_id)
         result = super().fulfill_watch(run_id, payload)
         if result is None:  # success
             run = self.store.load_run(run_id)
@@ -2260,6 +2265,35 @@ class AsyncEngine(Engine):
         except Exception as e:
             await self._queue.put(("step_error", job_id, step_name, run_id, e))
 
+    # ── Poll watch scheduling ────────────────────────────────────────────
+
+    def _schedule_poll_watch(self, job_id: str, run_id: str, watch: WatchSpec) -> None:
+        """Start an asyncio task that periodically pushes poll_check events."""
+        interval = watch.config.get("interval_seconds", 60)
+
+        async def _poll_loop() -> None:
+            try:
+                while True:
+                    await asyncio.sleep(interval)
+                    await self._queue.put(("poll_check", job_id, run_id))
+            except asyncio.CancelledError:
+                return
+
+        try:
+            loop = asyncio.get_running_loop()
+            task = loop.create_task(_poll_loop())
+        except RuntimeError:
+            if self._loop is None:
+                return
+            task = asyncio.run_coroutine_threadsafe(_poll_loop(), self._loop)
+        self._poll_tasks[run_id] = task
+
+    def _cancel_poll_task(self, run_id: str) -> None:
+        """Cancel a poll watch timer task."""
+        task = self._poll_tasks.pop(run_id, None)
+        if task:
+            task.cancel()
+
     # ── Event handling ───────────────────────────────────────────────────
 
     def _handle_queue_event(self, event: tuple) -> None:
@@ -2285,6 +2319,10 @@ class AsyncEngine(Engine):
                 return  # already handled (e.g. cancelled)
 
             self._process_launch_result(job, run, result)
+            # If the step suspended with a poll watch, schedule periodic checking
+            run = self.store.load_run(run_id)
+            if run.status == StepRunStatus.SUSPENDED and run.watch and run.watch.mode == "poll":
+                self._schedule_poll_watch(job_id, run_id, run.watch)
             self._after_step_change(job_id)
 
         elif event_type == "step_error":
@@ -2307,6 +2345,21 @@ class AsyncEngine(Engine):
 
             self._handle_executor_crash(job, run, step_name, error)
             self._after_step_change(job_id)
+
+        elif event_type == "poll_check":
+            _, job_id, run_id = event
+            try:
+                job = self.store.load_job(job_id)
+                run = self.store.load_run(run_id)
+            except KeyError:
+                self._cancel_poll_task(run_id)
+                return
+            if job.status != JobStatus.RUNNING or run.status != StepRunStatus.SUSPENDED:
+                self._cancel_poll_task(run_id)
+                return
+            if self._check_poll_watch(job, run):
+                self._cancel_poll_task(run_id)
+                self._after_step_change(job_id)
 
     def _after_step_change(self, job_id: str) -> None:
         """After a step result is processed, broadcast, dispatch ready steps, check terminal."""

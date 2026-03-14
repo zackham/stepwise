@@ -35,6 +35,7 @@ from stepwise.executors import (
     ExecutorStatus,
     HumanExecutor,
     MockLLMExecutor,
+    PollExecutor,
     ScriptExecutor,
 )
 from stepwise.models import (
@@ -89,6 +90,7 @@ __all__ = [
     "ExecutorStatus",
     "HumanExecutor",
     "MockLLMExecutor",
+    "PollExecutor",
     "ScriptExecutor",
     # Decorators
     "FallbackDecorator",

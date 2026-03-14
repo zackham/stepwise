@@ -305,6 +305,57 @@ class ScriptExecutor(Executor):
         pass  # M1: synchronous, nothing to cancel
 
 
+# ── PollExecutor ───────────────────────────────────────────────────────
+
+
+class PollExecutor(Executor):
+    """Suspends with a poll watch — engine periodically runs check_command.
+
+    The check_command is a shell command that the engine runs at interval_seconds.
+    - Exit 0 + JSON dict on stdout → fulfilled (dict becomes the artifact)
+    - Exit 0 + empty stdout → not ready, check again next interval
+    - Non-zero exit → error, retry next interval
+    """
+
+    def __init__(
+        self,
+        check_command: str,
+        interval_seconds: int = 60,
+        prompt: str = "",
+    ) -> None:
+        self.check_command = check_command
+        self.interval_seconds = interval_seconds
+        self.prompt = prompt
+
+    def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
+        # Interpolate $var placeholders in check_command and prompt
+        str_inputs = {k: str(v) if v is not None else "" for k, v in inputs.items()}
+        check_command = Template(self.check_command).safe_substitute(str_inputs)
+        prompt = Template(self.prompt).safe_substitute(str_inputs) if self.prompt else ""
+
+        config: dict[str, Any] = {
+            "check_command": check_command,
+            "interval_seconds": self.interval_seconds,
+        }
+        if prompt:
+            config["prompt"] = prompt
+
+        return ExecutorResult(
+            type="watch",
+            watch=WatchSpec(
+                mode="poll",
+                config=config,
+                fulfillment_outputs=context_to_outputs(context),
+            ),
+        )
+
+    def check_status(self, state: dict) -> ExecutorStatus:
+        return ExecutorStatus(state="running")
+
+    def cancel(self, state: dict) -> None:
+        pass
+
+
 # ── HumanExecutor ──────────────────────────────────────────────────────
 
 
