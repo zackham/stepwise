@@ -136,7 +136,7 @@ steps:
 ### Agent mode (--wait)
 
 ```bash
-stepwise run council.flow.yaml --wait --var question="Should we use Postgres?"
+stepwise run council --wait --var question="Should we use Postgres?"
 ```
 
 Blocks until the flow completes. Prints a single JSON object to stdout — nothing else. All logging goes to stderr. This is the primary integration path for agents calling flows as tools.
@@ -156,7 +156,7 @@ When a flow has human steps and `--wait` is used, the command returns exit code 
 ### Async mode (--async)
 
 ```bash
-stepwise run council.flow.yaml --async --var question="..."
+stepwise run council --async --var question="..."
 # → {"job_id": "job-a1b2c3d4", "status": "running"}
 ```
 
@@ -493,7 +493,7 @@ Shows metadata for a published flow without downloading it (name, author, descri
 Generate a JSON tool contract from a flow file. Shows what inputs the flow needs, what outputs it produces, and whether it has human steps.
 
 ```bash
-stepwise schema council.flow.yaml
+stepwise schema council
 ```
 
 ```json

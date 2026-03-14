@@ -23,19 +23,21 @@ Stepwise is a workflow engine that coordinates multi-step jobs where each step c
 curl -fsSL https://raw.githubusercontent.com/zackham/stepwise/master/install.sh | sh
 ```
 
+Try the interactive demo or a real-world code review flow:
+
 ```bash
-stepwise run @stepwise:welcome --watch       # interactive demo
-stepwise run @stepwise:code-review --watch   # real-world flow
+stepwise run @stepwise:welcome --watch
+stepwise run @stepwise:code-review --watch
 ```
 
-`--watch` opens a browser with a real-time DAG visualization. Steps execute automatically — agents stream output live, human steps pause and wait for your input.
+`--watch` opens a browser with a real-time DAG visualization. Steps execute automatically — agents stream output live, human steps pause and wait for your input. Drop `--watch` to run headless in the terminal.
 
 ## Flows your agents can call
 
 Stepwise flows are callable as tools by AI agents (Claude Code, Codex, etc.) via plain CLI. No MCP servers, no protocol layers — just bash commands that return JSON.
 
 ```bash
-stepwise run council.flow.yaml --wait --var question="Should we use Postgres?"
+stepwise run council --wait --var question="Should we use Postgres?"
 ```
 
 ```json
