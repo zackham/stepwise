@@ -175,9 +175,9 @@ export function ForEachExpandedContainer({
                   latestRuns={latestRuns}
                 />
 
-                {/* Container port edges */}
+                {/* Container port edges — inputs only; outputs show on the parent container */}
                 <ContainerPortEdges
-                  containerPorts={instance.layout.containerPorts}
+                  containerPorts={instance.layout.containerPorts.filter((p) => p.type === "input")}
                   nodes={instance.layout.nodes}
                   layoutWidth={instance.layout.width}
                   layoutHeight={instance.layout.height}
