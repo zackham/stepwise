@@ -3,8 +3,6 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
-
 ## [0.3.1] — 2026-03-14
 
 **CLI display overhaul** — rich, readable terminal output.
