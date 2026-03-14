@@ -112,6 +112,34 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
           />
         </marker>
         <marker
+          id="arrowhead-active"
+          markerWidth="8"
+          markerHeight="6"
+          refX="7"
+          refY="3"
+          orient="auto"
+          markerUnits="strokeWidth"
+        >
+          <polygon
+            points="0 0, 8 3, 0 6"
+            fill="oklch(0.65 0.15 250)"
+          />
+        </marker>
+        <marker
+          id="arrowhead-suspended"
+          markerWidth="8"
+          markerHeight="6"
+          refX="7"
+          refY="3"
+          orient="auto"
+          markerUnits="strokeWidth"
+        >
+          <polygon
+            points="0 0, 8 3, 0 6"
+            fill="oklch(0.7 0.15 85)"
+          />
+        </marker>
+        <marker
           id="loop-arrow"
           markerWidth="8"
           markerHeight="6"
@@ -127,21 +155,54 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
           />
         </marker>
       </defs>
+      <style>{`
+        @keyframes dash-flow {
+          to { stroke-dashoffset: -20; }
+        }
+        .edge-active {
+          animation: dash-flow 0.8s linear infinite;
+        }
+      `}</style>
       {edges.map((edge, i) => {
         const mid = edgeMidpoint(edge.points);
         const isSequencingOnly = edge.labels.length === 0;
         const totalHeight = edge.labels.length * LABEL_LINE_HEIGHT;
         const startY = mid.y - 6 - totalHeight / 2 + LABEL_LINE_HEIGHT / 2;
+
+        // Check if target step is active
+        const targetStatus = latestRuns?.[edge.to]?.status;
+        const isRunning = targetStatus === "running";
+        const isSuspended = targetStatus === "suspended";
+        const isActive = isRunning || isSuspended;
+
+        const pathD = buildPath(edge.points);
+
         return (
           <g key={`${edge.from}-${edge.to}-${i}`}>
+            {/* Glow layer for active edges */}
+            {isActive && (
+              <path
+                d={pathD}
+                fill="none"
+                stroke={isSuspended ? "oklch(0.7 0.15 85)" : "oklch(0.6 0.15 250)"}
+                strokeWidth={6}
+                opacity={0.15}
+                strokeLinecap="round"
+              />
+            )}
             <path
-              d={buildPath(edge.points)}
+              d={pathD}
               fill="none"
-              stroke={isSequencingOnly ? "oklch(0.35 0 0)" : "oklch(0.4 0 0)"}
-              strokeWidth={isSequencingOnly ? 1 : 1.5}
-              strokeDasharray={isSequencingOnly ? "4 3" : "none"}
-              markerEnd="url(#arrowhead)"
-              opacity={isSequencingOnly ? 0.4 : 0.5}
+              stroke={
+                isActive
+                  ? isSuspended ? "oklch(0.7 0.15 85)" : "oklch(0.6 0.15 250)"
+                  : isSequencingOnly ? "oklch(0.35 0 0)" : "oklch(0.4 0 0)"
+              }
+              strokeWidth={isActive ? 2 : isSequencingOnly ? 1 : 1.5}
+              strokeDasharray={isActive ? "8 12" : isSequencingOnly ? "4 3" : "none"}
+              markerEnd={isActive ? (isSuspended ? "url(#arrowhead-suspended)" : "url(#arrowhead-active)") : "url(#arrowhead)"}
+              opacity={isActive ? 0.8 : isSequencingOnly ? 0.4 : 0.5}
+              className={isActive ? "edge-active" : undefined}
             />
             {edge.labels.map((field, fi) => {
               const isSelected =
