@@ -386,6 +386,16 @@ app.add_middleware(
 )
 
 
+# ── Dev crash handler: exit on first unhandled exception ──────────────
+
+@app.exception_handler(Exception)
+async def _crash_on_error(request, exc):
+    import traceback
+    traceback.print_exception(type(exc), exc, exc.__traceback__)
+    logging.critical("Unhandled exception — exiting server for debugging")
+    os._exit(1)
+
+
 # ── Jobs ──────────────────────────────────────────────────────────────
 
 
