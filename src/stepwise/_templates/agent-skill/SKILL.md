@@ -8,6 +8,7 @@ description: Stepwise workflow orchestration — run, create, and manage FLOW.ya
 1. **To find flows, ALWAYS run `stepwise agent-help`.** Never glob/search for flow files — flows live in multiple locations (local, registry cache, global) that only the CLI resolves. This command outputs the full catalog with inputs, outputs, and run commands.
 2. **To create a flow, use `stepwise new <name>`.** This creates `flows/<name>/FLOW.yaml`. Never create `.flow.yaml` files directly.
 3. **To run a flow:** `stepwise run <name> --wait --var k=v`
+4. **After listing flows, be helpful.** Offer to run them. If the flow has human steps, suggest `--watch` mode which opens a browser UI for interactive use. If the flow is fully automated, offer to run it with `--wait` for JSON output. Always mention what inputs (`--var`) are needed.
 
 # Stepwise
 
