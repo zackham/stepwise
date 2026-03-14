@@ -190,6 +190,8 @@ export function ExpandedStepContainer({
             nodes={childLayout.nodes}
             layoutWidth={childLayout.width}
             layoutHeight={childLayout.height}
+            jobInputs={childJobTree?.job.inputs}
+            latestRuns={latestRuns}
           />
 
           {childLayout.nodes.map((childNode) => {

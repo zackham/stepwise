@@ -377,7 +377,7 @@ export function computeHierarchicalLayout(
     nodesep: isChild ? 30 : 60,
     ranksep: isChild ? 40 : 80,
     marginx: isChild ? 16 : 40,
-    marginy: isChild ? 12 : 40,
+    marginy: isChild ? 24 : 40,
   });
   g.setDefaultEdgeLabel(() => ({}));
 

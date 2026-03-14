@@ -181,6 +181,8 @@ export function ForEachExpandedContainer({
                   nodes={instance.layout.nodes}
                   layoutWidth={instance.layout.width}
                   layoutHeight={instance.layout.height}
+                  jobInputs={subTree?.job.inputs}
+                  latestRuns={latestRuns}
                 />
 
                 {instance.layout.nodes.map((childNode) => {
