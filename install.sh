@@ -42,7 +42,7 @@ dim "Using uv at $(command -v uv)"
 # ── Install stepwise ──────────────────────────────────────────────────
 STEPWISE_PKG="stepwise-run@git+https://github.com/zackham/stepwise.git"
 info "Installing stepwise..."
-uv tool install --force "$STEPWISE_PKG"
+uv tool install --force --reinstall "$STEPWISE_PKG"
 
 # ── Done ──────────────────────────────────────────────────────────────
 echo ""
