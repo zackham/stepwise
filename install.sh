@@ -42,31 +42,7 @@ dim "Using uv at $(command -v uv)"
 # ── Install stepwise ──────────────────────────────────────────────────
 STEPWISE_PKG="stepwise-run@git+https://github.com/zackham/stepwise.git"
 info "Installing stepwise..."
-set +e
-install_output=$(uv tool install "$STEPWISE_PKG" 2>&1)
-install_rc=$?
-set -e
-
-if [ $install_rc -ne 0 ]; then
-    if echo "$install_output" | grep -q "already exists"; then
-        existing=$(command -v stepwise 2>/dev/null || echo "unknown")
-        echo "A 'stepwise' command already exists at: $existing"
-        printf "Replace it? [y/N] "
-        read -r answer </dev/tty
-        case "$answer" in
-            y|Y|yes|Yes)
-                uv tool install --force "$STEPWISE_PKG"
-                ;;
-            *)
-                echo "Installation cancelled."
-                exit 0
-                ;;
-        esac
-    else
-        echo "$install_output" >&2
-        exit 1
-    fi
-fi
+uv tool install --force "$STEPWISE_PKG"
 
 # ── Done ──────────────────────────────────────────────────────────────
 echo ""
