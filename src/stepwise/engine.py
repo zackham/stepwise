@@ -139,7 +139,8 @@ class Engine:
 
     def resume_job(self, job_id: str) -> None:
         job = self.store.load_job(job_id)
-        if job.status != JobStatus.PAUSED:
+        resumable = {JobStatus.PAUSED, JobStatus.CANCELLED, JobStatus.COMPLETED, JobStatus.FAILED}
+        if job.status not in resumable:
             raise ValueError(f"Cannot resume job in status {job.status.value}")
         job.status = JobStatus.RUNNING
         job.updated_at = _now()
@@ -2122,7 +2123,8 @@ class AsyncEngine(Engine):
 
     def resume_job(self, job_id: str) -> None:
         job = self.store.load_job(job_id)
-        if job.status != JobStatus.PAUSED:
+        resumable = {JobStatus.PAUSED, JobStatus.CANCELLED, JobStatus.COMPLETED, JobStatus.FAILED}
+        if job.status not in resumable:
             raise ValueError(f"Cannot resume job in status {job.status.value}")
         job.status = JobStatus.RUNNING
         job.updated_at = _now()

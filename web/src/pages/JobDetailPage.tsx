@@ -111,18 +111,40 @@ export function JobDetailPage() {
   // Auto-select newly suspended human steps
   useAutoSelectSuspended(runs, selection, handleSelectStep);
 
-  // Auto-expand steps that have sub-jobs
-  const prevSubJobRunsRef = useRef<Set<string>>(new Set());
+  // Auto-expand steps that have sub-jobs (runtime or design-time)
+  const prevSubJobKeysRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const stepsToExpand: string[] = [];
+    const currentKeys = new Set<string>();
+
+    // Runtime sub-jobs: runs with sub_job_id
     for (const run of runs) {
-      if (run.sub_job_id && !prevSubJobRunsRef.current.has(run.id)) {
-        stepsToExpand.push(run.step_name);
+      if (run.sub_job_id) {
+        const key = `run:${run.id}`;
+        currentKeys.add(key);
+        if (!prevSubJobKeysRef.current.has(key)) {
+          stepsToExpand.push(run.step_name);
+        }
       }
     }
-    prevSubJobRunsRef.current = new Set(
-      runs.filter((r) => r.sub_job_id).map((r) => r.id),
-    );
+
+    // Design-time sub-flows: steps with sub_flow that have started running
+    if (job) {
+      for (const [name, step] of Object.entries(job.workflow.steps)) {
+        if (step.sub_flow) {
+          const hasRun = runs.some((r) => r.step_name === name);
+          if (hasRun) {
+            const key = `def:${name}`;
+            currentKeys.add(key);
+            if (!prevSubJobKeysRef.current.has(key)) {
+              stepsToExpand.push(name);
+            }
+          }
+        }
+      }
+    }
+
+    prevSubJobKeysRef.current = currentKeys;
     if (stepsToExpand.length > 0) {
       setExpandedSteps((prev) => {
         const next = new Set(prev);
@@ -130,7 +152,7 @@ export function JobDetailPage() {
         return next;
       });
     }
-  }, [runs]);
+  }, [runs, job]);
 
   // Reset state when switching jobs
   useEffect(() => {
