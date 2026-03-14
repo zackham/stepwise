@@ -1,27 +1,17 @@
 ---
 name: stepwise
-description: Stepwise workflow orchestration — run, create, and manage .flow.yaml workflows. Use when working with multi-step pipelines, DAGs, or agent/human/LLM workflows.
+description: Stepwise workflow orchestration — run, create, and manage FLOW.yaml workflows. Activate when user mentions flows, workflows, pipelines, stepwise, FLOW.yaml, or asks "what flows do we have".
 ---
+
+# Stepwise — Rules
+
+1. **To find flows, ALWAYS run `stepwise agent-help`.** Never glob/search for flow files — flows live in multiple locations (local, registry cache, global) that only the CLI resolves. This command outputs the full catalog with inputs, outputs, and run commands.
+2. **To create a flow, use `stepwise new <name>`.** This creates `flows/<name>/FLOW.yaml`. Never create `.flow.yaml` files directly.
+3. **To run a flow:** `stepwise run <name> --wait --var k=v`
 
 # Stepwise
 
-Workflow orchestration for agents and humans. Runs multi-step pipelines with LLM, agent, human, and script executors.
-
-## When to Use
-
-Activate when:
-- User mentions stepwise, flows, workflows, or pipelines
-- Working with `.flow.yaml` or `FLOW.yaml` files
-- User wants to run, create, or manage a workflow
-- User asks about step orchestration, DAGs, or multi-step processes
-
-## Discovering Flows
-
-**IMPORTANT: Always use `stepwise agent-help` to find available flows.** Do NOT search for files manually — flows live in multiple locations that only the CLI knows about (local directories, registry cache, global installs). The command outputs a complete catalog with inputs, outputs, and exact run commands.
-
-```bash
-stepwise agent-help
-```
+Workflow orchestration for agents and humans. Runs multi-step pipelines with LLM, agent, human, poll, and script executors.
 
 ### Flow locations
 
