@@ -1041,9 +1041,14 @@ class TestServerEndpoints:
         assert resp.status_code == 200
         job_id = resp.json()["id"]
 
-        # Start and tick
+        # Start and wait for async engine to process
         client.post(f"/api/jobs/{job_id}/start")
-        client.post("/api/tick")
+        import time
+        for _ in range(20):
+            time.sleep(0.1)
+            resp = client.get(f"/api/jobs/{job_id}/status")
+            if resp.status_code == 200 and resp.json()["status"] in ("running", "completed"):
+                break
 
         # Get resolved status
         resp = client.get(f"/api/jobs/{job_id}/status")
@@ -1055,6 +1060,7 @@ class TestServerEndpoints:
 
     def test_fulfill_returns_job_id(self, client):
         """POST /api/runs/{run_id}/fulfill returns job_id in response."""
+        import time
         # Create a job with a human step
         workflow = {
             "steps": {
@@ -1068,11 +1074,15 @@ class TestServerEndpoints:
         resp = client.post("/api/jobs", json={"objective": "test", "workflow": workflow})
         job_id = resp.json()["id"]
         client.post(f"/api/jobs/{job_id}/start")
-        client.post("/api/tick")
 
-        # Get the suspended run
-        resp = client.get("/api/jobs/suspended")
-        suspended = resp.json()["suspended_steps"]
+        # Wait for async engine to suspend the human step
+        suspended = []
+        for _ in range(20):
+            time.sleep(0.1)
+            resp = client.get("/api/jobs/suspended")
+            suspended = resp.json()["suspended_steps"]
+            if suspended:
+                break
         assert len(suspended) == 1
         run_id = suspended[0]["run_id"]
 
