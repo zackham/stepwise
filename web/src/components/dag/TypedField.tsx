@@ -243,16 +243,17 @@ export function TypedField({
   error,
   autoFocus,
 }: TypedFieldProps) {
+  const fieldType = schema.type || "str";
   return (
     <div>
       <FieldLabel name={name} schema={schema} />
-      {schema.type === "str" && (
+      {fieldType === "str" && (
         <StrField value={value} onChange={onChange} autoFocus={autoFocus} />
       )}
-      {schema.type === "text" && (
+      {fieldType === "text" && (
         <TextField value={value} onChange={onChange} autoFocus={autoFocus} />
       )}
-      {schema.type === "number" && (
+      {fieldType === "number" && (
         <NumberField
           value={value}
           onChange={onChange}
@@ -260,17 +261,17 @@ export function TypedField({
           autoFocus={autoFocus}
         />
       )}
-      {schema.type === "bool" && (
+      {fieldType === "bool" && (
         <BoolField value={value} onChange={onChange} schema={schema} />
       )}
-      {schema.type === "choice" && !schema.multiple && (
+      {fieldType === "choice" && !schema.multiple && (
         <ChoiceSingleField
           value={value}
           onChange={onChange as (v: string) => void}
           schema={schema}
         />
       )}
-      {schema.type === "choice" && schema.multiple && (
+      {fieldType === "choice" && schema.multiple && (
         <ChoiceMultipleField
           value={value}
           onChange={onChange as (v: string[]) => void}
