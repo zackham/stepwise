@@ -168,4 +168,33 @@ describe("DagCamera", () => {
     expect(result.scale).toBeLessThan(1);
     expect(result.scale).toBeGreaterThanOrEqual(0.3);
   });
+
+  it("pan stays coherent during zoom animation (no jank)", () => {
+    const camera = new DagCamera();
+    // Start zoomed in with nodes that will force a zoom-out
+    camera.syncFromManualInput(0, 0, 1);
+
+    // Wide node spread forces zoom out from 1.0
+    const rects = [
+      makeRect(0, 200),
+      makeRect(1100, 200),
+    ];
+    camera.setActiveNodes(rects, VIEWPORT);
+
+    // Track screen-space position of node center each frame
+    // If pan+zoom are coherent, screen position should move smoothly
+    const screenPositions: number[] = [];
+    const cx = (0 + 1100 + 240) / 2; // canvas center X of nodes
+    for (let i = 0; i < 120; i++) {
+      const t = camera.tick(1 / 60);
+      const screenCx = cx * t.scale + t.x;
+      screenPositions.push(screenCx);
+    }
+
+    // Check smoothness: no frame-to-frame jump > 15px in screen space
+    for (let i = 1; i < screenPositions.length; i++) {
+      const jump = Math.abs(screenPositions[i] - screenPositions[i - 1]);
+      expect(jump).toBeLessThan(15);
+    }
+  });
 });

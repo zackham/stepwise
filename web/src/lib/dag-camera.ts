@@ -58,25 +58,44 @@ function isSettled(state: SpringState, target: number, posTol: number, velTol: n
   return Math.abs(state.pos - target) < posTol && Math.abs(state.vel) < velTol;
 }
 
+/**
+ * Compute the bounding box of a set of rects.
+ * Returns null if the array is empty.
+ */
+function boundingBox(rects: Rect[]): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  if (rects.length === 0) return null;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const r of rects) {
+    minX = Math.min(minX, r.x);
+    minY = Math.min(minY, r.y);
+    maxX = Math.max(maxX, r.x + r.width);
+    maxY = Math.max(maxY, r.y + r.height);
+  }
+  return { minX, minY, maxX, maxY };
+}
+
 export class DagCamera {
   // Current spring states
   private panX: SpringState = { pos: 0, vel: 0 };
   private panY: SpringState = { pos: 0, vel: 0 };
   private zoom: SpringState = { pos: 1, vel: 0 };
 
-  // Raw target (before blending)
-  private rawTargetX = 0;
-  private rawTargetY = 0;
+  // Zoom target (computed in setActiveNodes, stable between calls)
   private targetZoom = 1;
 
   // Target blending state
-  private prevTargetX = 0;
-  private prevTargetY = 0;
+  private prevPanX = 0;
+  private prevPanY = 0;
   private blendStartTime = 0;
   private isBlending = false;
 
   // Active node tracking
   private activeNodeKey = "";
+
+  // Stored inputs for per-frame target recomputation
+  private activeRects: Rect[] = [];
+  private viewport = { width: 0, height: 0 };
+  private activeBounds: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
 
   // Whether the camera has a valid target (any active nodes exist)
   private hasTarget = false;
@@ -99,16 +118,14 @@ export class DagCamera {
     this.panX = { pos: x, vel: 0 };
     this.panY = { pos: y, vel: 0 };
     this.zoom = { pos: scale, vel: 0 };
-    this.rawTargetX = x;
-    this.rawTargetY = y;
     this.targetZoom = scale;
     this.settled = true;
     this.isBlending = false;
   }
 
   /**
-   * Update active nodes. Computes new camera target based on
-   * dead zone logic and minimal displacement.
+   * Update active nodes. Stores rects for per-frame target computation
+   * and determines zoom target.
    *
    * @param activeRects - bounding rects of active nodes in canvas coords
    * @param viewport - viewport dimensions { width, height }
@@ -119,18 +136,14 @@ export class DagCamera {
   ): void {
     if (activeRects.length === 0) {
       this.hasTarget = false;
+      this.activeRects = [];
+      this.activeBounds = null;
       return;
     }
     this.hasTarget = true;
-
-    // Compute bounding box of all active nodes
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const r of activeRects) {
-      minX = Math.min(minX, r.x);
-      minY = Math.min(minY, r.y);
-      maxX = Math.max(maxX, r.x + r.width);
-      maxY = Math.max(maxY, r.y + r.height);
-    }
+    this.activeRects = activeRects;
+    this.viewport = viewport;
+    this.activeBounds = boundingBox(activeRects);
 
     // Check if active set changed (for target blending)
     const newKey = activeRects.map(r => `${r.x},${r.y}`).sort().join("|");
@@ -138,56 +151,64 @@ export class DagCamera {
       const hadPreviousTarget = this.activeNodeKey !== "";
       this.activeNodeKey = newKey;
       if (hadPreviousTarget) {
-        // Blend from current spring target (what we were chasing) to new target
-        this.prevTargetX = this.rawTargetX;
-        this.prevTargetY = this.rawTargetY;
+        // Snapshot current pan position as blend origin
+        this.prevPanX = this.panX.pos;
+        this.prevPanY = this.panY.pos;
         this.blendStartTime = this.getNow();
         this.isBlending = true;
       }
     }
 
-    const scale = this.zoom.pos;
-    const vw = viewport.width;
-    const vh = viewport.height;
-
     // ── Zoom target ──
     // Only change zoom when nodes overflow viewport or are very small
-    const contentW = (maxX - minX) + ZOOM_OUT_PADDING * 2;
-    const contentH = (maxY - minY) + ZOOM_OUT_PADDING * 2;
-    const fitScale = Math.min(vw / contentW, vh / contentH);
+    const bounds = this.activeBounds!;
+    const contentW = (bounds.maxX - bounds.minX) + ZOOM_OUT_PADDING * 2;
+    const contentH = (bounds.maxY - bounds.minY) + ZOOM_OUT_PADDING * 2;
+    const fitScale = Math.min(viewport.width / contentW, viewport.height / contentH);
+    const currentScale = this.zoom.pos;
 
     let newZoom = this.targetZoom;
-    if (fitScale < scale) {
-      // Nodes overflow: zoom out to fit (clamped to 0.3)
+    if (fitScale < currentScale) {
+      // Nodes overflow at current zoom: zoom out to fit
       newZoom = Math.max(0.3, Math.min(1.0, fitScale));
     } else {
       // Check if nodes are very small relative to viewport
-      const usedFractionX = contentW * scale / vw;
-      const usedFractionY = contentH * scale / vh;
+      const usedFractionX = contentW * currentScale / viewport.width;
+      const usedFractionY = contentH * currentScale / viewport.height;
       if (usedFractionX < ZOOM_IN_THRESHOLD && usedFractionY < ZOOM_IN_THRESHOLD) {
-        // Zoom in, but not past 1.0
-        newZoom = Math.min(1.0, fitScale * 0.8); // 80% of fit to leave breathing room
+        newZoom = Math.min(1.0, fitScale * 0.8);
       }
-      // Otherwise keep current zoom (hysteresis)
     }
     this.targetZoom = newZoom;
 
-    // ── Pan target (dead zone + minimal displacement) ──
-    const useScale = newZoom; // use target zoom for pan computation
+    // Wake up the animation loop
+    this.settled = false;
+  }
 
-    // Transform active node bounds to screen space
-    const screenMinX = minX * useScale + this.panX.pos;
-    const screenMinY = minY * useScale + this.panY.pos;
-    const screenMaxX = maxX * useScale + this.panX.pos;
-    const screenMaxY = maxY * useScale + this.panY.pos;
+  /**
+   * Compute the pan target for this frame using the current zoom spring
+   * position. This ensures pan and zoom stay coherent as zoom animates.
+   */
+  private computePanTarget(currentScale: number): { x: number; y: number } {
+    const bounds = this.activeBounds;
+    if (!bounds) return { x: this.panX.pos, y: this.panY.pos };
 
-    // Dead zone (comfort zone) boundaries in screen space
+    const { minX, minY, maxX, maxY } = bounds;
+    const vw = this.viewport.width;
+    const vh = this.viewport.height;
+
+    // Transform active node bounds to screen space using current zoom
+    const screenMinX = minX * currentScale + this.panX.pos;
+    const screenMinY = minY * currentScale + this.panY.pos;
+    const screenMaxX = maxX * currentScale + this.panX.pos;
+    const screenMaxY = maxY * currentScale + this.panY.pos;
+
+    // Dead zone boundaries in screen space
     const dzLeft = vw * DEAD_ZONE_FRACTION;
     const dzRight = vw * (1 - DEAD_ZONE_FRACTION);
     const dzTop = vh * DEAD_ZONE_FRACTION;
     const dzBottom = vh * (1 - DEAD_ZONE_FRACTION);
 
-    // Compute minimal displacement to bring nodes inside dead zone
     let dx = 0;
     let dy = 0;
 
@@ -200,8 +221,8 @@ export class DagCamera {
       // Nodes span more than the comfort zone — center them
       const cx = (minX + maxX) / 2;
       const cy = (minY + maxY) / 2;
-      dx = vw / 2 - cx * useScale - this.panX.pos;
-      dy = vh / 2 - cy * useScale - this.panY.pos;
+      dx = vw / 2 - cx * currentScale - this.panX.pos;
+      dy = vh / 2 - cy * currentScale - this.panY.pos;
     } else {
       // Minimal nudge to keep nodes inside comfort zone
       if (screenMinX < dzLeft) dx = dzLeft - screenMinX;
@@ -211,30 +232,7 @@ export class DagCamera {
       else if (screenMaxY > dzBottom) dy = dzBottom - screenMaxY;
     }
 
-    this.rawTargetX = this.panX.pos + dx;
-    this.rawTargetY = this.panY.pos + dy;
-
-    // If we have a non-zero displacement, we're not settled
-    if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5 || Math.abs(newZoom - this.zoom.pos) > 0.001) {
-      this.settled = false;
-    }
-  }
-
-  /** Compute the effective pan target, applying blend interpolation if active */
-  private effectiveTarget(): { x: number; y: number } {
-    if (!this.isBlending) {
-      return { x: this.rawTargetX, y: this.rawTargetY };
-    }
-    const elapsed = this.getNow() - this.blendStartTime;
-    const t = smoothstep(elapsed / TARGET_BLEND_MS);
-    if (t >= 1) {
-      this.isBlending = false;
-      return { x: this.rawTargetX, y: this.rawTargetY };
-    }
-    return {
-      x: this.prevTargetX + (this.rawTargetX - this.prevTargetX) * t,
-      y: this.prevTargetY + (this.rawTargetY - this.prevTargetY) * t,
-    };
+    return { x: this.panX.pos + dx, y: this.panY.pos + dy };
   }
 
   /**
@@ -250,26 +248,56 @@ export class DagCamera {
     // Cap dt to prevent huge jumps
     const cappedDt = Math.min(dt, DT_CAP);
 
-    // Get blended target for this frame
-    const target = this.effectiveTarget();
-
-    this.panX = springStep(this.panX, target.x, PAN_OMEGA, cappedDt);
-    this.panY = springStep(this.panY, target.y, PAN_OMEGA, cappedDt);
+    // Step zoom first so pan target uses the updated zoom
     this.zoom = springStep(this.zoom, this.targetZoom, ZOOM_OMEGA, cappedDt);
+
+    // Recompute pan target using current (just-stepped) zoom
+    const rawTarget = this.computePanTarget(this.zoom.pos);
+
+    // Apply target blending if transitioning between active sets
+    let targetX: number;
+    let targetY: number;
+    if (this.isBlending) {
+      const elapsed = this.getNow() - this.blendStartTime;
+      const t = smoothstep(elapsed / TARGET_BLEND_MS);
+      if (t >= 1) {
+        this.isBlending = false;
+        targetX = rawTarget.x;
+        targetY = rawTarget.y;
+      } else {
+        targetX = this.prevPanX + (rawTarget.x - this.prevPanX) * t;
+        targetY = this.prevPanY + (rawTarget.y - this.prevPanY) * t;
+      }
+    } else {
+      targetX = rawTarget.x;
+      targetY = rawTarget.y;
+    }
+
+    this.panX = springStep(this.panX, targetX, PAN_OMEGA, cappedDt);
+    this.panY = springStep(this.panY, targetY, PAN_OMEGA, cappedDt);
 
     // Check if all springs have settled (only if blend is complete)
     const blendDone = !this.isBlending;
     const panSettled = blendDone &&
-      isSettled(this.panX, target.x, 0.5, 0.5) &&
-      isSettled(this.panY, target.y, 0.5, 0.5);
+      isSettled(this.panX, targetX, 0.5, 0.5) &&
+      isSettled(this.panY, targetY, 0.5, 0.5);
     const zoomSettled = isSettled(this.zoom, this.targetZoom, 0.001, 0.001);
 
+    // Pan can only truly settle when zoom is also done, since zoom changes
+    // shift the pan target. Recheck dead zone at final zoom.
     if (panSettled && zoomSettled) {
-      // Snap to exact target
-      this.panX = { pos: target.x, vel: 0 };
-      this.panY = { pos: target.y, vel: 0 };
-      this.zoom = { pos: this.targetZoom, vel: 0 };
-      this.settled = true;
+      // Verify pan is still correct at settled zoom
+      const finalTarget = this.computePanTarget(this.zoom.pos);
+      const stillGood =
+        Math.abs(this.panX.pos - finalTarget.x) < 1 &&
+        Math.abs(this.panY.pos - finalTarget.y) < 1;
+
+      if (stillGood) {
+        this.panX = { pos: finalTarget.x, vel: 0 };
+        this.panY = { pos: finalTarget.y, vel: 0 };
+        this.zoom = { pos: this.targetZoom, vel: 0 };
+        this.settled = true;
+      }
     }
 
     return {
