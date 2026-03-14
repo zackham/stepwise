@@ -25,9 +25,10 @@ venv/
 node_modules/
 web/dist/
 
-# IDE
+# IDE / AI
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 *~
