@@ -2270,11 +2270,17 @@ class AsyncEngine(Engine):
             _, job_id, step_name, run_id, result = event
             self._tasks.pop(run_id, None)
 
-            job = self.store.load_job(job_id)
+            try:
+                job = self.store.load_job(job_id)
+            except KeyError:
+                return  # job was removed or never persisted
             if job.status != JobStatus.RUNNING:
                 return
 
-            run = self.store.load_run(run_id)
+            try:
+                run = self.store.load_run(run_id)
+            except KeyError:
+                return
             if run.status != StepRunStatus.RUNNING:
                 return  # already handled (e.g. cancelled)
 
@@ -2285,11 +2291,17 @@ class AsyncEngine(Engine):
             _, job_id, step_name, run_id, error = event
             self._tasks.pop(run_id, None)
 
-            job = self.store.load_job(job_id)
+            try:
+                job = self.store.load_job(job_id)
+            except KeyError:
+                return
             if job.status != JobStatus.RUNNING:
                 return
 
-            run = self.store.load_run(run_id)
+            try:
+                run = self.store.load_run(run_id)
+            except KeyError:
+                return
             if run.status != StepRunStatus.RUNNING:
                 return
 
