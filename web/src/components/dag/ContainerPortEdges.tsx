@@ -52,6 +52,25 @@ export function ContainerPortEdges({
 
   const nodeMap = new Map(nodes.map((n) => [n.id, n]));
 
+  // Group input ports together so we can stack their labels
+  const inputPorts = containerPorts.filter((p) => p.type === "input");
+  const outputPorts = containerPorts.filter((p) => p.type === "output");
+
+  // Collect all input labels for a single stacked label block
+  const allInputLabels: { field: string; stepName: string }[] = [];
+  for (const port of inputPorts) {
+    for (const field of port.labels) {
+      allInputLabels.push({ field, stepName: port.stepName });
+    }
+  }
+
+  const allOutputLabels: { field: string; stepName: string }[] = [];
+  for (const port of outputPorts) {
+    for (const field of port.labels) {
+      allOutputLabels.push({ field, stepName: port.stepName });
+    }
+  }
+
   return (
     <>
       <svg
@@ -103,125 +122,104 @@ export function ContainerPortEdges({
         })}
       </svg>
 
-      {/* Label pills on port edges — interactive with hover */}
-      {containerPorts.map((port) => {
-        const node = nodeMap.get(port.stepName);
-        if (!node) return null;
+      {/* Input labels — pinned near top, stacked vertically */}
+      {allInputLabels.length > 0 && (
+        <div
+          className="absolute flex flex-col items-center gap-0.5"
+          style={{
+            left: layoutWidth / 2,
+            top: -2,
+            transform: "translate(-50%, -100%)",
+          }}
+        >
+          {allInputLabels.map(({ field }) => {
+            const value = jobInputs?.[field];
+            const hasValue = value !== undefined;
+            return (
+              <span
+                key={field}
+                className={
+                  hasValue
+                    ? "px-1.5 py-0.5 rounded text-[9px] font-mono bg-purple-500/10 text-purple-300/80 border border-purple-500/20 cursor-default whitespace-nowrap"
+                    : "px-1.5 py-0.5 rounded text-[9px] font-mono bg-zinc-800/60 text-zinc-500 border border-zinc-700/30 whitespace-nowrap"
+                }
+                onMouseEnter={(e) => {
+                  if (!hasValue) return;
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const parent = e.currentTarget.closest("[style]")?.parentElement;
+                  const parentRect = parent?.getBoundingClientRect();
+                  setHover({
+                    field,
+                    value,
+                    x: rect.left - (parentRect?.left ?? 0) + rect.width / 2,
+                    y: rect.bottom - (parentRect?.top ?? 0),
+                  });
+                }}
+                onMouseLeave={() => setHover(null)}
+              >
+                {hasValue ? (
+                  <>
+                    <span className="text-purple-400/60">{field}: </span>
+                    <span className="text-purple-200/70">{formatPreview(value, 20)}</span>
+                  </>
+                ) : (
+                  field
+                )}
+              </span>
+            );
+          })}
+        </div>
+      )}
 
-        const stepCx = node.x + node.width / 2;
-        const containerCx = layoutWidth / 2;
-
-        if (port.type === "input") {
-          const startY = -8;
-          const endY = node.y;
-          const labelY = (startY + endY) / 2 - 8;
-          const labelX = (containerCx + stepCx) / 2;
-
-          return (
-            <div
-              key={`input-label-${port.stepName}`}
-              className="absolute flex gap-1 flex-wrap justify-center"
-              style={{
-                left: labelX,
-                top: labelY,
-                transform: "translateX(-50%)",
-              }}
-            >
-              {port.labels.map((field) => {
-                const value = jobInputs?.[field];
-                const hasValue = value !== undefined;
-                return (
-                  <span
-                    key={field}
-                    className={
-                      hasValue
-                        ? "px-1.5 py-0.5 rounded text-[9px] font-mono bg-purple-500/10 text-purple-300/80 border border-purple-500/20 cursor-default whitespace-nowrap"
-                        : "px-1.5 py-0.5 rounded text-[9px] font-mono bg-zinc-800/60 text-zinc-500 border border-zinc-700/30 whitespace-nowrap"
-                    }
-                    onMouseEnter={(e) => {
-                      if (!hasValue) return;
-                      const rect = e.currentTarget.getBoundingClientRect();
-                      const parent = e.currentTarget.closest("[style]")?.parentElement;
-                      const parentRect = parent?.getBoundingClientRect();
-                      setHover({
-                        field,
-                        value,
-                        x: rect.left - (parentRect?.left ?? 0) + rect.width / 2,
-                        y: rect.bottom - (parentRect?.top ?? 0),
-                      });
-                    }}
-                    onMouseLeave={() => setHover(null)}
-                  >
-                    {hasValue ? (
-                      <>
-                        <span className="text-purple-400/60">{field}: </span>
-                        <span className="text-purple-200/70">{formatPreview(value, 20)}</span>
-                      </>
-                    ) : (
-                      field
-                    )}
-                  </span>
-                );
-              })}
-            </div>
-          );
-        } else {
-          const startY = node.y + node.height;
-          const endY = layoutHeight + 8;
-          const labelY = (startY + endY) / 2 - 8;
-          const labelX = (containerCx + stepCx) / 2;
-
-          return (
-            <div
-              key={`output-label-${port.stepName}`}
-              className="absolute flex gap-1 flex-wrap justify-center"
-              style={{
-                left: labelX,
-                top: labelY,
-                transform: "translateX(-50%)",
-              }}
-            >
-              {port.labels.map((field) => {
-                const run = latestRuns?.[port.stepName];
-                const value = run?.status === "completed" ? run.result?.artifact?.[field] : undefined;
-                const hasValue = value !== undefined;
-                return (
-                  <span
-                    key={field}
-                    className={
-                      hasValue
-                        ? "px-1.5 py-0.5 rounded text-[9px] font-mono bg-emerald-500/10 text-emerald-300/70 border border-emerald-500/20 cursor-default whitespace-nowrap"
-                        : "px-1.5 py-0.5 rounded text-[9px] font-mono bg-zinc-800/60 text-zinc-500 border border-zinc-700/30 whitespace-nowrap"
-                    }
-                    onMouseEnter={(e) => {
-                      if (!hasValue) return;
-                      const rect = e.currentTarget.getBoundingClientRect();
-                      const parent = e.currentTarget.closest("[style]")?.parentElement;
-                      const parentRect = parent?.getBoundingClientRect();
-                      setHover({
-                        field,
-                        value,
-                        x: rect.left - (parentRect?.left ?? 0) + rect.width / 2,
-                        y: rect.bottom - (parentRect?.top ?? 0),
-                      });
-                    }}
-                    onMouseLeave={() => setHover(null)}
-                  >
-                    {hasValue ? (
-                      <>
-                        <span className="text-emerald-400/60">{field}: </span>
-                        <span className="text-emerald-200/60">{formatPreview(value, 20)}</span>
-                      </>
-                    ) : (
-                      field
-                    )}
-                  </span>
-                );
-              })}
-            </div>
-          );
-        }
-      })}
+      {/* Output labels — pinned near bottom, stacked vertically */}
+      {allOutputLabels.length > 0 && (
+        <div
+          className="absolute flex flex-col items-center gap-0.5"
+          style={{
+            left: layoutWidth / 2,
+            top: layoutHeight + 2,
+            transform: "translateX(-50%)",
+          }}
+        >
+          {allOutputLabels.map(({ field, stepName }) => {
+            const run = latestRuns?.[stepName];
+            const value = run?.status === "completed" ? run.result?.artifact?.[field] : undefined;
+            const hasValue = value !== undefined;
+            return (
+              <span
+                key={field}
+                className={
+                  hasValue
+                    ? "px-1.5 py-0.5 rounded text-[9px] font-mono bg-emerald-500/10 text-emerald-300/70 border border-emerald-500/20 cursor-default whitespace-nowrap"
+                    : "px-1.5 py-0.5 rounded text-[9px] font-mono bg-zinc-800/60 text-zinc-500 border border-zinc-700/30 whitespace-nowrap"
+                }
+                onMouseEnter={(e) => {
+                  if (!hasValue) return;
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const parent = e.currentTarget.closest("[style]")?.parentElement;
+                  const parentRect = parent?.getBoundingClientRect();
+                  setHover({
+                    field,
+                    value,
+                    x: rect.left - (parentRect?.left ?? 0) + rect.width / 2,
+                    y: rect.bottom - (parentRect?.top ?? 0),
+                  });
+                }}
+                onMouseLeave={() => setHover(null)}
+              >
+                {hasValue ? (
+                  <>
+                    <span className="text-emerald-400/60">{field}: </span>
+                    <span className="text-emerald-200/60">{formatPreview(value, 20)}</span>
+                  </>
+                ) : (
+                  field
+                )}
+              </span>
+            );
+          })}
+        </div>
+      )}
 
       {/* Hover tooltip */}
       {hover && (
