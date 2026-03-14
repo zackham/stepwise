@@ -123,12 +123,18 @@ export function FlowDagView({
     return map;
   }, [runs]);
 
+  // Estimated screen-pixel height of the HumanInputPanel popover
+  const HUMAN_PANEL_SCREEN_HEIGHT = 280;
+  const HUMAN_PANEL_GAP = 12; // gap between node bottom and panel top
+
   // Collect active node rects for the camera
   const activeRects = useMemo(() => {
     const activeNodeIds: string[] = [];
+    const suspendedIds = new Set<string>();
     for (const [name, run] of Object.entries(latestRuns)) {
       if (run.status === "running" || run.status === "suspended" || run.status === "delegated") {
         activeNodeIds.push(name);
+        if (run.status === "suspended") suspendedIds.add(name);
       }
     }
     if (jobTree) {
@@ -148,14 +154,26 @@ export function FlowDagView({
         }
       }
     }
+    const scale = transformRef.current.scale;
     const rects: Rect[] = [];
     for (const n of layout.nodes) {
       if (activeNodeIds.includes(n.id)) {
-        rects.push({ x: n.x, y: n.y, width: n.width, height: n.height });
+        // If this is a selected suspended step with a human input panel,
+        // extend the rect to include the popover below the node
+        const hasPopover = selectedStep === n.id && suspendedIds.has(n.id);
+        const popoverExtra = hasPopover
+          ? HUMAN_PANEL_GAP + HUMAN_PANEL_SCREEN_HEIGHT / scale
+          : 0;
+        rects.push({
+          x: n.x,
+          y: n.y,
+          width: n.width,
+          height: n.height + popoverExtra,
+        });
       }
     }
     return rects;
-  }, [layout, latestRuns, jobTree, runs]);
+  }, [layout, latestRuns, jobTree, runs, selectedStep]);
 
   // Feed active rects to camera whenever they change
   useEffect(() => {
