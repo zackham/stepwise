@@ -145,10 +145,10 @@ export function FlowDagView({
     cx /= activeLayoutNodes.length;
     cy /= activeLayoutNodes.length;
 
-    // Target: center active nodes in viewport
+    // Target: active nodes in upper third of viewport
     const t = transformRef.current;
     const targetX = rect.width / 2 - cx * t.scale;
-    const targetY = rect.height / 2 - cy * t.scale;
+    const targetY = rect.height * 0.3 - cy * t.scale;
 
     // Lerp toward target
     const lerp = 0.12;
