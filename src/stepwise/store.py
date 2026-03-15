@@ -284,7 +284,7 @@ class SQLiteStore:
             job_id=row["job_id"],
             step_name=row["step_name"],
             attempt=row["attempt"],
-            status=StepRunStatus(row["status"]),
+            status=StepRunStatus(row["status"]) if row["status"] else StepRunStatus.RUNNING,
             inputs=json.loads(row["inputs"]) if row["inputs"] else None,
             dep_run_ids=json.loads(row["dep_run_ids"]) if row["dep_run_ids"] else None,
             result=HandoffEnvelope.from_dict(result_data) if result_data else None,

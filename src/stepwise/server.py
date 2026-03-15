@@ -391,8 +391,9 @@ app.add_middleware(
 @app.exception_handler(Exception)
 async def _crash_on_error(request, exc):
     import traceback
+    import logging as _logging
     traceback.print_exception(type(exc), exc, exc.__traceback__)
-    logging.critical("Unhandled exception — exiting server for debugging")
+    _logging.critical("Unhandled exception — exiting server for debugging")
     os._exit(1)
 
 
