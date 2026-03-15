@@ -29,6 +29,12 @@ interface ContainerPortEdgesProps {
   layoutHeight: number;
   jobInputs?: Record<string, unknown>;
   latestRuns?: Record<string, StepRun>;
+  /** Total height of the outer container (for positioning output labels) */
+  containerHeight?: number;
+  /** Height of the container header bar */
+  headerHeight?: number;
+  /** Top offset of the child layout content area within the container */
+  contentTop?: number;
 }
 
 interface HoverInfo {
@@ -45,6 +51,9 @@ export function ContainerPortEdges({
   layoutHeight,
   jobInputs,
   latestRuns,
+  containerHeight,
+  headerHeight,
+  contentTop,
 }: ContainerPortEdgesProps) {
   const [hover, setHover] = useState<HoverInfo | null>(null);
 
@@ -122,14 +131,14 @@ export function ContainerPortEdges({
         })}
       </svg>
 
-      {/* Input labels — pinned near top, stacked vertically */}
+      {/* Input labels — positioned above the child layout, below the header */}
       {allInputLabels.length > 0 && (
         <div
           className="absolute flex flex-col items-center gap-0.5"
           style={{
             left: layoutWidth / 2,
-            top: -2,
-            transform: "translate(-50%, -100%)",
+            top: 2,
+            transform: "translateX(-50%)",
           }}
         >
           {allInputLabels.map(({ field }) => {
