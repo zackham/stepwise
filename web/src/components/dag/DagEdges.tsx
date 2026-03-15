@@ -91,8 +91,8 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
   return (
     <svg
       className="absolute inset-0 pointer-events-none"
-      width={width}
-      height={height}
+      width={isFinite(width) ? width : 0}
+      height={isFinite(height) ? height : 0}
       style={{ overflow: "visible" }}
     >
       <defs>

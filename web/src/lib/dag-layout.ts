@@ -1,6 +1,11 @@
 import dagre from "dagre";
 import type { FlowDefinition, JobTreeNode, StepRun } from "./types";
 
+/** Return `value` if it's a usable finite number, otherwise `fallback`. */
+function finiteOr(value: number | undefined | null, fallback: number): number {
+  return typeof value === "number" && isFinite(value) && value > 0 ? value : fallback;
+}
+
 // ── Selection model ─────────────────────────────────────────────────
 export type DagSelection =
   | { kind: "step"; stepName: string }
@@ -228,8 +233,8 @@ export function computeDagLayout(workflow: FlowDefinition): DagLayout {
     nodes,
     edges,
     loopEdges,
-    width: (graphMeta?.width || 600) + 80 + loopExtraWidth,
-    height: (graphMeta?.height || 400) + 80,
+    width: finiteOr(graphMeta?.width as number, 600) + 80 + loopExtraWidth,
+    height: finiteOr(graphMeta?.height as number, 400) + 80,
   };
 }
 
@@ -395,16 +400,16 @@ export function computeHierarchicalLayout(
         (sum, inst, idx) => sum + inst.layout.width + (idx > 0 ? FOR_EACH_INSTANCE_GAP : 0),
         0,
       );
-      const maxH = Math.max(...feInstances.map((i) => FOR_EACH_INSTANCE_HEADER + i.layout.height));
+      const heights = feInstances.map((i) => FOR_EACH_INSTANCE_HEADER + i.layout.height);
+      const maxH = heights.length > 0 ? Math.max(...heights) : 0;
       const w = totalW + CONTAINER_PAD_X * 2;
       // Account for output port labels below the child layout
-      const feOutputCount = Math.max(
-        ...feInstances.map((i) =>
-          i.layout.containerPorts
-            .filter((p) => p.type === "output")
-            .reduce((sum, p) => sum + p.labels.length, 0)
-        ),
+      const outputCounts = feInstances.map((i) =>
+        i.layout.containerPorts
+          .filter((p) => p.type === "output")
+          .reduce((sum, p) => sum + p.labels.length, 0)
       );
+      const feOutputCount = outputCounts.length > 0 ? Math.max(...outputCounts) : 0;
       const feOutputExtra = feOutputCount > 0
         ? feOutputCount * PORT_LABEL_HEIGHT + PORT_LABEL_GAP
         : 0;
@@ -664,7 +669,7 @@ export function computeHierarchicalLayout(
     loopEdges,
     flowPorts,
     containerPorts,
-    width: (graphMeta?.width || 600) + outerPad + loopExtraWidth,
-    height: (graphMeta?.height || 400) + outerPad,
+    width: finiteOr(graphMeta?.width as number, 600) + outerPad + loopExtraWidth,
+    height: finiteOr(graphMeta?.height as number, 400) + outerPad,
   };
 }
