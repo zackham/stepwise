@@ -95,6 +95,8 @@ export const NODE_HEIGHT_WITH_DESC = 108;
 const CONTAINER_HEADER = 44;
 const CONTAINER_PAD_X = 24;
 const CONTAINER_PAD_BOTTOM = 28;
+const PORT_LABEL_HEIGHT = 20; // approximate height of a container port label pill
+const PORT_LABEL_GAP = 4; // gap between stacked port labels
 const FLOW_PORT_WIDTH = 160;
 const FLOW_PORT_HEIGHT = 40;
 const FOR_EACH_INSTANCE_HEADER = 28;
@@ -395,12 +397,30 @@ export function computeHierarchicalLayout(
       );
       const maxH = Math.max(...feInstances.map((i) => FOR_EACH_INSTANCE_HEADER + i.layout.height));
       const w = totalW + CONTAINER_PAD_X * 2;
-      const h = maxH + CONTAINER_HEADER + CONTAINER_PAD_BOTTOM;
+      // Account for output port labels below the child layout
+      const feOutputCount = Math.max(
+        ...feInstances.map((i) =>
+          i.layout.containerPorts
+            .filter((p) => p.type === "output")
+            .reduce((sum, p) => sum + p.labels.length, 0)
+        ),
+      );
+      const feOutputExtra = feOutputCount > 0
+        ? feOutputCount * PORT_LABEL_HEIGHT + PORT_LABEL_GAP
+        : 0;
+      const h = maxH + CONTAINER_HEADER + CONTAINER_PAD_BOTTOM + feOutputExtra;
       nodeSizes.set(name, { width: Math.max(w, NODE_WIDTH), height: h });
     } else if (childLayout) {
       // Standard expanded: inflate to contain child DAG
       const w = childLayout.width + CONTAINER_PAD_X * 2;
-      const h = childLayout.height + CONTAINER_HEADER + CONTAINER_PAD_BOTTOM;
+      // Account for output port labels below the child layout
+      const outputLabelCount = childLayout.containerPorts
+        .filter((p) => p.type === "output")
+        .reduce((sum, p) => sum + p.labels.length, 0);
+      const outputExtra = outputLabelCount > 0
+        ? outputLabelCount * PORT_LABEL_HEIGHT + PORT_LABEL_GAP
+        : 0;
+      const h = childLayout.height + CONTAINER_HEADER + CONTAINER_PAD_BOTTOM + outputExtra;
       nodeSizes.set(name, { width: Math.max(w, NODE_WIDTH), height: h });
     } else {
       nodeSizes.set(name, { width: NODE_WIDTH, height: nodeHeight(workflow, name) });
