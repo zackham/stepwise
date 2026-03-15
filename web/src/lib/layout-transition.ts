@@ -6,6 +6,9 @@ import type { DagEdge } from "./dag-layout";
 const TRANSITION_MS = 300;
 
 function lerp(a: number, b: number, t: number): number {
+  // Guard against NaN from dagre or missing values
+  if (isNaN(a)) return b;
+  if (isNaN(b)) return a;
   return a + (b - a) * t;
 }
 
