@@ -141,7 +141,7 @@ export function ExpandedStepContainer({
   return (
     <div
       className={cn(
-        "absolute border rounded-lg overflow-hidden",
+        "absolute border rounded-lg",
         borderColor,
         bgColor,
       )}
@@ -149,7 +149,7 @@ export function ExpandedStepContainer({
     >
       {/* Header bar */}
       <div
-        className="flex items-center gap-2 px-3 h-10 bg-purple-500/10 border-b border-purple-500/20 cursor-pointer"
+        className="flex items-center gap-2 px-3 h-10 bg-purple-500/10 border-b border-purple-500/20 cursor-pointer rounded-t-lg overflow-hidden"
         onClick={(e) => {
           e.stopPropagation();
           onToggleExpand(stepName);
@@ -184,7 +184,7 @@ export function ExpandedStepContainer({
             latestRuns={latestRuns}
           />
 
-          {/* Container port edges (lines from container boundary to entry/terminal steps) */}
+          {/* Container port edges (lines + labels from container boundary to entry/terminal steps) */}
           <ContainerPortEdges
             containerPorts={childLayout.containerPorts}
             nodes={childLayout.nodes}
@@ -192,6 +192,9 @@ export function ExpandedStepContainer({
             layoutHeight={childLayout.height}
             jobInputs={childJobTree?.job.inputs}
             latestRuns={latestRuns}
+            containerHeight={node.height}
+            headerHeight={node.containerPadding.top}
+            contentTop={node.containerPadding.top + 4}
           />
 
           {childLayout.nodes.map((childNode) => {
