@@ -1,6 +1,7 @@
 import { useMemo, useRef, useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { computeHierarchicalLayout } from "@/lib/dag-layout";
 import type { DagSelection } from "@/lib/dag-layout";
+import { useLayoutTransition } from "@/lib/layout-transition";
 import { DagCamera } from "@/lib/dag-camera";
 import type { Rect } from "@/lib/dag-camera";
 import { StepNode } from "./StepNode";
@@ -64,20 +65,21 @@ export function FlowDagView({
   const cameraRef = useRef(new DagCamera());
   const lastFrameTimeRef = useRef<number | null>(null);
 
-  const layout = useMemo(
+  const rawLayout = useMemo(
     () => computeHierarchicalLayout(workflow, expandedSteps, jobTree),
     [workflow, expandedSteps, jobTree],
   );
-  const prevLayoutRef = useRef(layout);
+  const layout = useLayoutTransition(rawLayout);
+  const prevRawLayoutRef = useRef(rawLayout);
 
-  // When layout changes (expand/collapse, new sub-jobs), clear spring
-  // velocities so stale momentum doesn't cause jank
+  // When the raw layout changes (expand/collapse, new sub-jobs), clear
+  // camera spring velocities so stale momentum doesn't cause jank
   useEffect(() => {
-    if (prevLayoutRef.current !== layout) {
-      prevLayoutRef.current = layout;
+    if (prevRawLayoutRef.current !== rawLayout) {
+      prevRawLayoutRef.current = rawLayout;
       cameraRef.current.onLayoutChange();
     }
-  }, [layout]);
+  }, [rawLayout]);
 
   // Apply transform directly to DOM (no re-render)
   const applyTransform = useCallback(() => {
