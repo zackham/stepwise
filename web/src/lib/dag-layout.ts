@@ -228,8 +228,8 @@ export function computeDagLayout(workflow: FlowDefinition): DagLayout {
     nodes,
     edges,
     loopEdges,
-    width: (graphMeta?.width ?? 600) + 80 + loopExtraWidth,
-    height: (graphMeta?.height ?? 400) + 80,
+    width: (graphMeta?.width || 600) + 80 + loopExtraWidth,
+    height: (graphMeta?.height || 400) + 80,
   };
 }
 
@@ -664,7 +664,7 @@ export function computeHierarchicalLayout(
     loopEdges,
     flowPorts,
     containerPorts,
-    width: (graphMeta?.width ?? 600) + outerPad + loopExtraWidth,
-    height: (graphMeta?.height ?? 400) + outerPad,
+    width: (graphMeta?.width || 600) + outerPad + loopExtraWidth,
+    height: (graphMeta?.height || 400) + outerPad,
   };
 }
