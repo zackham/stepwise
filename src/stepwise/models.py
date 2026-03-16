@@ -179,22 +179,30 @@ class ExitRule:
 @dataclass
 class InputBinding:
     local_name: str  # what the executor sees
-    source_step: str  # which predecessor, or "$job"
-    source_field: str  # which output field
+    source_step: str  # which predecessor, or "$job"; empty string for any_of
+    source_field: str  # which output field; empty string for any_of
+    any_of_sources: list[tuple[str, str]] | None = None  # [(step, field), ...]
 
     def to_dict(self) -> dict:
-        return {
+        d: dict = {
             "local_name": self.local_name,
             "source_step": self.source_step,
             "source_field": self.source_field,
         }
+        if self.any_of_sources is not None:
+            d["any_of_sources"] = [{"step": s, "field": f} for s, f in self.any_of_sources]
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> InputBinding:
+        any_of = None
+        if d.get("any_of_sources"):
+            any_of = [(e["step"], e["field"]) for e in d["any_of_sources"]]
         return cls(
             local_name=d["local_name"],
             source_step=d["source_step"],
             source_field=d["source_field"],
+            any_of_sources=any_of,
         )
 
 
@@ -452,7 +460,24 @@ class WorkflowDefinition:
         # Check input binding sources
         for name, step in self.steps.items():
             for binding in step.inputs:
-                if binding.source_step != "$job" and binding.source_step not in step_names:
+                if binding.any_of_sources is not None:
+                    # Validate any_of bindings
+                    if len(binding.any_of_sources) < 2:
+                        errors.append(
+                            f"Step '{name}': input '{binding.local_name}' any_of must have >= 2 sources"
+                        )
+                    for src_step, src_field in binding.any_of_sources:
+                        if src_step not in step_names:
+                            errors.append(
+                                f"Step '{name}': input '{binding.local_name}' any_of references "
+                                f"unknown step '{src_step}'"
+                            )
+                        elif src_field.split(".")[0] not in self.steps[src_step].outputs:
+                            errors.append(
+                                f"Step '{name}': input '{binding.local_name}' any_of references "
+                                f"unknown field '{src_field}' on step '{src_step}'"
+                            )
+                elif binding.source_step != "$job" and binding.source_step not in step_names:
                     errors.append(
                         f"Step '{name}': input binding references unknown step '{binding.source_step}'"
                     )
@@ -492,13 +517,20 @@ class WorkflowDefinition:
                     )
                 seen_outputs.add(out)
 
-            # Check exit rule loop targets
+            # Check exit rule targets
             for rule in step.exit_rules:
                 target = rule.config.get("target")
-                if rule.config.get("action") == "loop" and target:
+                action = rule.config.get("action")
+                if action == "loop" and target:
                     if target not in step_names:
                         errors.append(
                             f"Step '{name}': exit rule '{rule.name}' loop target "
+                            f"'{target}' is not a valid step"
+                        )
+                if action == "advance" and target:
+                    if target not in step_names:
+                        errors.append(
+                            f"Step '{name}': exit rule '{rule.name}' advance target "
                             f"'{target}' is not a valid step"
                         )
 
@@ -631,10 +663,11 @@ class WorkflowDefinition:
         result = []
         for name, step in self.steps.items():
             has_step_deps = any(
-                b.source_step != "$job" for b in step.inputs
+                b.source_step != "$job" for b in step.inputs if not b.any_of_sources
             )
+            has_any_of_deps = any(b.any_of_sources for b in step.inputs)
             has_for_each_dep = step.for_each is not None
-            if not has_step_deps and not step.sequencing and not has_for_each_dep:
+            if not has_step_deps and not has_any_of_deps and not step.sequencing and not has_for_each_dep:
                 result.append(name)
         return result
 
@@ -647,7 +680,10 @@ class WorkflowDefinition:
         depended_on: set[str] = set()
         for step in self.steps.values():
             for binding in step.inputs:
-                if binding.source_step != "$job":
+                if binding.any_of_sources:
+                    for src_step, _ in binding.any_of_sources:
+                        depended_on.add(src_step)
+                elif binding.source_step != "$job":
                     depended_on.add(binding.source_step)
             for seq in step.sequencing:
                 depended_on.add(seq)
@@ -660,7 +696,13 @@ class WorkflowDefinition:
                 continue
             # Exclude loop-internal steps (loop back to own dep)
             step_def = self.steps[name]
-            own_deps = {b.source_step for b in step_def.inputs if b.source_step != "$job"}
+            own_deps: set[str] = set()
+            for b in step_def.inputs:
+                if b.any_of_sources:
+                    for src, _ in b.any_of_sources:
+                        own_deps.add(src)
+                elif b.source_step != "$job":
+                    own_deps.add(b.source_step)
             own_deps.update(step_def.sequencing)
             is_loop_internal = any(
                 rule.config.get("action") == "loop"
@@ -680,7 +722,10 @@ class WorkflowDefinition:
         for name, step in self.steps.items():
             deps: set[str] = set()
             for binding in step.inputs:
-                if binding.source_step != "$job":
+                if binding.any_of_sources:
+                    for src_step, _ in binding.any_of_sources:
+                        deps.add(src_step)
+                elif binding.source_step != "$job":
                     deps.add(binding.source_step)
             for seq in step.sequencing:
                 deps.add(seq)

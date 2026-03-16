@@ -41,8 +41,9 @@ export interface ExitRule {
 
 export interface InputBinding {
   local_name: string;
-  source_step: string; // "$job" or step name
-  source_field: string;
+  source_step: string; // "$job" or step name; empty string for any_of
+  source_field: string; // empty string for any_of
+  any_of_sources?: { step: string; field: string }[];
 }
 
 // ── Step Limits ────────────────────────────────────────────────────────
