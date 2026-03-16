@@ -11,6 +11,7 @@ const mockFlows: LocalFlow[] = [
     steps_count: 3,
     modified_at: "2026-03-11T10:00:00",
     is_directory: true,
+    executor_types: ["script", "llm"],
   },
   {
     path: "flows/deploy.flow.yaml",
@@ -19,6 +20,7 @@ const mockFlows: LocalFlow[] = [
     steps_count: 2,
     modified_at: "2026-03-10T08:00:00",
     is_directory: false,
+    executor_types: ["script"],
   },
   {
     path: "flows/review/FLOW.yaml",
@@ -27,6 +29,7 @@ const mockFlows: LocalFlow[] = [
     steps_count: 5,
     modified_at: "2026-03-09T14:00:00",
     is_directory: true,
+    executor_types: ["human", "llm"],
   },
 ];
 
@@ -37,7 +40,6 @@ describe("FlowFileList", () => {
         flows={mockFlows}
         selectedName={undefined}
         onSelect={() => {}}
-        dirtyFlows={new Set()}
       />
     );
     expect(screen.getByText("research")).toBeDefined();
@@ -51,7 +53,6 @@ describe("FlowFileList", () => {
         flows={mockFlows}
         selectedName={undefined}
         onSelect={() => {}}
-        dirtyFlows={new Set()}
       />
     );
     expect(screen.getByText("3")).toBeDefined();
@@ -65,7 +66,6 @@ describe("FlowFileList", () => {
         flows={mockFlows}
         selectedName="research"
         onSelect={() => {}}
-        dirtyFlows={new Set()}
       />
     );
     const button = screen.getByText("research").closest("button")!;
@@ -79,7 +79,6 @@ describe("FlowFileList", () => {
         flows={mockFlows}
         selectedName={undefined}
         onSelect={onSelect}
-        dirtyFlows={new Set()}
       />
     );
     fireEvent.click(screen.getByText("deploy"));
@@ -92,7 +91,6 @@ describe("FlowFileList", () => {
         flows={mockFlows}
         selectedName={undefined}
         onSelect={() => {}}
-        dirtyFlows={new Set()}
       />
     );
     const input = screen.getByPlaceholderText("Filter flows...");
@@ -108,7 +106,6 @@ describe("FlowFileList", () => {
         flows={[]}
         selectedName={undefined}
         onSelect={() => {}}
-        dirtyFlows={new Set()}
       />
     );
     expect(screen.getByText("No flows found")).toBeDefined();
@@ -120,7 +117,6 @@ describe("FlowFileList", () => {
         flows={mockFlows}
         selectedName={undefined}
         onSelect={() => {}}
-        dirtyFlows={new Set()}
       />
     );
     const input = screen.getByPlaceholderText("Filter flows...");
@@ -128,16 +124,4 @@ describe("FlowFileList", () => {
     expect(screen.getByText("No matching flows")).toBeDefined();
   });
 
-  it("shows dirty indicator for dirty flows", () => {
-    const { container } = render(
-      <FlowFileList
-        flows={mockFlows}
-        selectedName="research"
-        onSelect={() => {}}
-        dirtyFlows={new Set(["research"])}
-      />
-    );
-    const dots = container.querySelectorAll(".bg-amber-400");
-    expect(dots.length).toBe(1);
-  });
 });

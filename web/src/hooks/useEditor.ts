@@ -55,6 +55,23 @@ export function useSaveFlow() {
   });
 }
 
+export function usePatchFlowMetadata() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      path,
+      metadata,
+    }: {
+      path: string;
+      metadata: Partial<import("@/lib/types").FlowMetadata>;
+    }) => api.patchFlowMetadata(path, metadata),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["localFlows"] });
+      queryClient.invalidateQueries({ queryKey: ["localFlow"] });
+    },
+  });
+}
+
 export function usePatchStep() {
   return useMutation({
     mutationFn: ({

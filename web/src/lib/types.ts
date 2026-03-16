@@ -83,10 +83,22 @@ export interface StepDefinition {
   chain_label?: string;
 }
 
+// ── Flow Metadata ────────────────────────────────────────────────────
+
+export interface FlowMetadata {
+  name?: string;
+  description?: string;
+  author?: string;
+  version?: string;
+  tags?: string[];
+  forked_from?: string;
+}
+
 // ── Flow Definition ───────────────────────────────────────────────────
 
 export interface FlowDefinition {
   steps: Record<string, StepDefinition>;
+  metadata?: FlowMetadata;
 }
 
 // ── Sidecar ────────────────────────────────────────────────────────────
@@ -267,6 +279,7 @@ export interface LocalFlow {
   steps_count: number;
   modified_at: string;
   is_directory: boolean;
+  executor_types: string[];
 }
 
 export interface FlowGraphNode {
