@@ -294,13 +294,13 @@ export function LocalFlowInfoPanel({
           </div>
 
           {/* Executor types */}
-          {flow.executor_types.length > 0 && (
+          {(flow.executor_types?.length ?? 0) > 0 && (
             <>
               <Separator />
               <div className="space-y-1.5">
                 <span className="text-xs text-zinc-500">Executors</span>
                 <div className="flex flex-wrap gap-1">
-                  {flow.executor_types.map((t) => (
+                  {(flow.executor_types ?? []).map((t) => (
                     <span
                       key={t}
                       className="text-[10px] font-mono bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded"
