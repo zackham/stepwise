@@ -840,11 +840,17 @@ class Engine:
         if not step_def:
             return False
 
-        # Check all dependency provenance
-        dep_steps = self._dep_steps(step_def)
-        for dep_step in dep_steps:
-            if dep_step == "$job":
-                continue
+        # Check dependency provenance
+        # For regular deps: check each dep step
+        regular_dep_steps: list[str] = [
+            b.source_step for b in step_def.inputs
+            if not b.any_of_sources and b.source_step != "$job"
+        ]
+        regular_dep_steps.extend(step_def.sequencing)
+        if step_def.for_each:
+            regular_dep_steps.append(step_def.for_each.source_step)
+
+        for dep_step in regular_dep_steps:
             if not run.dep_run_ids:
                 return False
             source_run_id = run.dep_run_ids.get(dep_step)
@@ -856,6 +862,24 @@ class Engine:
                 return False
             if not self._is_current(job, source_run):
                 return False
+
+        # For any_of deps: only check the source that was actually used (in dep_run_ids)
+        for binding in step_def.inputs:
+            if binding.any_of_sources:
+                # Find which source was used
+                found_current = False
+                for src_step, _ in binding.any_of_sources:
+                    if run.dep_run_ids and src_step in run.dep_run_ids:
+                        source_run_id = run.dep_run_ids[src_step]
+                        try:
+                            source_run = self.store.load_run(source_run_id)
+                            if self._is_current(job, source_run):
+                                found_current = True
+                                break
+                        except KeyError:
+                            pass
+                if not found_current:
+                    return False
 
         return True
 
