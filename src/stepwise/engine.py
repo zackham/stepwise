@@ -921,14 +921,32 @@ class Engine:
                 downstream.add(name)
         return downstream
 
+    def _transitive_downstream(self, job: Job, step_name: str) -> set[str]:
+        """All steps transitively downstream of step_name."""
+        visited: set[str] = set()
+        queue = [step_name]
+        while queue:
+            s = queue.pop(0)
+            for child in self._direct_downstream(job, s):
+                if child not in visited:
+                    visited.add(child)
+                    queue.append(child)
+        return visited
+
     def _propagate_skips(self, job: Job, completing_step: str, target_step: str) -> None:
         """Mark non-targeted downstream steps as SKIPPED, propagate transitively."""
         downstream = self._direct_downstream(job, completing_step)
-        to_skip: set[str] = set()
 
+        # Steps reachable through the target branch are merge points, not branch
+        # alternatives — they must not be skipped in the initial pass.
+        target_reachable = self._transitive_downstream(job, target_step)
+
+        to_skip: set[str] = set()
         for d in downstream:
             if d == target_step:
                 continue
+            if d in target_reachable:
+                continue  # merge point — reachable via target branch
             sdef = job.workflow.steps[d]
             has_hard_dep = False
             for b in sdef.inputs:

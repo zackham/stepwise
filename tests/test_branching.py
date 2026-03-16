@@ -687,3 +687,71 @@ steps:
         assert "final" in wf.steps
         merge_binding = wf.steps["final"].inputs[0]
         assert merge_binding.any_of_sources == [("quick-path", "result"), ("deep-path", "result")]
+
+
+class TestMergePointNotSkipped:
+    """Verify that merge points downstream of BOTH branches are not skipped."""
+
+    def test_branch_with_shared_downstream(self, async_engine):
+        """A branches to B or C; D depends on A (hard dep) AND any_of(B, C).
+
+        D is a merge point reachable via the target branch — it must NOT be
+        skipped when A targets B.
+        """
+        register_step_fn("classify", lambda inputs: {"choice": "left"})
+        register_step_fn("left-work", lambda inputs: {"val": "L"})
+        register_step_fn("right-work", lambda inputs: {"val": "R"})
+        register_step_fn("merge", lambda inputs: {"out": inputs["data"] + "-" + inputs["val"]})
+
+        wf = WorkflowDefinition(steps={
+            "classify": StepDefinition(
+                name="classify",
+                executor=_callable_ref("classify"),
+                outputs=["choice"],
+                exit_rules=[
+                    _advance_rule("left", "outputs.choice == 'left'", "left-work"),
+                    _advance_rule("right", "outputs.choice == 'right'", "right-work"),
+                ],
+            ),
+            "left-work": StepDefinition(
+                name="left-work",
+                executor=_callable_ref("left-work"),
+                inputs=[InputBinding("choice", "classify", "choice")],
+                outputs=["val"],
+            ),
+            "right-work": StepDefinition(
+                name="right-work",
+                executor=_callable_ref("right-work"),
+                inputs=[InputBinding("choice", "classify", "choice")],
+                outputs=["val"],
+            ),
+            "merge": StepDefinition(
+                name="merge",
+                executor=_callable_ref("merge"),
+                inputs=[
+                    InputBinding("data", "classify", "choice"),  # hard dep on branching step
+                    InputBinding(
+                        local_name="val", source_step="", source_field="",
+                        any_of_sources=[("left-work", "val"), ("right-work", "val")],
+                    ),
+                ],
+                outputs=["out"],
+            ),
+        })
+
+        job = async_engine.create_job(objective="test", workflow=wf, inputs={})
+        result = run_job_sync(async_engine, job.id)
+        assert result.status == JobStatus.COMPLETED
+
+        runs = async_engine.store.runs_for_job(job.id)
+        by_step = {}
+        for r in runs:
+            by_step.setdefault(r.step_name, []).append(r)
+
+        # right-work skipped, left-work completed
+        assert by_step["right-work"][0].status == StepRunStatus.SKIPPED
+        assert by_step["left-work"][0].status == StepRunStatus.COMPLETED
+
+        # merge ran (not skipped!) and got left-work's value
+        assert by_step["merge"][0].status == StepRunStatus.COMPLETED
+        assert by_step["merge"][0].result.artifact["out"] == "left-L"
