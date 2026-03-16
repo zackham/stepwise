@@ -82,6 +82,12 @@ export const STEP_STATUS_COLORS: Record<
     border: "border-zinc-500/40",
     ring: "ring-zinc-500/50",
   },
+  skipped: {
+    bg: "bg-zinc-500/10",
+    text: "text-zinc-600",
+    border: "border-zinc-600/30",
+    ring: "ring-zinc-600/40",
+  },
 };
 
 // For steps with no run yet (pending)

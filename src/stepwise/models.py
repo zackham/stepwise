@@ -41,6 +41,7 @@ class StepRunStatus(Enum):
     DELEGATED = "delegated"
     COMPLETED = "completed"
     FAILED = "failed"
+    SKIPPED = "skipped"
 
 
 # ── Step Limits ───────────────────────────────────────────────────────
