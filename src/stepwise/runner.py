@@ -476,7 +476,7 @@ def _build_step_tree(
             error=run.error,
         )
 
-        # Recurse into sub-jobs (sub-flows, routes)
+        # Recurse into sub-jobs (sub-flows, for-each)
         if run.sub_job_id:
             node.children = _build_step_tree(engine, store, run.sub_job_id)
 

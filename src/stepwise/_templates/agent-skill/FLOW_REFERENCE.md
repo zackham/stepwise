@@ -241,6 +241,14 @@ inputs:
 - Dot-paths work: `step.field.nested`
 - `local_name` must be unique within a step
 - `source_field` must be in the source step's declared `outputs`
+- `any_of` inputs resolve from the first available completed source:
+  ```yaml
+  inputs:
+    result:
+      any_of:
+        - branch-a.result
+        - branch-b.result
+  ```
 
 Job inputs are passed via `--var` on the CLI or in the `inputs` dict via the API:
 
@@ -282,7 +290,7 @@ len(outputs.errors) == 0
 
 Keep expressions simple. If over ~80 characters, push the logic into the step itself and output a simple summary field.
 
-**Actions:** `advance` (continue DAG), `loop` (re-run target, supersedes old run), `escalate` (pause job), `abandon` (fail job).
+**Actions:** `advance` (continue DAG; optional `target` for conditional branching — non-targeted downstream steps get SKIPPED), `loop` (re-run target, supersedes old run), `escalate` (pause job), `abandon` (fail job).
 
 **Priority pattern:** success conditions first → safety bounds → loop fallback last.
 
@@ -386,7 +394,7 @@ steps:
 
 ## Flow Steps (Sub-Flow Composition)
 
-Run another flow as a step. Preferred over single-route `routes:` blocks.
+Run another flow as a step.
 
 ```yaml
 steps:
@@ -414,15 +422,15 @@ steps:
 4. Inline `flow:` with nested `steps:` block — use sparingly; prefer standalone flows.
 
 **Rules:**
-- `flow:` is mutually exclusive with `run:`, `executor:`, `routes:`, and `for_each:`
+- `flow:` is mutually exclusive with `run:`, `executor:`, and `for_each:`
 - Must declare `outputs:` — every terminal step in the sub-flow must produce them
 - All refs resolved at parse time — no network/file access at runtime
 - Sub-flow receives parent step's resolved inputs as job-level inputs
 - Cycle detection: A→B→A raises an error at parse time
 
-## Route Steps (Conditional Dispatch)
+## Conditional Branching
 
-Dispatch to different sub-flows based on upstream output. First match wins.
+Branch workflows using `advance` exit rules with `target` and merge with `any_of` inputs.
 
 ```yaml
 steps:
@@ -431,38 +439,44 @@ steps:
     prompt: "Classify: $input"
     outputs: [category]
     inputs: { input: $job.input }
+    exits:
+      - name: simple
+        when: "outputs.category == 'simple'"
+        action: advance
+        target: quick-path
+      - name: complex
+        when: "outputs.category == 'complex'"
+        action: advance
+        target: deep-path
 
-  dispatch:
+  quick-path:
+    run: scripts/quick.sh
     inputs: { category: classify.category }
-    routes:
-      fast:
-        when: "category == 'simple'"
-        flow: quick-pipeline            # bare name refs preferred
-      complex:
-        when: "category == 'complex'"
-        flow:                           # inline sub-flow
-          steps:
-            solve:
-              executor: agent
-              prompt: "Deep analysis..."
-              outputs: [answer]
-      default:                          # no when: — always matches last
-        flow: standard-pipeline
-    outputs: [answer]                   # required — every sub-flow must produce these
+    outputs: [answer]
+
+  deep-path:
+    executor: agent
+    prompt: "Deep analysis..."
+    inputs: { category: classify.category }
+    outputs: [answer]
 
   report:
     executor: llm
     prompt: "Generate report from: $answer"
     outputs: [report]
     inputs:
-      answer: dispatch.answer           # from whichever sub-flow ran
+      answer:
+        any_of:
+          - quick-path.answer
+          - deep-path.answer
 ```
 
-- Flow source types: bare name (preferred), `@author:name` (registry), `path.yaml` (file), inline `flow:` block — all resolved at parse time
-- Every sub-flow's terminal step(s) must produce all declared `outputs:`
-- `when:` expressions use the same safe eval as exit rules, with input bindings by name + `attempt`
-- Expression errors fail the step (no fallthrough); no match + no default = failure
-- Route steps cannot also be for_each steps
+- `advance` with `target`: selectively advances to one downstream step, SKIPS others
+- `any_of` inputs: resolves from first available completed source (>= 2 entries required)
+- Skip propagation is transitive — dependents of skipped steps are also skipped
+- Steps connected only via `any_of` are NOT skipped unless ALL sources are dead
+- If all terminal steps are SKIPPED, the job fails
+- SKIPPED terminals don't block job completion
 
 ## Prompt Templating
 
@@ -570,11 +584,11 @@ decorators:
 5. **`safe_substitute` doesn't error on typos.** `$dta` instead of `$data` renders as literal `$dta`.
 6. **YAML loop exits need `target`.** Always set `target` to the step name, even for self-loops.
 7. **Currentness cascade.** When a loop supersedes a step's run, ALL downstream dependents re-execute.
-8. **Route expression errors don't fallthrough.** Bad syntax or undefined variables fail the step, not skip to next route.
+8. **`any_of` needs >= 2 sources.** Single-source `any_of` is invalid — just use a regular input binding.
 9. **File refs are baked at parse time.** Changes to referenced files require re-parsing the parent flow.
 10. **Use bare flow names, not file paths.** `flow: generic-council` not `flow: ../generic-council/FLOW.yaml`. Bare names are portable and resolve via project discovery.
-11. **Use `flow:` instead of single-route `routes:` blocks.** If there's no conditional dispatch, `flow: name` is cleaner than `routes: {default: {flow: name}}`.
-12. **`flow:` can't combine with other executors.** Mutually exclusive with `run:`, `executor:`, `routes:`, and `for_each:`.
+11. **Use `advance` + `target` for branching.** Conditional dispatch uses exit rules with `target`, not separate dispatch steps. Merge branches with `any_of` inputs.
+12. **`flow:` can't combine with other executors.** Mutually exclusive with `run:`, `executor:`, and `for_each:`.
 13. **`prompt` and `prompt_file` are mutually exclusive.** Never set both on the same step.
 14. **Directory flow `run:` paths resolve relative to the flow directory**, not the current working directory.
 
@@ -590,7 +604,7 @@ Before outputting a flow, verify:
 6. Prompt `$variables` match input `local_name` values exactly
 7. All loops have a safety cap (`attempt >= N` at medium priority)
 8. For-each: source produces a list; sub-flow accesses item via `$job.<as>`
-9. Routes: every non-default route has `when:`; at most one `default`; `attempt` is reserved
-10. All sub-flows (flow steps, routes, for-each) produce all declared parent `outputs`
+9. Branching: `advance` + `target` references a valid step; `any_of` has >= 2 sources with valid `step.field` refs
+10. All sub-flows (flow steps, for-each) produce all declared parent `outputs`
 
 After generating, validate with `stepwise validate <flow>`.
