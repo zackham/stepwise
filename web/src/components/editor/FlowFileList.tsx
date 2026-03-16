@@ -17,7 +17,6 @@ interface FlowFileListProps {
   selectedName: string | undefined;
   onSelect: (flow: LocalFlow) => void;
   onDelete?: (flow: LocalFlow) => void;
-  dirtyFlows: Set<string>;
   flowFiles?: FlowFile[];
   selectedFile?: string | null;
   onSelectFile?: (path: string) => void;
@@ -30,7 +29,6 @@ export function FlowFileList({
   selectedName,
   onSelect,
   onDelete,
-  dirtyFlows,
   flowFiles,
   selectedFile,
   onSelectFile,
@@ -105,9 +103,6 @@ export function FlowFileList({
               <span className="ml-auto text-xs text-zinc-600 shrink-0">
                 {flow.steps_count}
               </span>
-              {dirtyFlows.has(flow.name) && (
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
-              )}
             </button>
           );
 

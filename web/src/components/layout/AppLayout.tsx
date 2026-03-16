@@ -1,7 +1,7 @@
 import { Outlet, Link, useLocation } from "@tanstack/react-router";
 import { useStepwiseWebSocket } from "@/hooks/useStepwiseWebSocket";
 import { useEngineStatus } from "@/hooks/useStepwise";
-import { Workflow, LayoutGrid, FileCode, Settings2, Zap } from "lucide-react";
+import { Workflow, LayoutGrid, FileCode, Settings2, Zap, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export function AppLayout() {
@@ -12,7 +12,7 @@ export function AppLayout() {
   const currentPath = location.pathname;
   const isJobsActive =
     currentPath === "/jobs" || currentPath.startsWith("/jobs/");
-  const isEditorActive = currentPath.startsWith("/editor");
+  const isFlowsActive = currentPath.startsWith("/flows");
   const isSettingsActive = currentPath.startsWith("/settings");
 
   return (
@@ -25,6 +25,15 @@ export function AppLayout() {
             Stepwise
           </span>
         </Link>
+        {status?.cwd && (
+          <div
+            className="flex items-center gap-1.5 text-xs text-zinc-600 font-mono truncate max-w-48"
+            title={status.cwd}
+          >
+            <FolderOpen className="w-3 h-3 shrink-0" />
+            <span className="truncate">{status.cwd.split("/").pop() || status.cwd}</span>
+          </div>
+        )}
 
         <nav className="flex items-center gap-1 ml-4">
           <Link
@@ -40,16 +49,16 @@ export function AppLayout() {
             Jobs
           </Link>
           <Link
-            to="/editor"
+            to="/flows"
             className={cn(
               "px-3 py-1.5 text-sm rounded-md transition-colors",
-              isEditorActive
+              isFlowsActive
                 ? "bg-zinc-800 text-foreground"
                 : "text-zinc-500 hover:text-foreground hover:bg-zinc-800/50"
             )}
           >
             <FileCode className="w-3.5 h-3.5 inline mr-1.5" />
-            Editor
+            Flows
           </Link>
           <Link
             to="/settings"

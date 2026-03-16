@@ -9,6 +9,7 @@ import { JobDashboard } from "@/pages/JobDashboard";
 import { JobDetailPage } from "@/pages/JobDetailPage";
 import { JobEventsPage } from "@/pages/JobEventsPage";
 import { JobTreePage } from "@/pages/JobTreePage";
+import { FlowsPage } from "@/pages/FlowsPage";
 import { EditorPage } from "@/pages/EditorPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 
@@ -54,18 +55,35 @@ const jobTreeRoute = createRoute({
   component: JobTreePage,
 });
 
-// Editor
-const editorRoute = createRoute({
+// Flows list
+const flowsRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/editor",
+  path: "/flows",
+  component: FlowsPage,
+});
+
+// Flow editor
+const flowEditorRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/flows/$flowName",
   component: EditorPage,
 });
 
-// Editor with flow name
-const editorFlowRoute = createRoute({
+// Legacy editor redirects
+const editorRedirectRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/editor",
+  beforeLoad: () => {
+    throw redirect({ to: "/flows" });
+  },
+});
+
+const editorFlowRedirectRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/editor/$flowName",
-  component: EditorPage,
+  beforeLoad: ({ params }) => {
+    throw redirect({ to: "/flows/$flowName", params: { flowName: params.flowName } });
+  },
 });
 
 // Settings
@@ -82,8 +100,10 @@ const routeTree = rootRoute.addChildren([
   jobDetailRoute,
   jobEventsRoute,
   jobTreeRoute,
-  editorRoute,
-  editorFlowRoute,
+  flowsRoute,
+  flowEditorRoute,
+  editorRedirectRoute,
+  editorFlowRedirectRoute,
   settingsRoute,
 ]);
 

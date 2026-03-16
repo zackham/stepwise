@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import {
   Loader2, Check, FileText, Search, Pencil, Eye,
   ChevronDown, ChevronRight, Terminal,
@@ -63,6 +63,85 @@ function ToolActivitiesBlock({ tools, isStreaming }: { tools: ToolActivity[]; is
   );
 }
 
+/** Render inline markdown: **bold**, `code`, and plain text. */
+function renderInline(text: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  // Match **bold** or `code` spans
+  const re = /(\*\*(.+?)\*\*|`([^`]+)`)/g;
+  let last = 0;
+  let match: RegExpExecArray | null;
+  let key = 0;
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > last) {
+      parts.push(text.slice(last, match.index));
+    }
+    if (match[2]) {
+      parts.push(<strong key={key++} className="font-semibold text-zinc-200">{match[2]}</strong>);
+    } else if (match[3]) {
+      parts.push(<code key={key++} className="px-1 py-0.5 rounded bg-zinc-800 text-zinc-300 font-mono text-[11px]">{match[3]}</code>);
+    }
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) {
+    parts.push(text.slice(last));
+  }
+  return parts;
+}
+
+/** Lightweight markdown renderer for chat messages. Handles paragraphs, lists, bold, code. */
+function MarkdownContent({ content }: { content: string }) {
+  // Split into blocks by double newline (paragraphs) or detect list items
+  const lines = content.split("\n");
+  const blocks: ReactNode[] = [];
+  let currentParagraph: string[] = [];
+  let currentList: string[] = [];
+  let key = 0;
+
+  const flushParagraph = () => {
+    if (currentParagraph.length > 0) {
+      const text = currentParagraph.join("\n");
+      if (text.trim()) {
+        blocks.push(<p key={key++}>{renderInline(text)}</p>);
+      }
+      currentParagraph = [];
+    }
+  };
+
+  const flushList = () => {
+    if (currentList.length > 0) {
+      blocks.push(
+        <ul key={key++} className="list-disc list-inside space-y-0.5 pl-1">
+          {currentList.map((item, i) => (
+            <li key={i}>{renderInline(item)}</li>
+          ))}
+        </ul>
+      );
+      currentList = [];
+    }
+  };
+
+  for (const line of lines) {
+    const listMatch = line.match(/^[-*]\s+(.+)/);
+    const numberedMatch = line.match(/^\d+\.\s+(.+)/);
+
+    if (listMatch || numberedMatch) {
+      flushParagraph();
+      currentList.push((listMatch?.[1] ?? numberedMatch?.[1])!);
+    } else {
+      flushList();
+      if (line.trim() === "") {
+        flushParagraph();
+      } else {
+        currentParagraph.push(line);
+      }
+    }
+  }
+  flushList();
+  flushParagraph();
+
+  return <div className="space-y-2">{blocks}</div>;
+}
+
 interface ChatMessagesProps {
   messages: ChatMessage[];
   isStreaming: boolean;
@@ -94,13 +173,17 @@ export function ChatMessages({ messages, isStreaming, onApplyYaml, emptyMessage 
               />
             )}
 
-            <div className={`text-xs ${
-              msg.role === "user"
-                ? "text-blue-300 bg-blue-950/30 rounded px-2.5 py-1.5"
-                : "text-zinc-300"
-            }`}>
-              <span className="whitespace-pre-wrap">{msg.content}</span>
-            </div>
+            {msg.content && (
+              msg.role === "user" ? (
+                <div className="text-xs text-blue-300 bg-blue-950/30 rounded px-2.5 py-1.5">
+                  <span className="whitespace-pre-wrap">{msg.content}</span>
+                </div>
+              ) : (
+                <div className="text-xs text-zinc-300 leading-relaxed">
+                  <MarkdownContent content={msg.content} />
+                </div>
+              )
+            )}
 
             {msg.filesChanged && msg.filesChanged.length > 0 && (
               <div className="my-1.5 px-2.5 py-1.5 bg-green-950/30 border border-green-900/30 rounded text-[11px] text-green-300/80">

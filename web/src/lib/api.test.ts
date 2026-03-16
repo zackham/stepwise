@@ -97,6 +97,7 @@ describe("API client", () => {
         body: JSON.stringify({
           objective: "new",
           workflow,
+          flow_path: null,
           inputs: { key: "value" },
           config: null,
           workspace_path: null,
@@ -116,6 +117,7 @@ describe("API client", () => {
       expect(body.inputs).toBeNull();
       expect(body.config).toBeNull();
       expect(body.workspace_path).toBeNull();
+      expect(body.flow_path).toBeNull();
     });
   });
 
