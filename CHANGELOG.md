@@ -3,6 +3,35 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-03-16
+
+**Pull-Based Branching, Poll Executor, Smooth DAG Camera** — conditional workflows and a polished live view.
+
+### Added
+- **`when` conditions** — steps declare their own activation condition evaluated against resolved inputs. Mutually exclusive branches, conditional gates, and skip propagation without explicit routing
+- **`any_of` input bindings** — steps can depend on any one of multiple upstream steps, enabling merge points after conditional branches
+- **`SKIPPED` step status** — steps that never activate are marked SKIPPED at job settlement, with a `STEP_SKIPPED` event
+- **Poll executor** — `executor: poll` runs `check_command` at `interval_seconds`; JSON dict on stdout = fulfilled. For waiting on external conditions (PR reviews, deploys, etc.)
+- **DAG camera** — critically damped spring with dead zone and target blending for smooth auto-follow. Zoom-to-fit active nodes (70–100%), slower pan lerp, extended active rect for human input popovers
+- **Animated layout transitions** — DAG nodes interpolate position when the layout changes (expand/collapse, new steps)
+- **Flows page** — dedicated page for browsing local flows, split from the editor
+- **Local flow info panel** — three-column layout showing flow metadata, executor types, and description
+- **Zombie job cleanup** — server fails jobs owned by dead processes on startup
+- **`acpx` auto-install** — install script installs acpx when npm is available
+- **`stepwise diagram`** — CLI command to render flow DAGs via graphviz
+
+### Changed
+- **Branching model rewrite** — removed the entire route system (`RouteSpec`, `RouteDefinition`, `_launch_route`). Replaced with pure-pull `when`-based branching. Exit rule `advance` with `target` replaced by `when` conditions on downstream steps
+- Welcome flow rewritten using DAG branching primitives
+- EditorPage simplified after FlowsPage extraction
+
+### Fixed
+- NaN/Infinity in SVG from layout transition and dagre
+- Container port labels overlapping header and clipping at bottom
+- Output port labels overflowing expanded container bottom
+- `any_of` input bindings handled correctly in DAG layout
+- Null job status handled gracefully in store
+
 ## [0.3.1] — 2026-03-14
 
 **CLI display overhaul** — rich, readable terminal output.
