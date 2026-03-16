@@ -700,11 +700,12 @@ class Engine:
                 if job.status != JobStatus.RUNNING:
                     return
 
-            # 5. Check job completion
+            # 5. Check job completion / settlement
             job = self.store.load_job(job.id)
             if job.status != JobStatus.RUNNING:
                 return
             if self._job_complete(job):
+                self._settle_unstarted_steps(job)
                 job.status = JobStatus.COMPLETED
                 job.updated_at = _now()
                 self.store.save_job(job)
@@ -712,6 +713,15 @@ class Engine:
                 return
 
             if not made_progress:
+                # Check for settled-but-failed: nothing active, nothing ready
+                if (not self.store.running_runs(job.id) and
+                        not self.store.suspended_runs(job.id) and
+                        not self.store.delegated_runs(job.id)):
+                    self._settle_unstarted_steps(job)
+                    job.status = JobStatus.FAILED
+                    job.updated_at = _now()
+                    self.store.save_job(job)
+                    self._emit(job.id, JOB_FAILED, {"reason": "no_terminal_reached"})
                 return  # No progress possible, wait for next tick
 
     # ── Readiness ─────────────────────────────────────────────────────────
@@ -726,12 +736,11 @@ class Engine:
 
     def _is_step_ready(self, job: Job, step_name: str, step_def: StepDefinition) -> bool:
         """A step is ready when:
-        1. All dep steps have current completed run (any_of: at least one)
-        2. No active run exists (running, suspended, delegated)
-        3. No current completed run exists
+        1. No active run exists (running, suspended, delegated)
+        2. No current completed run exists (or loop guard prevents re-trigger)
+        3. All dep steps have current completed run (any_of: at least one)
         4. No in-flight loop will supersede a dep (loop-aware)
-        5. Re-triggering won't create an infinite loop
-        6. Step is not SKIPPED
+        5. `when` condition (if set) evaluates to True against resolved inputs
         """
         # Check no active run
         latest = self.store.latest_run(job.id, step_name)
@@ -742,10 +751,6 @@ class Engine:
         ):
             return False
 
-        # SKIPPED steps are never ready
-        if latest and latest.status == StepRunStatus.SKIPPED:
-            return False
-
         # Check no current completed run
         if latest and latest.status == StepRunStatus.COMPLETED:
             if self._is_current(job, latest):
@@ -754,7 +759,6 @@ class Engine:
             # Loop guard: if this step has a non-current completed run AND
             # it has an unconditional loop exit rule targeting one of its own
             # deps, re-triggering would create an infinite loop. Skip it.
-            # Conditional loops (field_match etc.) are fine — they can advance.
             dep_step_names = set(self._dep_steps(step_def))
             for rule in step_def.exit_rules:
                 if rule.config.get("action") == "loop" and rule.type == "always":
@@ -792,6 +796,20 @@ class Engine:
                             break
                 if not has_available:
                     return False
+
+        # Evaluate step-level `when` condition against resolved inputs
+        if step_def.when is not None:
+            try:
+                from stepwise.yaml_loader import evaluate_when_condition
+                inputs, _ = self._resolve_inputs(job, step_def)
+                if not evaluate_when_condition(step_def.when, inputs):
+                    return False
+            except Exception:
+                import logging
+                logging.getLogger("stepwise.engine").warning(
+                    "when evaluation failed for step %s", step_name, exc_info=True
+                )
+                return False
 
         return True
 
@@ -890,147 +908,37 @@ class Engine:
     # ── Job Completion ────────────────────────────────────────────────────
 
     def _job_complete(self, job: Job) -> bool:
-        """A job is complete when all non-skipped terminal steps have current completed runs."""
-        terminal = job.workflow.terminal_steps()
-        for step_name in terminal:
-            if self._is_step_skipped(job, step_name):
-                continue  # skipped terminals don't block completion
-            latest = self.store.latest_completed_run(job.id, step_name)
-            if not latest or not self._is_current(job, latest):
-                return False
-        return True
+        """Job is complete when nothing is in motion, nothing is ready,
+        and at least one terminal has a current completed run."""
+        # Anything in motion → not done
+        if (self.store.running_runs(job.id) or
+                self.store.suspended_runs(job.id) or
+                self.store.delegated_runs(job.id)):
+            return False
+        # Anything ready to launch → not done
+        if self._find_ready(job):
+            return False
+        # Nothing in motion, nothing ready → settled
+        # Complete if at least one terminal has a current completed run
+        for t in job.workflow.terminal_steps():
+            latest = self.store.latest_completed_run(job.id, t)
+            if latest and self._is_current(job, latest):
+                return True
+        return False  # no terminal completed → will be failed by caller
 
-    def _is_step_skipped(self, job: Job, step_name: str) -> bool:
-        latest = self.store.latest_run(job.id, step_name)
-        return latest is not None and latest.status == StepRunStatus.SKIPPED
-
-    def _direct_downstream(self, job: Job, step_name: str) -> set[str]:
-        """Steps that directly depend on step_name via inputs/sequencing/for_each/any_of."""
-        downstream: set[str] = set()
-        for name, sdef in job.workflow.steps.items():
-            for b in sdef.inputs:
-                if not b.any_of_sources and b.source_step == step_name:
-                    downstream.add(name)
-                elif b.any_of_sources:
-                    for src, _ in b.any_of_sources:
-                        if src == step_name:
-                            downstream.add(name)
-            if step_name in sdef.sequencing:
-                downstream.add(name)
-            if sdef.for_each and sdef.for_each.source_step == step_name:
-                downstream.add(name)
-        return downstream
-
-    def _transitive_downstream(self, job: Job, step_name: str) -> set[str]:
-        """All steps transitively downstream of step_name."""
-        visited: set[str] = set()
-        queue = [step_name]
-        while queue:
-            s = queue.pop(0)
-            for child in self._direct_downstream(job, s):
-                if child not in visited:
-                    visited.add(child)
-                    queue.append(child)
-        return visited
-
-    def _propagate_skips(self, job: Job, completing_step: str, target_step: str) -> None:
-        """Mark non-targeted downstream steps as SKIPPED, propagate transitively."""
-        downstream = self._direct_downstream(job, completing_step)
-
-        # Steps reachable through the target branch are merge points, not branch
-        # alternatives — they must not be skipped in the initial pass.
-        target_reachable = self._transitive_downstream(job, target_step)
-
-        to_skip: set[str] = set()
-        for d in downstream:
-            if d == target_step:
-                continue
-            if d in target_reachable:
-                continue  # merge point — reachable via target branch
-            sdef = job.workflow.steps[d]
-            has_hard_dep = False
-            for b in sdef.inputs:
-                if not b.any_of_sources and b.source_step == completing_step:
-                    has_hard_dep = True
-                    break
-            if completing_step in sdef.sequencing:
-                has_hard_dep = True
-            if sdef.for_each and sdef.for_each.source_step == completing_step:
-                has_hard_dep = True
-            if has_hard_dep:
-                to_skip.add(d)
-
-        # BFS: create SKIPPED runs and propagate transitively
-        skipped_so_far: set[str] = set()
-        queue = list(to_skip)
-        while queue:
-            step = queue.pop(0)
-            if step in skipped_so_far:
-                continue
-            skipped_so_far.add(step)
-
-            run = StepRun(
-                id=_gen_id("run"), job_id=job.id, step_name=step,
-                attempt=self.store.next_attempt(job.id, step),
-                status=StepRunStatus.SKIPPED,
-                error=f"Skipped: advance from '{completing_step}' targeted '{target_step}'",
-                started_at=_now(), completed_at=_now(),
-            )
-            self.store.save_run(run)
-            self._emit(job.id, STEP_SKIPPED, {
-                "step": step,
-                "reason": f"advance targeted '{target_step}'",
-            })
-
-            # Transitively propagate
-            for child in self._direct_downstream(job, step):
-                if child in skipped_so_far:
-                    continue
-                child_def = job.workflow.steps[child]
-                should_skip = False
-
-                # Regular/sequencing/for_each dep on a skipped step → skip
-                for b in child_def.inputs:
-                    if not b.any_of_sources and b.source_step in skipped_so_far:
-                        should_skip = True
-                        break
-                if not should_skip:
-                    for seq in child_def.sequencing:
-                        if seq in skipped_so_far:
-                            should_skip = True
-                            break
-                if not should_skip and child_def.for_each:
-                    if child_def.for_each.source_step in skipped_so_far:
-                        should_skip = True
-
-                # any_of: only skip if ALL sources in a group are dead
-                if not should_skip:
-                    for b in child_def.inputs:
-                        if b.any_of_sources:
-                            all_dead = all(
-                                self._is_step_skipped(job, src) or src in skipped_so_far
-                                for src, _ in b.any_of_sources
-                            )
-                            if all_dead:
-                                should_skip = True
-                                break
-
-                if should_skip:
-                    queue.append(child)
-
-        # Guard: if ALL terminal steps are now skipped, fail the job
-        terminals = job.workflow.terminal_steps()
-        if terminals and all(
-            self._is_step_skipped(job, t) or t in skipped_so_far
-            for t in terminals
-        ):
-            job.status = JobStatus.FAILED
-            job.updated_at = _now()
-            self.store.save_job(job)
-            self._emit(job.id, JOB_FAILED, {
-                "reason": "all_terminals_skipped",
-                "step": completing_step,
-            })
+    def _settle_unstarted_steps(self, job: Job) -> None:
+        """Mark never-run steps as SKIPPED for bookkeeping. Called at job settlement."""
+        for step_name in job.workflow.steps:
+            latest = self.store.latest_run(job.id, step_name)
+            if latest is None:
+                run = StepRun(
+                    id=_gen_id("run"), job_id=job.id, step_name=step_name,
+                    attempt=1, status=StepRunStatus.SKIPPED,
+                    error="Not reached",
+                    started_at=_now(), completed_at=_now(),
+                )
+                self.store.save_run(run)
+                self._emit(job.id, STEP_SKIPPED, {"step": step_name, "reason": "settlement"})
 
     # ── Launching ─────────────────────────────────────────────────────────
 
@@ -1674,9 +1582,6 @@ class Engine:
 
                 match action:
                     case "advance":
-                        target = rule.config.get("target")
-                        if target:
-                            self._propagate_skips(job, run.step_name, target)
                         return  # Normal progression
                     case "loop":
                         target = rule.config.get("target", run.step_name)
@@ -2077,9 +1982,6 @@ class Engine:
                             })
                             return
                         case "advance":
-                            target = rule.config.get("target")
-                            if target:
-                                self._propagate_skips(job, run.step_name, target)
                             return  # Move past the failure
 
         # No exit rule handled the failure — halt the job
@@ -2089,6 +1991,7 @@ class Engine:
 
     def _halt_job(self, job: Job, run: StepRun) -> None:
         """Halt job on step failure."""
+        self._settle_unstarted_steps(job)
         job.status = JobStatus.FAILED
         job.updated_at = _now()
         self.store.save_job(job)
@@ -2442,14 +2345,26 @@ class AsyncEngine(Engine):
         self._check_job_terminal(job_id)
 
     def _check_job_terminal(self, job_id: str) -> None:
-        """Check if job reached terminal state; complete if all terminals are current."""
+        """Check if job reached terminal state; settle and complete/fail."""
         job = self.store.load_job(job_id)
 
         if job.status == JobStatus.RUNNING and self._job_complete(job):
+            self._settle_unstarted_steps(job)
             job.status = JobStatus.COMPLETED
             job.updated_at = _now()
             self.store.save_job(job)
             self._emit(job.id, JOB_COMPLETED)
+        elif job.status == JobStatus.RUNNING:
+            # Check for settled-but-failed: nothing active, nothing ready, no terminal completed
+            if (not self.store.running_runs(job.id) and
+                    not self.store.suspended_runs(job.id) and
+                    not self.store.delegated_runs(job.id) and
+                    not self._find_ready(job)):
+                self._settle_unstarted_steps(job)
+                job.status = JobStatus.FAILED
+                job.updated_at = _now()
+                self.store.save_job(job)
+                self._emit(job.id, JOB_FAILED, {"reason": "no_terminal_reached"})
 
         # Signal done if terminal
         job = self.store.load_job(job_id)
