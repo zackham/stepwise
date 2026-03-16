@@ -7,120 +7,69 @@ describe("EditorToolbar", () => {
     render(
       <EditorToolbar
         flowName="research"
-        isDirty={false}
-        isSaving={false}
-        onSave={() => {}}
-        onDiscard={() => {}}
         parseErrors={[]}
       />
     );
     expect(screen.getByText("research")).toBeDefined();
   });
 
-  it("shows dirty indicator when dirty", () => {
-    const { container } = render(
-      <EditorToolbar
-        flowName="research"
-        isDirty={true}
-        isSaving={false}
-        onSave={() => {}}
-        onDiscard={() => {}}
-        parseErrors={[]}
-      />
-    );
-    const dot = container.querySelector(".bg-amber-400");
-    expect(dot).toBeDefined();
-  });
-
-  it("save button disabled when not dirty", () => {
-    render(
-      <EditorToolbar
-        flowName="research"
-        isDirty={false}
-        isSaving={false}
-        onSave={() => {}}
-        onDiscard={() => {}}
-        parseErrors={[]}
-      />
-    );
-    const saveBtn = screen.getByText("Save").closest("button")!;
-    expect(saveBtn.disabled).toBe(true);
-  });
-
-  it("save button enabled when dirty", () => {
-    render(
-      <EditorToolbar
-        flowName="research"
-        isDirty={true}
-        isSaving={false}
-        onSave={() => {}}
-        onDiscard={() => {}}
-        parseErrors={[]}
-      />
-    );
-    const saveBtn = screen.getByText("Save").closest("button")!;
-    expect(saveBtn.disabled).toBe(false);
-  });
-
-  it("calls onSave when save clicked", () => {
-    const onSave = vi.fn();
-    render(
-      <EditorToolbar
-        flowName="research"
-        isDirty={true}
-        isSaving={false}
-        onSave={onSave}
-        onDiscard={() => {}}
-        parseErrors={[]}
-      />
-    );
-    fireEvent.click(screen.getByText("Save"));
-    expect(onSave).toHaveBeenCalled();
-  });
-
-  it("calls onDiscard when discard clicked", () => {
-    const onDiscard = vi.fn();
-    render(
-      <EditorToolbar
-        flowName="research"
-        isDirty={true}
-        isSaving={false}
-        onSave={() => {}}
-        onDiscard={onDiscard}
-        parseErrors={[]}
-      />
-    );
-    fireEvent.click(screen.getByText("Discard"));
-    expect(onDiscard).toHaveBeenCalled();
-  });
-
-  it("shows saving state", () => {
-    render(
-      <EditorToolbar
-        flowName="research"
-        isDirty={true}
-        isSaving={true}
-        onSave={() => {}}
-        onDiscard={() => {}}
-        parseErrors={[]}
-      />
-    );
-    expect(screen.getByText("Saving...")).toBeDefined();
-  });
-
   it("displays parse errors", () => {
     render(
       <EditorToolbar
         flowName="research"
-        isDirty={false}
-        isSaving={false}
-        onSave={() => {}}
-        onDiscard={() => {}}
         parseErrors={["Invalid YAML: unexpected indent"]}
       />
     );
     expect(
       screen.getByText("Invalid YAML: unexpected indent")
     ).toBeDefined();
+  });
+
+  it("shows Run button when onRun provided", () => {
+    render(
+      <EditorToolbar
+        flowName="research"
+        parseErrors={[]}
+        onRun={() => {}}
+      />
+    );
+    expect(screen.getByText("Run")).toBeDefined();
+  });
+
+  it("disables Run when parse errors exist", () => {
+    render(
+      <EditorToolbar
+        flowName="research"
+        parseErrors={["error"]}
+        onRun={() => {}}
+      />
+    );
+    const runBtn = screen.getByText("Run").closest("button")!;
+    expect(runBtn.disabled).toBe(true);
+  });
+
+  it("shows chat toggle when onToggleChat provided", () => {
+    render(
+      <EditorToolbar
+        flowName="research"
+        parseErrors={[]}
+        onToggleChat={() => {}}
+      />
+    );
+    expect(screen.getByTitle("Open chat")).toBeDefined();
+  });
+
+  it("calls onToggleChat when chat button clicked", () => {
+    const onToggleChat = vi.fn();
+    render(
+      <EditorToolbar
+        flowName="research"
+        parseErrors={[]}
+        onToggleChat={onToggleChat}
+        chatOpen={false}
+      />
+    );
+    fireEvent.click(screen.getByTitle("Open chat"));
+    expect(onToggleChat).toHaveBeenCalled();
   });
 });

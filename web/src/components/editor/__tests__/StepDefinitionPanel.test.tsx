@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement } from "react";
@@ -35,12 +35,11 @@ function makeStepDef(overrides: Partial<StepDefinition> = {}): StepDefinition {
 }
 
 describe("StepDefinitionPanel", () => {
-  it("renders step name and executor type", () => {
+  it("renders step name and executor type badge", () => {
     renderWithQuery(
       <StepDefinitionPanel
         stepDef={makeStepDef()}
         onClose={vi.fn()}
-        onPatch={vi.fn()}
       />
     );
     expect(screen.getByText("analyze")).toBeInTheDocument();
@@ -52,27 +51,24 @@ describe("StepDefinitionPanel", () => {
       <StepDefinitionPanel
         stepDef={makeStepDef()}
         onClose={vi.fn()}
-        onPatch={vi.fn()}
       />
     );
     expect(screen.getByText("Prompt")).toBeInTheDocument();
-    // Prompt is rendered read-only via PromptPreview
     expect(screen.getByText("Analyze data")).toBeInTheDocument();
   });
 
-  it("shows model field for LLM executor", () => {
+  it("shows model as read-only text for LLM executor", () => {
     renderWithQuery(
       <StepDefinitionPanel
         stepDef={makeStepDef()}
         onClose={vi.fn()}
-        onPatch={vi.fn()}
       />
     );
     expect(screen.getByText("Model")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("gpt-4o")).toBeInTheDocument();
+    expect(screen.getByText("gpt-4o")).toBeInTheDocument();
   });
 
-  it("shows run command for script executor", () => {
+  it("shows run command as read-only pre block for script executor", () => {
     renderWithQuery(
       <StepDefinitionPanel
         stepDef={makeStepDef({
@@ -80,11 +76,9 @@ describe("StepDefinitionPanel", () => {
           executor: { type: "script", config: { command: "curl http://example.com" }, decorators: [] },
         })}
         onClose={vi.fn()}
-        onPatch={vi.fn()}
       />
     );
-    expect(screen.getByText("Run Command")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("curl http://example.com")).toBeInTheDocument();
+    expect(screen.getByText("curl http://example.com")).toBeInTheDocument();
   });
 
   it("shows prompt for human executor", () => {
@@ -95,20 +89,17 @@ describe("StepDefinitionPanel", () => {
           executor: { type: "human", config: { prompt: "Review the output" }, decorators: [] },
         })}
         onClose={vi.fn()}
-        onPatch={vi.fn()}
       />
     );
     expect(screen.getByText("Prompt / Instructions")).toBeInTheDocument();
-    // Prompt is rendered read-only via PromptPreview
     expect(screen.getByText("Review the output")).toBeInTheDocument();
   });
 
-  it("displays outputs as tags", () => {
+  it("displays outputs as read-only tags", () => {
     renderWithQuery(
       <StepDefinitionPanel
         stepDef={makeStepDef({ outputs: ["summary", "details"] })}
         onClose={vi.fn()}
-        onPatch={vi.fn()}
       />
     );
     expect(screen.getByText("summary")).toBeInTheDocument();
@@ -120,7 +111,6 @@ describe("StepDefinitionPanel", () => {
       <StepDefinitionPanel
         stepDef={makeStepDef()}
         onClose={vi.fn()}
-        onPatch={vi.fn()}
       />
     );
     expect(screen.getByText("raw")).toBeInTheDocument();
@@ -133,10 +123,8 @@ describe("StepDefinitionPanel", () => {
       <StepDefinitionPanel
         stepDef={makeStepDef()}
         onClose={onClose}
-        onPatch={vi.fn()}
       />
     );
-    // Find the X button (close)
     const buttons = screen.getAllByRole("button");
     const closeBtn = buttons.find(
       (b) => b.querySelector("svg.lucide-x") !== null
@@ -152,7 +140,6 @@ describe("StepDefinitionPanel", () => {
       <StepDefinitionPanel
         stepDef={makeStepDef()}
         onClose={vi.fn()}
-        onPatch={vi.fn()}
         onDelete={onDelete}
       />
     );
@@ -167,28 +154,9 @@ describe("StepDefinitionPanel", () => {
       <StepDefinitionPanel
         stepDef={makeStepDef()}
         onClose={vi.fn()}
-        onPatch={vi.fn()}
       />
     );
     expect(screen.queryByTitle("Delete step")).not.toBeInTheDocument();
-  });
-
-  it("calls onPatch when model changes via custom input", async () => {
-    vi.useFakeTimers();
-    const onPatch = vi.fn();
-    renderWithQuery(
-      <StepDefinitionPanel
-        stepDef={makeStepDef()}
-        onClose={vi.fn()}
-        onPatch={onPatch}
-      />
-    );
-    // Switch to custom input mode
-    fireEvent.click(screen.getByTitle("Type a custom model ID"));
-    const modelInput = screen.getByPlaceholderText("provider/model-id");
-    fireEvent.change(modelInput, { target: { value: "claude-sonnet-4" } });
-    expect(onPatch).toHaveBeenCalledWith({ model: "claude-sonnet-4" });
-    vi.useRealTimers();
   });
 
   it("shows limits when present", () => {
@@ -198,7 +166,6 @@ describe("StepDefinitionPanel", () => {
           limits: { max_cost_usd: 0.5, max_duration_minutes: 10, max_iterations: 3 },
         })}
         onClose={vi.fn()}
-        onPatch={vi.fn()}
       />
     );
     expect(screen.getByText("Limits")).toBeInTheDocument();
@@ -221,10 +188,88 @@ describe("StepDefinitionPanel", () => {
           ],
         })}
         onClose={vi.fn()}
-        onPatch={vi.fn()}
       />
     );
-    expect(screen.getByText("Exit Rules")).toBeInTheDocument();
     expect(screen.getByText("check_done")).toBeInTheDocument();
+    expect(screen.getByText("→ escalate")).toBeInTheDocument();
+  });
+
+  it("shows description when present", () => {
+    renderWithQuery(
+      <StepDefinitionPanel
+        stepDef={makeStepDef({ description: "Analyze raw data for insights" })}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.getByText("Analyze raw data for insights")).toBeInTheDocument();
+  });
+
+  it("shows emit_flow badge when set", () => {
+    renderWithQuery(
+      <StepDefinitionPanel
+        stepDef={makeStepDef({
+          executor: { type: "agent", config: { prompt: "Do it", emit_flow: true }, decorators: [] },
+        })}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.getByText("emit_flow")).toBeInTheDocument();
+  });
+
+  it("shows decorators section when decorators present", () => {
+    renderWithQuery(
+      <StepDefinitionPanel
+        stepDef={makeStepDef({
+          executor: {
+            type: "llm",
+            config: { prompt: "Test", model: "gpt-4o" },
+            decorators: [
+              { type: "timeout", config: { timeout_minutes: 30 } },
+              { type: "retry", config: { max_retries: 3, backoff: "exponential" } },
+            ],
+          },
+        })}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.getByText("Decorators")).toBeInTheDocument();
+    expect(screen.getByText("30m")).toBeInTheDocument();
+    expect(screen.getByText("max 3")).toBeInTheDocument();
+    expect(screen.getByText("exponential backoff")).toBeInTheDocument();
+  });
+
+  it("shows for_each badge and details when present", () => {
+    renderWithQuery(
+      <StepDefinitionPanel
+        stepDef={makeStepDef({
+          for_each: { source_step: "fetch", source_field: "items", item_var: "item", on_error: "fail_fast" },
+        })}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.getByText("for_each")).toBeInTheDocument();
+    expect(screen.getByText("fetch.items")).toBeInTheDocument();
+    expect(screen.getByText("item")).toBeInTheDocument();
+    expect(screen.getByText("fail_fast")).toBeInTheDocument();
+  });
+
+  it("shows poll executor config", () => {
+    renderWithQuery(
+      <StepDefinitionPanel
+        stepDef={makeStepDef({
+          name: "wait",
+          executor: {
+            type: "poll",
+            config: { check_command: "gh pr view --json status", interval_seconds: 30, prompt: "Waiting for review" },
+            decorators: [],
+          },
+        })}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.getByText("poll")).toBeInTheDocument();
+    expect(screen.getByText("gh pr view --json status")).toBeInTheDocument();
+    expect(screen.getByText(/Every 30s/)).toBeInTheDocument();
+    expect(screen.getByText("Waiting for review")).toBeInTheDocument();
   });
 });

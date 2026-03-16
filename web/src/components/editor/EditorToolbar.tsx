@@ -1,52 +1,53 @@
-import { Save, RotateCcw, Plus, Play } from "lucide-react";
+import { Play, MessageSquare, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import type { AgentMode } from "@/hooks/useEditorChat";
+
+const AGENT_LABELS: Record<AgentMode, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  simple: "AI",
+};
 
 interface EditorToolbarProps {
   flowName: string;
-  isDirty: boolean;
-  isSaving: boolean;
-  onSave: () => void;
-  onDiscard: () => void;
-  onAddStep?: () => void;
+  onBack?: () => void;
   onRun?: () => void;
   isRunning?: boolean;
   parseErrors: string[];
+  chatOpen?: boolean;
+  onToggleChat?: () => void;
+  isChatStreaming?: boolean;
+  agentMode?: AgentMode;
 }
 
 export function EditorToolbar({
   flowName,
-  isDirty,
-  isSaving,
-  onSave,
-  onDiscard,
-  onAddStep,
+  onBack,
   onRun,
   isRunning,
   parseErrors,
+  chatOpen,
+  onToggleChat,
+  isChatStreaming,
+  agentMode = "claude",
 }: EditorToolbarProps) {
   return (
     <div className="flex items-center gap-3 h-10 px-3 border-b border-border shrink-0">
-      <span className="text-sm font-medium text-foreground flex items-center gap-2">
-        {flowName}
-        {isDirty && (
-          <span
-            className="w-2 h-2 rounded-full bg-amber-400"
-            title="Unsaved changes"
-          />
-        )}
-      </span>
-
-      {onAddStep && (
+      {onBack && (
         <Button
           variant="ghost"
           size="sm"
-          onClick={onAddStep}
-          className="h-7 text-xs"
+          onClick={onBack}
+          className="h-7 w-7 p-0 text-zinc-500 hover:text-foreground"
+          title="Back to flows"
         >
-          <Plus className="w-3 h-3 mr-1" />
-          Add Step
+          <ArrowLeft className="w-3.5 h-3.5" />
         </Button>
       )}
+      <span className="text-sm font-medium text-foreground">
+        {flowName}
+      </span>
 
       {onRun && (
         <Button
@@ -72,26 +73,27 @@ export function EditorToolbar({
         </span>
       )}
 
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={onDiscard}
-        disabled={!isDirty}
-        className="h-7 text-xs"
-      >
-        <RotateCcw className="w-3 h-3 mr-1" />
-        Discard
-      </Button>
-      <Button
-        variant="default"
-        size="sm"
-        onClick={onSave}
-        disabled={!isDirty || isSaving}
-        className="h-7 text-xs"
-      >
-        <Save className="w-3 h-3 mr-1" />
-        {isSaving ? "Saving..." : "Save"}
-      </Button>
+      {onToggleChat && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onToggleChat}
+          className={cn(
+            "h-7 text-xs relative",
+            chatOpen ? "text-violet-400 hover:text-violet-300" : "text-zinc-500 hover:text-zinc-300"
+          )}
+          title={chatOpen ? "Close chat" : "Open chat"}
+        >
+          <MessageSquare className="w-3.5 h-3.5 mr-1" />
+          {AGENT_LABELS[agentMode]}
+          {isChatStreaming && (
+            <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-violet-500" />
+            </span>
+          )}
+        </Button>
+      )}
     </div>
   );
 }
