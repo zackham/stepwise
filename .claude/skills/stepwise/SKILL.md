@@ -11,7 +11,7 @@ Workflow orchestration for agents and humans. Runs multi-step pipelines with LLM
 
 Activate when:
 - User mentions stepwise, flows, workflows, or pipelines
-- Working with `.flow.yaml` files
+- Working with `.flow.yaml` or `FLOW.yaml` files
 - User wants to run, create, or manage a workflow
 - User asks about step orchestration, DAGs, or multi-step processes
 
@@ -25,7 +25,25 @@ stepwise agent-help
 
 This outputs the current flow catalog with inputs, outputs, and exact run commands.
 
-Flows can be single files (`my-flow.flow.yaml`) or directories (`my-flow/FLOW.yaml` with co-located scripts and prompts). The CLI accepts flow names — it resolves them across `flows/`, `.stepwise/flows/`, and the project root.
+### Flow locations
+
+Flows live in directory format: `flows/<name>/FLOW.yaml`. The directory can contain co-located scripts, prompts, and data files alongside the FLOW.yaml.
+
+```
+flows/
+  my-flow/
+    FLOW.yaml              # flow definition
+    analyze.py             # co-located script
+    prompts/system.md      # prompt file
+```
+
+**Discovery order:** The CLI resolves bare flow names across these directories:
+1. Project root
+2. `flows/`
+3. `.stepwise/flows/`
+4. `~/.stepwise/flows/`
+
+**Registry flows** (downloaded via `stepwise get @author:name`) are cached in `.stepwise/registry/@author/slug/FLOW.yaml`. These are read-only. Run them with `stepwise run @stepwise:flow-name`.
 
 ### Interaction Modes
 
@@ -54,8 +72,9 @@ stepwise wait <job-id>                        # block on existing job
 stepwise cancel <job-id> --output json        # cancel with step details
 stepwise schema <flow>                        # input/output schema as JSON
 stepwise validate <flow>                      # syntax check
+stepwise run @author:flow-name                # run a registry flow (auto-fetches)
 stepwise share <flow>                         # publish to registry
-stepwise get <name>                           # download from registry
+stepwise get @author:flow-name                # download from registry
 stepwise search "query"                       # search registry
 stepwise info <name>                          # registry flow details
 ```
@@ -93,10 +112,24 @@ Timeout (exit 3):
 {"status": "timeout", "job_id": "...", "timeout_seconds": 300, "suspended_at_step": "..."}
 ```
 
+## Registry Flows
+
+Flows fetched from the registry (via `stepwise get @author:name`) are cached in `.stepwise/registry/@author/slug/`. These are **read-only** — never modify them in place.
+
+**To run a registry flow:** `stepwise run @author:flow-name`
+
+**To fork a registry flow for modification:**
+1. Copy the directory from `.stepwise/registry/@author/slug/` to `flows/your-name/`
+2. Set `author:` to the current user
+3. Add `forked_from: "@author:original-name"` to the YAML metadata
+4. Modify freely — it's now a local flow
+
+**Important:** Bare flow names (e.g. `stepwise run my-flow`) only resolve to local flows. Registry flows always require the `@author:name` format.
+
 ## Creating & Modifying Flows
 
 Read `FLOW_REFERENCE.md` in this skill directory for the complete YAML format specification including:
-- Step definitions, executor types (script, human, llm, agent)
+- Step definitions, executor types (script, human, poll, llm, agent)
 - Input bindings, exit rules, loop patterns
 - For-each (fan-out/fan-in), route steps (conditional dispatch)
 - Decorators, limits, idempotency modes
