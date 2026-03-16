@@ -426,7 +426,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
             "stepwise.server:app",
             host=host,
             port=port,
-            log_level="warning",
+            log_level="error",
         )
     finally:
         remove_pidfile(project.dot_dir)
@@ -472,6 +472,143 @@ def cmd_validate(args: argparse.Namespace) -> int:
     except Exception as e:
         io.log("error", f"{flow_path}: {e}")
         return EXIT_JOB_FAILED
+
+
+def cmd_diagram(args: argparse.Namespace) -> int:
+    """Generate a Graphviz diagram from a flow file."""
+    io = _io(args)
+    from stepwise.flow_resolution import FlowResolutionError, resolve_flow, parse_registry_ref, resolve_registry_flow
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+    # Resolve flow path
+    try:
+        ref = parse_registry_ref(args.flow)
+        if ref:
+            author, slug = ref
+            flow_path = resolve_registry_flow(author, slug, _project_dir(args))
+        else:
+            flow_path = resolve_flow(args.flow, _project_dir(args))
+    except FlowResolutionError as e:
+        io.log("error", str(e))
+        return EXIT_USAGE_ERROR
+
+    # Load workflow
+    try:
+        wf = load_workflow_yaml(str(flow_path))
+    except YAMLLoadError as e:
+        io.log("error", f"{flow_path}:")
+        for err in e.errors:
+            io.log("info", f"  - {err}")
+        return EXIT_JOB_FAILED
+    except Exception as e:
+        io.log("error", f"{flow_path}: {e}")
+        return EXIT_JOB_FAILED
+
+    # Build graph
+    try:
+        import graphviz
+    except ImportError:
+        io.log("error", "graphviz Python package not installed. Run: uv add graphviz")
+        return EXIT_JOB_FAILED
+
+    fmt = args.format
+    dot = _build_flow_graph(wf, fmt)
+
+    # Determine output path
+    if args.output:
+        out_path = args.output
+        # Strip extension if it matches format (graphviz adds it)
+        if out_path.endswith(f".{fmt}"):
+            out_path = out_path[: -len(fmt) - 1]
+    else:
+        out_path = wf.metadata.name or flow_path.stem
+
+    try:
+        rendered = dot.render(out_path, cleanup=True)
+    except graphviz.backend.ExecutableNotFound:
+        io.log("error", "Graphviz 'dot' binary not found. Install Graphviz: brew install graphviz / apt install graphviz")
+        return EXIT_JOB_FAILED
+
+    io.log("success", rendered)
+    return EXIT_SUCCESS
+
+
+def _build_flow_graph(wf, fmt: str, name: str | None = None):
+    """Build a graphviz.Digraph for a WorkflowDefinition."""
+    import graphviz
+
+    graph_name = name or wf.metadata.name or "flow"
+    dot = graphviz.Digraph(graph_name, format=fmt)
+    dot.attr(
+        rankdir="TB",
+        bgcolor="#0a0a0f",
+        fontname="Helvetica",
+        fontcolor="white",
+        pad="0.5",
+    )
+    dot.attr("node", fontname="Helvetica", fontcolor="white", color="#333",
+             style="filled", fillcolor="#1a1a2e")
+    dot.attr("edge", fontname="Helvetica", fontsize="10")
+
+    _EXECUTOR_SHAPES = {
+        "script": "box",
+        "human": "parallelogram",
+        "llm": "box",
+        "agent": "doubleoctagon",
+        "poll": "hexagon",
+    }
+    _EXECUTOR_STYLE = {
+        "llm": "filled,rounded",
+    }
+
+    for step_name, step in wf.steps.items():
+        exec_type = step.executor.type if step.executor else "script"
+        shape = _EXECUTOR_SHAPES.get(exec_type, "box")
+        style = _EXECUTOR_STYLE.get(exec_type, "filled")
+        label = f'<<B>{step_name}</B><BR/><FONT POINT-SIZE="10">{exec_type}</FONT>>'
+        dot.node(step_name, label=label, shape=shape, style=style)
+
+        # Sub-flow as cluster subgraph
+        if step.sub_flow:
+            sub = _build_flow_graph(step.sub_flow, fmt, name=f"cluster_{step_name}")
+            sub.attr(label=step_name, style="dashed", color="#666", fontcolor="white")
+            dot.subgraph(sub)
+
+    # Edges
+    for step_name, step in wf.steps.items():
+        # Input bindings (data flow)
+        for inp in step.inputs:
+            if inp.any_of_sources:
+                for src_step, _src_field in inp.any_of_sources:
+                    if src_step != "$job" and src_step in wf.steps:
+                        dot.edge(src_step, step_name, label=inp.local_name,
+                                 color="#60a5fa", fontcolor="#60a5fa")
+            else:
+                if inp.source_step != "$job" and inp.source_step in wf.steps:
+                    dot.edge(inp.source_step, step_name, label=inp.local_name,
+                             color="#60a5fa", fontcolor="#60a5fa")
+
+        # Sequencing edges
+        for dep in step.sequencing:
+            if dep in wf.steps:
+                dot.edge(dep, step_name, style="dashed", color="#666")
+
+        # Exit rules
+        for rule in step.exit_rules:
+            action = rule.config.get("action", "")
+            target = rule.config.get("target", "")
+            if action == "loop" and target and target in wf.steps:
+                dot.edge(step_name, target, label=rule.name, style="dotted",
+                         color="#f59e0b", fontcolor="#f59e0b", constraint="false")
+
+        # For-each edge
+        if step.for_each:
+            src = step.for_each.source_step
+            if src in wf.steps:
+                dot.edge(src, step_name, label="for each", style="bold",
+                         color="#a78bfa", fontcolor="#a78bfa", penwidth="2")
+
+    return dot
 
 
 def cmd_new(args: argparse.Namespace) -> int:
@@ -929,7 +1066,7 @@ def _run_watch(
             "stepwise.server:app",
             host=host,
             port=port,
-            log_level="warning",
+            log_level="error",
         )
     finally:
         remove_pidfile(project.dot_dir)
@@ -1056,6 +1193,7 @@ def _port_available(host: str, port: int) -> bool:
     """Check if a port is available to bind."""
     import socket
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind((host, port))
             return True
@@ -2069,6 +2207,20 @@ def cmd_self_update(args: argparse.Namespace) -> int:
     except Exception:
         pass
 
+    # Also update acpx if npm is available
+    import shutil as _shutil
+    if _shutil.which("npm"):
+        acpx_result = subprocess.run(
+            ["npm", "install", "-g", "acpx"],
+            capture_output=True, text=True,
+        )
+        if acpx_result.returncode == 0:
+            io.log("info", "Updated acpx (agent protocol CLI).")
+        else:
+            io.log("warn", "Failed to update acpx — agent/LLM steps may not work.")
+    elif not _shutil.which("acpx"):
+        io.log("warn", "acpx not found. Install Node.js and run: npm install -g acpx")
+
     if new_version == old_version:
         io.log("success", f"Already up to date (v{old_version}).")
         return EXIT_SUCCESS
@@ -2176,6 +2328,13 @@ def build_parser() -> argparse.ArgumentParser:
     # validate
     p_validate = sub.add_parser("validate", help="Validate a flow file")
     p_validate.add_argument("flow", help="Flow name or path to .flow.yaml file")
+
+    # diagram
+    p_diagram = sub.add_parser("diagram", help="Generate a diagram from a flow file")
+    p_diagram.add_argument("flow", help="Flow name or path to .flow.yaml file")
+    p_diagram.add_argument("-o", "--output", help="Output file path (default: <name>.<format>)")
+    p_diagram.add_argument("-f", "--format", choices=["svg", "png", "pdf"], default="svg",
+                           help="Output format (default: svg)")
 
     # templates
     sub.add_parser("templates", help="List available templates")
@@ -2346,6 +2505,7 @@ def main(argv: list[str] | None = None) -> int:
         "run": cmd_run,
         "new": cmd_new,
         "validate": cmd_validate,
+        "diagram": cmd_diagram,
         "templates": cmd_templates,
         "config": cmd_config,
         "check": cmd_check,

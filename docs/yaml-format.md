@@ -120,6 +120,9 @@ step_name:
   # Sequencing (optional) — wait for steps without taking data
   sequencing: [step_a, step_b]
 
+  # Activation condition (optional) — gate on resolved inputs
+  when: "expression"               # Python expression against input names
+
   # Exit Rules (optional) — evaluated after step completion
   exits:
     - name: rule_name
@@ -296,7 +299,7 @@ steps:
 
 ### Conditional Branching
 
-Branch workflows using `advance` exit rules with `target` and merge with `any_of` inputs.
+Branch workflows using step-level `when` conditions and merge with `any_of` inputs.
 
 ```yaml
 steps:
@@ -304,27 +307,20 @@ steps:
     executor: llm
     prompt: "Classify this issue as trivial, standard, or complex"
     outputs: [category, summary]
-    exits:
-      - name: trivial
-        when: "outputs.category == 'trivial'"
-        action: advance
-        target: quick-fix
-      - name: complex
-        when: "outputs.category == 'complex'"
-        action: advance
-        target: deep-analysis
 
   quick-fix:
     executor: llm
     prompt: "Quick fix for: $summary"
-    inputs: { summary: triage.summary }
+    inputs: { summary: triage.summary, category: triage.category }
     outputs: [result]
+    when: "category == 'trivial'"
 
   deep-analysis:
     executor: agent
     prompt: "Deep analysis of: $summary"
-    inputs: { summary: triage.summary }
+    inputs: { summary: triage.summary, category: triage.category }
     outputs: [result]
+    when: "category == 'complex'"
 
   report:
     run: scripts/report.sh
@@ -336,23 +332,21 @@ steps:
     outputs: [final]
 ```
 
-**`advance` with `target`:**
-- `target` names a downstream step to selectively advance to
-- Non-targeted downstream steps (with hard dependencies on the completing step) get SKIPPED runs
-- Skip propagation is transitive — dependents of skipped steps are also skipped
-- The target must be a valid step name in the workflow
+**Step-level `when`:**
+- Evaluated against resolved inputs after all deps are satisfied
+- If `when` is false, the step stays not-ready (never launches)
+- At job settlement, never-started steps get SKIPPED runs for bookkeeping
+- Expression namespace: input names directly available (e.g., `category == 'trivial'`)
 
 **`any_of` inputs:**
 - Resolves from the first available completed source (in list order)
 - Must have >= 2 source entries
 - Each entry uses `step.field` syntax
-- A step with `any_of` is only skipped if ALL sources are dead
 
-**Skip propagation:**
-- Hard deps (regular inputs, sequencing, for_each) on a non-targeted step → SKIPPED
-- Soft deps (any_of) → only SKIPPED when ALL sources in the group are dead
-- If all terminal steps are SKIPPED, the job fails
-- SKIPPED terminals don't block job completion
+**Settlement:**
+- When nothing is in motion and nothing is ready, the job is settled
+- Steps that never ran get SKIPPED runs
+- Job completes if at least one terminal has a current completed run; fails otherwise
 
 ### Context Chains
 

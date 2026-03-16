@@ -12,7 +12,7 @@ Stepwise has three runtime concepts, a dependency system, and a control flow mec
 | **Input binding** | Pulls data from upstream outputs | `findings: research.findings` |
 | **Exit rule** | Decides what happens after step completion | advance, loop, escalate, abandon |
 | **For-each** | Iterates over a list with embedded sub-flows | Items execute in parallel |
-| **Branching** | Conditional advancement with skip propagation | `advance` + `target`, `any_of` merge |
+| **Branching** | Conditional activation via step-level `when` | `when` condition, `any_of` merge |
 | **Context chain** | Session continuity across agent steps | Prior transcripts compiled into context |
 
 ## Jobs
@@ -228,51 +228,43 @@ Each iteration runs as an independent sub-job. Results are collected in source l
 
 ## Conditional Branching
 
-Branching uses two primitives: **`advance` with `target`** for selective advancement and **`any_of` inputs** for merging branches.
+Branching is **pure-pull**: each step declares its own activation condition via `when`, evaluated against its resolved inputs. Merge points use `any_of` inputs to take from whichever branch completed.
 
 ```yaml
 steps:
   classify:
     run: scripts/classify.sh
     outputs: [category]
-    exits:
-      - name: simple
-        when: "outputs.category == 'simple'"
-        action: advance
-        target: quick-path           # only quick-path runs
-      - name: complex
-        when: "outputs.category == 'complex'"
-        action: advance
-        target: deep-path            # only deep-path runs
 
   quick-path:
     run: scripts/quick.sh
     inputs: { category: classify.category }
     outputs: [result]
+    when: "category == 'simple'"       # I decide when I run
 
   deep-path:
     executor: agent
     prompt: "Deep analysis..."
     inputs: { category: classify.category }
     outputs: [result]
+    when: "category == 'complex'"      # I decide when I run
 
   final:
     run: scripts/report.sh
     inputs:
       result:
-        any_of:                      # takes from whichever branch completed
+        any_of:                        # takes from whichever branch completed
           - quick-path.result
           - deep-path.result
     outputs: [report]
 ```
 
-When `classify` completes with `category == 'simple'`, the engine targets `quick-path` and creates SKIPPED runs for `deep-path` (and any of its transitive dependents). The `final` step uses `any_of` to merge — it resolves from the first available completed source.
+When `classify` completes with `category == 'simple'`, `quick-path`'s `when` condition is satisfied so it activates. `deep-path`'s condition is false, so it stays not-ready. When no steps are in motion and nothing new can activate, the engine **settles** the job: never-started steps get SKIPPED runs, and the job completes if at least one terminal has a current completed run.
 
-**Skip propagation rules:**
-- Steps with a hard dependency (regular input, sequencing, for_each) on a non-targeted step are SKIPPED
-- Steps connected only via `any_of` are NOT skipped unless ALL their `any_of` sources are dead
-- If all terminal steps end up SKIPPED, the job fails
-- SKIPPED terminals don't block job completion
+**Key distinctions:**
+- `sequencing: [step-x]` = ordering only (wait for step-x to complete)
+- `inputs: { field: step-x.field }` = data dependency (also implies ordering)
+- `when: "expr"` = conditional gate on resolved inputs (evaluated after deps are satisfied)
 
 ## Context Chains
 
