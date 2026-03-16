@@ -105,28 +105,23 @@ steps:
             printf '{"passed": 4, "failed": 2, "status": "fail"}'
           outputs: [passed, failed, status]
           sequencing: [task-implement]
-          exits:
-            - name: pass
-              when: "outputs.status == 'pass'"
-              action: advance
-              target: task-done
-            - name: fail
-              when: "True"
-              action: advance
-              target: task-fix
         task-done:
           description: "Tests passed"
           run: |
             printf '{"result": "passed"}'
           outputs: [result]
-          sequencing: [task-run-tests]
+          inputs:
+            status: task-run-tests.status
+          when: "status == 'pass'"
         task-fix:
           description: "Fixing tests"
           run: |
             sleep 1
             printf '{"fixes": "applied"}'
           outputs: [fixes]
-          sequencing: [task-run-tests]
+          inputs:
+            status: task-run-tests.status
+          when: "status == 'fail'"
         task-retest:
           description: "Re-running tests"
           run: |
@@ -149,7 +144,7 @@ steps:
               target: task-fix
 
   # ─── 5. Integration Tests ───────────────────────────────────────
-  #     Branch: pass (advance) or fail (fix loop)
+  #     Branch: pass → tests-ok, fail → fix-tests loop
   run-tests:
     description: "Running integration tests"
     run: |
@@ -157,22 +152,15 @@ steps:
       printf '{"passed": 8, "failed": 3, "status": "fail"}'
     outputs: [passed, failed, status]
     sequencing: [write-code]
-    exits:
-      - name: pass
-        when: "outputs.status == 'pass'"
-        action: advance
-        target: tests-ok
-      - name: fail
-        when: "True"
-        action: advance
-        target: fix-tests
 
   tests-ok:
     description: "Tests passed"
     run: |
       printf '{"result": "passed"}'
     outputs: [result]
-    sequencing: [run-tests]
+    inputs:
+      status: run-tests.status
+    when: "status == 'pass'"
 
   fix-tests:
     description: "Fixing tests"
@@ -180,7 +168,9 @@ steps:
       sleep 1
       printf '{"fixes": "applied"}'
     outputs: [fixes]
-    sequencing: [run-tests]
+    inputs:
+      status: run-tests.status
+    when: "status == 'fail'"
 
   rerun-tests:
     description: "Re-running tests"
@@ -235,7 +225,7 @@ steps:
           - rerun-tests.result
 
   # ─── 7. Code Review ─────────────────────────────────────────────
-  #     Branch: approved (advance) or changes (revise loop)
+  #     Branch: approved → review-ok, changes → revise loop
   await-review:
     description: "Code review"
     run: |
@@ -244,22 +234,15 @@ steps:
     outputs: [result, reviewer]
     inputs:
       pr: open-pr.pr
-    exits:
-      - name: approved
-        when: "outputs.result == 'approved'"
-        action: advance
-        target: review-ok
-      - name: changes
-        when: "True"
-        action: advance
-        target: revise-code
 
   review-ok:
     description: "Review approved"
     run: |
       printf '{"outcome": "approved"}'
     outputs: [outcome]
-    sequencing: [await-review]
+    inputs:
+      result: await-review.result
+    when: "result == 'approved'"
 
   revise-code:
     description: "Revising code"
@@ -267,7 +250,9 @@ steps:
       sleep 2
       printf '{"changes": "revised"}'
     outputs: [changes]
-    sequencing: [await-review]
+    inputs:
+      result: await-review.result
+    when: "result != 'approved'"
 
   push-fix:
     description: "Pushing fixes"
@@ -308,7 +293,7 @@ steps:
 
       The review loop just resolved — revise-code, push-fix, and re-review cycled until approved. That loop-back edge in the DAG is an exit rule.
 
-      Now your choice branches the workflow — only one path executes, and the other is skipped.
+      Now your choice branches the workflow — only one path executes, and the other is settled as skipped.
     outputs:
       decision:
         type: choice
@@ -322,15 +307,6 @@ steps:
         any_of:
           - review-ok.outcome
           - re-review.outcome
-    exits:
-      - name: deploy
-        when: "outputs.decision == 'deploy'"
-        action: advance
-        target: merge
-      - name: close
-        when: "outputs.decision == 'close'"
-        action: advance
-        target: close-pr
 
   # ─── 9. Deploy or Close ──────────────────────────────────────────
   merge:
@@ -341,7 +317,8 @@ steps:
     outputs: [action, pr]
     inputs:
       pr: open-pr.pr
-    sequencing: [ship-it]
+      decision: ship-it.decision
+    when: "decision == 'deploy'"
 
   deploy-prod:
     description: "Deploying to prod"
@@ -361,4 +338,5 @@ steps:
     outputs: [status, pr_title]
     inputs:
       pr_title: open-pr.pr_title
-    sequencing: [ship-it]
+      decision: ship-it.decision
+    when: "decision == 'close'"
