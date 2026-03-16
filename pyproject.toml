@@ -21,6 +21,7 @@ dependencies = [
     "ruamel-yaml>=0.18",
     "rich>=13.0",
     "questionary>=2.0",
+    "graphviz>=0.20",
 ]
 
 [project.scripts]
