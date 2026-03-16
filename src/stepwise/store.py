@@ -184,7 +184,7 @@ class SQLiteStore:
             id=row["id"],
             objective=row["objective"] or "",
             workflow=WorkflowDefinition.from_dict(json.loads(row["workflow"])),
-            status=JobStatus(row["status"]) if row["status"] else JobStatus.FAILED,
+            status=JobStatus(row["status"]),
             inputs=json.loads(row["inputs"]) if row["inputs"] else {},
             parent_job_id=row["parent_job_id"],
             parent_step_run_id=row["parent_step_run_id"],
