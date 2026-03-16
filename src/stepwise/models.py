@@ -235,52 +235,6 @@ class ForEachSpec:
         )
 
 
-# ── Route Spec ────────────────────────────────────────────────────────
-
-
-@dataclass
-class RouteSpec:
-    """A single conditional route within a route step."""
-    name: str                           # route key (e.g. "trivial", "default")
-    when: str | None                    # expression string (None for default)
-    flow: WorkflowDefinition | None     # inline sub-flow (parsed)
-    flow_ref: str | None                # @author:name registry ref (preserved)
-
-    def to_dict(self) -> dict:
-        d: dict = {"name": self.name}
-        if self.when is not None:
-            d["when"] = self.when
-        if self.flow is not None:
-            d["flow"] = self.flow.to_dict()
-        if self.flow_ref is not None:
-            d["flow_ref"] = self.flow_ref
-        return d
-
-    @classmethod
-    def from_dict(cls, d: dict) -> RouteSpec:
-        return cls(
-            name=d["name"],
-            when=d.get("when"),
-            flow=WorkflowDefinition.from_dict(d["flow"]) if d.get("flow") else None,
-            flow_ref=d.get("flow_ref"),
-        )
-
-
-@dataclass
-class RouteDefinition:
-    """Conditional sub-flow dispatch for a route step."""
-    routes: list[RouteSpec]  # ordered list of routes (default last)
-
-    def to_dict(self) -> dict:
-        return {"routes": [r.to_dict() for r in self.routes]}
-
-    @classmethod
-    def from_dict(cls, d: dict) -> RouteDefinition:
-        return cls(
-            routes=[RouteSpec.from_dict(r) for r in d.get("routes", [])],
-        )
-
-
 # ── Output Field Spec ─────────────────────────────────────────────────
 
 
@@ -352,7 +306,6 @@ class StepDefinition:
     output_schema: dict[str, OutputFieldSpec] = field(default_factory=dict)
     chain: str | None = None  # M7a: context chain membership
     chain_label: str | None = None  # M7a: label shown in chain prefix
-    route_def: RouteDefinition | None = None  # M8: conditional sub-flow dispatch
 
     def to_dict(self) -> dict:
         d = {
@@ -376,8 +329,6 @@ class StepDefinition:
             d["chain"] = self.chain
         if self.chain_label:
             d["chain_label"] = self.chain_label
-        if self.route_def:
-            d["route_def"] = self.route_def.to_dict()
         return d
 
     @classmethod
@@ -396,7 +347,6 @@ class StepDefinition:
             sub_flow=WorkflowDefinition.from_dict(d["sub_flow"]) if d.get("sub_flow") else None,
             chain=d.get("chain"),
             chain_label=d.get("chain_label"),
-            route_def=RouteDefinition.from_dict(d["route_def"]) if d.get("route_def") else None,
         )
 
 
@@ -559,57 +509,6 @@ class WorkflowDefinition:
                         f"Step '{name}': for_each on_error must be 'fail_fast' or 'continue', "
                         f"got '{fe.on_error}'"
                     )
-
-            # Check route steps
-            if step.route_def:
-                rd = step.route_def
-                if not rd.routes:
-                    errors.append(f"Step '{name}': routes must have at least one entry")
-                default_count = sum(1 for r in rd.routes if r.when is None)
-                if default_count > 1:
-                    errors.append(f"Step '{name}': multiple default routes")
-                for route in rd.routes:
-                    if route.when is None and route.name != "default":
-                        errors.append(
-                            f"Step '{name}': route '{route.name}' must have a 'when' expression "
-                            f"(only 'default' can omit it)"
-                        )
-                    if route.flow is None and route.flow_ref is None:
-                        errors.append(
-                            f"Step '{name}': route '{route.name}' missing 'flow'"
-                        )
-                    if route.flow:
-                        sub_errors = route.flow.validate()
-                        for se in sub_errors:
-                            errors.append(f"Step '{name}' route '{route.name}': {se}")
-                        terms = route.flow.terminal_steps()
-                        if not terms and step.outputs:
-                            errors.append(
-                                f"Step '{name}' route '{route.name}': sub-flow has no terminal "
-                                f"steps but route requires outputs"
-                            )
-                        for tname in terms:
-                            term_outputs = set(route.flow.steps[tname].outputs)
-                            missing = set(step.outputs) - term_outputs
-                            if missing:
-                                errors.append(
-                                    f"Step '{name}' route '{route.name}': terminal step "
-                                    f"'{tname}' missing outputs {sorted(missing)}"
-                                )
-                if step.for_each:
-                    errors.append(
-                        f"Step '{name}': cannot combine for_each and routes"
-                    )
-                if not step.outputs:
-                    errors.append(
-                        f"Step '{name}': route steps must declare outputs"
-                    )
-                for inp in step.inputs:
-                    if inp.local_name == "attempt":
-                        errors.append(
-                            f"Step '{name}': 'attempt' is a reserved name and cannot "
-                            f"be used as an input binding"
-                        )
 
         # Check chain definitions
         for chain_name, chain_config in self.chains.items():

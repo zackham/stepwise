@@ -32,9 +32,6 @@ from stepwise.events import (
     STEP_STARTED,
     STEP_STARTED_ASYNC,
     STEP_SUSPENDED,
-    ROUTE_EVAL_ERROR,
-    ROUTE_MATCHED,
-    ROUTE_NO_MATCH,
     WATCH_FULFILLED,
 )
 from stepwise.executors import (
@@ -483,7 +480,6 @@ class Engine:
                 latest_runs[run.step_name] = run
 
         steps: list[dict] = []
-        route_decisions: dict[str, str] = {}
         sub_jobs: list[dict] = []
 
         for step_name, step_def in job.workflow.steps.items():
@@ -538,9 +534,6 @@ class Engine:
                         except KeyError:
                             pass
 
-                # Route decisions
-                if step_def.route_def and es.get("matched_route"):
-                    route_decisions[step_name] = es["matched_route"]
             else:
                 step_info["status"] = "pending"
                 # Show dependencies for pending steps
@@ -561,7 +554,6 @@ class Engine:
             "created_at": job.created_at.isoformat() if job.created_at else None,
             "cost_usd": round(self.job_cost(job_id), 4),
             "steps": steps,
-            "route_decisions": route_decisions,
             "sub_jobs": sub_jobs,
         }
 
@@ -1051,10 +1043,6 @@ class Engine:
                 self._halt_job(job, run)
                 return run
 
-        # Route steps get special handling
-        if step_def.route_def:
-            return self._launch_route(job, step_def)
-
         # Direct sub-flow steps
         if step_def.executor.type == "sub_flow" and step_def.sub_flow:
             return self._launch_sub_flow(job, step_def)
@@ -1471,136 +1459,6 @@ class Engine:
 
         self._process_completion(job, run)
         return True
-
-    # ── Route Steps ──────────────────────────────────────────────────────
-
-    def _launch_route(self, job: Job, step_def: StepDefinition) -> StepRun:
-        """Launch a route step: evaluate conditions, dispatch to matching sub-flow."""
-        from stepwise.yaml_loader import SAFE_BUILTINS, _DotDict
-
-        route_def = step_def.route_def
-        attempt = self.store.next_attempt(job.id, step_def.name)
-        inputs, dep_run_ids = self._resolve_inputs(job, step_def)
-
-        # Evaluate conditions
-        namespace = {
-            "__builtins__": SAFE_BUILTINS,
-            "attempt": attempt,
-            **{k: _DotDict(v) if isinstance(v, dict) else v for k, v in inputs.items()},
-        }
-
-        matched_route = None
-        for route in route_def.routes:
-            if route.when is None:  # default route
-                matched_route = route
-                break
-            try:
-                if bool(eval(route.when, namespace)):
-                    matched_route = route
-                    break
-            except Exception as e:
-                # Expression evaluation error → fail the step
-                run = StepRun(
-                    id=_gen_id("run"), job_id=job.id, step_name=step_def.name,
-                    attempt=attempt, status=StepRunStatus.FAILED,
-                    inputs=inputs, dep_run_ids=dep_run_ids,
-                    error=f"Route '{route.name}' when expression failed: {e}",
-                    error_category="route_eval_error",
-                    started_at=_now(), completed_at=_now(),
-                )
-                self.store.save_run(run)
-                self._emit(job.id, ROUTE_EVAL_ERROR, {
-                    "step": step_def.name, "route": route.name, "error": str(e),
-                })
-                self._halt_job(job, run)
-                return run
-
-        if matched_route is None:
-            run = StepRun(
-                id=_gen_id("run"), job_id=job.id, step_name=step_def.name,
-                attempt=attempt, status=StepRunStatus.FAILED,
-                inputs=inputs, dep_run_ids=dep_run_ids,
-                error=f"No route matched. Evaluated: {[r.name for r in route_def.routes]}",
-                error_category="route_no_match",
-                executor_state={"route": True, "evaluated_inputs": inputs},
-                started_at=_now(), completed_at=_now(),
-            )
-            self.store.save_run(run)
-            self._emit(job.id, ROUTE_NO_MATCH, {
-                "step": step_def.name,
-                "evaluated_routes": [r.name for r in route_def.routes],
-            })
-            self._halt_job(job, run)
-            return run
-
-        # Resolve workflow
-        workflow = matched_route.flow
-        if workflow is None and matched_route.flow_ref:
-            workflow = self._resolve_flow_ref(matched_route.flow_ref, job)
-
-        # Validate output contract at runtime (for refs resolved late)
-        if workflow:
-            terms = workflow.terminal_steps()
-            if not terms and step_def.outputs:
-                run = StepRun(
-                    id=_gen_id("run"), job_id=job.id, step_name=step_def.name,
-                    attempt=attempt, status=StepRunStatus.FAILED,
-                    inputs=inputs, dep_run_ids=dep_run_ids,
-                    error=(f"Route '{matched_route.name}' sub-flow has no terminal steps "
-                           f"but route requires outputs {sorted(step_def.outputs)}"),
-                    started_at=_now(), completed_at=_now(),
-                )
-                self.store.save_run(run)
-                self._halt_job(job, run)
-                return run
-            for term_name in terms:
-                term_outputs = set(workflow.steps[term_name].outputs)
-                missing = set(step_def.outputs) - term_outputs
-                if missing:
-                    run = StepRun(
-                        id=_gen_id("run"), job_id=job.id, step_name=step_def.name,
-                        attempt=attempt, status=StepRunStatus.FAILED,
-                        inputs=inputs, dep_run_ids=dep_run_ids,
-                        error=(f"Route '{matched_route.name}' sub-flow terminal step "
-                               f"'{term_name}' outputs {sorted(term_outputs)} do not "
-                               f"cover required outputs {sorted(missing)}"),
-                        started_at=_now(), completed_at=_now(),
-                    )
-                    self.store.save_run(run)
-                    self._halt_job(job, run)
-                    return run
-
-        # Create run in DELEGATED status, then create sub-job
-        run = StepRun(
-            id=_gen_id("run"), job_id=job.id, step_name=step_def.name,
-            attempt=attempt, status=StepRunStatus.DELEGATED,
-            inputs=inputs, dep_run_ids=dep_run_ids,
-            started_at=_now(),
-        )
-        self.store.save_run(run)
-
-        sub_def = SubJobDefinition(
-            objective=f"Route '{matched_route.name}' for step '{step_def.name}'",
-            workflow=workflow,
-        )
-        try:
-            sub = self._create_sub_job(job, run, sub_def)
-        except Exception as e:
-            # Sub-job creation failed (e.g., depth guard). Prevent orphaned DELEGATED run.
-            run.status = StepRunStatus.FAILED
-            run.error = f"Failed to create sub-job for route '{matched_route.name}': {e}"
-            run.completed_at = _now()
-            self.store.save_run(run)
-            self._halt_job(job, run)
-            return run
-
-        run.sub_job_id = sub.id
-        run.executor_state = {"route": True, "matched_route": matched_route.name}
-        self.store.save_run(run)
-        self._emit(job.id, ROUTE_MATCHED, {
-            "step": step_def.name, "route": matched_route.name, "sub_job_id": sub.id,
-        })
-        return run
 
     # ── Direct Sub-Flow Steps ─────────────────────────────────────────────
 
@@ -2407,9 +2265,6 @@ class AsyncEngine(Engine):
                 self._emit(job.id, STEP_FAILED, {"step": step_name, "error": str(e)})
                 self._halt_job(job, run)
                 return run
-
-        if step_def.route_def:
-            return self._launch_route(job, step_def)
 
         if step_def.executor.type == "sub_flow" and step_def.sub_flow:
             return self._launch_sub_flow(job, step_def)
