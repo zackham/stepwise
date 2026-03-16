@@ -234,6 +234,32 @@ Catches: YAML syntax errors, missing step references, invalid input bindings, ba
 
 ---
 
+## `stepwise diagram`
+
+Generate a Graphviz DAG image from a flow file.
+
+```bash
+stepwise diagram my-flow.flow.yaml
+stepwise diagram my-flow.flow.yaml -f png
+stepwise diagram my-flow.flow.yaml -o output/my-flow.svg
+stepwise diagram @alice:code-review              # registry flow
+```
+
+```
+✓ my-flow.svg
+```
+
+Renders a dark-themed DAG matching the web UI aesthetic. Node shapes indicate executor type (box for script, parallelogram for human, rounded box for LLM, double octagon for agent, hexagon for poll). Edges are color-coded: blue for data flow, gray dashed for sequencing, amber dotted for loops, green bold for conditional advance, purple bold for for-each.
+
+Requires the system `graphviz` package (`dot` binary). Install with `brew install graphviz` or `apt install graphviz`.
+
+| Flag | Description |
+|------|-------------|
+| `-f, --format {svg,png,pdf}` | Output format (default: svg) |
+| `-o, --output PATH` | Output file path (default: `<flow-name>.<format>` in cwd) |
+
+---
+
 ## `stepwise jobs`
 
 List jobs in the project database.
