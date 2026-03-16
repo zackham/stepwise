@@ -106,6 +106,45 @@ def _parse_input_binding(local_name: str, source: str) -> InputBinding:
     return InputBinding(local_name, parts[0], parts[1])
 
 
+def _parse_inputs(inputs_data: Any, step_name: str) -> list[InputBinding]:
+    """Parse inputs from YAML, supporting both string and any_of dict syntax."""
+    bindings: list[InputBinding] = []
+    if not isinstance(inputs_data, dict):
+        return bindings
+    for local_name, source in inputs_data.items():
+        if isinstance(source, str):
+            try:
+                bindings.append(_parse_input_binding(local_name, source))
+            except ValueError as e:
+                raise ValueError(f"Step '{step_name}': {e}") from e
+        elif isinstance(source, dict) and "any_of" in source:
+            sources_list = source["any_of"]
+            if not isinstance(sources_list, list) or len(sources_list) < 2:
+                raise ValueError(
+                    f"Step '{step_name}': input '{local_name}' any_of must be a list with >= 2 entries"
+                )
+            any_of_pairs: list[tuple[str, str]] = []
+            for src in sources_list:
+                if not isinstance(src, str) or "." not in src:
+                    raise ValueError(
+                        f"Step '{step_name}': input '{local_name}' any_of entry '{src}' "
+                        f"must be 'step_name.field_name'"
+                    )
+                parts = src.split(".", 1)
+                any_of_pairs.append((parts[0], parts[1]))
+            bindings.append(InputBinding(
+                local_name=local_name,
+                source_step="",
+                source_field="",
+                any_of_sources=any_of_pairs,
+            ))
+        else:
+            raise ValueError(
+                f"Step '{step_name}': input '{local_name}' must be a string or {{any_of: [...]}} dict"
+            )
+    return bindings
+
+
 def _resolve_prompt_file(
     step_data: dict,
     step_name: str,
@@ -710,22 +749,7 @@ def _parse_step(
 
         executor = ExecutorRef("route", {})
 
-        # Parse inputs
-        inputs_data = step_data.get("inputs", {})
-        input_bindings: list[InputBinding] = []
-        if isinstance(inputs_data, dict):
-            for local_name, source in inputs_data.items():
-                if isinstance(source, str):
-                    try:
-                        binding = _parse_input_binding(local_name, source)
-                        input_bindings.append(binding)
-                    except ValueError as e:
-                        raise ValueError(f"Step '{step_name}': {e}") from e
-                else:
-                    raise ValueError(
-                        f"Step '{step_name}': input '{local_name}' source must be a string, "
-                        f"got {type(source).__name__}"
-                    )
+        input_bindings = _parse_inputs(step_data.get("inputs", {}), step_name)
 
         sequencing = step_data.get("sequencing", [])
         if isinstance(sequencing, str):
@@ -774,22 +798,7 @@ def _parse_step(
                     f"missing outputs {sorted(missing)}"
                 )
 
-        # Parse inputs
-        inputs_data = step_data.get("inputs", {})
-        input_bindings: list[InputBinding] = []
-        if isinstance(inputs_data, dict):
-            for local_name, source in inputs_data.items():
-                if isinstance(source, str):
-                    try:
-                        binding = _parse_input_binding(local_name, source)
-                        input_bindings.append(binding)
-                    except ValueError as e:
-                        raise ValueError(f"Step '{step_name}': {e}") from e
-                else:
-                    raise ValueError(
-                        f"Step '{step_name}': input '{local_name}' source must be a string, "
-                        f"got {type(source).__name__}"
-                    )
+        input_bindings = _parse_inputs(step_data.get("inputs", {}), step_name)
 
         sequencing = step_data.get("sequencing", [])
         if isinstance(sequencing, str):
@@ -815,22 +824,7 @@ def _parse_step(
         # For-each step: executor is a no-op placeholder, the engine handles it
         executor = ExecutorRef("for_each", {})
 
-        # Inputs are parent-level bindings passed to every iteration
-        inputs_data = step_data.get("inputs", {})
-        input_bindings: list[InputBinding] = []
-        if isinstance(inputs_data, dict):
-            for local_name, source in inputs_data.items():
-                if isinstance(source, str):
-                    try:
-                        binding = _parse_input_binding(local_name, source)
-                        input_bindings.append(binding)
-                    except ValueError as e:
-                        raise ValueError(f"Step '{step_name}': {e}") from e
-                else:
-                    raise ValueError(
-                        f"Step '{step_name}': input '{local_name}' source must be a string, "
-                        f"got {type(source).__name__}"
-                    )
+        input_bindings = _parse_inputs(step_data.get("inputs", {}), step_name)
 
         # Outputs default to ["results"] for for_each steps
         if not outputs:
@@ -857,21 +851,7 @@ def _parse_step(
     executor = _parse_executor(step_data, step_name, base_dir=base_dir)
 
     # Inputs
-    inputs_data = step_data.get("inputs", {})
-    input_bindings: list[InputBinding] = []
-    if isinstance(inputs_data, dict):
-        for local_name, source in inputs_data.items():
-            if isinstance(source, str):
-                try:
-                    binding = _parse_input_binding(local_name, source)
-                    input_bindings.append(binding)
-                except ValueError as e:
-                    raise ValueError(f"Step '{step_name}': {e}") from e
-            else:
-                raise ValueError(
-                    f"Step '{step_name}': input '{local_name}' source must be a string, "
-                    f"got {type(source).__name__}"
-                )
+    input_bindings = _parse_inputs(step_data.get("inputs", {}), step_name)
 
     # Sequencing
     sequencing = step_data.get("sequencing", [])
