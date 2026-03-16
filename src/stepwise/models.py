@@ -482,11 +482,10 @@ class WorkflowDefinition:
                             f"'{target}' is not a valid step"
                         )
                 if action == "advance" and target:
-                    if target not in step_names:
-                        errors.append(
-                            f"Step '{name}': exit rule '{rule.name}' advance target "
-                            f"'{target}' is not a valid step"
-                        )
+                    errors.append(
+                        f"Step '{name}': exit rule '{rule.name}' has 'advance' with 'target' — "
+                        f"use step-level 'when' for conditional branching instead"
+                    )
 
             # Check for_each steps
             if step.for_each:
