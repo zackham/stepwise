@@ -100,7 +100,8 @@ class ThreadSafeStore(SQLiteStore):
 
 class CreateJobRequest(BaseModel):
     objective: str
-    workflow: dict
+    workflow: dict | None = None
+    flow_path: str | None = None
     inputs: dict | None = None
     config: dict | None = None
     workspace_path: str | None = None
@@ -410,9 +411,23 @@ def list_jobs(status: str | None = None, top_level: bool = False):
 
 @app.post("/api/jobs")
 def create_job(req: CreateJobRequest):
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
     engine = _get_engine()
     try:
-        wf = WorkflowDefinition.from_dict(req.workflow)
+        if req.workflow:
+            wf = WorkflowDefinition.from_dict(req.workflow)
+        elif req.flow_path:
+            abs_path = (_project_dir / req.flow_path).resolve()
+            abs_path.relative_to(_project_dir)
+            if not abs_path.is_file():
+                raise HTTPException(status_code=404, detail=f"Flow not found: {req.flow_path}")
+            try:
+                wf = load_workflow_yaml(abs_path.read_text())
+            except YAMLLoadError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+        else:
+            raise HTTPException(status_code=400, detail="Either workflow or flow_path is required")
         config = JobConfig.from_dict(req.config) if req.config else None
         job = engine.create_job(
             objective=req.objective,
@@ -855,6 +870,7 @@ def engine_status():
         "active_jobs": len(active),
         "total_jobs": len(all_jobs),
         "registered_executors": list(engine.registry._factories.keys()),
+        "cwd": os.getcwd(),
     }
 
 
@@ -1255,13 +1271,17 @@ def list_local_flows():
         except OSError:
             modified_at = ""
 
-        # Parse lightly to get step count and description
+        # Parse lightly to get step count, description, and executor types
         steps_count = 0
         description = ""
+        executor_types: list[str] = []
         try:
             wf = load_workflow_yaml(flow_info.path)
             steps_count = len(wf.steps)
             description = wf.metadata.description or ""
+            executor_types = sorted(
+                {s.executor.type for s in wf.steps.values() if s.executor}
+            )
         except (YAMLLoadError, Exception):
             pass
 
@@ -1278,6 +1298,7 @@ def list_local_flows():
             "steps_count": steps_count,
             "modified_at": modified_at,
             "is_directory": flow_info.is_directory,
+            "executor_types": executor_types,
         })
 
     return result
@@ -1621,6 +1642,74 @@ def save_local_flow(path: str, req: SaveYAMLRequest):
         "path": rel_path,
         "name": workflow.metadata.name or abs_path.stem,
         "raw_yaml": req.yaml,
+        "flow": workflow.to_dict(),
+        "graph": graph,
+        "is_directory": is_directory,
+        "flow_dir": flow_dir,
+    }
+
+
+# ── Flow Metadata Patch ────────────────────────────────────────────────
+
+
+class FlowMetadataPatch(BaseModel):
+    description: str | None = None
+    author: str | None = None
+    version: str | None = None
+    tags: list[str] | None = None
+
+
+@app.patch("/api/flows/local/{path:path}")
+def patch_flow_metadata(path: str, req: FlowMetadataPatch):
+    """Update top-level metadata fields in a flow YAML (round-trip safe)."""
+    from ruamel.yaml import YAML
+    from io import StringIO
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+    abs_path = (_project_dir / path).resolve()
+    try:
+        abs_path.relative_to(_project_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path escapes project directory")
+    if abs_path.is_dir():
+        abs_path = abs_path / "FLOW.yaml"
+    if not abs_path.is_file():
+        raise HTTPException(status_code=404, detail="Flow file not found")
+
+    ryaml = YAML()
+    ryaml.preserve_quotes = True
+    raw = abs_path.read_text()
+    data = ryaml.load(raw)
+
+    # Apply only the fields that were provided
+    for field_name in ("description", "author", "version", "tags"):
+        value = getattr(req, field_name)
+        if value is not None:
+            data[field_name] = value
+
+    buf = StringIO()
+    ryaml.dump(data, buf)
+    updated_yaml = buf.getvalue()
+
+    # Atomic write
+    tmp_path = abs_path.with_suffix(abs_path.suffix + ".tmp")
+    tmp_path.write_text(updated_yaml)
+    tmp_path.rename(abs_path)
+
+    # Re-parse and return full detail
+    workflow = load_workflow_yaml(abs_path)
+    graph = _build_flow_graph(updated_yaml)
+    is_directory = abs_path.name == "FLOW.yaml"
+    flow_dir = str(abs_path.parent)
+    try:
+        rel_path = str(abs_path.relative_to(_project_dir))
+    except ValueError:
+        rel_path = path
+
+    return {
+        "path": rel_path,
+        "name": workflow.metadata.name or abs_path.stem,
+        "raw_yaml": updated_yaml,
         "flow": workflow.to_dict(),
         "graph": graph,
         "is_directory": is_directory,
