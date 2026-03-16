@@ -300,6 +300,7 @@ class StepDefinition:
     exit_rules: list[ExitRule] = field(default_factory=list)
     idempotency: str = "idempotent"  # "idempotent" | "retriable_with_guard" | "non_retriable"
     description: str = ""  # optional human-readable description
+    when: str | None = None  # activation condition evaluated against resolved inputs
     limits: StepLimits | None = None  # M4: cost/time/iteration limits
     for_each: ForEachSpec | None = None  # iteration over upstream list
     sub_flow: WorkflowDefinition | None = None  # embedded flow for for_each
@@ -317,6 +318,8 @@ class StepDefinition:
             "exit_rules": [r.to_dict() for r in self.exit_rules],
             "idempotency": self.idempotency,
         }
+        if self.when is not None:
+            d["when"] = self.when
         if self.output_schema:
             d["output_schema"] = {k: v.to_dict() for k, v in self.output_schema.items()}
         if self.limits:
@@ -341,6 +344,7 @@ class StepDefinition:
             sequencing=d.get("sequencing", []),
             exit_rules=[ExitRule.from_dict(r) for r in d.get("exit_rules", [])],
             idempotency=d.get("idempotency", "idempotent"),
+            when=d.get("when"),
             output_schema={k: OutputFieldSpec.from_dict(v) for k, v in d.get("output_schema", {}).items()},
             limits=StepLimits.from_dict(d["limits"]) if d.get("limits") else None,
             for_each=ForEachSpec.from_dict(d["for_each"]) if d.get("for_each") else None,
