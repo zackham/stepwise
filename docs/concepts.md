@@ -12,7 +12,7 @@ Stepwise has three runtime concepts, a dependency system, and a control flow mec
 | **Input binding** | Pulls data from upstream outputs | `findings: research.findings` |
 | **Exit rule** | Decides what happens after step completion | advance, loop, escalate, abandon |
 | **For-each** | Iterates over a list with embedded sub-flows | Items execute in parallel |
-| **Route step** | Conditional dispatch (switch statement) | First-match semantics |
+| **Branching** | Conditional advancement with skip propagation | `advance` + `target`, `any_of` merge |
 | **Context chain** | Session continuity across agent steps | Prior transcripts compiled into context |
 
 ## Jobs
@@ -226,35 +226,53 @@ process_sections:
 
 Each iteration runs as an independent sub-job. Results are collected in source list order. Items can execute in parallel.
 
-## Route Steps
+## Conditional Branching
 
-Route steps add **conditional dispatch** — run different sub-flows based on upstream output. Think of them as a `switch` statement for workflows.
+Branching uses two primitives: **`advance` with `target`** for selective advancement and **`any_of` inputs** for merging branches.
 
 ```yaml
-run_pipeline:
-  inputs: { category: triage.category }
-  routes:
-    trivial:
-      when: "category == 'trivial'"
-      flow: flows/trivial.yaml
-    complex:
-      when: "category == 'complex'"
-      flow:
-        steps:
-          analyze:
-            executor: agent
-            prompt: "Deep analysis..."
-            outputs: [result]
-    default:
-      flow: flows/standard.yaml
-  outputs: [result]
+steps:
+  classify:
+    run: scripts/classify.sh
+    outputs: [category]
+    exits:
+      - name: simple
+        when: "outputs.category == 'simple'"
+        action: advance
+        target: quick-path           # only quick-path runs
+      - name: complex
+        when: "outputs.category == 'complex'"
+        action: advance
+        target: deep-path            # only deep-path runs
+
+  quick-path:
+    run: scripts/quick.sh
+    inputs: { category: classify.category }
+    outputs: [result]
+
+  deep-path:
+    executor: agent
+    prompt: "Deep analysis..."
+    inputs: { category: classify.category }
+    outputs: [result]
+
+  final:
+    run: scripts/report.sh
+    inputs:
+      result:
+        any_of:                      # takes from whichever branch completed
+          - quick-path.result
+          - deep-path.result
+    outputs: [report]
 ```
 
-Routes evaluate in declaration order using first-match semantics. The `default` route (optional, no `when:`) always goes last. If nothing matches and there's no default, the step fails.
+When `classify` completes with `category == 'simple'`, the engine targets `quick-path` and creates SKIPPED runs for `deep-path` (and any of its transitive dependents). The `final` step uses `any_of` to merge — it resolves from the first available completed source.
 
-Route steps build on the same sub-job infrastructure as for-each: the matched sub-flow runs as a sub-job, the parent step stays in `DELEGATED` status until it completes, and the sub-flow's terminal outputs become the route step's result.
-
-**Flow composition:** Sub-flows can be defined inline, loaded from local files, or referenced from the registry (`@author:name`). All three are resolved at parse time — the YAML is fetched and baked inline, so jobs never depend on external files or network at runtime.
+**Skip propagation rules:**
+- Steps with a hard dependency (regular input, sequencing, for_each) on a non-targeted step are SKIPPED
+- Steps connected only via `any_of` are NOT skipped unless ALL their `any_of` sources are dead
+- If all terminal steps end up SKIPPED, the job fails
+- SKIPPED terminals don't block job completion
 
 ## Context Chains
 
