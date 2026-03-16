@@ -733,11 +733,12 @@ class Engine:
 
     def _is_step_ready(self, job: Job, step_name: str, step_def: StepDefinition) -> bool:
         """A step is ready when:
-        1. All dep steps have current completed run
+        1. All dep steps have current completed run (any_of: at least one)
         2. No active run exists (running, suspended, delegated)
         3. No current completed run exists
         4. No in-flight loop will supersede a dep (loop-aware)
         5. Re-triggering won't create an infinite loop
+        6. Step is not SKIPPED
         """
         # Check no active run
         latest = self.store.latest_run(job.id, step_name)
@@ -746,6 +747,10 @@ class Engine:
             StepRunStatus.SUSPENDED,
             StepRunStatus.DELEGATED,
         ):
+            return False
+
+        # SKIPPED steps are never ready
+        if latest and latest.status == StepRunStatus.SKIPPED:
             return False
 
         # Check no current completed run
@@ -764,19 +769,36 @@ class Engine:
                     if target in dep_step_names:
                         return False
 
-        # Check all deps have current completed runs
-        dep_steps = self._dep_steps(step_def)
-        for dep_step in dep_steps:
-            if dep_step == "$job":
-                continue
+        # Check regular deps (non-any_of, non-$job): ALL must have current completed runs
+        regular_deps: list[str] = [
+            b.source_step for b in step_def.inputs
+            if not b.any_of_sources and b.source_step != "$job"
+        ]
+        regular_deps.extend(step_def.sequencing)
+        if step_def.for_each:
+            regular_deps.append(step_def.for_each.source_step)
+
+        for dep_step in regular_deps:
             dep_latest = self.store.latest_completed_run(job.id, dep_step)
             if not dep_latest:
                 return False
             if not self._is_current(job, dep_latest):
                 return False
-            # Loop guard: don't launch if an in-flight loop will supersede this dep
             if self._dep_will_be_superseded(job, dep_step):
                 return False
+
+        # Check any_of groups: at least ONE source per group must have current completed run
+        for binding in step_def.inputs:
+            if binding.any_of_sources:
+                has_available = False
+                for src_step, _ in binding.any_of_sources:
+                    dep_latest = self.store.latest_completed_run(job.id, src_step)
+                    if dep_latest and self._is_current(job, dep_latest):
+                        if not self._dep_will_be_superseded(job, src_step):
+                            has_available = True
+                            break
+                if not has_available:
+                    return False
 
         return True
 
@@ -838,7 +860,11 @@ class Engine:
 
     def _dep_steps(self, step_def: StepDefinition) -> list[str]:
         """All dependency steps: input binding sources + sequencing + for_each source."""
-        deps = [b.source_step for b in step_def.inputs]
+        deps = [b.source_step for b in step_def.inputs if not b.any_of_sources]
+        for b in step_def.inputs:
+            if b.any_of_sources:
+                for src_step, _ in b.any_of_sources:
+                    deps.append(src_step)
         deps.extend(step_def.sequencing)
         if step_def.for_each:
             deps.append(step_def.for_each.source_step)
@@ -1499,7 +1525,25 @@ class Engine:
         dep_run_ids: dict[str, str] = {}
 
         for binding in step_def.inputs:
-            if binding.source_step == "$job":
+            if binding.any_of_sources:
+                # Resolve from first available completed source
+                for src_step, src_field in binding.any_of_sources:
+                    latest = self.store.latest_completed_run(job.id, src_step)
+                    if latest and latest.result:
+                        value = latest.result.artifact.get(src_field)
+                        if value is None and "." in src_field:
+                            parts = src_field.split(".")
+                            value = latest.result.artifact
+                            for part in parts:
+                                if isinstance(value, dict):
+                                    value = value.get(part)
+                                else:
+                                    value = None
+                                    break
+                        inputs[binding.local_name] = value
+                        dep_run_ids[src_step] = latest.id
+                        break  # first available wins
+            elif binding.source_step == "$job":
                 inputs[binding.local_name] = job.inputs.get(binding.source_field)
                 dep_run_ids["$job"] = "$job"
             else:
