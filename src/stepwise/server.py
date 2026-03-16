@@ -319,6 +319,25 @@ async def _observe_external_jobs() -> None:
             await asyncio.sleep(5)
 
 
+def _cleanup_zombie_jobs(store: ThreadSafeStore) -> None:
+    """Fail server-owned jobs stuck in running/pending from a previous crashed server."""
+    import logging
+    logger = logging.getLogger("stepwise.server")
+    for job in store.active_jobs():
+        if job.created_by != "server":
+            continue
+        # Fail all running step runs
+        for run in store.running_runs(job.id):
+            run.status = StepRunStatus.FAILED
+            run.error = "Server restarted: step was orphaned"
+            run.completed_at = _now()
+            store.save_run(run)
+        job.status = JobStatus.FAILED
+        job.updated_at = _now()
+        store.save_job(job)
+        logger.info("Failed zombie job %s (%s)", job.id, job.objective)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _engine, _engine_task, _event_loop, _templates_dir, _project_dir
@@ -339,6 +358,10 @@ async def lifespan(app: FastAPI):
 
     dot_dir = _project_dir / ".stepwise"
     _engine = AsyncEngine(store, registry, jobs_dir=jobs_dir, project_dir=dot_dir if dot_dir.is_dir() else None, billing_mode=config.billing, config=config)
+
+    # Fail zombie jobs: server-owned jobs left in running/pending from a dead process
+    _cleanup_zombie_jobs(store)
+
     _engine.on_broadcast = _schedule_broadcast
     _engine_task = asyncio.create_task(_engine.run())
     _stream_monitor = asyncio.create_task(_agent_stream_monitor())
