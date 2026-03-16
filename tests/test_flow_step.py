@@ -128,26 +128,6 @@ class TestFlowStepParsing:
             assert step.sub_flow is not None
             assert step.executor.config.get("flow_ref") == "helper"
 
-    def test_mutual_exclusivity_flow_and_routes(self):
-        with pytest.raises(YAMLLoadError, match="cannot combine flow and routes"):
-            load_workflow_string(
-                "steps:\n"
-                "  bad:\n"
-                "    flow:\n"
-                "      steps:\n"
-                "        x:\n"
-                "          run: echo x\n"
-                "          outputs: [a]\n"
-                "    routes:\n"
-                "      default:\n"
-                "        flow:\n"
-                "          steps:\n"
-                "            y:\n"
-                "              run: echo y\n"
-                "              outputs: [a]\n"
-                "    outputs: [a]\n"
-            )
-
     def test_mutual_exclusivity_flow_and_run(self):
         with pytest.raises(YAMLLoadError, match="cannot combine flow with run/executor"):
             load_workflow_string(

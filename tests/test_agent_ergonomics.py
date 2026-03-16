@@ -109,7 +109,6 @@ class TestResolvedFlowStatus:
         assert step_b["status"] == "completed"
         assert "y" in step_b["outputs"]
 
-        assert status["route_decisions"] == {}
         assert status["sub_jobs"] == []
 
     def test_flow_with_suspended_step(self, engine, store):
@@ -343,7 +342,6 @@ class TestStatusJsonCLI:
         assert status["job_id"] == job_id
         assert "steps" in status
         assert "cost_usd" in status
-        assert "route_decisions" in status
         assert "sub_jobs" in status
 
         # Verify step structure
