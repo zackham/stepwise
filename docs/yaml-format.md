@@ -294,9 +294,9 @@ steps:
       all_results: process_sections.results   # array of sub-flow terminal outputs
 ```
 
-### Route Steps
+### Conditional Branching
 
-Route steps dispatch to different sub-flows based on upstream output. An upstream step classifies or categorizes, then the route step picks the right pipeline.
+Branch workflows using `advance` exit rules with `target` and merge with `any_of` inputs.
 
 ```yaml
 steps:
@@ -304,62 +304,55 @@ steps:
     executor: llm
     prompt: "Classify this issue as trivial, standard, or complex"
     outputs: [category, summary]
+    exits:
+      - name: trivial
+        when: "outputs.category == 'trivial'"
+        action: advance
+        target: quick-fix
+      - name: complex
+        when: "outputs.category == 'complex'"
+        action: advance
+        target: deep-analysis
 
-  run_pipeline:
-    inputs: { category: triage.category, summary: triage.summary }
-    routes:
-      trivial:
-        when: "category == 'trivial'"
-        flow:
-          steps:
-            quick_fix:
-              executor: llm
-              prompt: "Quick fix for: $summary"
-              outputs: [result]
-      standard:
-        when: "category == 'standard'"
-        flow: flows/standard-pipeline.yaml
-      complex:
-        when: "category == 'complex'"
-        flow: flows/complex-pipeline.yaml
-      default:
-        flow: flows/standard-pipeline.yaml
+  quick-fix:
+    executor: llm
+    prompt: "Quick fix for: $summary"
+    inputs: { summary: triage.summary }
     outputs: [result]
-```
 
-**Key concepts:**
-- `routes:` is a mapping of route names to `{when, flow}` entries
-- `when:` expressions use the same safe eval as exit rules, with input bindings + `attempt` available
-- **First-match semantics** — routes evaluate in YAML declaration order; first `when:` that returns true wins
-- `default:` route may omit `when:` — always matches, always evaluated last regardless of YAML position
-- Non-default routes **must** have a `when:` expression
-- Route steps **must** declare `outputs:`
+  deep-analysis:
+    executor: agent
+    prompt: "Deep analysis of: $summary"
+    inputs: { summary: triage.summary }
+    outputs: [result]
 
-**Three flow source types:**
-- **Inline** — a dict with `steps:` (parsed at load time)
-- **File path** — string ending `.yaml`/`.yml` (loaded and baked at parse time, resolved relative to parent flow directory)
-- **Registry ref** — string starting `@` like `@alice:fast-pipeline` (fetched from registry and baked inline at parse time, like file refs)
-
-**Output contract:** Every terminal step of each sub-flow must independently produce all declared `outputs:`. This prevents false positives when sub-flows branch internally.
-
-**Expression namespace:**
-- All input bindings by name (e.g., `category`, `summary`)
-- `attempt` — starts at 1, increments if the route step is re-executed via loop
-- The name `attempt` is reserved and cannot be used as an input binding
-
-**Error handling:**
-- Expression evaluation errors fail the step immediately (no fallthrough to next route)
-- If no route matches and no `default` exists, the step fails with `route_no_match`
-- Sub-job creation failures (e.g., depth limit) mark the run as failed, not orphaned
-
-**Downstream access:**
-```yaml
-  consume:
-    run: scripts/next.py
-    outputs: [final]
+  report:
+    run: scripts/report.sh
     inputs:
-      data: run_pipeline.result   # from whichever sub-flow ran
+      result:
+        any_of:
+          - quick-fix.result
+          - deep-analysis.result
+    outputs: [final]
 ```
+
+**`advance` with `target`:**
+- `target` names a downstream step to selectively advance to
+- Non-targeted downstream steps (with hard dependencies on the completing step) get SKIPPED runs
+- Skip propagation is transitive — dependents of skipped steps are also skipped
+- The target must be a valid step name in the workflow
+
+**`any_of` inputs:**
+- Resolves from the first available completed source (in list order)
+- Must have >= 2 source entries
+- Each entry uses `step.field` syntax
+- A step with `any_of` is only skipped if ALL sources are dead
+
+**Skip propagation:**
+- Hard deps (regular inputs, sequencing, for_each) on a non-targeted step → SKIPPED
+- Soft deps (any_of) → only SKIPPED when ALL sources in the group are dead
+- If all terminal steps are SKIPPED, the job fails
+- SKIPPED terminals don't block job completion
 
 ### Context Chains
 
@@ -439,4 +432,4 @@ steps:
 | `chain: chain_name` | `StepDefinition.chain = "chain_name"` |
 | `chain_label: "Label"` | `StepDefinition.chain_label = "Label"` |
 | `prompt_file: path/to/file` | Resolved at parse time → `ExecutorRef.config["prompt"]` |
-| `routes: {name: {when, flow}}` | `StepDefinition.route_def = RouteDefinition(routes=[RouteSpec(...)])` |
+| `inputs: {x: {any_of: [a.f, b.f]}}` | `InputBinding("x", "", "", any_of_sources=[("a","f"),("b","f")])` |

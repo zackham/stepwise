@@ -65,7 +65,8 @@ Two engine classes: `AsyncEngine` (primary, event-driven) and `Engine` (legacy, 
 - **Step readiness** (`_is_step_ready()`): no active run + no current completed run (or loop guard) + all deps have current completed runs
 - **Currency** (`_is_current()`): latest run for step is COMPLETED and all dep runs are also current (recursive)
 - **Executor dispatch:** `registry.create(ExecutorRef)` → factory lookup → decorator wrapping → `to_thread(executor.start)` (AsyncEngine) or direct call (Engine)
-- **Exit rules** after step completion: `advance` (continue DAG), `loop` (re-launch target step), `escalate` (pause job), `abandon` (fail job) — defined via `models.py:ExitRule`
+- **Exit rules** after step completion: `advance` (continue DAG, optional `target` for conditional branching), `loop` (re-launch target step), `escalate` (pause job), `abandon` (fail job) — defined via `models.py:ExitRule`
+- **Skip propagation**: When `advance` has a `target`, non-targeted downstream steps get SKIPPED runs. Transitive propagation marks dead branches. `any_of` inputs only skip when ALL sources are dead.
 - **Input resolution:** `_resolve_inputs()` navigates artifact fields via dot-path (`"step_name.field.nested"`)
 
 Do not duplicate readiness checks outside `engine.py`. Test input resolution via `register_step_fn()`, not by mocking engine internals.
