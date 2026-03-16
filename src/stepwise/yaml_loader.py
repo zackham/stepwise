@@ -301,6 +301,12 @@ def _parse_exit_rules(exits_data: list[dict], step_name: str) -> list[ExitRule]:
                 f"Step '{step_name}': exit rule '{name}' has action 'loop' but no 'target'"
             )
 
+        if action == "advance" and target:
+            raise ValueError(
+                f"Step '{step_name}': exit rule '{name}' has 'advance' with 'target' — "
+                f"use step-level 'when' for conditional branching instead"
+            )
+
         config: dict[str, Any] = {
             "condition": condition,
             "action": action,
