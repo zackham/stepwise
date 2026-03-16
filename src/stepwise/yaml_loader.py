@@ -21,8 +21,6 @@ from stepwise.models import (
     ForEachSpec,
     InputBinding,
     OutputFieldSpec,
-    RouteDefinition,
-    RouteSpec,
     StepDefinition,
     StepLimits,
     VALID_FIELD_TYPES,
@@ -559,86 +557,6 @@ def _parse_for_each(
     return for_each_spec, sub_flow
 
 
-def _parse_route(
-    step_data: dict,
-    step_name: str,
-    outputs: list[str],
-    base_dir: Path | None = None,
-    loading_files: frozenset[Path] | None = None,
-    project_dir: Path | None = None,
-) -> RouteDefinition | None:
-    """Parse route definitions from step YAML data.
-
-    Returns None if no routes: key present.
-    """
-    routes_data = step_data.get("routes")
-    if routes_data is None:
-        return None
-
-    if not isinstance(routes_data, dict):
-        raise ValueError(f"Step '{step_name}': 'routes' must be a mapping")
-
-    if not routes_data:
-        raise ValueError(f"Step '{step_name}': routes must have at least one entry")
-
-    named_routes: list[RouteSpec] = []
-    default_route: RouteSpec | None = None
-
-    for route_name, route_data in routes_data.items():
-        if not isinstance(route_data, dict):
-            raise ValueError(
-                f"Step '{step_name}': route '{route_name}' must be a mapping"
-            )
-
-        is_default = route_name == "default"
-
-        # Validate when expression
-        when_expr = route_data.get("when")
-        if is_default:
-            if when_expr is not None:
-                raise ValueError(
-                    f"Step '{step_name}': 'default' route must not have a 'when' expression"
-                )
-            when_expr = None
-        else:
-            if when_expr is None or (isinstance(when_expr, str) and not when_expr.strip()):
-                raise ValueError(
-                    f"Step '{step_name}': route '{route_name}' must have a 'when' expression "
-                    f"(only 'default' can omit it)"
-                )
-
-        # Parse flow source
-        flow_source = route_data.get("flow")
-        if flow_source is None:
-            raise ValueError(
-                f"Step '{step_name}': route '{route_name}' missing 'flow'"
-            )
-
-        flow, flow_ref = _resolve_flow_source(
-            flow_source, step_name, f"route '{route_name}'",
-            base_dir=base_dir, loading_files=loading_files, project_dir=project_dir,
-        )
-
-        route_spec = RouteSpec(
-            name=route_name,
-            when=when_expr,
-            flow=flow,
-            flow_ref=flow_ref,
-        )
-
-        if is_default:
-            default_route = route_spec
-        else:
-            named_routes.append(route_spec)
-
-    # Assemble: named routes in declaration order, default always last
-    all_routes = named_routes
-    if default_route:
-        all_routes.append(default_route)
-
-    return RouteDefinition(routes=all_routes)
-
-
 def _parse_output_field_spec(
     field_name: str, spec_data: Any, step_name: str,
 ) -> OutputFieldSpec:
@@ -730,47 +648,9 @@ def _parse_step(
     # Outputs
     outputs, output_schema = _parse_outputs(step_data, step_name)
 
-    # Check for routes (before for_each — mutual exclusivity checked later)
-    route_def = _parse_route(step_data, step_name, outputs, base_dir, loading_files, project_dir)
-
-    if route_def:
-        if step_data.get("for_each"):
-            raise ValueError(
-                f"Step '{step_name}': cannot combine for_each and routes"
-            )
-        if step_data.get("flow") and not step_data.get("for_each"):
-            raise ValueError(
-                f"Step '{step_name}': cannot combine flow and routes"
-            )
-        if not outputs:
-            raise ValueError(
-                f"Step '{step_name}': route steps must declare outputs"
-            )
-
-        executor = ExecutorRef("route", {})
-
-        input_bindings = _parse_inputs(step_data.get("inputs", {}), step_name)
-
-        sequencing = step_data.get("sequencing", [])
-        if isinstance(sequencing, str):
-            sequencing = [sequencing]
-
-        return StepDefinition(
-            name=step_name,
-            description=step_data.get("description", ""),
-            outputs=outputs,
-            output_schema=output_schema,
-            executor=executor,
-            inputs=input_bindings,
-            sequencing=sequencing,
-            route_def=route_def,
-        )
-
-    # Check for direct flow step (sub-flow invocation without routes or for_each)
+    # Check for direct flow step (sub-flow invocation without for_each)
     flow_data = step_data.get("flow")
     if flow_data and not step_data.get("for_each"):
-        if step_data.get("routes"):
-            raise ValueError(f"Step '{step_name}': cannot combine flow and routes")
         if step_data.get("run") or step_data.get("executor"):
             raise ValueError(f"Step '{step_name}': cannot combine flow with run/executor")
 

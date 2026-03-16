@@ -1151,8 +1151,6 @@ def _build_flow_graph(yaml_content: str) -> dict:
         # Determine executor type
         if step_def.get("for_each"):
             executor = "for_each"
-        elif step_def.get("routes"):
-            executor = "route"
         elif step_def.get("run"):
             executor = "script"
         elif step_def.get("executor"):
