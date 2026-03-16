@@ -226,6 +226,14 @@ inputs:
 - Dot-paths work: `step.field.nested`
 - `local_name` must be unique within a step
 - `source_field` must be in the source step's declared `outputs`
+- `any_of` inputs resolve from the first available completed source:
+  ```yaml
+  inputs:
+    result:
+      any_of:
+        - branch-a.result
+        - branch-b.result
+  ```
 
 Job inputs are passed via `--var` on the CLI or in the `inputs` dict via the API:
 
@@ -267,7 +275,7 @@ len(outputs.errors) == 0
 
 Keep expressions simple. If over ~80 characters, push the logic into the step itself and output a simple summary field.
 
-**Actions:** `advance` (continue DAG), `loop` (re-run target, supersedes old run), `escalate` (pause job), `abandon` (fail job).
+**Actions:** `advance` (continue DAG; optional `target` for conditional branching — non-targeted downstream steps get SKIPPED), `loop` (re-run target, supersedes old run), `escalate` (pause job), `abandon` (fail job).
 
 **Priority pattern:** success conditions first → safety bounds → loop fallback last.
 
@@ -474,135 +482,15 @@ steps:
 ```
 
 **Rules:**
-- `flow:` is mutually exclusive with `run:`, `executor:`, `routes:`, and `for_each:`
+- `flow:` is mutually exclusive with `run:`, `executor:`, and `for_each:`
 - Must declare `outputs:` — every terminal step in the sub-flow must produce them
 - All refs resolved at parse time — no network/file access at runtime
 - Sub-flow receives parent step's resolved inputs as job-level inputs
 - Cycle detection: A→B→A raises an error at parse time
 
-**Prefer `flow:` over single-route `routes:` blocks.** This:
+## Conditional Branching
 
-```yaml
-council:
-  flow: generic-council
-  inputs: { question: research.findings }
-  outputs: [consensus]
-```
-
-replaces this:
-
-```yaml
-# Don't write this — use flow: instead
-council:
-  inputs: { question: research.findings }
-  routes:
-    default:
-      flow: ../generic-council/FLOW.yaml
-  outputs: [consensus]
-```
-
-## Route Steps (Conditional Dispatch)
-
-Dispatch to different sub-flows based on upstream output. First match wins.
-
-```yaml
-steps:
-  triage:
-    executor: llm
-    prompt: "Classify this issue"
-    outputs: [category, summary]
-
-  handle:
-    inputs: { category: triage.category, summary: triage.summary }
-    routes:
-      trivial:
-        when: "category == 'trivial'"
-        flow:
-          steps:
-            fix:
-              executor: llm
-              prompt: "Quick fix: $summary"
-              outputs: [result]
-      complex:
-        when: "category == 'complex'"
-        flow: complex-pipeline               # bare name (preferred over file paths)
-      default:                               # no when: — always matches last
-        flow: standard-pipeline
-    outputs: [result]                        # required — every sub-flow must produce these
-```
-
-**Flow source types (prefer bare names):**
-
-| Type | Syntax | Resolved |
-|---|---|---|
-| Bare name (preferred) | `flow: name` | Project discovery (flows/ directory) |
-| Registry ref | `flow: @author:name` | Fetched and baked at parse time |
-| File path | `flow: path.yaml` | Loaded relative to parent flow dir |
-| Inline | `flow:` with nested `steps:` block | Parsed at load time |
-
-All four types are resolved at parse time — the YAML is fetched/loaded and baked inline, so jobs never depend on external files or network at runtime.
-
-**Output contract:** Every terminal step of each sub-flow must independently produce **all** declared `outputs:`. If the contract fails, validation errors at load time.
-
-**Expression namespace:** Route `when:` expressions use the same safe eval as exit rules, with all input bindings by name plus `attempt` (starts at 1). The name `attempt` is reserved — cannot be used as an input binding name.
-
-**Error handling:**
-- Expression evaluation errors fail the step immediately (no fallthrough to next route)
-- No match + no default = step failure
-- Route steps cannot also be for_each steps
-
-### Route patterns
-
-#### Simple category dispatch
-
-```yaml
-handle:
-  inputs: { type: classify.type, description: classify.description }
-  routes:
-    bug:
-      when: "type == 'bug'"
-      flow:
-        steps:
-          fix:
-            executor: agent
-            prompt: "Fix the bug: $description"
-            outputs: [result]
-    feature:
-      when: "type == 'feature'"
-      flow:
-        steps:
-          design:
-            executor: agent
-            prompt: "Design the feature: $description"
-            outputs: [result]
-    default:
-      flow:
-        steps:
-          generic:
-            executor: llm
-            prompt: "Handle: $description"
-            outputs: [result]
-  outputs: [result]
-```
-
-#### Route with bare name refs
-
-```yaml
-process:
-  inputs: { tier: evaluate.tier }
-  routes:
-    premium:
-      when: "tier == 'premium'"
-      flow: premium-pipeline
-    standard:
-      when: "tier == 'standard'"
-      flow: standard-pipeline
-    default:
-      flow: basic-pipeline
-  outputs: [result, summary]
-```
-
-#### Route with downstream consumption
+Branch workflows using `advance` exit rules with `target` and merge with `any_of` inputs.
 
 ```yaml
 steps:
@@ -610,27 +498,26 @@ steps:
     executor: llm
     prompt: "Classify: $input"
     outputs: [category]
-    inputs:
-      input: $job.input
+    inputs: { input: $job.input }
+    exits:
+      - name: simple
+        when: "outputs.category == 'simple'"
+        action: advance
+        target: quick-path
+      - name: complex
+        when: "outputs.category == 'complex'"
+        action: advance
+        target: deep-path
 
-  dispatch:
+  quick-path:
+    run: scripts/quick.sh
     inputs: { category: classify.category }
-    routes:
-      fast:
-        when: "category == 'simple'"
-        flow:
-          steps:
-            solve:
-              run: scripts/quick.sh
-              outputs: [answer]
-      slow:
-        when: "category == 'complex'"
-        flow:
-          steps:
-            solve:
-              executor: agent
-              prompt: "Deep analysis..."
-              outputs: [answer]
+    outputs: [answer]
+
+  deep-path:
+    executor: agent
+    prompt: "Deep analysis..."
+    inputs: { category: classify.category }
     outputs: [answer]
 
   report:
@@ -638,8 +525,18 @@ steps:
     prompt: "Generate report from: $answer"
     outputs: [report]
     inputs:
-      answer: dispatch.answer     # from whichever sub-flow ran
+      answer:
+        any_of:
+          - quick-path.answer
+          - deep-path.answer
 ```
+
+- `advance` with `target`: selectively advances to one downstream step, SKIPS others
+- `any_of` inputs: resolves from first available completed source (>= 2 entries required)
+- Skip propagation is transitive — dependents of skipped steps are also skipped
+- Steps connected only via `any_of` are NOT skipped unless ALL sources are dead
+- If all terminal steps are SKIPPED, the job fails
+- SKIPPED terminals don't block job completion
 
 ## Prompt Templating
 
@@ -882,11 +779,11 @@ steps:
 5. **`safe_substitute` doesn't error on typos.** `$dta` instead of `$data` renders as literal `$dta`.
 6. **YAML loop exits need `target`.** Always set `target` to the step name, even for self-loops.
 7. **Currentness cascade.** When a loop supersedes a step's run, ALL downstream dependents re-execute.
-8. **Route expression errors don't fallthrough.** Bad syntax or undefined variables fail the step, not skip to next route.
+8. **`any_of` needs >= 2 sources.** Single-source `any_of` is invalid — just use a regular input binding.
 9. **File refs are baked at parse time.** Changes to referenced files require re-parsing the parent flow.
 10. **Use bare flow names, not file paths.** `flow: generic-council` not `flow: ../generic-council/FLOW.yaml`. Bare names are portable and resolve via project discovery.
-11. **Use `flow:` instead of single-route `routes:` blocks.** If there's no conditional dispatch, `flow: name` is cleaner than `routes: {default: {flow: name}}`.
-12. **`flow:` can't combine with other executors.** Mutually exclusive with `run:`, `executor:`, `routes:`, and `for_each:`.
+11. **Use `advance` + `target` for branching.** Conditional dispatch uses exit rules with `target`, not separate dispatch steps. Merge branches with `any_of` inputs.
+12. **`flow:` can't combine with other executors.** Mutually exclusive with `run:`, `executor:`, and `for_each:`.
 13. **`prompt` and `prompt_file` are mutually exclusive.** Never set both on the same step.
 14. **Directory flow `run:` paths resolve relative to the flow directory**, not the current working directory.
 
@@ -906,10 +803,8 @@ Before outputting a flow, verify:
 10. `prompt` and `prompt_file` are mutually exclusive — never both on the same step
 11. For directory flows, `run:` paths are relative to the flow directory, not cwd
 12. For-each: `for_each` source produces a list; sub-flow accesses item via `$job.<as>`
-13. Routes: every non-default route has `when:`; at most one `default`
-14. Routes: every sub-flow terminal step produces all declared `outputs`
-15. Routes: `attempt` cannot be used as an input binding name (reserved)
-16. Flow steps: `flow:` cannot combine with `run:`, `executor:`, `routes:`, or `for_each:`
+13. Branching: `advance` + `target` references a valid step; `any_of` has >= 2 sources with valid `step.field` refs
+14. Flow steps: `flow:` cannot combine with `run:`, `executor:`, or `for_each:`
 17. Flow steps: sub-flow terminal step(s) must produce all declared `outputs`
 18. Flow refs: prefer bare names (`flow: council`) over file paths (`flow: ../council/FLOW.yaml`)
 

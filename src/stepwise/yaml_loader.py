@@ -352,7 +352,7 @@ def _load_flow_from_file(
             f"Step '{step_name}' {context}: circular flow reference: "
             f"{abs_path} is already being loaded"
         )
-    # Immutable set copy per branch — sibling routes can share files
+    # Immutable set copy per branch — sibling flows can share files
     branch_files = (loading_files or frozenset()) | {abs_path}
     return load_workflow_yaml(
         str(abs_path),
