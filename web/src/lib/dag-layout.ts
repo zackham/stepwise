@@ -138,7 +138,19 @@ export function computeDagLayout(workflow: FlowDefinition): DagLayout {
   const edgeLabels: Record<string, string[]> = {};
   for (const [name, step] of Object.entries(workflow.steps)) {
     for (const binding of step.inputs) {
-      if (binding.source_step !== "$job") {
+      // any_of bindings: add edges from each source
+      if (binding.any_of_sources) {
+        for (const src of binding.any_of_sources) {
+          if (!src.step || src.step === "$job") continue;
+          const key = `${src.step}->${name}`;
+          if (!edgeSet.has(key)) {
+            g.setEdge(src.step, name);
+            edgeSet.add(key);
+            edgeLabels[key] = [];
+          }
+          edgeLabels[key].push(src.field);
+        }
+      } else if (binding.source_step && binding.source_step !== "$job") {
         const key = `${binding.source_step}->${name}`;
         if (!edgeSet.has(key)) {
           g.setEdge(binding.source_step, name);
@@ -444,7 +456,25 @@ export function computeHierarchicalLayout(
       if (binding.source_step === "$job") {
         if (!jobInputConsumers.has(name)) jobInputConsumers.set(name, new Set());
         jobInputConsumers.get(name)!.add(binding.source_field);
-      } else {
+      } else if (binding.any_of_sources) {
+        // any_of bindings: add edges from each source
+        for (const src of binding.any_of_sources) {
+          if (!src.step || src.step === "$job") {
+            if (src.step === "$job") {
+              if (!jobInputConsumers.has(name)) jobInputConsumers.set(name, new Set());
+              jobInputConsumers.get(name)!.add(src.field);
+            }
+            continue;
+          }
+          const key = `${src.step}->${name}`;
+          if (!edgeSet.has(key)) {
+            g.setEdge(src.step, name);
+            edgeSet.add(key);
+            edgeLabels[key] = [];
+          }
+          edgeLabels[key].push(src.field);
+        }
+      } else if (binding.source_step) {
         const key = `${binding.source_step}->${name}`;
         if (!edgeSet.has(key)) {
           g.setEdge(binding.source_step, name);
