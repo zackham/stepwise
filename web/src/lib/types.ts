@@ -14,7 +14,8 @@ export type StepRunStatus =
   | "delegated"
   | "completed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "skipped";
 
 // ── Serializable References ────────────────────────────────────────────
 
@@ -75,6 +76,9 @@ export interface StepDefinition {
   limits: StepLimits | null;
   for_each?: ForEachSpec;
   sub_flow?: FlowDefinition;
+  output_schema?: Record<string, OutputFieldSchema>;
+  chain?: string;
+  chain_label?: string;
 }
 
 // ── Flow Definition ───────────────────────────────────────────────────

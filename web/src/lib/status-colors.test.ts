@@ -37,6 +37,7 @@ describe("STEP_STATUS_COLORS", () => {
     "completed",
     "failed",
     "cancelled",
+    "skipped",
   ];
 
   it("has a color definition for every StepRunStatus", () => {

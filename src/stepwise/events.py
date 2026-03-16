@@ -26,6 +26,7 @@ CONTEXT_INJECTED = "context.injected"
 STEP_STARTED_ASYNC = "step.started_async"
 STEP_LIMIT_EXCEEDED = "step.limit_exceeded"
 STEP_CANCELLED = "step.cancelled"
+STEP_SKIPPED = "step.skipped"
 
 # For-each events
 FOR_EACH_STARTED = "for_each.started"
