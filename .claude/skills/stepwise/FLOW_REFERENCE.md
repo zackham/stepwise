@@ -45,6 +45,8 @@ steps:
 
     sequencing: [step_a]             # optional — ordering without data transfer
 
+    when: "python expression"        # optional — activation gate on resolved inputs
+
     exits:                           # optional — evaluated after step completes
       - name: rule_name
         when: "python expression"
@@ -290,7 +292,7 @@ len(outputs.errors) == 0
 
 Keep expressions simple. If over ~80 characters, push the logic into the step itself and output a simple summary field.
 
-**Actions:** `advance` (continue DAG; optional `target` for conditional branching — non-targeted downstream steps get SKIPPED), `loop` (re-run target, supersedes old run), `escalate` (pause job), `abandon` (fail job).
+**Actions:** `advance` (continue DAG), `loop` (re-run target, supersedes old run), `escalate` (pause job), `abandon` (fail job). Use step-level `when` for conditional branching instead of `advance` with `target`.
 
 **Priority pattern:** success conditions first → safety bounds → loop fallback last.
 
@@ -430,7 +432,7 @@ steps:
 
 ## Conditional Branching
 
-Branch workflows using `advance` exit rules with `target` and merge with `any_of` inputs.
+Branch workflows using step-level `when` conditions (pure-pull) and merge with `any_of` inputs.
 
 ```yaml
 steps:
@@ -439,26 +441,19 @@ steps:
     prompt: "Classify: $input"
     outputs: [category]
     inputs: { input: $job.input }
-    exits:
-      - name: simple
-        when: "outputs.category == 'simple'"
-        action: advance
-        target: quick-path
-      - name: complex
-        when: "outputs.category == 'complex'"
-        action: advance
-        target: deep-path
 
   quick-path:
     run: scripts/quick.sh
     inputs: { category: classify.category }
     outputs: [answer]
+    when: "category == 'simple'"       # I decide when I run
 
   deep-path:
     executor: agent
     prompt: "Deep analysis..."
     inputs: { category: classify.category }
     outputs: [answer]
+    when: "category == 'complex'"      # I decide when I run
 
   report:
     executor: llm
@@ -471,12 +466,11 @@ steps:
           - deep-path.answer
 ```
 
-- `advance` with `target`: selectively advances to one downstream step, SKIPS others
+- `when`: step-level condition evaluated against resolved inputs. If deps are satisfied but `when` is false, the step stays not-ready.
 - `any_of` inputs: resolves from first available completed source (>= 2 entries required)
-- Skip propagation is transitive — dependents of skipped steps are also skipped
-- Steps connected only via `any_of` are NOT skipped unless ALL sources are dead
-- If all terminal steps are SKIPPED, the job fails
-- SKIPPED terminals don't block job completion
+- At job settlement, never-started steps get SKIPPED runs for bookkeeping
+- Job completes if at least one terminal completed; fails if no terminal reached
+- Key distinction: `sequencing: [step-x]` = ordering only, `inputs: { field: step-x.field }` = data dep, `when: "expr"` = conditional gate
 
 ## Prompt Templating
 
@@ -587,7 +581,7 @@ decorators:
 8. **`any_of` needs >= 2 sources.** Single-source `any_of` is invalid — just use a regular input binding.
 9. **File refs are baked at parse time.** Changes to referenced files require re-parsing the parent flow.
 10. **Use bare flow names, not file paths.** `flow: generic-council` not `flow: ../generic-council/FLOW.yaml`. Bare names are portable and resolve via project discovery.
-11. **Use `advance` + `target` for branching.** Conditional dispatch uses exit rules with `target`, not separate dispatch steps. Merge branches with `any_of` inputs.
+11. **Use step-level `when` for branching.** Each branch declares its own activation condition. Merge branches with `any_of` inputs.
 12. **`flow:` can't combine with other executors.** Mutually exclusive with `run:`, `executor:`, and `for_each:`.
 13. **`prompt` and `prompt_file` are mutually exclusive.** Never set both on the same step.
 14. **Directory flow `run:` paths resolve relative to the flow directory**, not the current working directory.
@@ -604,7 +598,7 @@ Before outputting a flow, verify:
 6. Prompt `$variables` match input `local_name` values exactly
 7. All loops have a safety cap (`attempt >= N` at medium priority)
 8. For-each: source produces a list; sub-flow accesses item via `$job.<as>`
-9. Branching: `advance` + `target` references a valid step; `any_of` has >= 2 sources with valid `step.field` refs
+9. Branching: `when` conditions reference input variable names; `any_of` has >= 2 sources with valid `step.field` refs
 10. All sub-flows (flow steps, for-each) produce all declared parent `outputs`
 
 After generating, validate with `stepwise validate <flow>`.

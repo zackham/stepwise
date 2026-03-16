@@ -62,11 +62,12 @@ Two engine classes: `AsyncEngine` (primary, event-driven) and `Engine` (legacy, 
 
 **Engine** (legacy) — tick-based `engine.tick()` loop. Still used by some tests. All business logic (readiness, exit rules, input resolution) is shared between both engines.
 
-- **Step readiness** (`_is_step_ready()`): no active run + no current completed run (or loop guard) + all deps have current completed runs
+- **Step readiness** (`_is_step_ready()`): no active run + no current completed run (or loop guard) + all deps have current completed runs + `when` condition (if set) evaluates to True
 - **Currency** (`_is_current()`): latest run for step is COMPLETED and all dep runs are also current (recursive)
 - **Executor dispatch:** `registry.create(ExecutorRef)` → factory lookup → decorator wrapping → `to_thread(executor.start)` (AsyncEngine) or direct call (Engine)
-- **Exit rules** after step completion: `advance` (continue DAG, optional `target` for conditional branching), `loop` (re-launch target step), `escalate` (pause job), `abandon` (fail job) — defined via `models.py:ExitRule`
-- **Skip propagation**: When `advance` has a `target`, non-targeted downstream steps get SKIPPED runs. Transitive propagation marks dead branches. `any_of` inputs only skip when ALL sources are dead.
+- **Exit rules** after step completion: `advance` (continue DAG), `loop` (re-launch target step), `escalate` (pause job), `abandon` (fail job) — defined via `models.py:ExitRule`
+- **Conditional branching** via `when`: Steps declare their own activation condition evaluated against resolved inputs. When deps are satisfied but `when` is false, the step stays not-ready. At job settlement, never-started steps get SKIPPED runs.
+- **Settlement**: When nothing is in motion and nothing is ready, the job is settled. `_settle_unstarted_steps()` marks never-run steps as SKIPPED. Job completes if at least one terminal completed; fails otherwise.
 - **Input resolution:** `_resolve_inputs()` navigates artifact fields via dot-path (`"step_name.field.nested"`)
 
 Do not duplicate readiness checks outside `engine.py`. Test input resolution via `register_step_fn()`, not by mocking engine internals.
@@ -199,6 +200,36 @@ steps:
         action: loop
         target: analyze
 ```
+
+Conditional branching with `when` (pull-based — each step decides when it runs):
+
+```yaml
+steps:
+  run-tests:
+    run: './test.sh'
+    outputs: [status]
+
+  open-pr:
+    inputs:
+      status: run-tests.status
+    when: "status == 'pass'"    # only activates if condition holds
+    run: 'gh pr create ...'
+    outputs: [pr_url]
+
+  fix-tests:
+    inputs:
+      status: run-tests.status
+    when: "status == 'fail'"    # mutually exclusive with open-pr
+    run: './fix.sh'
+    outputs: [fixes]
+    exits:
+      - name: retry
+        when: "True"
+        action: loop
+        target: run-tests       # loop stays (backward jump)
+```
+
+Key distinction: `sequencing: [step-x]` = ordering only, `inputs: { field: step-x.field }` = data dep, `when: "expr"` = conditional gate on resolved inputs.
 
 Poll step (wait for external condition):
 
