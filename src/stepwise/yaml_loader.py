@@ -87,6 +87,27 @@ def evaluate_exit_condition(condition: str, outputs: dict, attempt: int,
         raise ValueError(f"Exit condition '{condition}' failed: {e}") from e
 
 
+def evaluate_when_condition(condition: str, inputs: dict) -> bool:
+    """Evaluate a step-level `when` condition against resolved inputs.
+
+    Input names are directly available in the namespace (e.g., `status == 'pass'`).
+    Returns False on NameError/AttributeError/TypeError (missing input).
+    """
+    namespace: dict = {"__builtins__": SAFE_BUILTINS}
+    for k, v in inputs.items():
+        namespace[k] = _DotDict(v) if isinstance(v, dict) else v
+    try:
+        return bool(eval(condition, namespace))
+    except (NameError, AttributeError, TypeError):
+        return False
+    except Exception:
+        import logging
+        logging.getLogger("stepwise.engine").warning(
+            "when condition %r failed", condition, exc_info=True
+        )
+        return False
+
+
 def _parse_input_binding(local_name: str, source: str) -> InputBinding:
     """Parse 'step.field' or '$job.field' into an InputBinding."""
     if source.startswith("$job."):
@@ -757,6 +778,9 @@ def _parse_step(
     if isinstance(limits_data, dict):
         limits = StepLimits.from_dict(limits_data)
 
+    # Step-level when condition (pure-pull branching)
+    when_condition = step_data.get("when")
+
     # Chain membership (M7a)
     chain = step_data.get("chain")
     chain_label = step_data.get("chain_label")
@@ -771,6 +795,7 @@ def _parse_step(
         sequencing=sequencing,
         exit_rules=exit_rules,
         idempotency=idempotency,
+        when=when_condition,
         limits=limits,
         chain=chain,
         chain_label=chain_label,
