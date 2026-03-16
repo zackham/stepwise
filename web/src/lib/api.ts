@@ -7,6 +7,7 @@ import type {
   FlowTemplate,
   EngineStatus,
   FlowDefinition,
+  FlowMetadata,
   JobConfig,
   AgentStreamEvent,
   LocalFlow,
@@ -52,7 +53,8 @@ export function fetchJob(jobId: string): Promise<Job> {
 
 export function createJob(data: {
   objective: string;
-  workflow: FlowDefinition;
+  workflow?: FlowDefinition | null;
+  flow_path?: string;
   inputs?: Record<string, unknown>;
   config?: Partial<JobConfig>;
   workspace_path?: string;
@@ -61,7 +63,8 @@ export function createJob(data: {
     method: "POST",
     body: JSON.stringify({
       objective: data.objective,
-      workflow: data.workflow,
+      workflow: data.workflow ?? null,
+      flow_path: data.flow_path ?? null,
       inputs: data.inputs ?? null,
       config: data.config ?? null,
       workspace_path: data.workspace_path ?? null,
@@ -315,6 +318,16 @@ export function deleteStep(
   return request<ParseResult>("/flows/delete-step", {
     method: "POST",
     body: JSON.stringify({ flow_path: flowPath, step_name: stepName }),
+  });
+}
+
+export function patchFlowMetadata(
+  path: string,
+  metadata: Partial<FlowMetadata>
+): Promise<LocalFlowDetail> {
+  return request<LocalFlowDetail>(`/flows/local/${path}`, {
+    method: "PATCH",
+    body: JSON.stringify(metadata),
   });
 }
 
