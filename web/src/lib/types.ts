@@ -74,6 +74,7 @@ export interface StepDefinition {
   sequencing: string[];
   exit_rules: ExitRule[];
   idempotency: string;
+  when?: string;
   limits: StepLimits | null;
   for_each?: ForEachSpec;
   sub_flow?: FlowDefinition;
@@ -230,6 +231,7 @@ export interface EngineStatus {
   active_jobs: number;
   total_jobs: number;
   registered_executors: string[];
+  cwd?: string;
 }
 
 // ── Agent Streaming ───────────────────────────────────────────────────
