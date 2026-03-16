@@ -28,6 +28,7 @@ from stepwise.events import (
     STEP_DELEGATED,
     STEP_FAILED,
     STEP_LIMIT_EXCEEDED,
+    STEP_SKIPPED,
     STEP_STARTED,
     STEP_STARTED_ASYNC,
     STEP_SUSPENDED,
@@ -873,13 +874,129 @@ class Engine:
     # ── Job Completion ────────────────────────────────────────────────────
 
     def _job_complete(self, job: Job) -> bool:
-        """A job is complete when all terminal steps have current completed runs."""
+        """A job is complete when all non-skipped terminal steps have current completed runs."""
         terminal = job.workflow.terminal_steps()
         for step_name in terminal:
+            if self._is_step_skipped(job, step_name):
+                continue  # skipped terminals don't block completion
             latest = self.store.latest_completed_run(job.id, step_name)
             if not latest or not self._is_current(job, latest):
                 return False
         return True
+
+    def _is_step_skipped(self, job: Job, step_name: str) -> bool:
+        latest = self.store.latest_run(job.id, step_name)
+        return latest is not None and latest.status == StepRunStatus.SKIPPED
+
+    def _direct_downstream(self, job: Job, step_name: str) -> set[str]:
+        """Steps that directly depend on step_name via inputs/sequencing/for_each/any_of."""
+        downstream: set[str] = set()
+        for name, sdef in job.workflow.steps.items():
+            for b in sdef.inputs:
+                if not b.any_of_sources and b.source_step == step_name:
+                    downstream.add(name)
+                elif b.any_of_sources:
+                    for src, _ in b.any_of_sources:
+                        if src == step_name:
+                            downstream.add(name)
+            if step_name in sdef.sequencing:
+                downstream.add(name)
+            if sdef.for_each and sdef.for_each.source_step == step_name:
+                downstream.add(name)
+        return downstream
+
+    def _propagate_skips(self, job: Job, completing_step: str, target_step: str) -> None:
+        """Mark non-targeted downstream steps as SKIPPED, propagate transitively."""
+        downstream = self._direct_downstream(job, completing_step)
+        to_skip: set[str] = set()
+
+        for d in downstream:
+            if d == target_step:
+                continue
+            sdef = job.workflow.steps[d]
+            has_hard_dep = False
+            for b in sdef.inputs:
+                if not b.any_of_sources and b.source_step == completing_step:
+                    has_hard_dep = True
+                    break
+            if completing_step in sdef.sequencing:
+                has_hard_dep = True
+            if sdef.for_each and sdef.for_each.source_step == completing_step:
+                has_hard_dep = True
+            if has_hard_dep:
+                to_skip.add(d)
+
+        # BFS: create SKIPPED runs and propagate transitively
+        skipped_so_far: set[str] = set()
+        queue = list(to_skip)
+        while queue:
+            step = queue.pop(0)
+            if step in skipped_so_far:
+                continue
+            skipped_so_far.add(step)
+
+            run = StepRun(
+                id=_gen_id("run"), job_id=job.id, step_name=step,
+                attempt=self.store.next_attempt(job.id, step),
+                status=StepRunStatus.SKIPPED,
+                error=f"Skipped: advance from '{completing_step}' targeted '{target_step}'",
+                started_at=_now(), completed_at=_now(),
+            )
+            self.store.save_run(run)
+            self._emit(job.id, STEP_SKIPPED, {
+                "step": step,
+                "reason": f"advance targeted '{target_step}'",
+            })
+
+            # Transitively propagate
+            for child in self._direct_downstream(job, step):
+                if child in skipped_so_far:
+                    continue
+                child_def = job.workflow.steps[child]
+                should_skip = False
+
+                # Regular/sequencing/for_each dep on a skipped step → skip
+                for b in child_def.inputs:
+                    if not b.any_of_sources and b.source_step in skipped_so_far:
+                        should_skip = True
+                        break
+                if not should_skip:
+                    for seq in child_def.sequencing:
+                        if seq in skipped_so_far:
+                            should_skip = True
+                            break
+                if not should_skip and child_def.for_each:
+                    if child_def.for_each.source_step in skipped_so_far:
+                        should_skip = True
+
+                # any_of: only skip if ALL sources in a group are dead
+                if not should_skip:
+                    for b in child_def.inputs:
+                        if b.any_of_sources:
+                            all_dead = all(
+                                self._is_step_skipped(job, src) or src in skipped_so_far
+                                for src, _ in b.any_of_sources
+                            )
+                            if all_dead:
+                                should_skip = True
+                                break
+
+                if should_skip:
+                    queue.append(child)
+
+        # Guard: if ALL terminal steps are now skipped, fail the job
+        terminals = job.workflow.terminal_steps()
+        if terminals and all(
+            self._is_step_skipped(job, t) or t in skipped_so_far
+            for t in terminals
+        ):
+            job.status = JobStatus.FAILED
+            job.updated_at = _now()
+            self.store.save_job(job)
+            self._emit(job.id, JOB_FAILED, {
+                "reason": "all_terminals_skipped",
+                "step": completing_step,
+            })
 
     # ── Launching ─────────────────────────────────────────────────────────
 
@@ -1657,6 +1774,9 @@ class Engine:
 
                 match action:
                     case "advance":
+                        target = rule.config.get("target")
+                        if target:
+                            self._propagate_skips(job, run.step_name, target)
                         return  # Normal progression
                     case "loop":
                         target = rule.config.get("target", run.step_name)
@@ -2057,6 +2177,9 @@ class Engine:
                             })
                             return
                         case "advance":
+                            target = rule.config.get("target")
+                            if target:
+                                self._propagate_skips(job, run.step_name, target)
                             return  # Move past the failure
 
         # No exit rule handled the failure — halt the job
