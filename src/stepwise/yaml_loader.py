@@ -45,6 +45,10 @@ SAFE_BUILTINS = {
     "True": True,
     "False": False,
     "None": None,
+    # JavaScript/YAML-friendly aliases
+    "true": True,
+    "false": False,
+    "null": None,
 }
 
 

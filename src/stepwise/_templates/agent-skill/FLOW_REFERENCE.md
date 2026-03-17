@@ -284,7 +284,7 @@ exits:
 ```
 
 **Expression namespace:** `outputs` (DotDict), `attempt` (1-indexed), `max_attempts`.
-**Safe builtins:** `any`, `all`, `len`, `min`, `max`, `sum`, `abs`, `round`, `sorted`, `int`, `float`, `str`, `bool`, `True`, `False`, `None`.
+**Safe builtins:** `any`, `all`, `len`, `min`, `max`, `sum`, `abs`, `round`, `sorted`, `int`, `float`, `str`, `bool`, `True`/`true`, `False`/`false`, `None`/`null`.
 
 **Expression examples:**
 
