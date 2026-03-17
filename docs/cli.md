@@ -160,7 +160,7 @@ stepwise run council --async --var question="..."
 # → {"job_id": "job-a1b2c3d4", "status": "running"}
 ```
 
-Fire-and-forget. Spawns a detached background process (no `stepwise serve` required), returns the job ID immediately. Poll with `stepwise status` or retrieve results with `stepwise output`.
+Fire-and-forget. Spawns a detached background process (no server required), returns the job ID immediately. Poll with `stepwise status` or retrieve results with `stepwise output`.
 
 ### JSON output (--output json)
 
@@ -189,24 +189,55 @@ Same as headless mode (shows step progress to stderr) but prints structured JSON
 
 ---
 
-## `stepwise serve`
+## `stepwise server`
 
-Start a persistent server with the web UI. For long-running use where you want to manage multiple jobs over time.
+Manage the Stepwise server lifecycle: start, stop, restart, and check status.
+
+### `stepwise server start`
+
+Start the server in the foreground (default) or background (`--detach`).
 
 ```bash
-stepwise serve
-stepwise serve --port 9000
-stepwise serve --host 0.0.0.0 --port 8340    # bind to all interfaces
-stepwise serve --no-open                       # don't auto-open browser
+stepwise server start                          # foreground (Ctrl+C to stop)
+stepwise server start --detach                 # background daemon
+stepwise server start -d --port 9000           # background on custom port
+stepwise server start --host 0.0.0.0           # bind to all interfaces
+stepwise server start --no-open                # don't auto-open browser
 ```
 
-The server runs until you stop it (Ctrl+C). Jobs persist across restarts via SQLite.
+In detached mode, logs go to `.stepwise/logs/server.log` (5 MB rotation, 3 backups).
+
+### `stepwise server stop`
+
+Gracefully stop a running server (SIGTERM, then SIGKILL after 5s).
+
+```bash
+stepwise server stop
+```
+
+### `stepwise server restart`
+
+Stop the server (if running) and start it again. Passes through `--detach`, `--port`, `--host`.
+
+```bash
+stepwise server restart --detach
+```
+
+### `stepwise server status`
+
+Show whether the server is running, its PID, port, uptime, and log file path.
+
+```bash
+stepwise server status
+```
 
 | Flag | Description |
 |------|-------------|
-| `--port INT` | Port to listen on (default: 8340) |
+| `action` | `start`, `stop`, `restart`, or `status` |
+| `--port INT` | Port (default: 8340) |
 | `--host STR` | Bind address (default: 127.0.0.1) |
-| `--no-open` | Don't auto-open browser |
+| `--detach`, `-d` | Run in background (for `start`/`restart`) |
+| `--no-open` | Don't auto-open browser (for `start`/`restart`) |
 
 **Note:** The server exposes a REST API and WebSocket at the same address. See the [API Reference](api.md) for endpoint documentation. Swagger UI is available at `/docs`.
 
@@ -682,7 +713,7 @@ curl -s -X POST "$SLACK_WEBHOOK" -d "{\"text\":\"Step '$step' needs input: $cmd\
 
 ## Server-Aware CLI
 
-When `stepwise serve` is running, CLI commands can automatically route through the server API instead of accessing SQLite directly. This prevents database locking conflicts.
+When the Stepwise server is running, CLI commands can automatically route through the server API instead of accessing SQLite directly. This prevents database locking conflicts.
 
 **Detection:** The CLI checks `.stepwise/server.pid` and probes the health endpoint.
 

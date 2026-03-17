@@ -4,7 +4,10 @@ Usage:
     stepwise init                          Create .stepwise/ in cwd
     stepwise run <flow> [flags]            Run a flow
     stepwise new <name>                    Create a new flow
-    stepwise serve [flags]                 Persistent server
+    stepwise server start [--detach]       Start server (foreground or background)
+    stepwise server stop                   Stop the server
+    stepwise server restart                Restart the server
+    stepwise server status                 Show server status
     stepwise share <flow> [--author]       Publish a flow to the registry
     stepwise get <target>                  Download a flow (URL, @author:name, or slug)
     stepwise search [query] [--tag]        Search the flow registry
@@ -376,12 +379,24 @@ def _prompt_create_framework_dir(root: Path, io: IOAdapter) -> None:
         io.log("success", f"Installed agent skill in {installed}")
 
 
-def cmd_serve(args: argparse.Namespace) -> int:
+def cmd_server(args: argparse.Namespace) -> int:
+    action = args.action
+    if action == "start":
+        return _server_start(args)
+    elif action == "stop":
+        return _server_stop(args)
+    elif action == "restart":
+        return _server_restart(args)
+    elif action == "status":
+        return _server_status(args)
+    return EXIT_USAGE_ERROR
+
+
+def _server_start(args: argparse.Namespace) -> int:
     io = _io(args)
     project = _find_project_or_exit(args)
 
     import os
-    import uvicorn
 
     # Check if a server is already running for this project
     from stepwise.server_detect import detect_server
@@ -392,17 +407,24 @@ def cmd_serve(args: argparse.Namespace) -> int:
             _open_browser(existing_url)
         return EXIT_SUCCESS
 
-    # Set env vars so server.py picks them up in lifespan
-    os.environ["STEPWISE_DB"] = str(project.db_path)
-    os.environ["STEPWISE_TEMPLATES"] = str(project.templates_dir)
-    os.environ["STEPWISE_JOBS_DIR"] = str(project.jobs_dir)
-
     host = args.host or "127.0.0.1"
     port = args.port or 8340
 
     if not args.port and not _port_available(host, port):
         port = _find_free_port()
         io.log("warn", f"Port 8340 in use, using {port}")
+
+    if args.detach:
+        return _server_start_detached(project, host, port, io, args)
+
+    # Foreground mode
+    import uvicorn
+
+    # Set env vars so server.py picks them up in lifespan
+    os.environ["STEPWISE_DB"] = str(project.db_path)
+    os.environ["STEPWISE_TEMPLATES"] = str(project.templates_dir)
+    os.environ["STEPWISE_JOBS_DIR"] = str(project.jobs_dir)
+    os.environ["STEPWISE_PROJECT_DIR"] = str(project.root)
 
     io.banner(f"Stepwise v{_get_version()}", f"http://{host}:{port}")
 
@@ -419,7 +441,6 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     # Write pidfile for CLI server detection
     from stepwise.server_detect import write_pidfile, remove_pidfile
-    os.environ["STEPWISE_PROJECT_DIR"] = str(project.root)
     write_pidfile(project.dot_dir, port)
     try:
         uvicorn.run(
@@ -430,6 +451,146 @@ def cmd_serve(args: argparse.Namespace) -> int:
         )
     finally:
         remove_pidfile(project.dot_dir)
+    return EXIT_SUCCESS
+
+
+def _server_start_detached(
+    project: StepwiseProject,
+    host: str,
+    port: int,
+    io: IOAdapter,
+    args: argparse.Namespace,
+) -> int:
+    import subprocess
+    import time
+
+    project.logs_dir.mkdir(parents=True, exist_ok=True)
+    log_file = project.logs_dir / "server.log"
+
+    cmd = [
+        sys.executable, "-m", "stepwise.server_bg",
+        "--db", str(project.db_path),
+        "--jobs-dir", str(project.jobs_dir),
+        "--templates-dir", str(project.templates_dir),
+        "--project-dir", str(project.root),
+        "--dot-dir", str(project.dot_dir),
+        "--port", str(port),
+        "--host", host,
+        "--log-file", str(log_file),
+    ]
+
+    subprocess.Popen(
+        cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    # Wait for server to become healthy
+    url = f"http://{host}:{port}"
+    from stepwise.server_detect import _probe_health
+    for _ in range(50):  # up to 5 seconds
+        time.sleep(0.1)
+        if _probe_health(url, timeout=1.0):
+            io.banner(f"Stepwise v{_get_version()}", url)
+            io.log("info", f"Log: {log_file}")
+            io.log("info", "Run `stepwise server stop` to shut down")
+            if not args.no_open:
+                _open_browser(url)
+            return EXIT_SUCCESS
+
+    io.log("error", f"Server did not start within 5 seconds")
+    io.log("info", f"Check log: {log_file}")
+    return EXIT_JOB_FAILED
+
+
+def _server_stop(args: argparse.Namespace) -> int:
+    import os
+    import signal
+    import time
+
+    io = _io(args)
+    project = _find_project_or_exit(args)
+
+    from stepwise.server_detect import read_pidfile, remove_pidfile, _pid_alive
+
+    data = read_pidfile(project.dot_dir)
+    pid = data.get("pid")
+
+    if not pid or not _pid_alive(pid):
+        if pid:
+            # Stale pidfile
+            remove_pidfile(project.dot_dir)
+        io.log("info", "Server is not running")
+        return EXIT_SUCCESS
+
+    # Send SIGTERM and wait
+    os.kill(pid, signal.SIGTERM)
+    for _ in range(50):  # up to 5 seconds
+        time.sleep(0.1)
+        if not _pid_alive(pid):
+            remove_pidfile(project.dot_dir)
+            io.log("success", "Server stopped")
+            return EXIT_SUCCESS
+
+    # Force kill
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+    remove_pidfile(project.dot_dir)
+    io.log("warn", f"Server (PID {pid}) did not stop gracefully, sent SIGKILL")
+    return EXIT_SUCCESS
+
+
+def _server_restart(args: argparse.Namespace) -> int:
+    _server_stop(args)
+    return _server_start(args)
+
+
+def _server_status(args: argparse.Namespace) -> int:
+    io = _io(args)
+    project = _find_project_or_exit(args)
+
+    from stepwise.server_detect import detect_server, read_pidfile
+
+    url = detect_server(project.dot_dir)
+    if not url:
+        io.log("info", "Server is not running")
+        return EXIT_SUCCESS
+
+    data = read_pidfile(project.dot_dir)
+    pid = data.get("pid", "?")
+    port = data.get("port", "?")
+    log_file = data.get("log_file")
+
+    # Compute uptime
+    uptime_str = ""
+    started_at = data.get("started_at")
+    if started_at:
+        try:
+            from datetime import datetime, timezone
+            start = datetime.fromisoformat(started_at)
+            delta = datetime.now(timezone.utc) - start
+            total_secs = int(delta.total_seconds())
+            hours, remainder = divmod(total_secs, 3600)
+            minutes, secs = divmod(remainder, 60)
+            if hours:
+                uptime_str = f"{hours}h {minutes}m"
+            elif minutes:
+                uptime_str = f"{minutes}m {secs}s"
+            else:
+                uptime_str = f"{secs}s"
+        except Exception:
+            pass
+
+    parts = [f"PID {pid}", f"port {port}"]
+    if uptime_str:
+        parts.append(f"uptime {uptime_str}")
+    io.log("info", f"Server running at {url} ({', '.join(parts)})")
+    if log_file:
+        io.log("info", f"Log: {log_file}")
     return EXIT_SUCCESS
 
 
@@ -539,6 +700,44 @@ def cmd_diagram(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
+def _executor_subtitle(step) -> str:
+    """Compute a human-readable subtitle for a step's executor (mirrors web UI)."""
+    exec_type = step.executor.type if step.executor else "script"
+    config = step.executor.config if step.executor else {}
+
+    if exec_type == "script":
+        cmd = config.get("command", "")
+        if not cmd:
+            return "script"
+        # For python3 -c "..." inline scripts, show outputs instead
+        if "python3 -c" in cmd or "python -c" in cmd:
+            if step.outputs:
+                return f"script -> {', '.join(step.outputs)}"
+            return "python script"
+        # Strip python3 prefix for .py files, show just the filename
+        cmd = cmd.replace("python3 ", "").replace("python ", "")
+        return cmd[:36] if len(cmd) <= 36 else cmd[:34] + ".."
+    elif exec_type == "llm":
+        model = config.get("model", "")
+        return f"LLM: {model}" if model else "LLM"
+    elif exec_type == "agent":
+        model = config.get("model", "")
+        parts = ["Agent"]
+        if model:
+            parts.append(model)
+        return " ".join(parts)
+    elif exec_type == "human":
+        prompt = config.get("prompt", "")
+        if prompt:
+            return prompt[:36] if len(prompt) <= 36 else prompt[:34] + ".."
+        return "human input"
+    elif exec_type == "poll":
+        return "poll"
+    elif exec_type == "mock_llm":
+        return "LLM simulation"
+    return exec_type
+
+
 def _build_flow_graph(wf, fmt: str, name: str | None = None):
     """Build a graphviz.Digraph for a WorkflowDefinition."""
     import graphviz
@@ -551,6 +750,8 @@ def _build_flow_graph(wf, fmt: str, name: str | None = None):
         fontname="Helvetica",
         fontcolor="white",
         pad="0.5",
+        nodesep="0.6",
+        ranksep="0.8",
     )
     dot.attr("node", fontname="Helvetica", fontcolor="white", color="#333",
              style="filled", fillcolor="#1a1a2e")
@@ -567,22 +768,104 @@ def _build_flow_graph(wf, fmt: str, name: str | None = None):
         "llm": "filled,rounded",
     }
 
+    # ── Collect $job.* input consumers ──────────────────────────────
+    job_input_consumers: dict[str, set[str]] = {}  # step_name -> {field_names}
+    for step_name, step in wf.steps.items():
+        for inp in step.inputs:
+            if inp.any_of_sources:
+                for src_step, src_field in inp.any_of_sources:
+                    if src_step == "$job":
+                        job_input_consumers.setdefault(step_name, set()).add(src_field)
+            elif inp.source_step == "$job":
+                job_input_consumers.setdefault(step_name, set()).add(inp.source_field)
+
+    all_job_fields: set[str] = set()
+    for fields in job_input_consumers.values():
+        all_job_fields.update(fields)
+
+    # ── Collect terminal steps and their outputs ────────────────────
+    depended_on: set[str] = set()
+    for step in wf.steps.values():
+        for binding in step.inputs:
+            if binding.any_of_sources:
+                for src_step, _ in binding.any_of_sources:
+                    if src_step != "$job":
+                        depended_on.add(src_step)
+            elif binding.source_step != "$job":
+                depended_on.add(binding.source_step)
+        for seq in step.sequencing:
+            depended_on.add(seq)
+        if step.for_each:
+            depended_on.add(step.for_each.source_step)
+
+    terminal_outputs: dict[str, list[str]] = {}  # step_name -> output fields
+    for step_name, step in wf.steps.items():
+        if step_name not in depended_on and step.outputs:
+            terminal_outputs[step_name] = step.outputs
+
+    # ── Add Inputs port node ────────────────────────────────────────
+    INPUTS_ID = "__inputs__"
+    if all_job_fields:
+        fields_label = "\\n".join(sorted(all_job_fields))
+        input_label = f'<<FONT POINT-SIZE="10">&#x2193; Inputs</FONT><BR/><FONT POINT-SIZE="9" COLOR="#94a3b8">{fields_label}</FONT>>'
+        dot.node(INPUTS_ID, label=input_label, shape="box", style="rounded,filled",
+                 fillcolor="#1e293b", color="#475569", fontcolor="#94a3b8",
+                 margin="0.15,0.1")
+
+    # ── Add step nodes ──────────────────────────────────────────────
     for step_name, step in wf.steps.items():
         exec_type = step.executor.type if step.executor else "script"
         shape = _EXECUTOR_SHAPES.get(exec_type, "box")
         style = _EXECUTOR_STYLE.get(exec_type, "filled")
-        label = f'<<B>{step_name}</B><BR/><FONT POINT-SIZE="10">{exec_type}</FONT>>'
-        dot.node(step_name, label=label, shape=shape, style=style)
+        subtitle = _executor_subtitle(step)
 
-        # Sub-flow as cluster subgraph
-        if step.sub_flow:
-            sub = _build_flow_graph(step.sub_flow, fmt, name=f"cluster_{step_name}")
-            sub.attr(label=step_name, style="dashed", color="#666", fontcolor="white")
-            dot.subgraph(sub)
+        # For-each steps: render inline with step count badge
+        if step.for_each and step.sub_flow:
+            sub_step_count = len(step.sub_flow.steps)
+            fe_badge = f"for-each ({sub_step_count} step{'s' if sub_step_count != 1 else ''})"
+            label = (
+                f'<<B>{step_name}</B>'
+                f'<BR/><FONT POINT-SIZE="10" COLOR="#c084fc">'
+                f'&#x1F517; {fe_badge}</FONT>>'
+            )
+            dot.node(step_name, label=label, shape="box", style="filled",
+                     fillcolor="#1a1a2e", color="#7c3aed")
+        else:
+            # Escape HTML entities in subtitle
+            safe_subtitle = subtitle.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            label = (
+                f'<<B>{step_name}</B>'
+                f'<BR/><FONT POINT-SIZE="10" COLOR="#94a3b8">{safe_subtitle}</FONT>>'
+            )
+            dot.node(step_name, label=label, shape=shape, style=style)
 
-    # Edges
+    # ── Add Outputs port node ───────────────────────────────────────
+    OUTPUTS_ID = "__outputs__"
+    if terminal_outputs:
+        all_out_fields: list[str] = []
+        for fields in terminal_outputs.values():
+            all_out_fields.extend(fields)
+        fields_label = "\\n".join(all_out_fields)
+        output_label = f'<<FONT POINT-SIZE="10">&#x2191; Outputs</FONT><BR/><FONT POINT-SIZE="9" COLOR="#6ee7b7">{fields_label}</FONT>>'
+        dot.node(OUTPUTS_ID, label=output_label, shape="box", style="rounded,filled",
+                 fillcolor="#022c22", color="#065f46", fontcolor="#6ee7b7",
+                 margin="0.15,0.1")
+
+    # ── Edges ───────────────────────────────────────────────────────
+
+    # Edges from Inputs node to consuming steps
+    if all_job_fields:
+        seen_input_edges: set[str] = set()
+        for step_name, fields in job_input_consumers.items():
+            edge_key = f"{INPUTS_ID}->{step_name}"
+            if edge_key not in seen_input_edges:
+                edge_label = ", ".join(sorted(fields))
+                dot.edge(INPUTS_ID, step_name, label=edge_label,
+                         color="#475569", fontcolor="#94a3b8", style="dashed")
+                seen_input_edges.add(edge_key)
+
+    # Step-to-step data flow edges
     for step_name, step in wf.steps.items():
-        # Input bindings (data flow)
         for inp in step.inputs:
             if inp.any_of_sources:
                 for src_step, _src_field in inp.any_of_sources:
@@ -594,10 +877,23 @@ def _build_flow_graph(wf, fmt: str, name: str | None = None):
                     dot.edge(inp.source_step, step_name, label=inp.local_name,
                              color="#60a5fa", fontcolor="#60a5fa")
 
+        # for_each implicit edge from source step
+        if step.for_each and step.for_each.source_step in wf.steps:
+            dot.edge(step.for_each.source_step, step_name,
+                     label=step.for_each.source_field,
+                     color="#c084fc", fontcolor="#c084fc")
+
         # Sequencing edges
         for dep in step.sequencing:
             if dep in wf.steps:
                 dot.edge(dep, step_name, style="dashed", color="#666")
+
+    # Edges from terminal steps to Outputs node
+    if terminal_outputs:
+        for step_name, fields in terminal_outputs.items():
+            edge_label = ", ".join(fields)
+            dot.edge(step_name, OUTPUTS_ID, label=edge_label,
+                     color="#065f46", fontcolor="#6ee7b7", style="dashed")
 
         # Exit rules
         for rule in step.exit_rules:
@@ -2298,11 +2594,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("--skill", metavar="DIR",
                         help="Install agent skill to specific directory (e.g., .claude or .agents)")
 
-    # serve
-    p_serve = sub.add_parser("serve", help="Start persistent server with web UI")
-    p_serve.add_argument("--port", type=int, help="Port to listen on (default: 8340)")
-    p_serve.add_argument("--host", help="Bind address (default: 127.0.0.1)")
-    p_serve.add_argument("--no-open", action="store_true", help="Don't auto-open browser")
+    # server
+    p_server = sub.add_parser("server", help="Manage the Stepwise server")
+    p_server.add_argument("action", choices=["start", "stop", "restart", "status"])
+    p_server.add_argument("--port", type=int, help="Port (default: 8340)")
+    p_server.add_argument("--host", help="Bind address (default: 127.0.0.1)")
+    p_server.add_argument("--detach", "-d", action="store_true", help="Run in background")
+    p_server.add_argument("--no-open", action="store_true", help="Don't auto-open browser")
 
     # run
     p_run = sub.add_parser("run", help="Run a flow")
@@ -2507,7 +2805,7 @@ def main(argv: list[str] | None = None) -> int:
 
     handlers = {
         "init": cmd_init,
-        "serve": cmd_serve,
+        "server": cmd_server,
         "run": cmd_run,
         "new": cmd_new,
         "validate": cmd_validate,
