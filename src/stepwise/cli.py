@@ -517,19 +517,25 @@ def cmd_diagram(args: argparse.Namespace) -> int:
     # Determine output path
     if args.output:
         out_path = args.output
-        # Strip extension if it matches format (graphviz adds it)
-        if out_path.endswith(f".{fmt}"):
-            out_path = out_path[: -len(fmt) - 1]
+        # Ensure the output path has the correct extension
+        if not out_path.endswith(f".{fmt}"):
+            out_path = f"{out_path}.{fmt}"
     else:
-        out_path = wf.metadata.name or flow_path.stem
+        name = wf.metadata.name or flow_path.stem
+        out_path = f"{name}.{fmt}"
 
+    # Render using pipe() to avoid writing intermediate DOT source files.
+    # The old render() approach wrote a bare file (e.g. "council") as the DOT
+    # source, which would then be picked up by flow resolution on subsequent
+    # runs and parsed as YAML, causing errors.
     try:
-        rendered = dot.render(out_path, cleanup=True)
+        data = dot.pipe()
     except graphviz.backend.ExecutableNotFound:
         io.log("error", "Graphviz 'dot' binary not found. Install Graphviz: brew install graphviz / apt install graphviz")
         return EXIT_JOB_FAILED
 
-    io.log("success", rendered)
+    Path(out_path).write_bytes(data)
+    io.log("success", out_path)
     return EXIT_SUCCESS
 
 
