@@ -136,6 +136,43 @@ def fire_hook_for_event(
     return fire_hook(hook_name, payload, project_dir)
 
 
+def fire_notify_webhook(
+    event_type: str,
+    event_data: dict,
+    job_id: str,
+    notify_url: str,
+    notify_context: dict | None = None,
+) -> None:
+    """Fire-and-forget HTTP POST to a webhook URL with event data.
+
+    Args:
+        event_type: Engine event constant (e.g. "job.completed").
+        event_data: The event's data dict from the engine.
+        job_id: The job ID associated with the event.
+        notify_url: HTTP(S) URL to POST to.
+        notify_context: Optional context dict merged into payload.
+    """
+    import threading
+
+    payload = {
+        "event": event_type,
+        "job_id": job_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        **event_data,
+    }
+    if notify_context:
+        payload["context"] = notify_context
+
+    def _send() -> None:
+        try:
+            import httpx
+            httpx.post(notify_url, json=payload, timeout=10)
+        except Exception:
+            logger.warning("Webhook notification failed for %s → %s", event_type, notify_url, exc_info=True)
+
+    threading.Thread(target=_send, daemon=True).start()
+
+
 def _log_hook_failure(
     project_dir: Path,
     event_name: str,
