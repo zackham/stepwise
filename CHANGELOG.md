@@ -3,8 +3,6 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
-
 ## [0.6.0] — 2026-03-17
 
 **Optional Inputs, Session Continuity, Webhook Notifications** — smarter loops, agent memory, and async event delivery.
