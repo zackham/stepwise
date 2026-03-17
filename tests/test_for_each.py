@@ -739,3 +739,148 @@ class TestForEachJobTree:
 
         tree = engine.get_job_tree(job.id)
         assert len(tree["sub_jobs"]) == 2
+
+
+# ── All-fail with on_error: continue ────────────────────────────────
+
+
+class TestForEachAllFail:
+    def test_all_items_fail_with_continue_fails_step(self):
+        """When ALL for-each items fail, the step should fail even with on_error=continue."""
+        def always_fail(inputs):
+            raise RuntimeError("every item fails")
+
+        register_step_fn("always_fail_fe", always_fail)
+
+        _, engine = make_engine()
+
+        sub_flow = WorkflowDefinition(steps={
+            "process": StepDefinition(
+                name="process", outputs=["result"],
+                executor=ExecutorRef("callable", {"fn_name": "always_fail_fe"}),
+                inputs=[InputBinding("item", "$job", "item")],
+            ),
+        })
+
+        w = WorkflowDefinition(steps={
+            "source": StepDefinition(
+                name="source", outputs=["items"],
+                executor=ExecutorRef("callable", {"fn_name": "all_fail_source"}),
+            ),
+            "each": StepDefinition(
+                name="each", outputs=["results"],
+                executor=ExecutorRef("for_each", {}),
+                for_each=ForEachSpec(
+                    source_step="source", source_field="items",
+                    on_error="continue",
+                ),
+                sub_flow=sub_flow,
+            ),
+        })
+
+        register_step_fn("all_fail_source", lambda inputs: {
+            "items": ["a", "b", "c"]
+        })
+
+        job = engine.create_job("For-each all-fail", w)
+        engine.start_job(job.id)
+        job = tick_until_done(engine, job.id)
+
+        assert job.status == JobStatus.FAILED
+
+        fe_run = engine.get_runs(job.id, "each")[0]
+        assert fe_run.status == StepRunStatus.FAILED
+        assert "All 3 sub-jobs failed" in fe_run.error
+
+        # Results should still be available for debugging
+        assert fe_run.result is not None
+        results = fe_run.result.artifact["results"]
+        assert len(results) == 3
+        assert all("_error" in r for r in results)
+
+    def test_partial_failure_with_continue_still_succeeds(self):
+        """When some (but not all) items fail with on_error=continue, the step succeeds."""
+        def partial_fail(inputs):
+            if inputs["item"] == "bad":
+                raise RuntimeError("this one fails")
+            return {"result": f"ok_{inputs['item']}"}
+
+        register_step_fn("partial_fail_fe", partial_fail)
+
+        _, engine = make_engine()
+
+        sub_flow = WorkflowDefinition(steps={
+            "process": StepDefinition(
+                name="process", outputs=["result"],
+                executor=ExecutorRef("callable", {"fn_name": "partial_fail_fe"}),
+                inputs=[InputBinding("item", "$job", "item")],
+            ),
+        })
+
+        w = WorkflowDefinition(steps={
+            "source": StepDefinition(
+                name="source", outputs=["items"],
+                executor=ExecutorRef("callable", {"fn_name": "partial_fail_source"}),
+            ),
+            "each": StepDefinition(
+                name="each", outputs=["results"],
+                executor=ExecutorRef("for_each", {}),
+                for_each=ForEachSpec(
+                    source_step="source", source_field="items",
+                    on_error="continue",
+                ),
+                sub_flow=sub_flow,
+            ),
+        })
+
+        register_step_fn("partial_fail_source", lambda inputs: {
+            "items": ["good", "bad", "also_good"]
+        })
+
+        job = engine.create_job("For-each partial-fail", w)
+        engine.start_job(job.id)
+        job = tick_until_done(engine, job.id)
+
+        # Partial failure with continue should still succeed
+        assert job.status == JobStatus.COMPLETED
+
+    def test_single_item_fails_with_continue_fails_step(self):
+        """A single-item for-each where that one item fails should fail."""
+        register_step_fn("single_fail_fe", lambda inputs: (_ for _ in ()).throw(RuntimeError("fail")))
+
+        _, engine = make_engine()
+
+        sub_flow = WorkflowDefinition(steps={
+            "process": StepDefinition(
+                name="process", outputs=["result"],
+                executor=ExecutorRef("callable", {"fn_name": "single_fail_fe"}),
+                inputs=[InputBinding("item", "$job", "item")],
+            ),
+        })
+
+        w = WorkflowDefinition(steps={
+            "source": StepDefinition(
+                name="source", outputs=["items"],
+                executor=ExecutorRef("callable", {"fn_name": "single_fail_src"}),
+            ),
+            "each": StepDefinition(
+                name="each", outputs=["results"],
+                executor=ExecutorRef("for_each", {}),
+                for_each=ForEachSpec(
+                    source_step="source", source_field="items",
+                    on_error="continue",
+                ),
+                sub_flow=sub_flow,
+            ),
+        })
+
+        register_step_fn("single_fail_src", lambda inputs: {"items": ["only"]})
+
+        job = engine.create_job("For-each single-fail", w)
+        engine.start_job(job.id)
+        job = tick_until_done(engine, job.id)
+
+        assert job.status == JobStatus.FAILED
+        fe_run = engine.get_runs(job.id, "each")[0]
+        assert fe_run.status == StepRunStatus.FAILED
+        assert "All 1 sub-jobs failed" in fe_run.error

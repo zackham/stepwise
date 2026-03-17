@@ -283,7 +283,7 @@ steps:
 - `as: variable_name` — names the iteration variable (default: `item`). Accessed in sub-flow steps via `$job.<variable_name>`
 - `flow:` — an embedded workflow definition with its own `steps:` block. Each iteration runs this sub-flow as an independent sub-job
 - `on_error: fail_fast` — first failure cancels remaining items and fails the step (default)
-- `on_error: continue` — failures are recorded as `{"_error": "..."}` in results; remaining items continue
+- `on_error: continue` — failures are recorded as `{"_error": "..."}` in results; remaining items continue. If **all** items fail, the for-each step itself fails
 - Results are collected in source list order. The output artifact is `{"results": [...]}`
 - Empty source lists complete immediately with `{"results": []}`
 - Parent-level `inputs:` are passed through to every sub-job alongside the iteration variable

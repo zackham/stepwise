@@ -879,3 +879,124 @@ class TestLoopCounting:
 
         completed_count = engine.store.completed_run_count(job.id, "a")
         assert completed_count <= 3
+
+
+# ── Cost Tracking ─────────────────────────────────────────────────────
+
+
+class TestJobCost:
+    def test_cost_from_executor_meta(self):
+        """job_cost reads cost_usd from executor_meta when no step_events exist."""
+        store = SQLiteStore(":memory:")
+        reg = ExecutorRegistry()
+        reg.register("callable", lambda config: CallableExecutor(fn_name=config.get("fn_name", "default")))
+        engine = Engine(store=store, registry=reg)
+
+        # Create a simple workflow
+        register_step_fn("cost_step", lambda inputs: {"result": "done"})
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["result"],
+                executor=ExecutorRef("callable", {"fn_name": "cost_step"}),
+            ),
+        })
+
+        job = engine.create_job("Cost test", w)
+        engine.start_job(job.id)
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.COMPLETED
+
+        # Manually set cost_usd in executor_meta (simulating LLMExecutor behavior)
+        run = engine.get_runs(job.id, "a")[0]
+        run.result.executor_meta["cost_usd"] = 0.0042
+        store.save_run(run)
+
+        cost = engine.job_cost(job.id)
+        assert abs(cost - 0.0042) < 0.0001
+
+    def test_cost_from_step_events_preferred(self):
+        """When step_events exist, they take precedence over executor_meta."""
+        store = SQLiteStore(":memory:")
+        reg = ExecutorRegistry()
+        reg.register("callable", lambda config: CallableExecutor(fn_name=config.get("fn_name", "default")))
+        engine = Engine(store=store, registry=reg)
+
+        register_step_fn("cost_step2", lambda inputs: {"result": "done"})
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["result"],
+                executor=ExecutorRef("callable", {"fn_name": "cost_step2"}),
+            ),
+        })
+
+        job = engine.create_job("Cost precedence", w)
+        engine.start_job(job.id)
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.COMPLETED
+
+        run = engine.get_runs(job.id, "a")[0]
+        # Set both: step_events and executor_meta
+        store.save_step_event(run.id, "cost", {"cost_usd": 0.10})
+        run.result.executor_meta["cost_usd"] = 0.05
+        store.save_run(run)
+
+        cost = engine.job_cost(job.id)
+        # step_events cost (0.10) should be used, not executor_meta (0.05)
+        assert abs(cost - 0.10) < 0.001
+
+    def test_cost_zero_when_no_cost_data(self):
+        """job_cost returns 0 when there is no cost data anywhere."""
+        store = SQLiteStore(":memory:")
+        reg = ExecutorRegistry()
+        reg.register("callable", lambda config: CallableExecutor(fn_name=config.get("fn_name", "default")))
+        engine = Engine(store=store, registry=reg)
+
+        register_step_fn("no_cost_step", lambda inputs: {"result": "done"})
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["result"],
+                executor=ExecutorRef("callable", {"fn_name": "no_cost_step"}),
+            ),
+        })
+
+        job = engine.create_job("No cost", w)
+        engine.start_job(job.id)
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.COMPLETED
+        assert engine.job_cost(job.id) == 0.0
+
+    def test_cost_aggregates_multiple_steps(self):
+        """job_cost sums cost across multiple steps."""
+        store = SQLiteStore(":memory:")
+        reg = ExecutorRegistry()
+        reg.register("callable", lambda config: CallableExecutor(fn_name=config.get("fn_name", "default")))
+        engine = Engine(store=store, registry=reg)
+
+        register_step_fn("cost_a", lambda inputs: {"x": "1"})
+        register_step_fn("cost_b", lambda inputs: {"y": "2"})
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["x"],
+                executor=ExecutorRef("callable", {"fn_name": "cost_a"}),
+            ),
+            "b": StepDefinition(
+                name="b", outputs=["y"],
+                executor=ExecutorRef("callable", {"fn_name": "cost_b"}),
+                inputs=[InputBinding("x", "a", "x")],
+            ),
+        })
+
+        job = engine.create_job("Multi cost", w)
+        engine.start_job(job.id)
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.COMPLETED
+
+        # Set cost on both steps
+        for step_name, cost_val in [("a", 0.003), ("b", 0.007)]:
+            run = engine.get_runs(job.id, step_name)[0]
+            run.result.executor_meta["cost_usd"] = cost_val
+            store.save_run(run)
+
+        total = engine.job_cost(job.id)
+        assert abs(total - 0.010) < 0.001
