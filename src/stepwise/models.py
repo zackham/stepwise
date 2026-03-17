@@ -561,11 +561,24 @@ class WorkflowDefinition:
         return errors
 
     def entry_steps(self) -> list[str]:
-        """Steps with no dependencies (no inputs, sequencing, or for_each source)."""
+        """Steps with no dependencies (no inputs, sequencing, or for_each source).
+
+        Loop back-edges are excluded: if step X depends on step Y and Y has
+        a loop exit targeting X, that dependency doesn't prevent X from being
+        an entry step.
+        """
+        # Collect loop back-edges
+        loop_back_edges: set[tuple[str, str]] = set()
+        for sname, sdef in self.steps.items():
+            for rule in sdef.exit_rules:
+                if rule.config.get("action") == "loop" and rule.config.get("target"):
+                    loop_back_edges.add((sname, rule.config["target"]))
+
         result = []
         for name, step in self.steps.items():
             has_step_deps = any(
-                b.source_step != "$job" for b in step.inputs if not b.any_of_sources
+                b.source_step != "$job" and (b.source_step, name) not in loop_back_edges
+                for b in step.inputs if not b.any_of_sources
             )
             has_any_of_deps = any(b.any_of_sources for b in step.inputs)
             has_for_each_dep = step.for_each is not None
@@ -617,7 +630,22 @@ class WorkflowDefinition:
         return terminals
 
     def _detect_cycles(self) -> list[str]:
-        """Detect cycles using Kahn's algorithm."""
+        """Detect cycles using Kahn's algorithm.
+
+        Loop back-edges are excluded: when step X depends on step Y's output
+        and Y has a loop exit rule targeting X, that edge is a valid loop
+        pattern, not a structural cycle.
+        """
+        # Collect loop back-edges: (source_step, target_step) pairs where
+        # source has a loop exit targeting target
+        loop_back_edges: set[tuple[str, str]] = set()
+        for name, step in self.steps.items():
+            for exit_rule in step.exit_rules:
+                action = exit_rule.config.get("action")
+                target = exit_rule.config.get("target")
+                if action == "loop" and target:
+                    loop_back_edges.add((name, target))
+
         adj: dict[str, list[str]] = {name: [] for name in self.steps}
         in_degree: dict[str, int] = {name: 0 for name in self.steps}
 
@@ -634,6 +662,10 @@ class WorkflowDefinition:
             if step.for_each:
                 deps.add(step.for_each.source_step)
             for dep in deps:
+                # Skip loop back-edges: dep → name is a back-edge if dep
+                # has a loop exit targeting name
+                if (dep, name) in loop_back_edges:
+                    continue
                 if dep in adj:
                     adj[dep].append(name)
                     in_degree[name] += 1
