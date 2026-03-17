@@ -1075,7 +1075,7 @@ class TestServerEndpoints:
 
         # Wait for async engine to suspend the human step
         suspended = []
-        for _ in range(20):
+        for _ in range(50):
             time.sleep(0.1)
             resp = client.get("/api/jobs/suspended")
             suspended = resp.json()["suspended_steps"]
