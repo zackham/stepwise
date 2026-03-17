@@ -149,6 +149,30 @@ Inputs are declared as `local_name: source` where source is:
 
 The local_name is what the executor receives. It decouples the executor from the graph topology.
 
+#### Optional Inputs
+
+Optional inputs are weak-reference bindings that resolve to `None` when the source dep has no current completed run. They allow steps to proceed without waiting, enabling loop-back data feeding and first-run defaults.
+
+```yaml
+inputs:
+  topic: $job.topic                    # required — step waits for this
+  score:
+    from: review.score
+    optional: true                     # resolves to None if review hasn't completed
+```
+
+**Syntax:** Dict with `from` (same format as regular source) + `optional: true`.
+
+**None handling:**
+- In prompt templates: `None` renders as empty string `""`
+- In expression evaluation (exit rules, `when`): `None` is first-class. Test with `score is None`
+- In script executors: environment variable is unset (not "None" or "null")
+- `any_of` + `optional`: allowed — "try these sources, but if none available, proceed with `None`"
+
+**Cycle detection:** A cycle in the dependency graph is valid if every cycle contains at least one `optional: true` edge.
+
+**Data model:** `InputBinding("x", "step", "field", optional=True)`
+
 ### Exit Rule Expressions
 
 Exit rules use Python expressions evaluated with `eval()` in a restricted namespace:
@@ -185,7 +209,7 @@ when: "len(outputs.errors) == 0"
 | `escalate` | Pause the job for human inspection |
 | `abandon` | Fail the job |
 
-If no exit rules are defined, or none match, the step implicitly advances.
+If no exit rules are defined, the step implicitly advances. When exit rules exist but none match: if the step has explicit `advance` rules, the step **fails** (prevents unhandled output cases from silently progressing); if the step has only loop/escalate/abandon rules, unmatched = implicit advance.
 
 ### Human Steps
 
@@ -407,6 +431,68 @@ steps:
 - `full`: Include all completed attempts for each prior step (useful with loops)
 - `latest`: Only include the most recent completed attempt per step
 
+### Session Continuity
+
+Agent and LLM steps with `continue_session: true` reuse the same agent session across loop iterations, continuing the conversation instead of starting fresh.
+
+```yaml
+implement:
+  executor: agent
+  prompt: "Implement: $spec"
+  loop_prompt: "Tests failed:\n$failures\nFix the issues."
+  continue_session: true
+  max_continuous_attempts: 5
+  inputs:
+    spec: $job.spec
+    failures:
+      from: run-tests.failures
+      optional: true
+  outputs: [result]
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `continue_session` | bool | `false` | Reuse agent session across loop iterations |
+| `loop_prompt` | string | — | Alternate prompt template on attempt > 1 (falls back to `prompt`) |
+| `max_continuous_attempts` | int | — | After N iterations, force fresh session with chain context backfill |
+
+**Behavior:**
+- First run: creates session, sends `prompt`
+- Loop-back (attempt > 1): continues session, sends `loop_prompt` (or `prompt` if not set)
+- Chain context (M7a) injection is skipped for continued sessions
+- If session crashes or `max_continuous_attempts` exceeded, falls back to fresh session + chain context
+
+**Cross-step session sharing:** Agent steps with `continue_session: true` auto-emit `_session_id`. Downstream steps continue the same conversation via optional input:
+
+```yaml
+steps:
+  plan:
+    executor: agent
+    prompt: "Plan: $spec"
+    continue_session: true
+    inputs: { spec: $job.spec }
+    outputs: [plan]
+    # automatically emits _session_id
+
+  implement:
+    executor: agent
+    prompt: "Implement the plan."
+    continue_session: true
+    inputs:
+      plan: plan.plan
+      _session_id:
+        from: plan._session_id
+        optional: true
+    outputs: [result]
+```
+
+`_session_id` is a reserved output field — don't declare it in `outputs:`. The engine serializes concurrent access to shared sessions.
+
+**Data model:**
+- `StepDefinition.continue_session = True`
+- `StepDefinition.loop_prompt = "..."`
+- `StepDefinition.max_continuous_attempts = 5`
+
 ## How It Maps to the Data Model
 
 | YAML | Data Model |
@@ -427,3 +513,7 @@ steps:
 | `chain_label: "Label"` | `StepDefinition.chain_label = "Label"` |
 | `prompt_file: path/to/file` | Resolved at parse time → `ExecutorRef.config["prompt"]` |
 | `inputs: {x: {any_of: [a.f, b.f]}}` | `InputBinding("x", "", "", any_of_sources=[("a","f"),("b","f")])` |
+| `inputs: {x: {from: "a.f", optional: true}}` | `InputBinding("x", "a", "f", optional=True)` |
+| `continue_session: true` | `StepDefinition.continue_session = True` |
+| `loop_prompt: "..."` | `StepDefinition.loop_prompt = "..."` |
+| `max_continuous_attempts: 5` | `StepDefinition.max_continuous_attempts = 5` |

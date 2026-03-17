@@ -3,6 +3,16 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Optional inputs** — `{from: "step.field", optional: true}` weak-reference bindings that resolve to `None` when the source dep is unavailable. Enables feeding data backward across loops, first-run defaults, and graceful degradation. Cycles in the dependency graph are valid if every cycle contains at least one optional edge.
+- **Session continuity** — `continue_session: true` on agent/LLM steps reuses the same agent session across loop iterations instead of starting fresh. `loop_prompt` provides an alternate prompt for attempt > 1. `max_continuous_attempts` acts as a circuit breaker, forcing a fresh session with chain context backfill after N iterations.
+- **Cross-step session sharing** — Agent steps with `continue_session` auto-emit `_session_id` as a typed output. Downstream steps receive it via optional input bindings to continue the same conversation. Engine serializes concurrent access via `_SessionLockManager`.
+
+### Changed
+- **Exit rule default behavior** — When explicit `advance` rules exist but none match, the step now **fails** instead of silently advancing. This prevents unhandled output cases from progressing through the DAG. Steps with only loop/escalate/abandon rules still implicitly advance when unmatched.
+
 ## [0.5.0] — 2026-03-17
 
 **Server Management, Config Interpolation, Expression Fixes** — structured server commands and executor parameterization.
