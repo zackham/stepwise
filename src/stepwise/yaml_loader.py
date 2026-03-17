@@ -805,6 +805,14 @@ def _parse_step(
     chain = step_data.get("chain")
     chain_label = step_data.get("chain_label")
 
+    # Session continuity
+    continue_session = step_data.get("continue_session", False)
+    loop_prompt_raw = step_data.get("loop_prompt")
+    loop_prompt = None
+    if loop_prompt_raw is not None:
+        loop_prompt = str(loop_prompt_raw)
+    max_continuous_attempts = step_data.get("max_continuous_attempts")
+
     return StepDefinition(
         name=step_name,
         description=step_data.get("description", ""),
@@ -819,6 +827,9 @@ def _parse_step(
         limits=limits,
         chain=chain,
         chain_label=chain_label,
+        continue_session=continue_session,
+        loop_prompt=loop_prompt,
+        max_continuous_attempts=max_continuous_attempts,
     )
 
 

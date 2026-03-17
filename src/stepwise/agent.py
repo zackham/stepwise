@@ -97,7 +97,8 @@ class AcpxBackend:
         Path(working_dir).mkdir(parents=True, exist_ok=True)
 
         agent = config.get("agent", self.default_agent)
-        session_name = f"step-{context.step_name}-{context.attempt}"
+        # Use stable session name if provided (session continuity), else per-attempt
+        session_name = config.get("_session_name") or f"step-{context.step_name}-{context.attempt}"
 
         # Write prompt to file for acpx --file
         step_io = Path(working_dir) / ".step-io"
@@ -459,12 +460,14 @@ class MockAgentBackend:
 
         working_dir = config.get("working_dir", context.workspace_path)
         output_path = f"/tmp/mock-agent-{pid}.jsonl"
+        session_name = config.get("_session_name") or f"step-{context.step_name}-{context.attempt}"
 
         self._processes[pid] = {
             "prompt": prompt,
             "config": config,
             "context_step": context.step_name,
             "context_attempt": context.attempt,
+            "session_name": session_name,
         }
 
         # Auto-complete if configured
@@ -478,6 +481,7 @@ class MockAgentBackend:
             pgid=pid,
             output_path=output_path,
             working_dir=working_dir,
+            session_name=session_name,
         )
 
     def wait(self, process: AgentProcess) -> AgentStatus:
@@ -573,6 +577,10 @@ class AgentExecutor(Executor):
         self.output_mode = output_mode
         self.output_path = output_path
         self.config = config
+        # Session continuity fields (flow through from step definition via config)
+        self.continue_session = config.get("continue_session", False)
+        self.loop_prompt = config.get("loop_prompt")
+        self.max_continuous_attempts = config.get("max_continuous_attempts")
 
     def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
         """Spawn agent, block until completion. Runs in thread pool via AsyncEngine."""
@@ -583,7 +591,29 @@ class AgentExecutor(Executor):
             output_file = f"{context.step_name}-output.json"
 
         prompt = self._render_prompt(inputs, context)
-        process = self.backend.spawn(prompt, self.config, context)
+
+        # Session continuity: determine session naming strategy
+        spawn_config = dict(self.config)
+        if self.continue_session:
+            # Check circuit breaker
+            use_existing = True
+            if (self.max_continuous_attempts is not None
+                    and context.attempt > self.max_continuous_attempts):
+                use_existing = False  # fresh session after breaker
+
+            prev_session = spawn_config.pop("_prev_session_name", None)
+            if use_existing and prev_session:
+                # Continue existing session — use stable name (no attempt suffix)
+                spawn_config["_session_name"] = prev_session
+            elif use_existing and context.attempt > 1:
+                # Previous session should exist but config missing — use stable name
+                spawn_config["_session_name"] = f"step-{context.step_name}"
+
+        # Also support received session from _session_id input
+        if "_session_id" in inputs and inputs["_session_id"]:
+            spawn_config["_session_name"] = inputs["_session_id"]
+
+        process = self.backend.spawn(prompt, spawn_config, context)
         process.capture_transcript = bool(context.chain)
 
         if context.state_update_fn:
@@ -784,7 +814,11 @@ class AgentExecutor(Executor):
         # Always make objective and workspace available for prompt templates
         str_inputs.setdefault("objective", context.objective or "")
         str_inputs.setdefault("workspace", context.workspace_path or "")
-        prompt = Template(self.prompt_template).safe_substitute(str_inputs)
+        # Use loop_prompt on attempt > 1 if configured
+        template = self.prompt_template
+        if context.attempt > 1 and self.loop_prompt:
+            template = self.loop_prompt
+        prompt = Template(template).safe_substitute(str_inputs)
         # Also support {{var}} (Jinja/Mustache-style) templates
         for k, v in str_inputs.items():
             prompt = prompt.replace("{{" + k + "}}", v)

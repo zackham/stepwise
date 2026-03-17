@@ -499,6 +499,7 @@ class LLMExecutor(Executor):
         system: str | None = None,
         temperature: float = 0.0,
         max_tokens: int = 4096,
+        loop_prompt: str | None = None,
     ) -> None:
         self.client = client
         self.model = model
@@ -506,6 +507,7 @@ class LLMExecutor(Executor):
         self.system = system
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.loop_prompt = loop_prompt
 
     def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
         import logging
@@ -650,7 +652,11 @@ class LLMExecutor(Executor):
                 str_inputs[k] = json.dumps(v, indent=2)
             else:
                 str_inputs[k] = str(v)
-        prompt = Template(self.prompt_template).safe_substitute(str_inputs)
+        # Use loop_prompt on attempt > 1 if configured
+        template = self.prompt_template
+        if context.attempt > 1 and self.loop_prompt:
+            template = self.loop_prompt
+        prompt = Template(template).safe_substitute(str_inputs)
         # Also support {{var}} (Jinja/Mustache-style) templates
         for k, v in str_inputs.items():
             prompt = prompt.replace("{{" + k + "}}", v)
