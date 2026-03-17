@@ -5,13 +5,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic V
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-03-17
+
+**Optional Inputs, Session Continuity, Webhook Notifications** — smarter loops, agent memory, and async event delivery.
+
 ### Added
 - **Optional inputs** — `{from: "step.field", optional: true}` weak-reference bindings that resolve to `None` when the source dep is unavailable. Enables feeding data backward across loops, first-run defaults, and graceful degradation. Cycles in the dependency graph are valid if every cycle contains at least one optional edge.
 - **Session continuity** — `continue_session: true` on agent/LLM steps reuses the same agent session across loop iterations instead of starting fresh. `loop_prompt` provides an alternate prompt for attempt > 1. `max_continuous_attempts` acts as a circuit breaker, forcing a fresh session with chain context backfill after N iterations.
 - **Cross-step session sharing** — Agent steps with `continue_session` auto-emit `_session_id` as a typed output. Downstream steps receive it via optional input bindings to continue the same conversation. Engine serializes concurrent access via `_SessionLockManager`.
+- **Webhook notifications** — `stepwise run --async --notify <url> --notify-context '{...}'` delivers HTTP POST callbacks on job suspend, complete, and fail events. Context dict is passed through to every webhook payload.
 
 ### Changed
 - **Exit rule default behavior** — When explicit `advance` rules exist but none match, the step now **fails** instead of silently advancing. This prevents unhandled output cases from progressing through the DAG. Steps with only loop/escalate/abandon rules still implicitly advance when unmatched.
+
+### Fixed
+- **Ctrl+C during human input** — presents suspend/cancel menu instead of crashing
+- **External fulfill detection** — AsyncEngine polls for state changes every 5 seconds, picking up fulfills from other processes without waiting for an internal event
 
 ## [0.5.0] — 2026-03-17
 
