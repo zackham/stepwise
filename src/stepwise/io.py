@@ -14,6 +14,14 @@ from dataclasses import dataclass, field
 from typing import Any, Generator, TextIO
 
 
+class HumanInputAborted(Exception):
+    """Raised when user aborts human input collection."""
+
+    def __init__(self, action: str):
+        self.action = action  # "suspend" or "cancel"
+        super().__init__(f"Human input aborted: {action}")
+
+
 # ── Live flow handle ──────────────────────────────────────────────────
 
 
@@ -892,28 +900,53 @@ class TerminalAdapter(IOAdapter):
         if handle is not None:
             handle.set_pause_lines(lines)
 
-        # Delegate to base class for actual collection
-        return super().collect_human_input(prompt, fields, schema)
+        # Delegate to base class, catching Ctrl+C for abort menu
+        try:
+            return super().collect_human_input(prompt, fields, schema)
+        except KeyboardInterrupt:
+            self._console.print()  # newline after ^C
+            return self._interrupt_menu()
+
+    def _interrupt_menu(self) -> dict[str, Any]:
+        """Show abort menu after Ctrl+C during human input. Never returns normally."""
+        choices = ["Retry input", "Leave suspended", "Cancel job"]
+        try:
+            import questionary
+            choice = questionary.select(
+                "Input interrupted:",
+                choices=choices,
+            ).unsafe_ask()
+        except (ImportError, KeyboardInterrupt):
+            # Second Ctrl+C or no questionary → default to suspend
+            choice = "Leave suspended"
+
+        if choice == "Retry input":
+            # Signal caller to re-prompt — use a sentinel that runner handles
+            raise HumanInputAborted("retry")
+        elif choice == "Cancel job":
+            raise HumanInputAborted("cancel")
+        else:
+            raise HumanInputAborted("suspend")
 
     def prompt_confirm(self, message: str, default: bool = True) -> bool:
         try:
             import questionary
             return questionary.confirm(message, default=default).unsafe_ask()
-        except (ImportError, KeyboardInterrupt):
+        except ImportError:
             return self._plain.prompt_confirm(message, default)
 
     def prompt_select(self, message: str, choices: list[str]) -> str:
         try:
             import questionary
             return questionary.select(message, choices=choices).unsafe_ask()
-        except (ImportError, KeyboardInterrupt):
+        except ImportError:
             return self._plain.prompt_select(message, choices)
 
     def prompt_multi_select(self, message: str, choices: list[str]) -> list[str]:
         try:
             import questionary
             return questionary.checkbox(message, choices=choices).unsafe_ask()
-        except (ImportError, KeyboardInterrupt):
+        except ImportError:
             return self._plain.prompt_multi_select(message, choices)
 
     def prompt_text(
@@ -925,7 +958,7 @@ class TerminalAdapter(IOAdapter):
                 # questionary doesn't have great multiline; use plain
                 return self._plain.prompt_text(message, default, multiline=True)
             return questionary.text(message, default=default or "").unsafe_ask()
-        except (ImportError, KeyboardInterrupt):
+        except ImportError:
             return self._plain.prompt_text(message, default, multiline)
 
     def prompt_number(
@@ -959,7 +992,7 @@ class TerminalAdapter(IOAdapter):
             if not result and default is not None:
                 return default
             return float(result)
-        except (ImportError, KeyboardInterrupt):
+        except ImportError:
             return self._plain.prompt_number(message, min_val, max_val, default)
 
 

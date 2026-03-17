@@ -20,7 +20,7 @@ import httpx
 from stepwise.config import StepwiseConfig, load_config
 from stepwise.flow_resolution import flow_display_name
 from stepwise.engine import AsyncEngine, Engine
-from stepwise.io import IOAdapter, LiveFlowHandle, StepNode, create_adapter
+from stepwise.io import IOAdapter, LiveFlowHandle, StepNode, HumanInputAborted, create_adapter
 from stepwise.models import (
     Job,
     JobStatus,
@@ -512,7 +512,11 @@ async def _handle_human_input(
     job_id: str,
     seen_prompted: set[str],
 ) -> None:
-    """Check for and handle suspended human steps, recursively through sub-jobs."""
+    """Check for and handle suspended human steps, recursively through sub-jobs.
+
+    Raises HumanInputAborted (action="suspend" or "cancel") if the user
+    chooses to leave the step suspended or cancel the job via Ctrl+C menu.
+    """
     all_runs = engine.get_runs(job_id)
     for run in all_runs:
         if run.status == StepRunStatus.SUSPENDED and run.watch:
@@ -523,11 +527,29 @@ async def _handle_human_input(
                 prompt = (run.watch.config or {}).get("prompt", "")
                 fields = run.watch.fulfillment_outputs
                 schema = run.watch.output_schema
-                payload = await asyncio.to_thread(
-                    adapter.collect_human_input,
-                    prompt, fields, schema,
-                )
-                engine.fulfill_watch(run.id, payload)
+
+                while True:
+                    try:
+                        payload = await asyncio.to_thread(
+                            adapter.collect_human_input,
+                            prompt, fields, schema,
+                        )
+                    except HumanInputAborted as e:
+                        if e.action == "retry":
+                            continue  # re-prompt
+                        handle.resume_after_input()
+                        raise  # suspend or cancel — let caller handle
+
+                    try:
+                        engine.fulfill_watch(run.id, payload)
+                    except ValueError as e:
+                        # Missing required fields — show error and re-prompt
+                        await asyncio.to_thread(
+                            adapter.note, str(e), "Missing fields",
+                        )
+                        continue
+
+                    break  # fulfilled successfully
 
                 handle.resume_after_input()
                 return  # handle one at a time
@@ -596,9 +618,18 @@ async def _async_run_flow(
                 handle.render_tree(tree)
 
                 # Handle human input (separate from rendering)
-                await _handle_human_input(
-                    engine, adapter, handle, job.id, seen_prompted,
-                )
+                try:
+                    await _handle_human_input(
+                        engine, adapter, handle, job.id, seen_prompted,
+                    )
+                except HumanInputAborted as e:
+                    if e.action == "cancel":
+                        engine.cancel_job(job.id)
+                        _err("Cancelled.", output_stream)
+                        return 130
+                    else:  # suspend
+                        _err("Left suspended — resume via web UI or re-run.", output_stream)
+                        return EXIT_SUSPENDED
 
                 # Check job terminal state
                 if job.status == JobStatus.COMPLETED:
@@ -1270,6 +1301,8 @@ def run_async(
     workspace: str | None = None,
     config: StepwiseConfig | None = None,
     force_local: bool = False,
+    notify_url: str | None = None,
+    notify_context: dict | None = None,
 ) -> int:
     """Fire-and-forget flow execution. Spawns a detached background process.
 
@@ -1319,6 +1352,10 @@ def run_async(
             inputs=inputs or {},
             workspace_path=workspace,
         )
+        if notify_url:
+            job.notify_url = notify_url
+            job.notify_context = notify_context or {}
+            store.save_job(job)
         job_id = job.id
     finally:
         store.close()

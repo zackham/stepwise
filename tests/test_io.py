@@ -5,6 +5,7 @@ from io import StringIO
 import pytest
 
 from stepwise.io import (
+    HumanInputAborted,
     IOAdapter,
     LiveFlowHandle,
     PlainAdapter,
@@ -399,6 +400,17 @@ class TestCollectHumanInput:
         adapter = PlainAdapter(output=out, input_stream=inp)
         adapter.collect_human_input("Please review this.", ["response"])
         assert "Please review this" in out.getvalue()
+
+
+class TestHumanInputAborted:
+    def test_exception_carries_action(self):
+        e = HumanInputAborted("suspend")
+        assert e.action == "suspend"
+        assert "suspend" in str(e)
+
+    def test_cancel_action(self):
+        e = HumanInputAborted("cancel")
+        assert e.action == "cancel"
 
 
 # ── QuietAdapter ─────────────────────────────────────────────────────
