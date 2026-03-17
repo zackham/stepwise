@@ -830,6 +830,82 @@ class TestExitRuleDefaults:
         job = engine.get_job(job.id)
         assert job.status == JobStatus.PAUSED
 
+    def test_no_match_with_advance_rule_fails_job(self):
+        """When advance rules exist but nothing matches, job should fail."""
+        register_step_fn("nm_adv", lambda i: {"value": 42})
+        engine = make_engine()
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["value"],
+                executor=ExecutorRef("callable", {"fn_name": "nm_adv"}),
+                exit_rules=[
+                    ExitRule("good", "field_match", {
+                        "field": "value", "value": 100, "action": "advance",
+                    }, priority=10),
+                    ExitRule("retry", "field_match", {
+                        "field": "value", "value": 0,
+                        "action": "loop", "target": "a", "max_iterations": 3,
+                    }, priority=5),
+                ],
+            ),
+        })
+
+        job = engine.create_job("No match with advance", w)
+        engine.start_job(job.id)
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.FAILED
+
+    def test_no_match_without_advance_rule_advances(self):
+        """When only loop/escalate rules exist and nothing matches, implicit advance."""
+        register_step_fn("nm_no_adv", lambda i: {"value": 42})
+        engine = make_engine()
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["value"],
+                executor=ExecutorRef("callable", {"fn_name": "nm_no_adv"}),
+                exit_rules=[
+                    ExitRule("retry", "field_match", {
+                        "field": "value", "value": 0,
+                        "action": "loop", "target": "a", "max_iterations": 3,
+                    }, priority=10),
+                    ExitRule("critical", "field_match", {
+                        "field": "value", "value": -1, "action": "escalate",
+                    }, priority=5),
+                ],
+            ),
+        })
+
+        job = engine.create_job("No match without advance", w)
+        engine.start_job(job.id)
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.COMPLETED
+
+    def test_default_action_counts_as_advance(self):
+        """Rule with no explicit action defaults to advance — counts for exhaustiveness."""
+        register_step_fn("def_act", lambda i: {"value": 42})
+        engine = make_engine()
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["value"],
+                executor=ExecutorRef("callable", {"fn_name": "def_act"}),
+                exit_rules=[
+                    # No "action" key → defaults to "advance"
+                    ExitRule("auto", "field_match", {
+                        "field": "value", "value": 100,
+                    }, priority=10),
+                ],
+            ),
+        })
+
+        job = engine.create_job("Default action", w)
+        engine.start_job(job.id)
+        job = engine.get_job(job.id)
+        # Rule doesn't match, but it's an advance rule (default), so job should fail
+        assert job.status == JobStatus.FAILED
+
 
 # ── Test 23: Loop counting ───────────────────────────────────────────
 

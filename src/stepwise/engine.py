@@ -61,7 +61,7 @@ from stepwise.models import (
     _gen_id,
     _now,
 )
-from stepwise.hooks import fire_hook_for_event
+from stepwise.hooks import fire_hook_for_event, fire_notify_webhook
 from stepwise.store import SQLiteStore
 
 
@@ -1726,12 +1726,23 @@ class Engine:
                         })
                         return
 
-        # No rule matched → advance
-        self._emit(job.id, EXIT_RESOLVED, {
-            "step": run.step_name,
-            "rule": "no_match_advance",
-            "action": "advance",
-        })
+        # No rule matched — behavior depends on whether advance rules exist
+        has_advance_rule = any(
+            rule.config.get("action", "advance") == "advance"
+            for rule in sorted_rules
+        )
+        if has_advance_rule:
+            # Author explicitly defined when to advance — unmatched = failure
+            self._fail_run(job, run, step_def,
+                           error=f"No exit rule matched for step '{run.step_name}' "
+                                 f"(artifact: {list(artifact.keys())})")
+        else:
+            # No advance rule — implicit advance (loop/escalate only paths)
+            self._emit(job.id, EXIT_RESOLVED, {
+                "step": run.step_name,
+                "rule": "implicit_advance",
+                "action": "advance",
+            })
 
     def _evaluate_rule(self, rule: ExitRule, artifact: dict,
                        attempt: int = 1) -> bool:
@@ -2096,6 +2107,17 @@ class Engine:
         self.store.save_event(event)
         # Fire project hooks for relevant events
         fire_hook_for_event(event_type, event.data, job_id, self.project_dir)
+        # Fire webhook notification if configured on the job
+        self._fire_notify(job_id, event_type, event.data)
+
+    def _fire_notify(self, job_id: str, event_type: str, event_data: dict) -> None:
+        """Fire webhook notification if the job has a notify_url configured."""
+        try:
+            job = self.store.load_job(job_id)
+        except KeyError:
+            return
+        if job.notify_url:
+            fire_notify_webhook(event_type, event_data, job_id, job.notify_url, job.notify_context)
 
     def _emit_effector_events(self, job_id: str, envelope: HandoffEnvelope | None) -> None:
         """Check executor_meta for effector_events and emit them."""
