@@ -185,7 +185,7 @@ def _format_compact(entries: list[dict], registry_entries: list[dict] | None = N
     """
     lines: list[str] = []
 
-    # 5-mode interaction model
+    # 6-mode interaction model
     lines.extend([
         "# Stepwise Agent Instructions",
         "",
@@ -193,6 +193,13 @@ def _format_compact(entries: list[dict], registry_entries: list[dict] | None = N
         "",
         "**Automated** — Run a flow end-to-end, get structured output.",
         "  `stepwise run <flow> --wait --var k=v`",
+        "",
+        "**Async** — Fire-and-forget with webhook notifications.",
+        "  `stepwise run <flow> --async --notify <url> --notify-context '{\"topic_id\":\"...\"}' --var k=v`",
+        "  Returns immediately with job_id. Webhook receives events when the job",
+        "  suspends (human step), completes, or fails. Use this when you're a server",
+        "  or bot and don't want to block — just kick off the flow and respond to",
+        "  webhook callbacks asynchronously.",
         "",
         "**Mediated** — Run a flow with human steps; fulfill them interactively.",
         "  `stepwise run <flow> --wait` → exit 5 = suspended → read prompt →",
@@ -292,6 +299,8 @@ def _format_compact(entries: list[dict], registry_entries: list[dict] | None = N
         "",
         "`stepwise run <flow> --wait --var k=v` — run and block for JSON result.",
         "`stepwise run <flow> --async` — fire-and-forget, returns job_id.",
+        "`stepwise run <flow> --async --notify <url>` — async with webhook callbacks on suspend/complete/fail.",
+        "`stepwise run <flow> --async --notify <url> --notify-context '{...}'` — async with context passed to webhooks.",
         "`stepwise status <job-id> --output json` — resolved flow status (DAG view).",
         "`stepwise output <job-id>` — terminal outputs after completion.",
         "`stepwise output <job-id> --step a,b` — per-step outputs.",
