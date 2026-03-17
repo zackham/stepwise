@@ -1,5 +1,7 @@
 name: welcome
 description: "From issue to deploy — a real dev workflow in one YAML file"
+author: stepwise
+tags: [demo, human-in-the-loop, for-each, branching, loops]
 
 steps:
   # ─── 1. The "Issue" ──────────────────────────────────────────────
@@ -293,7 +295,7 @@ steps:
 
       The review loop just resolved — revise-code, push-fix, and re-review cycled until approved. That loop-back edge in the DAG is an exit rule.
 
-      Now your choice branches the workflow — only one path executes, and the other is settled as skipped.
+      Now your choice branches the workflow — each downstream step has a `when` condition, so only one path executes and the other is skipped.
     outputs:
       decision:
         type: choice
