@@ -67,46 +67,6 @@ steps:
         config: { max_retries: 2 }
 ```
 
-## Config Interpolation
-
-Executor config string values support `$variable` interpolation from resolved inputs, just like prompts do. This lets you parameterize any config field — model, command, system message, etc.
-
-```yaml
-steps:
-  call-model:
-    executor: llm
-    model: $model_id                  # interpolated from inputs
-    prompt: "Analyze: $data"
-    outputs: [analysis]
-    inputs:
-      model_id: $job.model            # or from upstream step
-      data: fetch.result
-```
-
-This is especially useful with `for_each` to fan out across models:
-
-```yaml
-steps:
-  council:
-    for_each: $job.models             # ["anthropic/claude-sonnet-4-20250514", "google/gemini-2.5-pro", ...]
-    as: model
-    flow:
-      steps:
-        analyze:
-          executor: llm
-          model: $model               # each sub-job gets a different model
-          prompt: "Analyze: $spec"
-          outputs: [analysis]
-          inputs:
-            model: $job.model
-            spec: $job.spec
-    outputs: [results]
-    inputs:
-      spec: $job.spec
-```
-
-Non-string config values (numbers, lists, booleans) are not interpolated. Missing variables are left as-is (`$unknown` stays `$unknown`).
-
 ## Executor Types
 
 ### script
@@ -224,9 +184,16 @@ summarize:
 *One of `prompt` or `prompt_file` required.
 
 **Output extraction priority:**
+
+For **single-output** steps (e.g. `outputs: [response]`): no tool_choice is forced. The model responds naturally.
+1. JSON in content body matching the field name (markdown fences stripped automatically)
+2. Raw text content assigned to the single field
+3. Tool call response (fallback if no content)
+
+For **multi-output** steps (e.g. `outputs: [analysis, recommendation]`): tool_choice is forced via function calling.
 1. Tool call response (structured output via function calling)
-2. JSON in content body (markdown fences stripped automatically)
-3. Single-field shortcut: if only one output declared, raw text content is used
+2. JSON in content body — preferred over tool call if content is 3x+ longer (truncation protection)
+3. JSON extraction from mixed prose+JSON content
 
 ### agent
 
