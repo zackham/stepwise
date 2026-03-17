@@ -484,6 +484,48 @@ def build_emit_flow_instructions(
     lines.append("    outputs: [analysis]")
     lines.append("```\n")
 
+    # Optional inputs
+    lines.append("### Optional inputs\n")
+    lines.append("Weak-reference bindings that resolve to `None` when unavailable.")
+    lines.append("Use for loop-back data, first-run defaults, and cross-step sessions.\n")
+    lines.append("```yaml")
+    lines.append("inputs:")
+    lines.append("  spec: $job.spec                  # required — step waits")
+    lines.append("  failures:")
+    lines.append("    from: run-tests.failures")
+    lines.append("    optional: true                  # None on first iteration")
+    lines.append("```\n")
+    lines.append("- In prompts: `None` → empty string. In scripts: env var unset.")
+    lines.append("- Cycles via optional edges are valid (enables loop-back data).\n")
+
+    # Session continuity
+    lines.append("### Session continuity\n")
+    lines.append("Agent/LLM steps can reuse sessions across loop iterations:\n")
+    lines.append("```yaml")
+    lines.append("implement:")
+    lines.append("  executor: agent")
+    lines.append("  prompt: \"Implement: $spec\"")
+    lines.append("  loop_prompt: \"Tests failed:\\n$failures\\nFix them.\"")
+    lines.append("  continue_session: true")
+    lines.append("  max_continuous_attempts: 5")
+    lines.append("  inputs:")
+    lines.append("    spec: $job.spec")
+    lines.append("    failures:")
+    lines.append("      from: run-tests.failures")
+    lines.append("      optional: true")
+    lines.append("  outputs: [result]")
+    lines.append("```\n")
+    lines.append("- `continue_session: true` — reuse agent session across iterations")
+    lines.append("- `loop_prompt` — alternate prompt on attempt > 1 (falls back to `prompt`)")
+    lines.append("- `max_continuous_attempts` — circuit breaker; force fresh session after N iterations")
+    lines.append("- `_session_id` auto-emitted for cross-step sharing via optional input:\n")
+    lines.append("```yaml")
+    lines.append("inputs:")
+    lines.append("  _session_id:")
+    lines.append("    from: plan._session_id")
+    lines.append("    optional: true")
+    lines.append("```\n")
+
     # Rules
     lines.append("### Rules\n")
     lines.append("- Step names: kebab-case. Output fields: underscore_case")
@@ -492,7 +534,8 @@ def build_emit_flow_instructions(
     lines.append("- Steps run as soon as all dependencies complete")
     lines.append("- Terminal step outputs become the parent step's outputs")
     lines.append("- `$job.param` references job-level inputs; `source-step.field` for upstream")
-    lines.append("- Always include a safety cap (`attempt >= N`) in loop exit rules\n")
+    lines.append("- Always include a safety cap (`attempt >= N`) in loop exit rules")
+    lines.append("- Exit rules with `advance` actions fail if none match — handle all output cases\n")
 
     # Available flows for composition
     if project_dir:

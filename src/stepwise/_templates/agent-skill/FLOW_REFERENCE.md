@@ -237,6 +237,69 @@ implement:
 
 Auto-injected prompt variables: `$objective`, `$workspace`.
 
+### Session Continuity
+
+Agent and LLM steps with `continue_session: true` reuse the same agent session across loop iterations, continuing the conversation instead of starting fresh. This saves tokens and preserves full conversational context.
+
+```yaml
+implement:
+  executor: agent
+  prompt: "Implement: $spec"
+  loop_prompt: "Tests failed:\n$failures\nFix the issues."
+  continue_session: true
+  max_continuous_attempts: 5
+  inputs:
+    spec: $job.spec
+    failures:
+      from: run-tests.failures
+      optional: true
+  outputs: [result]
+```
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `continue_session` | bool | no | `false` | Reuse agent session across loop iterations |
+| `loop_prompt` | string | no | — | Alternate prompt template used on attempt > 1 (falls back to `prompt`) |
+| `max_continuous_attempts` | int | no | — | After N iterations, force fresh session with chain context backfill |
+
+**Behavior:**
+- First run (attempt 1): creates a new session, sends `prompt`
+- Loop-back (attempt 2+): continues existing session, sends `loop_prompt` (or `prompt` if not set)
+- When `continue_session` is true, M7a chain context injection is skipped (agent already has full history)
+- If `max_continuous_attempts` is exceeded or the session crashes, falls back to fresh session + chain context backfill
+
+**Cross-step session sharing via `_session_id`:**
+
+Agent steps with `continue_session: true` automatically emit a `_session_id` output field. Downstream steps can reference this to continue the same conversation:
+
+```yaml
+steps:
+  plan:
+    executor: agent
+    prompt: "Plan: $spec"
+    continue_session: true
+    inputs: { spec: $job.spec }
+    outputs: [plan]
+    # automatically emits _session_id
+
+  implement:
+    executor: agent
+    prompt: "Now implement the plan."
+    continue_session: true
+    inputs:
+      plan: plan.plan
+      _session_id:
+        from: plan._session_id
+        optional: true
+    outputs: [result]
+    # continues plan's session
+```
+
+- `_session_id` is a reserved output field — flow authors don't declare it in `outputs:`
+- If a step receives `_session_id` input + `continue_session`, it continues that session
+- If a step has `continue_session` but no `_session_id` input, it creates a new session
+- The engine serializes concurrent access to shared sessions via `_SessionLockManager`
+
 ## Inputs
 
 ```yaml
@@ -258,6 +321,28 @@ inputs:
         - branch-a.result
         - branch-b.result
   ```
+
+### Optional Inputs
+
+Optional inputs are weak-reference bindings that resolve to `None` when the source dep has no current completed run. They allow steps to proceed without waiting for a dependency, enabling loop-back data feeding, first-run defaults, and graceful degradation.
+
+```yaml
+inputs:
+  topic: $job.topic                    # required — step waits for this
+  score:
+    from: review.score
+    optional: true                     # resolves to None if review hasn't run
+```
+
+**Syntax:** Required inputs use bare `local_name: source` strings. Optional inputs use a dict with `from` + `optional: true`. This is consistent with the `any_of` dict syntax.
+
+**None handling:**
+- **In prompt templates** (`$var` interpolation): `None` renders as empty string `""`
+- **In expression evaluation** (exit rules, `when`): `None` is first-class. Test with `score is None` / `score is not None`. Comparing `None` with `>`, `<`, `float()` raises an eval error (flow authoring bug).
+- **In script executors** (`run:`): environment variable is unset (not "None" or "null"). Use `if [ -z "$score" ]; then ...`
+- **`any_of` + `optional`:** Allowed. Means "try to get one of these, but if none are available, resolve to `None` and proceed."
+
+**Cycle detection:** A cycle in the dependency graph is valid if every cycle contains at least one `optional: true` edge.
 
 Job inputs are passed via `--var` on the CLI or in the `inputs` dict via the API:
 
@@ -300,6 +385,8 @@ len(outputs.errors) == 0
 Keep expressions simple. If over ~80 characters, push the logic into the step itself and output a simple summary field.
 
 **Actions:** `advance` (continue DAG), `loop` (re-run target, supersedes old run), `escalate` (pause job), `abandon` (fail job). Use step-level `when` for conditional branching instead of `advance` with `target`.
+
+**Default when no rule matches:** If the step has explicit `advance` rules but none match, the step **fails** (prevents unhandled output cases from silently progressing). If the step has only loop/escalate/abandon rules (no advance rules), unmatched = implicit advance. No exit rules at all = implicit advance.
 
 **Priority pattern:** success conditions first → safety bounds → loop fallback last.
 
@@ -592,6 +679,9 @@ decorators:
 12. **`flow:` can't combine with other executors.** Mutually exclusive with `run:`, `executor:`, and `for_each:`.
 13. **`prompt` and `prompt_file` are mutually exclusive.** Never set both on the same step.
 14. **Directory flow `run:` paths resolve relative to the flow directory**, not the current working directory.
+15. **Optional inputs use dict syntax.** `score: {from: "review.score", optional: true}` — not `score: review.score?` or similar shorthand.
+16. **Exit rules with `advance` actions fail on no-match.** When you define explicit `advance` rules, the step fails if none match. Add a catch-all `advance` rule or handle all cases.
+17. **`_session_id` is auto-emitted.** Don't declare it in `outputs:` — it's automatically added by agent steps with `continue_session: true`.
 
 ## Validation Checklist
 
@@ -599,7 +689,7 @@ Before outputting a flow, verify:
 
 1. Input bindings: `source_step` is valid step name or `$job`; `source_field` exists in source step's `outputs`
 2. Every `loop` exit rule has a valid `target` step name
-3. No structural cycles in the DAG (loops use exit rules, not graph edges)
+3. No structural cycles in the DAG (loops use exit rules, not graph edges). Cycles via optional inputs are allowed.
 4. At least one entry step (no deps) and one terminal step (nothing depends on it)
 5. Every step has at least one declared output
 6. Prompt `$variables` match input `local_name` values exactly

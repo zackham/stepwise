@@ -68,10 +68,11 @@ Two engine classes: `AsyncEngine` (primary, event-driven) and `Engine` (legacy, 
 - **Step readiness** (`_is_step_ready()`): no active run + no current completed run (or loop guard) + all deps have current completed runs + `when` condition (if set) evaluates to True
 - **Currency** (`_is_current()`): latest run for step is COMPLETED and all dep runs are also current (recursive)
 - **Executor dispatch:** `registry.create(ExecutorRef)` → factory lookup → decorator wrapping → `to_thread(executor.start)` (AsyncEngine) or direct call (Engine)
-- **Exit rules** after step completion: `advance` (continue DAG), `loop` (re-launch target step), `escalate` (pause job), `abandon` (fail job) — defined via `models.py:ExitRule`
+- **Exit rules** after step completion: `advance` (continue DAG), `loop` (re-launch target step), `escalate` (pause job), `abandon` (fail job) — defined via `models.py:ExitRule`. When explicit `advance` rules exist but none match, the step **fails** (prevents silent advancement past unhandled cases). When only loop/escalate/abandon rules exist, unmatched = implicit advance.
+- **Session lock manager** (`_SessionLockManager`): serializes concurrent access to shared agent sessions. Steps sharing a `_session_id` acquire a lock before sending prompts, released on completion. Deterministic acquisition order (alphabetical step name, then for-each index).
 - **Conditional branching** via `when`: Steps declare their own activation condition evaluated against resolved inputs. When deps are satisfied but `when` is false, the step stays not-ready. At job settlement, never-started steps get SKIPPED runs.
 - **Settlement**: When nothing is in motion and nothing is ready, the job is settled. `_settle_unstarted_steps()` marks never-run steps as SKIPPED. Job completes if at least one terminal completed; fails otherwise.
-- **Input resolution:** `_resolve_inputs()` navigates artifact fields via dot-path (`"step_name.field.nested"`)
+- **Input resolution:** `_resolve_inputs()` navigates artifact fields via dot-path (`"step_name.field.nested"`). Optional inputs (`InputBinding.optional=True`) resolve to `None` when the source dep has no current completed run, allowing steps to proceed without waiting.
 
 Do not duplicate readiness checks outside `engine.py`. Test input resolution via `register_step_fn()`, not by mocking engine internals.
 
@@ -251,6 +252,36 @@ steps:
 ```
 
 The `check_command` runs every `interval_seconds`. Empty stdout or non-zero exit = not ready. JSON dict on stdout = fulfilled (dict becomes the artifact). `$var` placeholders in `check_command` and `prompt` are interpolated from inputs.
+
+Optional inputs (weak-reference bindings that resolve to `None` when unavailable):
+
+```yaml
+steps:
+  generate:
+    executor: llm
+    prompt: "Write content. Previous score: $score"
+    inputs:
+      topic: $job.topic
+      score:
+        from: review.score
+        optional: true           # None on first iteration, populated on loop-back
+    outputs: [content]
+
+  review:
+    executor: llm
+    prompt: "Score this: $content"
+    inputs:
+      content: generate.content
+    outputs: [score]
+    exits:
+      - when: "float(outputs.score) >= 0.8"
+        action: advance
+      - when: "attempt < 3"
+        action: loop
+        target: generate
+```
+
+Optional inputs skip readiness checks for their source dep. In prompts, `None` renders as empty string. In scripts, `None` means the env var is unset. Cycles in the dependency graph are valid if every cycle contains at least one optional edge.
 
 Agent step with dynamic flow emission:
 
@@ -472,6 +503,65 @@ steps:
 ```
 
 The `_delegated: True` marker is injected into the artifact when a sub-flow completes, allowing exit rules to distinguish delegation from direct completion.
+
+### Session continuity
+
+Agent and LLM steps with `continue_session: true` reuse the same agent session across loop iterations instead of starting fresh. Saves tokens by continuing the conversation rather than re-injecting context.
+
+```yaml
+steps:
+  implement:
+    executor: agent
+    prompt: "Implement: $spec"
+    loop_prompt: "Tests failed:\n$failures\nFix the issues."
+    continue_session: true
+    max_continuous_attempts: 5
+    inputs:
+      spec: $job.spec
+      failures:
+        from: run-tests.failures
+        optional: true
+    outputs: [result]
+
+  run-tests:
+    run: ./test.sh
+    inputs:
+      result: implement.result
+    outputs: [passed, failures]
+    exits:
+      - when: "outputs.passed == true"
+        action: advance
+      - when: "attempt < 5"
+        action: loop
+        target: implement
+```
+
+- `loop_prompt` — alternate prompt used on attempt > 1 (falls back to `prompt` if not set)
+- `max_continuous_attempts` — circuit breaker; after N iterations, forces a fresh session with M7a chain context backfill
+- `_session_id` — auto-emitted output for cross-step session sharing. Downstream steps receive it via optional input to continue the same conversation:
+
+```yaml
+steps:
+  plan:
+    executor: agent
+    prompt: "Plan: $spec"
+    continue_session: true
+    inputs: { spec: $job.spec }
+    outputs: [plan]
+    # automatically emits _session_id
+
+  implement:
+    executor: agent
+    prompt: "Implement the plan above."
+    continue_session: true
+    inputs:
+      plan: plan.plan
+      _session_id:
+        from: plan._session_id
+        optional: true
+    outputs: [result]
+    # continues plan's session
+```
 
 ### Distribution & Releases
 
