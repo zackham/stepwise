@@ -16,15 +16,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from stepwise.engine import AsyncEngine, Engine
-from stepwise.executors import ExecutorStatus
 from stepwise.config import (
     load_config, load_config_with_sources, save_config,
     save_project_config, save_project_local_config,
-    StepwiseConfig, ModelEntry, LabelInfo,
-    DEFAULT_LABELS, DEFAULT_LABEL_NAMES,
-    validate_label_name, label_model_id, parse_label_value,
+    StepwiseConfig, ModelEntry,
+    DEFAULT_LABEL_NAMES,
+    validate_label_name, label_model_id,
 )
-from stepwise.openrouter_models import get_openrouter_models, enrich_registry
+from stepwise.openrouter_models import enrich_registry
 from stepwise.models import (
     Job,
     JobConfig,
