@@ -482,14 +482,37 @@ class Engine:
                 suspended.append(entry)
         return suspended
 
+    def _run_cost(self, run: StepRun) -> float:
+        """Get cost for a single run, checking step_events first, then executor_meta."""
+        cost = self.store.accumulated_cost(run.id)
+        if cost:
+            return cost
+        # Fallback: LLMExecutor stores cost in executor_meta (no step_events)
+        if run.result and run.result.executor_meta:
+            meta_cost = run.result.executor_meta.get("cost_usd")
+            if meta_cost:
+                return float(meta_cost)
+        return 0.0
+
     def job_cost(self, job_id: str) -> float:
-        """Total accumulated cost across all runs for a job."""
+        """Total accumulated cost across all runs for a job, including sub-jobs."""
         runs = self.store.runs_for_job(job_id)
         total = 0.0
         for run in runs:
-            cost = self.store.accumulated_cost(run.id)
-            if cost:
-                total += cost
+            total += self._run_cost(run)
+            # Include sub-job costs (for-each, sub-flow delegation)
+            es = run.executor_state or {}
+            if es.get("for_each"):
+                for sub_id in es.get("sub_job_ids", []):
+                    try:
+                        total += self.job_cost(sub_id)
+                    except KeyError:
+                        pass
+            elif run.sub_job_id:
+                try:
+                    total += self.job_cost(run.sub_job_id)
+                except KeyError:
+                    pass
         return total
 
     def resolved_flow_status(self, job_id: str) -> dict:
@@ -521,7 +544,7 @@ class Engine:
             if run:
                 step_info["status"] = run.status.value
                 step_info["attempt"] = run.attempt
-                step_info["cost_usd"] = round(self.store.accumulated_cost(run.id), 4)
+                step_info["cost_usd"] = round(self._run_cost(run), 4)
 
                 if run.status == StepRunStatus.COMPLETED and run.result:
                     step_info["outputs"] = list(run.result.artifact.keys())
@@ -1398,6 +1421,27 @@ class Engine:
         results = []
         for r in completed_results:
             results.append(r if r is not None else {})
+
+        # If ALL items failed, fail the for-each step regardless of on_error setting.
+        # on_error: continue means "tolerate partial failures", not "accept 100% failure".
+        if any_failed and len(failed_indices) == len(sub_job_ids):
+            run.result = HandoffEnvelope(
+                artifact={"results": results},
+                sidecar=Sidecar(),
+                workspace=job.workspace_path,
+                timestamp=_now(),
+            )
+            run.status = StepRunStatus.FAILED
+            run.error = f"All {len(sub_job_ids)} sub-jobs failed"
+            run.completed_at = _now()
+            self.store.save_run(run)
+            self._emit(job.id, FOR_EACH_COMPLETED, {
+                "step": run.step_name,
+                "item_count": len(sub_job_ids),
+                "failed_count": len(failed_indices),
+            })
+            self._halt_job(job, run)
+            return True
 
         run.result = HandoffEnvelope(
             artifact={"results": results},

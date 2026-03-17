@@ -62,11 +62,15 @@ class OpenRouterClient:
         choice = data["choices"][0]["message"]
         usage = data.get("usage", {})
 
-        # Extract cost from response header or data
+        # Extract cost from response body (preferred) or header (legacy)
         cost: float | None = None
-        cost_header = resp.headers.get("x-openrouter-cost")
-        if cost_header:
-            cost = float(cost_header)
+        body_cost = usage.get("cost")
+        if body_cost is not None:
+            cost = float(body_cost)
+        else:
+            cost_header = resp.headers.get("x-openrouter-cost")
+            if cost_header:
+                cost = float(cost_header)
 
         # Parse tool calls
         tool_calls = None

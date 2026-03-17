@@ -395,7 +395,7 @@ steps:
       all_results: research_all.results  # array of sub-flow outputs
 ```
 
-- `on_error: continue` — failures become `{"_error": "..."}` in results
+- `on_error: continue` — failures become `{"_error": "..."}` in results; if all items fail, the step fails
 - Empty source list → immediate completion with `{"results": []}`
 - Nested field paths work: `step.design.sections`
 - Sub-flows can have multiple steps — standard DAG rules apply inside
