@@ -140,6 +140,14 @@ def _parse_inputs(inputs_data: Any, step_name: str) -> list[InputBinding]:
                 bindings.append(_parse_input_binding(local_name, source))
             except ValueError as e:
                 raise ValueError(f"Step '{step_name}': {e}") from e
+        elif isinstance(source, dict) and "from" in source:
+            # {from: "step.field", optional: true} dict form
+            try:
+                binding = _parse_input_binding(local_name, source["from"])
+            except ValueError as e:
+                raise ValueError(f"Step '{step_name}': {e}") from e
+            binding.optional = source.get("optional", False)
+            bindings.append(binding)
         elif isinstance(source, dict) and "any_of" in source:
             sources_list = source["any_of"]
             if not isinstance(sources_list, list) or len(sources_list) < 2:
@@ -160,10 +168,12 @@ def _parse_inputs(inputs_data: Any, step_name: str) -> list[InputBinding]:
                 source_step="",
                 source_field="",
                 any_of_sources=any_of_pairs,
+                optional=source.get("optional", False),
             ))
         else:
             raise ValueError(
-                f"Step '{step_name}': input '{local_name}' must be a string or {{any_of: [...]}} dict"
+                f"Step '{step_name}': input '{local_name}' must be a string, "
+                f"{{from: ..., optional: true}}, or {{any_of: [...]}} dict"
             )
     return bindings
 

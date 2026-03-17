@@ -817,10 +817,10 @@ class Engine:
                     if target in dep_step_names:
                         return False
 
-        # Check regular deps (non-any_of, non-$job): ALL must have current completed runs
+        # Check regular deps (non-any_of, non-$job, non-optional): ALL must have current completed runs
         regular_deps: list[str] = [
             b.source_step for b in step_def.inputs
-            if not b.any_of_sources and b.source_step != "$job"
+            if not b.any_of_sources and b.source_step != "$job" and not b.optional
         ]
         regular_deps.extend(step_def.sequencing)
         if step_def.for_each:
@@ -836,6 +836,7 @@ class Engine:
                 return False
 
         # Check any_of groups: at least ONE source per group must have current completed run
+        # (unless the binding is optional, in which case missing is OK)
         for binding in step_def.inputs:
             if binding.any_of_sources:
                 has_available = False
@@ -845,7 +846,7 @@ class Engine:
                         if not self._dep_will_be_superseded(job, src_step):
                             has_available = True
                             break
-                if not has_available:
+                if not has_available and not binding.optional:
                     return False
 
         # Evaluate step-level `when` condition against resolved inputs
@@ -902,10 +903,10 @@ class Engine:
             return False
 
         # Check dependency provenance
-        # For regular deps: check each dep step
+        # For regular deps (non-optional): check each dep step
         regular_dep_steps: list[str] = [
             b.source_step for b in step_def.inputs
-            if not b.any_of_sources and b.source_step != "$job"
+            if not b.any_of_sources and b.source_step != "$job" and not b.optional
         ]
         regular_dep_steps.extend(step_def.sequencing)
         if step_def.for_each:
@@ -929,8 +930,10 @@ class Engine:
             if binding.any_of_sources:
                 # Find which source was used
                 found_current = False
+                any_recorded = False
                 for src_step, _ in binding.any_of_sources:
                     if run.dep_run_ids and src_step in run.dep_run_ids:
+                        any_recorded = True
                         source_run_id = run.dep_run_ids[src_step]
                         try:
                             source_run = self.store.load_run(source_run_id)
@@ -939,7 +942,8 @@ class Engine:
                                 break
                         except KeyError:
                             pass
-                if not found_current:
+                # Optional any_of with no source used → still current
+                if not found_current and not (binding.optional and not any_recorded):
                     return False
 
         return True
@@ -1533,6 +1537,7 @@ class Engine:
         for binding in step_def.inputs:
             if binding.any_of_sources:
                 # Resolve from first available completed source
+                resolved = False
                 for src_step, src_field in binding.any_of_sources:
                     latest = self.store.latest_completed_run(job.id, src_step)
                     if latest and latest.result:
@@ -1548,7 +1553,10 @@ class Engine:
                                     break
                         inputs[binding.local_name] = value
                         dep_run_ids[src_step] = latest.id
+                        resolved = True
                         break  # first available wins
+                if not resolved and binding.optional:
+                    inputs[binding.local_name] = None
             elif binding.source_step == "$job":
                 inputs[binding.local_name] = job.inputs.get(binding.source_field)
                 dep_run_ids["$job"] = "$job"
@@ -1568,6 +1576,9 @@ class Engine:
                                 break
                     inputs[binding.local_name] = value
                     dep_run_ids[binding.source_step] = latest.id
+                elif binding.optional:
+                    # Optional dep not available — set to None
+                    inputs[binding.local_name] = None
 
         # Record sequencing deps
         for seq_step in step_def.sequencing:
@@ -1875,6 +1886,7 @@ class Engine:
     def _validate_artifact(self, step_def: StepDefinition, envelope: HandoffEnvelope | None) -> str | None:
         """M1: hard validation — artifact must contain all declared output fields.
         Returns error string if validation fails, None if valid.
+        Fields prefixed with _ are exempt (auto-injected metadata like _session_id).
         """
         if not step_def.outputs:
             return None  # No declared outputs to validate
@@ -1892,6 +1904,8 @@ class Engine:
                 f"Step '{step_def.name}' declares outputs {step_def.outputs} "
                 f"but artifact is empty"
             )
+        # Filter out _-prefixed keys from artifact for validation purposes
+        declared_keys = {k for k in envelope.artifact if not k.startswith("_")}
         missing = []
         for f in step_def.outputs:
             if f in envelope.artifact:
@@ -1903,7 +1917,7 @@ class Engine:
         if missing:
             return (
                 f"Step '{step_def.name}' artifact missing declared outputs: {missing} "
-                f"(got: {list(envelope.artifact.keys())})"
+                f"(got: {list(declared_keys)})"
             )
         return None
 

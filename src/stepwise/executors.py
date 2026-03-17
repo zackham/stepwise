@@ -644,6 +644,8 @@ class LLMExecutor(Executor):
         for k, v in inputs.items():
             if isinstance(v, str):
                 str_inputs[k] = v
+            elif v is None:
+                str_inputs[k] = ""
             elif isinstance(v, (dict, list)):
                 str_inputs[k] = json.dumps(v, indent=2)
             else:

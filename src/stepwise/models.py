@@ -182,6 +182,7 @@ class InputBinding:
     source_step: str  # which predecessor, or "$job"; empty string for any_of
     source_field: str  # which output field; empty string for any_of
     any_of_sources: list[tuple[str, str]] | None = None  # [(step, field), ...]
+    optional: bool = False  # weak reference — resolves to None if dep unavailable
 
     def to_dict(self) -> dict:
         d: dict = {
@@ -191,6 +192,8 @@ class InputBinding:
         }
         if self.any_of_sources is not None:
             d["any_of_sources"] = [{"step": s, "field": f} for s, f in self.any_of_sources]
+        if self.optional:
+            d["optional"] = True
         return d
 
     @classmethod
@@ -203,6 +206,7 @@ class InputBinding:
             source_step=d["source_step"],
             source_field=d["source_field"],
             any_of_sources=any_of,
+            optional=d.get("optional", False),
         )
 
 
@@ -577,10 +581,15 @@ class WorkflowDefinition:
         result = []
         for name, step in self.steps.items():
             has_step_deps = any(
-                b.source_step != "$job" and (b.source_step, name) not in loop_back_edges
+                b.source_step != "$job"
+                and (b.source_step, name) not in loop_back_edges
+                and not b.optional
                 for b in step.inputs if not b.any_of_sources
             )
-            has_any_of_deps = any(b.any_of_sources for b in step.inputs)
+            has_any_of_deps = any(
+                b.any_of_sources and not b.optional
+                for b in step.inputs
+            )
             has_for_each_dep = step.for_each is not None
             if not has_step_deps and not has_any_of_deps and not step.sequencing and not has_for_each_dep:
                 result.append(name)
@@ -591,15 +600,20 @@ class WorkflowDefinition:
 
         Excludes loop-internal steps: steps that loop back to one of their
         own dependencies are intermediate loop participants, not terminals.
+        Self-deps and optional deps are excluded from the "depended on" set.
         """
         depended_on: set[str] = set()
         for step in self.steps.values():
             for binding in step.inputs:
                 if binding.any_of_sources:
                     for src_step, _ in binding.any_of_sources:
-                        depended_on.add(src_step)
+                        # Skip self-deps and optional deps
+                        if src_step != step.name and not binding.optional:
+                            depended_on.add(src_step)
                 elif binding.source_step != "$job":
-                    depended_on.add(binding.source_step)
+                    # Skip self-deps and optional deps
+                    if binding.source_step != step.name and not binding.optional:
+                        depended_on.add(binding.source_step)
             for seq in step.sequencing:
                 depended_on.add(seq)
             if step.for_each:
@@ -649,6 +663,13 @@ class WorkflowDefinition:
         adj: dict[str, list[str]] = {name: [] for name in self.steps}
         in_degree: dict[str, int] = {name: 0 for name in self.steps}
 
+        # Collect optional edges: bindings with optional=True
+        optional_edges: set[tuple[str, str]] = set()
+        for name, step in self.steps.items():
+            for binding in step.inputs:
+                if binding.optional and not binding.any_of_sources and binding.source_step != "$job":
+                    optional_edges.add((binding.source_step, name))
+
         for name, step in self.steps.items():
             deps: set[str] = set()
             for binding in step.inputs:
@@ -665,6 +686,9 @@ class WorkflowDefinition:
                 # Skip loop back-edges: dep → name is a back-edge if dep
                 # has a loop exit targeting name
                 if (dep, name) in loop_back_edges:
+                    continue
+                # Skip optional edges — they don't create hard dependencies
+                if (dep, name) in optional_edges:
                     continue
                 if dep in adj:
                     adj[dep].append(name)
@@ -931,9 +955,11 @@ class Job:
     created_by: str = "server"
     runner_pid: int | None = None
     heartbeat_at: datetime | None = None
+    notify_url: str | None = None
+    notify_context: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "id": self.id,
             "objective": self.objective,
             "workflow": self.workflow.to_dict(),
@@ -949,6 +975,10 @@ class Job:
             "runner_pid": self.runner_pid,
             "heartbeat_at": self.heartbeat_at.isoformat() if self.heartbeat_at else None,
         }
+        if self.notify_url:
+            d["notify_url"] = self.notify_url
+            d["notify_context"] = self.notify_context
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> Job:
@@ -967,6 +997,8 @@ class Job:
             created_by=d.get("created_by", "server"),
             runner_pid=d.get("runner_pid"),
             heartbeat_at=datetime.fromisoformat(d["heartbeat_at"]) if d.get("heartbeat_at") else None,
+            notify_url=d.get("notify_url"),
+            notify_context=d.get("notify_context", {}),
         )
 
 
