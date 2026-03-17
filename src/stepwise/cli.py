@@ -806,7 +806,7 @@ def _build_flow_graph(wf, fmt: str, name: str | None = None):
     # ── Add Inputs port node ────────────────────────────────────────
     INPUTS_ID = "__inputs__"
     if all_job_fields:
-        fields_label = "\\n".join(sorted(all_job_fields))
+        fields_label = "<BR/>".join(sorted(all_job_fields))
         input_label = f'<<FONT POINT-SIZE="10">&#x2193; Inputs</FONT><BR/><FONT POINT-SIZE="9" COLOR="#94a3b8">{fields_label}</FONT>>'
         dot.node(INPUTS_ID, label=input_label, shape="box", style="rounded,filled",
                  fillcolor="#1e293b", color="#475569", fontcolor="#94a3b8",
@@ -845,7 +845,7 @@ def _build_flow_graph(wf, fmt: str, name: str | None = None):
         all_out_fields: list[str] = []
         for fields in terminal_outputs.values():
             all_out_fields.extend(fields)
-        fields_label = "\\n".join(all_out_fields)
+        fields_label = "<BR/>".join(all_out_fields)
         output_label = f'<<FONT POINT-SIZE="10">&#x2191; Outputs</FONT><BR/><FONT POINT-SIZE="9" COLOR="#6ee7b7">{fields_label}</FONT>>'
         dot.node(OUTPUTS_ID, label=output_label, shape="box", style="rounded,filled",
                  fillcolor="#022c22", color="#065f46", fontcolor="#6ee7b7",
