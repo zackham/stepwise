@@ -3,6 +3,8 @@
 Tests the full path: workflow definition → engine tick → LLM executor → output parsing → step completion.
 """
 
+import json
+
 import pytest
 
 from stepwise.engine import Engine
@@ -228,9 +230,9 @@ class TestOutputFieldInjection:
         assert "label" in props
         assert "score" in props
 
-    def test_outputs_declared_builds_tool_schema(self):
-        """Step with declared outputs always gets a tool schema."""
-        client = MockLLMClient(content='{"result": "free form response"}')
+    def test_single_output_skips_tool_schema(self):
+        """Step with single output skips tool schema to avoid truncation."""
+        client = MockLLMClient(content="This is a long free form response about something.")
         engine = make_llm_engine(client)
 
         w = WorkflowDefinition(steps={
@@ -242,9 +244,39 @@ class TestOutputFieldInjection:
         })
         job = _submit(engine, "Freeform", w)
 
-        # Since outputs are declared, tools should be built
+        # Single-output steps should NOT get a tool schema
+        tools = client.calls[0].tools
+        assert tools is None
+
+        # The content should be captured via single-field shortcut
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.COMPLETED
+        runs = engine.get_runs(job.id)
+        assert runs[0].result.artifact["result"] == "This is a long free form response about something."
+        assert runs[0].result.executor_meta["parse_method"] == "single_field"
+
+    def test_multi_output_builds_tool_schema(self):
+        """Step with multiple outputs builds a tool schema."""
+        client = MockLLMClient(tool_calls=[
+            {"name": "step_output", "arguments": {"label": "ok", "score": "5"}}
+        ])
+        engine = make_llm_engine(client)
+
+        w = WorkflowDefinition(steps={
+            "rate": StepDefinition(
+                name="rate",
+                outputs=["label", "score"],
+                executor=ExecutorRef("llm", {"prompt": "Rate: $item"}),
+            ),
+        })
+        job = _submit(engine, "Rate", w, inputs={"item": "test"})
+
+        # Multi-output steps SHOULD get a tool schema
         tools = client.calls[0].tools
         assert tools is not None
+        props = tools[0]["function"]["parameters"]["properties"]
+        assert "label" in props
+        assert "score" in props
 
 
 # ── JSON Content Fallback Through Engine ─────────────────────────────
@@ -301,3 +333,160 @@ class TestParallelLLMSteps:
         job = engine.get_job(job.id)
         assert job.status == JobStatus.COMPLETED
         assert len(client.calls) == 2
+
+
+# ── Single-Field Content Preference ─────────────────────────────────
+
+
+class TestSingleFieldContentPreference:
+    """Tests for the single-output content preference behavior.
+
+    Some models (e.g. GPT-5.4) put full responses in content and brief
+    summaries in tool call args when tool_choice is forced. For single-output
+    steps, we skip tool_choice entirely and prefer raw content.
+    """
+
+    def test_single_output_prefers_content_over_tool_call(self):
+        """When both content and tool call exist, single-output prefers content."""
+        long_content = "This is a detailed analysis with multiple paragraphs. " * 50
+        brief_tool_arg = "Brief summary."
+
+        client = MockLLMClient(
+            content=long_content,
+            tool_calls=[{"name": "step_output", "arguments": {"response": brief_tool_arg}}],
+        )
+        engine = make_llm_engine(client)
+
+        w = WorkflowDefinition(steps={
+            "analyze": StepDefinition(
+                name="analyze",
+                outputs=["response"],
+                executor=ExecutorRef("llm", {"prompt": "Analyze: $text"}),
+            ),
+        })
+        job = _submit(engine, "Analyze", w, inputs={"text": "test"})
+
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.COMPLETED
+
+        runs = engine.get_runs(job.id)
+        artifact = runs[0].result.artifact
+        # Should use the longer content, not the truncated tool call
+        assert artifact["response"] == long_content.strip()
+        assert runs[0].result.executor_meta["parse_method"] == "single_field"
+
+    def test_single_output_falls_back_to_tool_call_when_no_content(self):
+        """When only tool call exists (no content), use it for single-output."""
+        client = MockLLMClient(
+            content=None,
+            tool_calls=[{"name": "step_output", "arguments": {"response": "tool response"}}],
+        )
+        engine = make_llm_engine(client)
+
+        w = WorkflowDefinition(steps={
+            "analyze": StepDefinition(
+                name="analyze",
+                outputs=["response"],
+                executor=ExecutorRef("llm", {"prompt": "Analyze: $text"}),
+            ),
+        })
+        job = _submit(engine, "Analyze", w, inputs={"text": "test"})
+
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.COMPLETED
+
+        runs = engine.get_runs(job.id)
+        assert runs[0].result.artifact["response"] == "tool response"
+        assert runs[0].result.executor_meta["parse_method"] == "tool_call"
+
+    def test_single_output_no_tools_sent(self):
+        """Single-output steps should not send tools to the API."""
+        client = MockLLMClient(content="Full response here.")
+        engine = make_llm_engine(client)
+
+        w = WorkflowDefinition(steps={
+            "respond": StepDefinition(
+                name="respond",
+                outputs=["answer"],
+                executor=ExecutorRef("llm", {"prompt": "Answer: $q"}),
+            ),
+        })
+        _submit(engine, "Respond", w, inputs={"q": "What is 2+2?"})
+
+        # No tools should be sent for single-output steps
+        assert client.calls[0].tools is None
+
+
+# ── Multi-Field Content Preference ──────────────────────────────────
+
+
+class TestMultiFieldContentPreference:
+    """Tests for multi-output content preference when tool calls are truncated."""
+
+    def test_multi_output_prefers_content_when_tool_call_truncated(self):
+        """When content JSON is 3x+ longer than tool call, prefer content."""
+        long_analysis = "Detailed analysis " * 100
+        long_recommendation = "Thorough recommendation " * 100
+        content_json = json.dumps({
+            "analysis": long_analysis,
+            "recommendation": long_recommendation,
+        })
+        client = MockLLMClient(
+            content=content_json,
+            tool_calls=[{
+                "name": "step_output",
+                "arguments": {
+                    "analysis": "Brief.",
+                    "recommendation": "Short.",
+                },
+            }],
+        )
+        engine = make_llm_engine(client)
+
+        w = WorkflowDefinition(steps={
+            "advise": StepDefinition(
+                name="advise",
+                outputs=["analysis", "recommendation"],
+                executor=ExecutorRef("llm", {"prompt": "Advise on: $topic"}),
+            ),
+        })
+        job = _submit(engine, "Advise", w, inputs={"topic": "strategy"})
+
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.COMPLETED
+
+        runs = engine.get_runs(job.id)
+        artifact = runs[0].result.artifact
+        assert artifact["analysis"] == long_analysis
+        assert artifact["recommendation"] == long_recommendation
+        assert runs[0].result.executor_meta["parse_method"] == "json_content_preferred"
+
+    def test_multi_output_uses_tool_call_when_not_truncated(self):
+        """When tool call is normal length, prefer it over content."""
+        client = MockLLMClient(
+            content='{"analysis": "Good", "recommendation": "Keep going"}',
+            tool_calls=[{
+                "name": "step_output",
+                "arguments": {
+                    "analysis": "Good analysis",
+                    "recommendation": "Keep going with this approach",
+                },
+            }],
+        )
+        engine = make_llm_engine(client)
+
+        w = WorkflowDefinition(steps={
+            "advise": StepDefinition(
+                name="advise",
+                outputs=["analysis", "recommendation"],
+                executor=ExecutorRef("llm", {"prompt": "Advise on: $topic"}),
+            ),
+        })
+        job = _submit(engine, "Advise", w, inputs={"topic": "strategy"})
+
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.COMPLETED
+
+        runs = engine.get_runs(job.id)
+        # Tool call is similar or larger — should use it
+        assert runs[0].result.executor_meta["parse_method"] == "tool_call"

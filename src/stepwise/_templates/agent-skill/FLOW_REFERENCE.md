@@ -184,9 +184,16 @@ summarize:
 *One of `prompt` or `prompt_file` required.
 
 **Output extraction priority:**
+
+For **single-output** steps (e.g. `outputs: [response]`): no tool_choice is forced. The model responds naturally.
+1. JSON in content body matching the field name (markdown fences stripped automatically)
+2. Raw text content assigned to the single field
+3. Tool call response (fallback if no content)
+
+For **multi-output** steps (e.g. `outputs: [analysis, recommendation]`): tool_choice is forced via function calling.
 1. Tool call response (structured output via function calling)
-2. JSON in content body (markdown fences stripped automatically)
-3. Single-field shortcut: if only one output declared, raw text content is used
+2. JSON in content body — preferred over tool call if content is 3x+ longer (truncation protection)
+3. JSON extraction from mixed prose+JSON content
 
 ### agent
 
