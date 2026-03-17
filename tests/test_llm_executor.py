@@ -170,13 +170,30 @@ class TestOutputParsing:
         assert result.envelope.artifact["summary"] == "This is a great summary of the topic."
         assert result.envelope.executor_meta["parse_method"] == "single_field"
 
-    def test_tool_call_takes_priority_over_content(self):
-        """If both tool_calls and content present, tool_call wins."""
+    def test_single_field_prefers_content_over_tool_call(self):
+        """For single-field steps, content takes priority over tool call.
+
+        Some models (e.g. GPT-5.4) put full responses in content and brief
+        summaries in tool call args. Content preference avoids truncation.
+        """
         client = MockLLMClient(
             content='{"label": "from_content"}',
             tool_calls=[{"name": "step_output", "arguments": {"label": "from_tool"}}],
         )
         ex = _executor(client, output_fields=["label"])
+        result = ex.start({}, _ctx())
+
+        # Content is JSON with the expected field — parsed as json_content
+        assert result.envelope.artifact["label"] == "from_content"
+        assert result.envelope.executor_meta["parse_method"] == "json_content"
+
+    def test_multi_field_tool_call_takes_priority_over_content(self):
+        """For multi-field steps, tool_call still takes priority when not truncated."""
+        client = MockLLMClient(
+            content='{"label": "from_content", "score": "3"}',
+            tool_calls=[{"name": "step_output", "arguments": {"label": "from_tool", "score": "5"}}],
+        )
+        ex = _executor(client, output_fields=["label", "score"])
         result = ex.start({}, _ctx())
 
         assert result.envelope.artifact["label"] == "from_tool"

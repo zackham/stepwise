@@ -673,69 +673,147 @@ class LLMExecutor(Executor):
         return getattr(self, "_output_fields", [])
 
     def _build_output_tool(self, output_fields: list[str]) -> list[dict] | None:
-        """Build a tool schema to enforce structured output."""
+        """Build a tool schema to enforce structured output.
+
+        For single-output steps (e.g. outputs: [response]), we skip tool_choice
+        entirely and let the model respond naturally. The single-field shortcut
+        in _parse_output will capture the raw content. This avoids models that
+        truncate long-form text when forced into JSON tool call format.
+
+        For multi-field outputs, we build a tool schema so the model returns
+        structured data with all required fields.
+        """
         if not output_fields:
+            return None
+        if len(output_fields) == 1:
+            # Single-output: don't force tool_choice. Let the model respond
+            # naturally and use the single-field shortcut in _parse_output.
             return None
         return [{
             "type": "function",
             "function": {
                 "name": "step_output",
-                "description": "Provide the step output with the required fields.",
+                "description": "Provide the step output with ALL required fields. Include your complete, detailed response for each field.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        f: {"type": "string"} for f in output_fields
+                        f: {"type": "string", "description": f"Your complete response for the '{f}' field."} for f in output_fields
                     },
                     "required": output_fields,
                 },
             },
         }]
 
+    @staticmethod
+    def _strip_code_fences(content: str) -> str:
+        """Strip markdown code fences from content, returning inner text."""
+        fence_start = content.find("```")
+        fence_end = content.rfind("```")
+        if fence_start != -1 and fence_end > fence_start:
+            inner = content[fence_start:fence_end + 3]
+            lines = inner.split("\n")
+            if len(lines) >= 3:
+                return "\n".join(lines[1:-1]).strip()
+        return content
+
     def _parse_output(
         self, response: LLMResponse, output_fields: list[str]
     ) -> tuple[dict, str] | tuple[None, str]:
-        """Parse LLM response into (artifact, parse_method). Returns (None, method) on failure."""
-        # 1. Tool call response (structured output)
+        """Parse LLM response into (artifact, parse_method). Returns (None, method) on failure.
+
+        Extraction priority:
+        1. For single-output steps: prefer content (single-field shortcut), then
+           tool call, then JSON in content. This avoids truncation from models
+           that put brief summaries in tool args and full text in content.
+        2. For multi-output steps: tool call first, then JSON in content. If a
+           tool call exists but content is significantly longer (3x+), prefer
+           content — the model likely put the real response there.
+        """
+        import logging
+        logger = logging.getLogger("stepwise.llm")
+
+        # ── Single-field fast path ───────────────────────────────────────
+        # For single-output steps, prefer content over tool calls.
+        # Models like GPT-5.4 put full responses in content and brief
+        # summaries in tool call args when forced via tool_choice.
+        if len(output_fields) == 1:
+            field = output_fields[0]
+            if response.content and response.content.strip():
+                content = response.content.strip()
+                # Strip markdown code fences before JSON parse attempt
+                stripped = self._strip_code_fences(content)
+                # First try: if content is JSON with the expected field, extract it
+                try:
+                    parsed = json.loads(stripped)
+                    if isinstance(parsed, dict) and field in parsed:
+                        return parsed, "json_content"
+                except (json.JSONDecodeError, ValueError):
+                    pass
+                # Otherwise use raw content as the field value
+                return {field: content}, "single_field"
+            # Fall back to tool call if no content
+            if response.tool_calls:
+                for tc in response.tool_calls:
+                    if tc.get("name") == "step_output":
+                        args = tc.get("arguments", {})
+                        if isinstance(args, dict) and field in args:
+                            return args, "tool_call"
+            return None, "none"
+
+        # ── Multi-field extraction ───────────────────────────────────────
+
+        # Try tool call first
+        tool_call_result = None
         if response.tool_calls:
             for tc in response.tool_calls:
                 if tc.get("name") == "step_output":
                     args = tc.get("arguments", {})
                     if isinstance(args, dict):
-                        return args, "tool_call"
+                        tool_call_result = args
+                        break
 
-        # 2. Try parsing content as JSON
+        # Try parsing content as JSON
+        content_result = None
         if response.content:
-            content = response.content.strip()
-            # Strip markdown code fences — find first/last ``` and extract between
-            fence_start = content.find("```")
-            fence_end = content.rfind("```")
-            if fence_start != -1 and fence_end > fence_start:
-                inner = content[fence_start:fence_end + 3]
-                lines = inner.split("\n")
-                if len(lines) >= 3:
-                    content = "\n".join(lines[1:-1]).strip()
+            content = self._strip_code_fences(response.content.strip())
 
             try:
                 parsed = json.loads(content)
                 if isinstance(parsed, dict):
-                    return parsed, "json_content"
+                    content_result = parsed
             except (json.JSONDecodeError, ValueError):
                 pass
 
-            # Extract JSON object from mixed content (prose + JSON)
-            import re
-            match = re.search(r'\{[\s\S]*\}', content)
-            if match:
-                try:
-                    parsed = json.loads(match.group())
-                    if isinstance(parsed, dict):
-                        return parsed, "json_content"
-                except (json.JSONDecodeError, ValueError):
-                    pass
+            if content_result is None:
+                # Extract JSON object from mixed content (prose + JSON)
+                import re
+                match = re.search(r'\{[\s\S]*\}', content)
+                if match:
+                    try:
+                        parsed = json.loads(match.group())
+                        if isinstance(parsed, dict):
+                            content_result = parsed
+                    except (json.JSONDecodeError, ValueError):
+                        pass
 
-        # 3. Single-field shortcut
-        if len(output_fields) == 1 and response.content:
-            return {output_fields[0]: response.content.strip()}, "single_field"
+        # Decide between tool call and content results
+        if tool_call_result and content_result:
+            # Both available — prefer whichever has more substance.
+            # Some models put truncated values in tool args and full text in content.
+            tc_total = sum(len(str(v)) for v in tool_call_result.values())
+            ct_total = sum(len(str(v)) for v in content_result.values())
+            # Check that content result has the required fields
+            ct_has_fields = all(f in content_result for f in output_fields)
+            if ct_has_fields and ct_total > tc_total * 3:
+                logger.info(f"Preferring content ({ct_total} chars) over tool_call ({tc_total} chars)")
+                return content_result, "json_content_preferred"
+            return tool_call_result, "tool_call"
+
+        if tool_call_result:
+            return tool_call_result, "tool_call"
+
+        if content_result:
+            return content_result, "json_content"
 
         return None, "none"
 
