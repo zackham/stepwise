@@ -351,7 +351,7 @@ Agents interact with flows in five modes, all using the same flow definition:
 ### Key Mechanics
 
 - **`--wait`** blocks until the flow completes or all progress is blocked by human steps (exit 5). Returns JSON with `suspended_steps` including `run_id`, `prompt`, and `fields`.
-- **`--async`** spawns a detached background process — no `stepwise serve` required. Poll with `stepwise status`, retrieve with `stepwise output`.
+- **`--async`** spawns a detached background process — no server required. Poll with `stepwise status`, retrieve with `stepwise output`.
 - **`stepwise fulfill <run-id> '{...}' --wait`** satisfies a human step and continues blocking until the next suspension or completion.
 - **`stepwise list --suspended --output json`** shows all pending human steps across all active jobs — the agent's "inbox."
 - **`stepwise schema`** generates a JSON tool contract: inputs, outputs, human steps.

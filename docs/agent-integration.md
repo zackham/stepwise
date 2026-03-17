@@ -186,7 +186,7 @@ stepwise run deploy.flow.yaml --async --var repo="/path" --var branch="main"
 # → {"job_id": "job-e5f6g7h8", "status": "running"}
 ```
 
-This spawns a detached background process. No `stepwise serve` required.
+This spawns a detached background process. No server required.
 
 ```bash
 # Check progress

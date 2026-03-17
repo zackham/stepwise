@@ -1,6 +1,6 @@
 # API Reference
 
-The Stepwise server exposes a REST API and WebSocket endpoint. Start it with `stepwise serve` (persistent) or `stepwise run --watch` (ephemeral).
+The Stepwise server exposes a REST API and WebSocket endpoint. Start it with `stepwise server start` (persistent) or `stepwise run --watch` (ephemeral).
 
 **Base URL:** `http://localhost:8340` (default port, configurable via `--port`)
 

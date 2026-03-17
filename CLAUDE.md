@@ -35,7 +35,10 @@ make build-web                             # npm build → copies web/dist/ → 
 | `stepwise run --wait <file>` | Blocking JSON output mode. Delegates to server if available (use `--local` to force standalone). |
 | `stepwise run --async <file>` | Fire-and-forget. Delegates to server if available (no subprocess needed); falls back to detached background process with `--local`. |
 | `stepwise run --watch <file>` | Launches FastAPI server with auto-created job, opens web UI |
-| `stepwise serve` | Persistent web server on port 8340 (REST + WebSocket) |
+| `stepwise server start` | Persistent web server on port 8340 (REST + WebSocket). `--detach` for background. |
+| `stepwise server stop` | Gracefully stop the server |
+| `stepwise server restart` | Stop + start (passes through `--detach`, `--port`, etc.) |
+| `stepwise server status` | Show PID, port, uptime, log path (or "not running") |
 
 All delegation modes (`run`, `--wait`, `--async`) use WebSocket notifications from the server for low-latency updates, falling back to REST polling at 2s intervals if WS connection fails.
 
@@ -339,7 +342,7 @@ Other patterns:
 
 **Engine:** `engine.py` (AsyncEngine event queue + legacy Engine tick loop, readiness, launching), `models.py` (all dataclasses), `executors.py` (ABC + built-in executors), `store.py` (SQLite + heartbeat + stale detection), `events.py` (event type constants), `decorators.py` (retry, timeout, fallback), `hooks.py` (project hooks — fires shell scripts on engine events like suspend, complete, fail)
 
-**CLI/Runner:** `cli.py` (all CLI commands), `runner.py` (headless `stepwise run` + server delegation), `runner_bg.py` (background mode), `agent.py` (AgentExecutor + AcpxBackend), `agent_help.py` (agent instruction generation), `server_detect.py` (PID file + health probe for server detection), `io.py` (terminal I/O adapter — TerminalAdapter/PlainAdapter/QuietAdapter for rendering flows and collecting input), `api_client.py` (HTTP client for CLI→server delegation)
+**CLI/Runner:** `cli.py` (all CLI commands), `runner.py` (headless `stepwise run` + server delegation), `runner_bg.py` (background mode), `server_bg.py` (detached server entry point for `--detach`), `agent.py` (AgentExecutor + AcpxBackend), `agent_help.py` (agent instruction generation), `server_detect.py` (PID file + health probe for server detection), `io.py` (terminal I/O adapter — TerminalAdapter/PlainAdapter/QuietAdapter for rendering flows and collecting input), `api_client.py` (HTTP client for CLI→server delegation)
 
 **Server:** `server.py` (FastAPI REST + WS + ThreadSafeStore + observation loop + adoption + config/editor/registry endpoints), `registry_factory.py` (shared executor registration), `editor_llm.py` (agent-assisted flow editing via acpx or OpenRouter, streaming NDJSON)
 
@@ -500,7 +503,7 @@ Every push to master is a release — but only version bumps trigger user-visibl
 6. Push: `git push origin master --tags`
 
 **How upgrades surface to users:**
-- `stepwise serve` prints a one-liner on startup if a newer version exists (cached check, once/day, non-blocking)
+- `stepwise server start` prints a one-liner on startup if a newer version exists (cached check, once/day, non-blocking)
 - `stepwise update` shows "Already up to date" or installs + prints the changelog diff between old and new version
 - Version check fetches `pyproject.toml` from GitHub raw, caches in `~/.cache/stepwise/version-check.json`
 

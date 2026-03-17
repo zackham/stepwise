@@ -128,7 +128,7 @@ steps:
 ```
 stepwise init                                  Create .stepwise/ project
 stepwise run <flow> [--watch|--wait|--async]   Run a flow
-stepwise serve                                 Persistent server with web UI
+stepwise server start [--detach]               Persistent server with web UI
 stepwise validate <flow>                       Check a flow for errors
 stepwise jobs                                  List all jobs
 stepwise status <job-id>                       Step-by-step detail

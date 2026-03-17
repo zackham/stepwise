@@ -36,6 +36,10 @@ class StepwiseProject:
     jobs_dir: Path  # dot_dir / jobs
     templates_dir: Path  # dot_dir / templates (user-saved)
 
+    @property
+    def logs_dir(self) -> Path:
+        return self.dot_dir / "logs"
+
 
 def find_project(start: Path | None = None) -> StepwiseProject:
     """Walk up from start (default cwd) looking for .stepwise/.
