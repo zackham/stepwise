@@ -3,6 +3,23 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] — 2026-03-17
+
+**Server Management, Config Interpolation, Expression Fixes** — structured server commands and executor parameterization.
+
+### Added
+- **`stepwise server` subcommands** — `start`, `stop`, `restart`, `status` replace the old `stepwise serve`. `--detach` for background mode, status shows PID/port/uptime/log path
+- **Config interpolation** — executor config string values support `$variable` interpolation from resolved inputs, parameterizing model, command, system message, etc.
+- **`stepwise diagram`** — DOT source no longer pollutes flow resolution (uses `pipe()`)
+
+### Fixed
+- **Single-output LLM steps** — skip `tool_choice` for steps with one output to prevent truncation; model responds naturally with JSON/text fallback
+- **Cycle detection** — now accounts for loop back-edges, preventing false positives on valid loop targets
+- **Expression namespace** — `true`/`false`/`null` aliases added (Python `True`/`False`/`None`)
+- **For-each all-fail** — correct behavior when all fan-out instances fail
+- **Cost reporting** — accurate token cost aggregation
+- **Diagram port labels** — HTML line breaks in port node labels, no more overlap
+
 ## [0.4.0] — 2026-03-16
 
 **Pull-Based Branching, Poll Executor, Smooth DAG Camera** — conditional workflows and a polished live view.
