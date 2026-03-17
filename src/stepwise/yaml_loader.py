@@ -116,10 +116,6 @@ def _parse_input_binding(local_name: str, source: str) -> InputBinding:
     """Parse 'step.field' or '$job.field' into an InputBinding."""
     if source.startswith("$job."):
         return InputBinding(local_name, "$job", source[5:])
-    if source.startswith("$step."):
-        # Magic binding — handled specially by the loader
-        # For now, skip these as they're not real input bindings
-        raise ValueError(f"$step.* bindings are not yet supported: {source}")
     parts = source.split(".", 1)
     if len(parts) != 2:
         raise ValueError(
