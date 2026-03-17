@@ -455,7 +455,8 @@ class WorkflowDefinition:
                     source_step = self.steps[binding.source_step]
                     # Support nested field references: "hero.headline" checks "hero" exists
                     field_root = binding.source_field.split(".")[0]
-                    if field_root not in source_step.outputs:
+                    # Skip validation for _-prefixed fields (auto-injected metadata like _session_id)
+                    if not field_root.startswith("_") and field_root not in source_step.outputs:
                         errors.append(
                             f"Step '{name}': input binding references unknown field "
                             f"'{binding.source_field}' on step '{binding.source_step}'"

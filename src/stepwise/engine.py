@@ -2183,6 +2183,26 @@ from typing import Callable
 _async_logger = _logging.getLogger("stepwise.async_engine")
 
 
+class _SessionLockManager:
+    """Serialize concurrent access to agent sessions.
+
+    Used by AsyncEngine to prevent multiple steps from accessing
+    the same agent session simultaneously.
+    """
+
+    def __init__(self) -> None:
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def get_lock(self, session_id: str) -> asyncio.Lock:
+        if session_id not in self._locks:
+            self._locks[session_id] = asyncio.Lock()
+        return self._locks[session_id]
+
+    def is_locked(self, session_id: str) -> bool:
+        lock = self._locks.get(session_id)
+        return lock is not None and lock.locked()
+
+
 class AsyncEngine(Engine):
     """Event-driven async workflow engine.
 
@@ -2208,6 +2228,7 @@ class AsyncEngine(Engine):
         self._job_done: dict[str, asyncio.Event] = {}  # job_id → done signal
         self._loop: asyncio.AbstractEventLoop | None = None  # set by run()
         self.on_broadcast: Callable[[dict], None] | None = None
+        self._session_locks = _SessionLockManager()
 
     # ── Main loop ────────────────────────────────────────────────────────
 
@@ -2366,7 +2387,15 @@ class AsyncEngine(Engine):
                 self.store.save_run(run)
             ctx.state_update_fn = update_state
 
-            result = await asyncio.to_thread(executor.start, inputs, ctx)
+            # Session locking: if inputs contain _session_id, serialize access
+            session_id = inputs.get("_session_id")
+            if session_id:
+                lock = self._session_locks.get_lock(session_id)
+                async with lock:
+                    result = await asyncio.to_thread(executor.start, inputs, ctx)
+            else:
+                result = await asyncio.to_thread(executor.start, inputs, ctx)
+
             await self._queue.put(("step_result", job_id, step_name, run_id, result))
         except asyncio.CancelledError:
             # Task was cancelled (job cancellation) — don't push event

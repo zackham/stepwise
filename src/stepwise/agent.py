@@ -677,6 +677,14 @@ class AgentExecutor(Executor):
 
         # Completed — extract outputs based on mode
         envelope = self._extract_output(state, self.output_mode, agent_status)
+
+        # Auto-inject _session_id into artifact for cross-step session sharing
+        if self.continue_session and process.session_name:
+            envelope.artifact["_session_id"] = process.session_name
+        elif "_session_id" in inputs and inputs["_session_id"] and process.session_name:
+            # Pass through received session ID
+            envelope.artifact["_session_id"] = inputs["_session_id"]
+
         return ExecutorResult(
             type="data",
             envelope=envelope,

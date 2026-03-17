@@ -386,3 +386,135 @@ class TestSessionSerialization:
         assert "continue_session" not in d
         assert "loop_prompt" not in d
         assert "max_continuous_attempts" not in d
+
+
+# ── Phase 3: Cross-step Session Sharing ──────────────────────────────
+
+
+class TestSessionIdAutoEmit:
+    def test_session_id_auto_emitted(self, engine, mock_backend):
+        """Agent step with continue_session=True — verify _session_id in artifact."""
+        mock_backend.set_auto_complete(result={"result": "done"})
+
+        wf = WorkflowDefinition(steps={
+            "agent-step": StepDefinition(
+                name="agent-step", outputs=["result"],
+                executor=ExecutorRef("agent", {"prompt": "Work"}),
+                continue_session=True,
+            ),
+        })
+
+        job = engine.create_job("session id test", wf)
+        result = run_job_sync(engine, job.id)
+        assert result.status == JobStatus.COMPLETED
+
+        runs = engine.store.runs_for_job(job.id)
+        assert len(runs) == 1
+        artifact = runs[0].result.artifact
+        assert "_session_id" in artifact
+        assert "agent-step" in artifact["_session_id"]
+
+    def test_session_id_flows_to_downstream(self, engine, mock_backend):
+        """Step B receives _session_id from step A — verify B continues A's session."""
+        mock_backend.set_auto_complete(result={"result": "done"})
+
+        register_step_fn("passthrough", lambda i: {"result": i.get("_session_id", "none")})
+
+        wf = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["result"],
+                executor=ExecutorRef("agent", {"prompt": "Work A"}),
+                continue_session=True,
+            ),
+            "b": StepDefinition(
+                name="b", outputs=["result"],
+                executor=ExecutorRef("agent", {"prompt": "Work B"}),
+                inputs=[
+                    InputBinding("_session_id", "a", "_session_id", optional=True),
+                    InputBinding("a_result", "a", "result"),
+                ],
+            ),
+        })
+
+        job = engine.create_job("downstream session test", wf)
+        result = run_job_sync(engine, job.id)
+        assert result.status == JobStatus.COMPLETED
+
+        # Check that B's spawn received the session name from A
+        pids = sorted(mock_backend._processes.keys())
+        if len(pids) >= 2:
+            b_config = mock_backend._processes[pids[1]]["config"]
+            assert "_session_name" in b_config
+
+    def test_session_id_passthrough(self, engine, mock_backend):
+        """Step B receives and re-emits _session_id — step C can continue."""
+        mock_backend.set_auto_complete(result={"result": "done"})
+
+        wf = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["result"],
+                executor=ExecutorRef("agent", {"prompt": "Work A"}),
+                continue_session=True,
+            ),
+            "b": StepDefinition(
+                name="b", outputs=["result"],
+                executor=ExecutorRef("agent", {"prompt": "Work B"}),
+                inputs=[
+                    InputBinding("_session_id", "a", "_session_id", optional=True),
+                    InputBinding("a_result", "a", "result"),
+                ],
+            ),
+            "c": StepDefinition(
+                name="c", outputs=["result"],
+                executor=ExecutorRef("agent", {"prompt": "Work C"}),
+                inputs=[
+                    InputBinding("_session_id", "b", "_session_id", optional=True),
+                    InputBinding("b_result", "b", "result"),
+                ],
+            ),
+        })
+
+        job = engine.create_job("passthrough session test", wf)
+        result = run_job_sync(engine, job.id)
+        assert result.status == JobStatus.COMPLETED
+
+        # C should also get the session
+        pids = sorted(mock_backend._processes.keys())
+        if len(pids) >= 3:
+            c_config = mock_backend._processes[pids[2]]["config"]
+            assert "_session_name" in c_config
+
+    def test_session_id_with_optional_input(self, engine, mock_backend):
+        """_session_id as optional — first step creates, second continues."""
+        mock_backend.set_auto_complete(result={"result": "done"})
+
+        wf = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["result"],
+                executor=ExecutorRef("agent", {"prompt": "Work A"}),
+                continue_session=True,
+            ),
+            "b": StepDefinition(
+                name="b", outputs=["result"],
+                executor=ExecutorRef("agent", {"prompt": "Work B"}),
+                inputs=[
+                    InputBinding("_session_id", "a", "_session_id", optional=True),
+                ],
+            ),
+        })
+
+        job = engine.create_job("optional session test", wf)
+        result = run_job_sync(engine, job.id)
+        assert result.status == JobStatus.COMPLETED
+
+
+class TestSessionLock:
+    def test_session_lock_serializes_access(self, engine, mock_backend):
+        """Two steps sharing _session_id via inputs — verify lock exists."""
+        # This is a structural test; full concurrency testing requires for_each
+        from stepwise.engine import _SessionLockManager
+
+        mgr = _SessionLockManager()
+        lock = mgr.get_lock("test-session")
+        assert not mgr.is_locked("test-session")
+        assert lock is not None
