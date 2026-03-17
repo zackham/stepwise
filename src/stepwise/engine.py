@@ -2231,14 +2231,35 @@ class AsyncEngine(Engine):
     # ── Main loop ────────────────────────────────────────────────────────
 
     async def run(self) -> None:
-        """Main event loop — blocks on queue, processes events."""
+        """Main event loop — blocks on queue, processes events.
+
+        Uses a 5-second timeout on queue.get() so that external state changes
+        (e.g. `stepwise fulfill` from another process) are picked up even when
+        no internal events are queued.
+        """
         self._loop = asyncio.get_running_loop()
         while True:
-            event = await self._queue.get()
+            try:
+                event = await asyncio.wait_for(self._queue.get(), timeout=5.0)
+            except asyncio.TimeoutError:
+                # Poll for external changes — check if any suspended runs
+                # were fulfilled by another process (e.g. CLI fulfill)
+                self._poll_external_changes()
+                continue
             try:
                 self._handle_queue_event(event)
             except Exception:
                 _async_logger.error("Error handling queue event", exc_info=True)
+
+    def _poll_external_changes(self) -> None:
+        """Check for runs that were fulfilled externally (by another engine instance).
+
+        _dispatch_ready is idempotent — it only launches steps whose deps are
+        met and that don't already have a run. Safe to call unconditionally.
+        """
+        for job in self.store.active_jobs():
+            self._dispatch_ready(job.id)
+            self._check_job_terminal(job.id)
 
     # ── Job lifecycle overrides ──────────────────────────────────────────
 
