@@ -1262,6 +1262,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     # --async mode: fire-and-forget (handles own errors as JSON)
     if getattr(args, "async_mode", False):
         from stepwise.runner import run_async
+        notify_context = None
+        if getattr(args, "notify_context", None):
+            import json as _json
+            try:
+                notify_context = _json.loads(args.notify_context)
+            except _json.JSONDecodeError:
+                from stepwise.runner import _json_error
+                _json_error(2, f"Invalid --notify-context JSON: {args.notify_context}")
+                return EXIT_USAGE_ERROR
         return run_async(
             flow_path=flow_path,
             project=project,
@@ -1269,6 +1278,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             inputs=inputs if inputs else None,
             workspace=args.workspace,
             force_local=getattr(args, "local", False),
+            notify_url=getattr(args, "notify", None),
+            notify_context=notify_context,
         )
 
     # --wait mode: blocking JSON output (handles own errors as JSON)
@@ -2624,6 +2635,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--report-output", help="Report output path (default: <flow>-report.html)")
     p_run.add_argument("--no-open", action="store_true", help="Don't auto-open browser (for --watch)")
     p_run.add_argument("--local", action="store_true", help="Force local execution (skip server delegation)")
+    p_run.add_argument("--notify", metavar="URL", help="Webhook URL for job event notifications")
+    p_run.add_argument("--notify-context", metavar="JSON", dest="notify_context",
+                       help="JSON context to include in webhook payloads")
 
     # check
     p_check = sub.add_parser("check", help="Verify model resolution for a flow")

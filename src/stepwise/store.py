@@ -123,6 +123,8 @@ class SQLiteStore:
             ("created_by", "TEXT", "'server'"),
             ("runner_pid", "INTEGER", None),
             ("heartbeat_at", "TEXT", None),
+            ("notify_url", "TEXT", None),
+            ("notify_context", "TEXT", None),
         ]:
             if col not in job_columns:
                 default_clause = f" DEFAULT {default}" if default else ""
@@ -136,8 +138,8 @@ class SQLiteStore:
             """INSERT INTO jobs
                 (id, objective, workflow, status, inputs, parent_job_id,
                  parent_step_run_id, workspace_path, config, created_at, updated_at,
-                 created_by, runner_pid, heartbeat_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 created_by, runner_pid, heartbeat_at, notify_url, notify_context)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 objective = excluded.objective,
                 workflow = excluded.workflow,
@@ -150,7 +152,9 @@ class SQLiteStore:
                 updated_at = excluded.updated_at,
                 created_by = excluded.created_by,
                 runner_pid = excluded.runner_pid,
-                heartbeat_at = excluded.heartbeat_at
+                heartbeat_at = excluded.heartbeat_at,
+                notify_url = excluded.notify_url,
+                notify_context = excluded.notify_context
             """,
             (
                 job.id,
@@ -167,6 +171,8 @@ class SQLiteStore:
                 job.created_by,
                 job.runner_pid,
                 job.heartbeat_at.isoformat() if job.heartbeat_at else None,
+                job.notify_url,
+                _dumps(job.notify_context) if job.notify_context else None,
             ),
         )
         self._conn.commit()
@@ -195,6 +201,8 @@ class SQLiteStore:
             created_by=row["created_by"] or "server",
             runner_pid=row["runner_pid"],
             heartbeat_at=_parse_dt(row["heartbeat_at"]) if row["heartbeat_at"] else None,
+            notify_url=row["notify_url"] if "notify_url" in row.keys() else None,
+            notify_context=json.loads(row["notify_context"]) if "notify_context" in row.keys() and row["notify_context"] else {},
         )
 
     def active_jobs(self) -> list[Job]:
