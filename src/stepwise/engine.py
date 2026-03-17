@@ -40,8 +40,11 @@ from stepwise.executors import (
     ExecutorRegistry,
     ExecutorResult,
 )
+from string import Template
+
 from stepwise.models import (
     Event,
+    ExecutorRef,
     ExitRule,
     HandoffEnvelope,
     Job,
@@ -60,6 +63,31 @@ from stepwise.models import (
 )
 from stepwise.hooks import fire_hook_for_event
 from stepwise.store import SQLiteStore
+
+
+def _interpolate_config(config: dict, inputs: dict) -> dict:
+    """Substitute $variable references in executor config string values."""
+    str_inputs = {}
+    for k, v in inputs.items():
+        if isinstance(v, str):
+            str_inputs[k] = v
+        elif isinstance(v, (dict, list)):
+            str_inputs[k] = json.dumps(v, indent=2)
+        else:
+            str_inputs[k] = str(v)
+    if not str_inputs:
+        return config
+    result = {}
+    changed = False
+    for k, v in config.items():
+        if isinstance(v, str) and "$" in v:
+            new_v = Template(v).safe_substitute(str_inputs)
+            if new_v != v:
+                changed = True
+            result[k] = new_v
+        else:
+            result[k] = v
+    return result if changed else config
 
 
 class Engine:
@@ -1028,6 +1056,15 @@ class Engine:
         )
 
         exec_ref = step_def.executor
+
+        # Interpolate $variable references in executor config from resolved inputs
+        interpolated = _interpolate_config(exec_ref.config, inputs)
+        if interpolated != exec_ref.config:
+            exec_ref = ExecutorRef(
+                type=exec_ref.type, config=interpolated,
+                decorators=exec_ref.decorators,
+            )
+
         if step_def.outputs and "output_fields" not in exec_ref.config:
             exec_ref = exec_ref.with_config({"output_fields": step_def.outputs})
         if job.workflow.source_dir and exec_ref.type == "script":

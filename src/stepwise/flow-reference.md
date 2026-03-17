@@ -2,25 +2,20 @@
 
 Complete YAML format specification for authoring Stepwise flows.
 
-## Flow Formats
+## Flow Format
 
-Flows can be either a single file or a directory:
-
-**Single file:** `my-flow.flow.yaml` — self-contained, everything in one file.
-
-**Directory flow:** `my-flow/FLOW.yaml` — the flow definition lives in `FLOW.yaml` inside a directory. Co-located scripts, prompts, and data files sit alongside it.
+Flows use a directory format: `flows/<name>/FLOW.yaml`. Co-located scripts, prompts, and data files live alongside the definition.
 
 ```
-my-flow/
-  FLOW.yaml              # flow definition (required)
-  analyze.py             # co-located script
-  prompts/
-    system.md            # prompt loaded via prompt_file
+flows/
+  my-flow/
+    FLOW.yaml              # flow definition (required)
+    analyze.py             # co-located script
+    prompts/
+      system.md            # prompt loaded via prompt_file
 ```
 
-Both formats work everywhere: `stepwise run`, `stepwise validate`, `stepwise share`, etc. Create directory flows with `stepwise new <name>`.
-
-If `name` is omitted, it defaults from the filename (`my-flow.flow.yaml` → `my-flow`).
+Create new flows with `stepwise new <name>`. If `name` is omitted in the YAML, it defaults from the directory name.
 
 ## Structure
 
@@ -30,6 +25,7 @@ description: "What this flow does"
 author: alice                    # optional, auto from git config
 version: "1.0"                   # optional
 tags: [research, agent]          # optional
+forked_from: "@bob:original"     # optional, provenance for forked flows
 
 steps:
   step-name:
@@ -70,6 +66,46 @@ steps:
       - type: retry
         config: { max_retries: 2 }
 ```
+
+## Config Interpolation
+
+Executor config string values support `$variable` interpolation from resolved inputs, just like prompts do. This lets you parameterize any config field — model, command, system message, etc.
+
+```yaml
+steps:
+  call-model:
+    executor: llm
+    model: $model_id                  # interpolated from inputs
+    prompt: "Analyze: $data"
+    outputs: [analysis]
+    inputs:
+      model_id: $job.model            # or from upstream step
+      data: fetch.result
+```
+
+This is especially useful with `for_each` to fan out across models:
+
+```yaml
+steps:
+  council:
+    for_each: $job.models             # ["anthropic/claude-sonnet-4-20250514", "google/gemini-2.5-pro", ...]
+    as: model
+    flow:
+      steps:
+        analyze:
+          executor: llm
+          model: $model               # each sub-job gets a different model
+          prompt: "Analyze: $spec"
+          outputs: [analysis]
+          inputs:
+            model: $job.model
+            spec: $job.spec
+    outputs: [results]
+    inputs:
+      spec: $job.spec
+```
+
+Non-string config values (numbers, lists, booleans) are not interpolated. Missing variables are left as-is (`$unknown` stays `$unknown`).
 
 ## Executor Types
 
@@ -125,8 +161,37 @@ approve:
 | Config field | Type | Required | Description |
 |---|---|---|---|
 | `prompt` | string | yes | Instructions shown to the user |
+| `notify` | string | no | Notification channel/webhook |
 
 In `--watch` mode, the UI shows the prompt and collects output fields. In headless mode, the terminal prompts for each output field.
+
+### poll
+
+Suspends and periodically runs a shell command to check for an external condition. Useful for waiting on CI, PR reviews, deployments, etc.
+
+```yaml
+wait-for-review:
+  executor: poll
+  check_command: |
+    gh pr view $pr_number --json reviewDecision \
+      --jq 'select(.reviewDecision != "") | {decision: .reviewDecision}'
+  interval_seconds: 30
+  prompt: "Waiting for PR #$pr_number review"
+  outputs: [decision]
+  inputs:
+    pr_number: create-pr.pr_number
+```
+
+| Config field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `check_command` | string | yes | — | Shell command to run periodically. `$var` placeholders from inputs |
+| `interval_seconds` | int | no | 60 | Seconds between checks |
+| `prompt` | string | no | — | Human-readable description of what is being waited on |
+
+**How it works:** The engine runs `check_command` every `interval_seconds`:
+- **JSON dict on stdout** → step is fulfilled, dict becomes the artifact
+- **Empty stdout** → not ready, check again next interval
+- **Non-zero exit** → error, retry next interval
 
 ### llm
 
@@ -175,15 +240,10 @@ implement:
   outputs: [result]
   inputs:
     plan: planning.result
-  idempotency: allow_restart        # recommended for agent steps
-```
-
-Optional: add limits for API-key-billed runs or open-ended loops:
-
-```yaml
   limits:
-    max_cost_usd: 2.00              # only enforced with billing: api_key
-    max_iterations: 20              # safety net for loops
+    max_cost_usd: 2.00
+    max_duration_minutes: 60
+  idempotency: allow_restart        # recommended for agent steps
 ```
 
 | Config field | Type | Required | Default | Description |
@@ -209,11 +269,6 @@ Optional: add limits for API-key-billed runs or open-ended loops:
 **Important:** If downstream steps need the agent's text, use `output_mode: stream_result`.
 
 Auto-injected prompt variables: `$objective`, `$workspace`.
-
-**Defaults and best practices:**
-- Agent steps have **no timeout or cost cap by default** — this is intentional for code tasks on subscription plans.
-- `max_cost_usd` only matters when billing via API key. On subscription plans (Anthropic Max, Codex), cost caps are unnecessary and ignored.
-- `max_iterations` is the most useful safety net for looping agents — recommended even for open-ended loops (15–20 as a starting point).
 
 ## Inputs
 
@@ -352,15 +407,18 @@ steps:
     for_each: generate.topics       # must produce a list
     as: topic                       # iteration variable (default: "item")
     on_error: continue              # "fail_fast" (default) | "continue"
+    inputs:
+      style: $job.style             # parent inputs pass through to all sub-jobs
     outputs: [results]              # defaults to [results]
     flow:
       steps:
         research:
           executor: agent
-          prompt: "Research: $topic"
+          prompt: "Research: $topic (style: $style)"
           outputs: [result]
           inputs:
             topic: $job.topic       # access item via $job.<as_variable>
+            style: $job.style       # access parent input via $job.<name>
 
   summarize:
     executor: llm
@@ -371,81 +429,14 @@ steps:
 ```
 
 - `on_error: continue` — failures become `{"_error": "..."}` in results
-- Parent-level `inputs:` on for_each steps pass through to all sub-jobs
 - Empty source list → immediate completion with `{"results": []}`
 - Nested field paths work: `step.design.sections`
-
-### When to use for-each vs manual fan-out
-
-**Use for_each when:**
-- The list size is dynamic (determined at runtime)
-- Every item runs the same pipeline
-- You want ordered results collected automatically
-
-**Use manual fan-out (explicit parallel steps) when:**
-- You have a fixed, known set of branches
-- Each branch has different logic/configuration
-- Branches need different executor types
-
-### For-each patterns
-
-#### Simple transform
-
-```yaml
-process_all:
-  for_each: source.items
-  flow:
-    steps:
-      transform:
-        run: scripts/transform.py
-        outputs: [result]
-        inputs:
-          item: $job.item
-```
-
-#### Multi-step pipeline per item
-
-```yaml
-review_all:
-  for_each: generate.sections
-  as: section
-  flow:
-    steps:
-      write:
-        executor: agent
-        prompt: "Write content for: $section"
-        outputs: [content]
-        inputs:
-          section: $job.section
-      review:
-        executor: llm
-        prompt: "Review: $text"
-        outputs: [score, feedback]
-        inputs:
-          text: write.content
-```
-
-#### With parent context passthrough
-
-```yaml
-process_all:
-  for_each: source.items
-  inputs:
-    style: $job.style              # parent input passed to all iterations
-  flow:
-    steps:
-      process:
-        executor: llm
-        prompt: "Process $item in style: $style"
-        outputs: [result]
-        inputs:
-          item: $job.item
-          style: $job.style
-```
+- Sub-flows can have multiple steps — standard DAG rules apply inside
+- Use for_each when the list size is dynamic; use explicit parallel steps when branches have different logic
 
 ## Flow Steps (Sub-Flow Composition)
 
-Run another flow as a step. The simplest way to compose flows — and the **preferred approach** when a step delegates to a single flow.
+Run another flow as a step.
 
 ```yaml
 steps:
@@ -467,21 +458,10 @@ steps:
 
 **Flow reference types (in order of preference):**
 
-1. `flow: name` — **bare flow name (preferred).** Resolved via project discovery (flows/ directory). Use this for local flows.
-2. `flow: @author:name` — registry ref, fetched and baked at parse time. Use for community/shared flows.
-3. `flow: path.yaml` — file path, resolved relative to the parent flow. **Avoid** — bare names are cleaner, portable, and don't break when directories move. Only use for flows outside the project's flows/ directory.
-4. Inline sub-flow definition — use sparingly. If the sub-flow is worth naming, make it a standalone flow:
-
-```yaml
-  step-name:
-    flow:
-      steps:
-        inner-step:
-          executor: llm
-          prompt: "..."
-          outputs: [result]
-    outputs: [result]
-```
+1. `flow: name` — **bare flow name (preferred).** Resolved via project discovery (flows/ directory).
+2. `flow: @author:name` — registry ref, fetched and baked at parse time.
+3. `flow: path.yaml` — file path, resolved relative to parent flow. Avoid — bare names are portable.
+4. Inline `flow:` with nested `steps:` block — use sparingly; prefer standalone flows.
 
 **Rules:**
 - `flow:` is mutually exclusive with `run:`, `executor:`, and `for_each:`
@@ -566,9 +546,9 @@ expensive_step:
     max_iterations: 10             # max completed runs when looping
 ```
 
-- `max_cost_usd` — engine cancels the executor if cost exceeds this. **Only enforced when `billing: api_key` is set in stepwise config** (default is `subscription`).
-- `max_duration_minutes` — engine cancels the executor if wall-clock exceeds this. Always enforced regardless of billing mode.
-- `max_iterations` — when exit rules loop back to this step, after N completions the loop escalates (pauses the job). Always enforced regardless of billing mode.
+- `max_cost_usd` — engine cancels the executor if cost exceeds this
+- `max_duration_minutes` — engine cancels the executor if wall-clock exceeds this
+- `max_iterations` — when exit rules loop back to this step, after N completions the loop escalates (pauses the job)
 
 ## Idempotency Modes
 
@@ -629,141 +609,6 @@ decorators:
         config: { command: "echo '{\"result\": \"fallback\"}'" }
 ```
 
-## Complete Flow Examples
-
-### Simple linear pipeline
-
-```yaml
-name: data-pipeline
-
-steps:
-  fetch:
-    run: scripts/fetch_data.py
-    outputs: [data, record_count]
-    inputs:
-      source_url: $job.url
-
-  transform:
-    run: scripts/transform.py
-    outputs: [cleaned_data, stats]
-    inputs:
-      raw_data: fetch.data
-
-  load:
-    run: scripts/load_to_db.py
-    outputs: [rows_inserted]
-    inputs:
-      data: transform.cleaned_data
-    idempotency: non_retriable
-```
-
-### AI code review with human approval
-
-```yaml
-name: code-review
-
-steps:
-  analyze:
-    executor: agent
-    prompt: |
-      Review the code changes in this PR: $pr_url
-
-      Check for:
-      1. Correctness and logic errors
-      2. Security vulnerabilities
-      3. Performance concerns
-      4. Style and maintainability
-    outputs: [result]
-    inputs:
-      pr_url: $job.pr_url
-    idempotency: allow_restart
-
-  approve:
-    executor: human
-    prompt: "Review the AI analysis. Decide: approve, request_changes, or escalate."
-    outputs: [decision, notes]
-    inputs:
-      review: analyze.result
-
-    exits:
-      - name: approved
-        when: "outputs.decision == 'approve'"
-        action: advance
-      - name: needs_changes
-        when: "outputs.decision == 'request_changes'"
-        action: loop
-        target: analyze
-      - name: escalate_it
-        when: "outputs.decision == 'escalate' or attempt >= 3"
-        action: escalate
-
-  merge:
-    run: scripts/merge_pr.sh
-    outputs: [merged]
-    inputs:
-      pr_url: $job.pr_url
-    sequencing: [approve]
-    idempotency: non_retriable
-```
-
-### Research with parallel branches
-
-```yaml
-name: market-research
-
-steps:
-  gather_web:
-    executor: agent
-    prompt: "Research $topic using web searches. Summarize key findings."
-    outputs: [result]
-    inputs:
-      topic: $job.topic
-    idempotency: allow_restart
-
-  gather_internal:
-    run: scripts/search_docs.py
-    outputs: [findings]
-    inputs:
-      query: $job.topic
-
-  synthesize:
-    executor: llm
-    prompt: |
-      Synthesize these research findings:
-
-      Web research: $web_findings
-      Internal docs: $internal_findings
-
-      Provide: executive summary, key themes, recommendations.
-    model: balanced
-    temperature: 0.3
-    outputs: [analysis]
-    inputs:
-      web_findings: gather_web.result
-      internal_findings: gather_internal.findings
-
-  review:
-    executor: human
-    prompt: "Review the research synthesis. Accept or request deeper analysis."
-    outputs: [accepted, feedback]
-    inputs:
-      analysis: synthesize.analysis
-
-    exits:
-      - name: accepted
-        when: "outputs.accepted == 'yes' or outputs.accepted == True"
-        action: advance
-      - name: redo
-        when: "attempt < 3"
-        action: loop
-        target: gather_web
-      - name: max_iterations
-        when: "attempt >= 3"
-        action: advance
-```
-
-`gather_web` and `gather_internal` run in parallel (no dependencies between them). `synthesize` waits for both.
-
 ## Gotchas
 
 1. **Input bindings already imply ordering.** Don't add `sequencing: [A]` if you already have `inputs: {x: A.field}`.
@@ -785,21 +630,15 @@ steps:
 
 Before outputting a flow, verify:
 
-1. Every input binding's `source_step` is a valid step name or `$job`
-2. Every input binding's `source_field` exists in the source step's `outputs`
-3. Every `loop` exit rule has a valid `target` step name
-4. No structural cycles in the DAG (loops use exit rules, not graph edges)
-5. At least one entry step (no deps) and one terminal step (nothing depends on it)
-6. Every step has at least one declared output
-7. Prompt `$variables` match input `local_name` values exactly
-8. All loops have a safety cap (`attempt >= N` at medium priority)
-9. Agent steps passing text downstream use `output_mode: stream_result`
-10. `prompt` and `prompt_file` are mutually exclusive — never both on the same step
-11. For directory flows, `run:` paths are relative to the flow directory, not cwd
-12. For-each: `for_each` source produces a list; sub-flow accesses item via `$job.<as>`
-13. Branching: `when` conditions reference input variable names; `any_of` has >= 2 sources with valid `step.field` refs
-14. Flow steps: `flow:` cannot combine with `run:`, `executor:`, or `for_each:`
-17. Flow steps: sub-flow terminal step(s) must produce all declared `outputs`
-18. Flow refs: prefer bare names (`flow: council`) over file paths (`flow: ../council/FLOW.yaml`)
+1. Input bindings: `source_step` is valid step name or `$job`; `source_field` exists in source step's `outputs`
+2. Every `loop` exit rule has a valid `target` step name
+3. No structural cycles in the DAG (loops use exit rules, not graph edges)
+4. At least one entry step (no deps) and one terminal step (nothing depends on it)
+5. Every step has at least one declared output
+6. Prompt `$variables` match input `local_name` values exactly
+7. All loops have a safety cap (`attempt >= N` at medium priority)
+8. For-each: source produces a list; sub-flow accesses item via `$job.<as>`
+9. Branching: `when` conditions reference input variable names; `any_of` has >= 2 sources with valid `step.field` refs
+10. All sub-flows (flow steps, for-each) produce all declared parent `outputs`
 
 After generating, validate with `stepwise validate <flow>`.
