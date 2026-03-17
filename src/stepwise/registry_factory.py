@@ -109,6 +109,8 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
                 kwargs["temperature"] = cfg["temperature"]
             if cfg.get("max_tokens") is not None:
                 kwargs["max_tokens"] = cfg["max_tokens"]
+            if cfg.get("loop_prompt"):
+                kwargs["loop_prompt"] = cfg["loop_prompt"]
             executor = LLMExecutor(
                 client=_client,
                 model=model_id,

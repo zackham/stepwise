@@ -311,6 +311,9 @@ class StepDefinition:
     output_schema: dict[str, OutputFieldSpec] = field(default_factory=dict)
     chain: str | None = None  # M7a: context chain membership
     chain_label: str | None = None  # M7a: label shown in chain prefix
+    continue_session: bool = False  # reuse agent session across loop iterations
+    loop_prompt: str | None = None  # alternate prompt template on attempt > 1
+    max_continuous_attempts: int | None = None  # circuit breaker for session reuse
 
     def to_dict(self) -> dict:
         d = {
@@ -336,6 +339,12 @@ class StepDefinition:
             d["chain"] = self.chain
         if self.chain_label:
             d["chain_label"] = self.chain_label
+        if self.continue_session:
+            d["continue_session"] = True
+        if self.loop_prompt is not None:
+            d["loop_prompt"] = self.loop_prompt
+        if self.max_continuous_attempts is not None:
+            d["max_continuous_attempts"] = self.max_continuous_attempts
         return d
 
     @classmethod
@@ -355,6 +364,9 @@ class StepDefinition:
             sub_flow=WorkflowDefinition.from_dict(d["sub_flow"]) if d.get("sub_flow") else None,
             chain=d.get("chain"),
             chain_label=d.get("chain_label"),
+            continue_session=d.get("continue_session", False),
+            loop_prompt=d.get("loop_prompt"),
+            max_continuous_attempts=d.get("max_continuous_attempts"),
         )
 
 

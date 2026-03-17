@@ -1069,6 +1069,15 @@ class Engine:
             "attempt": attempt,
         })
 
+        # Session continuity: skip chain context if continuing an existing session
+        skip_chain = False
+        if step_def.continue_session and attempt > 1:
+            prev_run = self.store.latest_completed_run(job.id, step_name)
+            if prev_run and prev_run.executor_state and prev_run.executor_state.get("session_name"):
+                skip_chain = True
+        if skip_chain:
+            chain_context = None
+
         ctx = ExecutionContext(
             job_id=job.id,
             step_name=step_name,
@@ -1096,6 +1105,22 @@ class Engine:
             exec_ref = exec_ref.with_config({"output_fields": step_def.outputs})
         if job.workflow.source_dir and exec_ref.type == "script":
             exec_ref = exec_ref.with_config({"flow_dir": job.workflow.source_dir})
+
+        # Pass session continuity fields to agent executor
+        if exec_ref.type == "agent":
+            session_ctx: dict = {}
+            if step_def.continue_session:
+                session_ctx["continue_session"] = True
+                # Pass previous session name from last completed run
+                prev_run = self.store.latest_completed_run(job.id, step_name)
+                if prev_run and prev_run.executor_state and prev_run.executor_state.get("session_name"):
+                    session_ctx["_prev_session_name"] = prev_run.executor_state["session_name"]
+            if step_def.loop_prompt is not None:
+                session_ctx["loop_prompt"] = step_def.loop_prompt
+            if step_def.max_continuous_attempts is not None:
+                session_ctx["max_continuous_attempts"] = step_def.max_continuous_attempts
+            if session_ctx:
+                exec_ref = exec_ref.with_config(session_ctx)
 
         # Inject runtime context for agent executors with emit_flow enabled
         if exec_ref.type == "agent" and exec_ref.config.get("emit_flow"):
