@@ -67,6 +67,23 @@ steps:
         config: { max_retries: 2 }
 ```
 
+## Config Interpolation
+
+Executor config string values support `$variable` interpolation from resolved inputs. This lets you parameterize any config field — model, command, system message, etc.
+
+```yaml
+call-model:
+  executor: llm
+  model: $model_id                  # interpolated from inputs
+  prompt: "Analyze: $data"
+  outputs: [analysis]
+  inputs:
+    model_id: $job.model
+    data: fetch.result
+```
+
+Useful with `for_each` to fan out across models (council pattern).
+
 ## Executor Types
 
 ### script
