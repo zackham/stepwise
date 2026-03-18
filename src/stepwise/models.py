@@ -577,6 +577,101 @@ class WorkflowDefinition:
 
         return errors
 
+    def warnings(self) -> list[str]:
+        """Generate advisory warnings about potential issues (non-blocking)."""
+        from itertools import product as _product
+        from stepwise.yaml_loader import evaluate_exit_condition
+
+        warns: list[str] = []
+
+        for name, step in self.steps.items():
+            if not step.exit_rules:
+                continue
+
+            # Unbounded loop detection
+            for rule in step.exit_rules:
+                if (rule.config.get("action") == "loop"
+                        and not rule.config.get("max_iterations")):
+                    target = rule.config.get("target", name)
+                    warns.append(
+                        f"\u26a0 Step '{name}': loop exit rule '{rule.name}' "
+                        f"targeting '{target}' has no max_iterations"
+                    )
+
+            # Structural catch-all check
+            conditions = [
+                r.config.get("condition", "")
+                for r in step.exit_rules if r.type == "expression"
+            ]
+            has_catch_all = any(
+                c.strip().lower() == "true"
+                for c in conditions
+            ) or any(r.type == "always" for r in step.exit_rules)
+            if not has_catch_all:
+                warns.append(
+                    f"\u26a0 Step '{name}': exit rules have no unconditional "
+                    f"catch-all (when: 'True')"
+                )
+
+            # Output-space coverage for human steps
+            if (step.executor.type == "human" and step.output_schema):
+                domains: dict[str, list] = {}
+                for field_name, spec in step.output_schema.items():
+                    vals: list = []
+                    if spec.type == "bool":
+                        vals = [True, False]
+                    elif spec.type == "choice" and spec.options:
+                        vals = list(spec.options)
+                    elif spec.type == "number":
+                        vals = [spec.min if spec.min is not None else 0]
+                    else:  # str, text
+                        vals = ["sample"]
+                    if not spec.required:
+                        vals = vals + [None]
+                    domains[field_name] = vals
+
+                field_names = list(domains.keys())
+                combos = list(_product(*[domains[f] for f in field_names]))
+
+                if len(combos) > 256:
+                    warns.append(
+                        f"\u2139 Step '{name}': {len(combos)} output "
+                        f"combinations — skipping coverage analysis"
+                    )
+                else:
+                    for combo in combos:
+                        outputs = dict(zip(field_names, combo))
+                        covered = False
+                        for rule in step.exit_rules:
+                            if rule.type == "always":
+                                covered = True
+                                break
+                            cond = rule.config.get("condition", "False")
+                            try:
+                                if evaluate_exit_condition(cond, outputs, 1):
+                                    covered = True
+                                    break
+                            except Exception:
+                                pass
+                        if not covered:
+                            warns.append(
+                                f"\u26a0 Step '{name}': uncovered output "
+                                f"combination {outputs}"
+                            )
+
+            # Coercion safety notes
+            import re
+            for rule in step.exit_rules:
+                cond = rule.config.get("condition", "")
+                if re.search(r"float\(|int\(|bool\(", cond):
+                    warns.append(
+                        f"\u2139 Step '{name}': exit rule '{rule.name}' "
+                        f"uses type coercion — verify input is always "
+                        f"the expected type"
+                    )
+
+        return warns
+
     def entry_steps(self) -> list[str]:
         """Steps with no dependencies (no inputs, sequencing, or for_each source).
 

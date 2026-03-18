@@ -1793,7 +1793,12 @@ class Engine:
                 condition = rule.config.get("condition", "False")
                 try:
                     return evaluate_exit_condition(condition, artifact, attempt)
-                except ValueError:
+                except ValueError as e:
+                    import logging
+                    logging.getLogger("stepwise.engine").warning(
+                        "Exit rule '%s' eval failed: %s (artifact keys: %s)",
+                        rule.name, e, list(artifact.keys()),
+                    )
                     return False
             case "always":
                 return True
