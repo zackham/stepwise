@@ -138,6 +138,56 @@ def get_bundled_web_dir() -> Path:
     return Path(__file__).parent / "_web"
 
 
+def get_web_dir() -> Path:
+    """Resolve the web UI assets directory.
+
+    Priority:
+    1. STEPWISE_WEB_DIR env var (explicit override)
+    2. Source tree web/dist (editable installs or local file:// installs)
+    3. Bundled _web/ inside the installed package
+
+    When installed as a uv tool or pip package from a local path, the
+    dist-info/direct_url.json records the source directory. This lets us
+    find web/dist even when __file__ points into the venv, not the source.
+    """
+    import os
+
+    # 1. Explicit override
+    env = os.environ.get("STEPWISE_WEB_DIR")
+    if env:
+        p = Path(env)
+        if p.exists() and (p / "index.html").exists():
+            return p
+
+    # 2a. Source tree via __file__ (editable installs, running from checkout)
+    src_dist = Path(__file__).parent.parent.parent / "web" / "dist"
+    if src_dist.exists() and (src_dist / "index.html").exists():
+        return src_dist
+
+    # 2b. Source tree via dist-info (uv tool install from local path)
+    try:
+        from importlib.metadata import distribution
+        import json
+
+        dist = distribution("stepwise-run")
+        for f in dist.files or []:
+            if f.name == "direct_url.json":
+                url_path = Path(dist.locate_file(f))
+                data = json.loads(url_path.read_text())
+                url = data.get("url", "")
+                if url.startswith("file://"):
+                    source_root = Path(url[7:])
+                    candidate = source_root / "web" / "dist"
+                    if candidate.exists() and (candidate / "index.html").exists():
+                        return candidate
+                break
+    except Exception:
+        pass
+
+    # 3. Bundled assets
+    return get_bundled_web_dir()
+
+
 def _project_from_root(root: Path) -> StepwiseProject:
     dot = root / DOT_DIR_NAME
     return StepwiseProject(

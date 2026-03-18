@@ -426,6 +426,10 @@ def _server_start(args: argparse.Namespace) -> int:
     os.environ["STEPWISE_JOBS_DIR"] = str(project.jobs_dir)
     os.environ["STEPWISE_PROJECT_DIR"] = str(project.root)
 
+    # Resolve web dir now (CLI process can find source tree reliably)
+    from stepwise.project import get_web_dir
+    os.environ["STEPWISE_WEB_DIR"] = str(get_web_dir())
+
     io.banner(f"Stepwise v{_get_version()}", f"http://{host}:{port}")
 
     # Non-blocking upgrade check (fail silently)
@@ -467,6 +471,10 @@ def _server_start_detached(
     project.logs_dir.mkdir(parents=True, exist_ok=True)
     log_file = project.logs_dir / "server.log"
 
+    # Resolve web dir now (CLI process can find source tree reliably)
+    from stepwise.project import get_web_dir
+    web_dir = str(get_web_dir())
+
     cmd = [
         sys.executable, "-m", "stepwise.server_bg",
         "--db", str(project.db_path),
@@ -477,6 +485,7 @@ def _server_start_detached(
         "--port", str(port),
         "--host", host,
         "--log-file", str(log_file),
+        "--web-dir", web_dir,
     ]
 
     subprocess.Popen(

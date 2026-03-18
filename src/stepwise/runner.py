@@ -123,16 +123,22 @@ def _delegated_create_and_start(
     objective: str,
     inputs: dict | None,
     workspace: str | None,
+    notify_url: str | None = None,
+    notify_context: dict | None = None,
 ) -> tuple[str | None, str | None]:
     """Create and start a job on the server. Returns (job_id, error_message)."""
     base = server_url.rstrip("/")
     try:
-        resp = httpx.post(f"{base}/api/jobs", json={
+        payload = {
             "objective": objective,
             "workflow": workflow.to_dict(),
             "inputs": inputs,
             "workspace_path": workspace,
-        }, timeout=10)
+        }
+        if notify_url:
+            payload["notify_url"] = notify_url
+            payload["notify_context"] = notify_context or {}
+        resp = httpx.post(f"{base}/api/jobs", json=payload, timeout=10)
         resp.raise_for_status()
         job_id = resp.json()["id"]
     except Exception as e:
@@ -1335,7 +1341,7 @@ def run_async(
         from stepwise.server_detect import detect_server
         server_url = detect_server(project.dot_dir)
         if server_url:
-            return _delegated_run_async(server_url, workflow, objective or flow_display_name(flow_path), inputs, workspace)
+            return _delegated_run_async(server_url, workflow, objective or flow_display_name(flow_path), inputs, workspace, notify_url, notify_context)
 
     # Create the job in the store so we have a job_id
     if config is None:
@@ -1391,9 +1397,11 @@ def _delegated_run_async(
     objective: str,
     inputs: dict | None,
     workspace: str | None,
+    notify_url: str | None = None,
+    notify_context: dict | None = None,
 ) -> int:
     """Delegate --async mode to a running server. No polling, exits immediately."""
-    job_id, err = _delegated_create_and_start(server_url, workflow, objective, inputs, workspace)
+    job_id, err = _delegated_create_and_start(server_url, workflow, objective, inputs, workspace, notify_url, notify_context)
     if err:
         _json_stdout({"status": "error", "exit_code": EXIT_JOB_FAILED, "error": err})
         return EXIT_JOB_FAILED

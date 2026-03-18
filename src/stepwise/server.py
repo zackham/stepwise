@@ -104,6 +104,8 @@ class CreateJobRequest(BaseModel):
     inputs: dict | None = None
     config: dict | None = None
     workspace_path: str | None = None
+    notify_url: str | None = None
+    notify_context: dict | None = None
 
 
 class FulfillWatchRequest(BaseModel):
@@ -319,11 +321,19 @@ async def _observe_external_jobs() -> None:
 
 
 def _cleanup_zombie_jobs(store: ThreadSafeStore) -> None:
-    """Fail server-owned jobs stuck in running/pending from a previous crashed server."""
+    """Fail server-owned jobs stuck in running/pending from a previous crashed server.
+
+    Jobs with suspended human steps are NOT zombies — they're legitimately
+    waiting for input. Skip those and let the engine resume them normally.
+    """
     import logging
     logger = logging.getLogger("stepwise.server")
     for job in store.active_jobs():
         if job.created_by != "server":
+            continue
+        # Skip jobs that have suspended steps — they're waiting on humans
+        if store.suspended_runs(job.id):
+            logger.info("Skipping job %s (%s): has suspended steps waiting for input", job.id, job.objective)
             continue
         # Fail all running step runs
         for run in store.running_runs(job.id):
@@ -458,6 +468,10 @@ def create_job(req: CreateJobRequest):
             config=config,
             workspace_path=req.workspace_path,
         )
+        if req.notify_url:
+            job.notify_url = req.notify_url
+            job.notify_context = req.notify_context or {}
+            engine.store.save_job(job)
         _notify_change(job.id)
         return _serialize_job(job)
     except ValueError as e:
@@ -2151,11 +2165,9 @@ async def websocket_endpoint(ws: WebSocket):
 
 # ── Static files (production) ─────────────────────────────────────────
 
-from stepwise.project import get_bundled_web_dir
+from stepwise.project import get_web_dir
 
-# Prefer local web/dist (dev mode, always fresh), fall back to bundled _web (installed package)
-_web_dev = Path(__file__).parent.parent.parent / "web" / "dist"
-_web_dist = _web_dev if _web_dev.exists() else get_bundled_web_dir()
+_web_dist = get_web_dir()
 if _web_dist.exists():
     from fastapi.responses import FileResponse
 

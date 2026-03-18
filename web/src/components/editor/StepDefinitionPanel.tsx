@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { StepDefinition, OutputFieldSchema } from "@/lib/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -298,7 +298,7 @@ export function StepDefinitionPanel({
           >
             {execType}
           </Badge>
-          {config.emit_flow && (
+          {!!config.emit_flow && (
             <Badge className="bg-blue-900/50 text-blue-400 border-blue-800">
               emit_flow
             </Badge>
@@ -353,7 +353,7 @@ export function StepDefinitionPanel({
 
               {(execType === "llm" || execType === "mock_llm") && (
                 <div className="space-y-3">
-                  {config.prompt && (
+                  {!!config.prompt && (
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-zinc-500">Prompt</span>
@@ -406,7 +406,7 @@ export function StepDefinitionPanel({
 
               {execType === "agent" && (
                 <div className="space-y-3">
-                  {config.prompt && (
+                  {!!config.prompt && (
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-zinc-500">Prompt</span>
@@ -419,12 +419,12 @@ export function StepDefinitionPanel({
                     </div>
                   )}
                   <div className="flex flex-wrap gap-1.5">
-                    {config.output_mode && (
+                    {!!config.output_mode && (
                       <Badge className="bg-zinc-800 text-zinc-400 border-zinc-700">
                         output: {String(config.output_mode)}
                       </Badge>
                     )}
-                    {config.output_path && (
+                    {!!config.output_path && (
                       <Badge className="bg-zinc-800 text-zinc-400 border-zinc-700">
                         path: {String(config.output_path)}
                       </Badge>
@@ -435,7 +435,7 @@ export function StepDefinitionPanel({
 
               {execType === "human" && (
                 <div className="space-y-3">
-                  {config.prompt && (
+                  {!!config.prompt && (
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-zinc-500">
@@ -462,7 +462,7 @@ export function StepDefinitionPanel({
 
               {execType === "poll" && (
                 <div className="space-y-3">
-                  {config.check_command && (
+                  {!!config.check_command && (
                     <div className="space-y-1.5">
                       <span className="text-xs text-zinc-500">
                         Check Command
@@ -477,7 +477,7 @@ export function StepDefinitionPanel({
                       Every {String(config.interval_seconds)}s
                     </KV>
                   )}
-                  {config.prompt && (
+                  {!!config.prompt && (
                     <div className="space-y-1.5">
                       <span className="text-xs text-zinc-500">
                         Waiting Message
@@ -516,7 +516,7 @@ export function StepDefinitionPanel({
                 {stepDef.when && (
                   <div className="space-y-1.5">
                     <span className="text-xs text-zinc-500">Activation Condition</span>
-                    <CodeBlock tint="yellow">{stepDef.when}</CodeBlock>
+                    <CodeBlock>{stepDef.when}</CodeBlock>
                   </div>
                 )}
                 {stepDef.inputs.length > 0 && (
@@ -576,7 +576,7 @@ export function StepDefinitionPanel({
                                 when: {String(r.config.condition)}
                               </div>
                             )}
-                            {action === "loop" && r.config.target && (
+                            {action === "loop" && !!r.config.target && (
                               <div className="text-zinc-500">
                                 target: {String(r.config.target)}
                                 {r.config.max_iterations != null &&
