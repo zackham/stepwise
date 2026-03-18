@@ -1076,3 +1076,104 @@ class TestJobCost:
 
         total = engine.job_cost(job.id)
         assert abs(total - 0.010) < 0.001
+
+
+# ── Exit Rule Evaluation Safety ─────────────────────────────────────────
+
+
+class TestExitRuleEvalSafety:
+    """R1: Exit rule eval errors don't crash steps."""
+
+    def test_exit_rule_eval_error_does_not_crash(self, engine, store):
+        """A broken expression returns False; no unhandled exception propagates.
+
+        With an explicit advance rule that doesn't match, the step fails
+        gracefully (engine's no-match-on-advance-rules logic). The key
+        assertion is that the engine doesn't crash — the eval error is
+        caught and the step proceeds through normal exit rule evaluation.
+        """
+        register_step_fn("score_step", lambda inputs: {"score": None})
+
+        w = WorkflowDefinition(steps={
+            "scorer": StepDefinition(
+                name="scorer", outputs=["score"],
+                executor=ExecutorRef("callable", {"fn_name": "score_step"}),
+                exit_rules=[
+                    ExitRule("check_score", "expression", {
+                        "condition": "float(outputs.get('score')) >= 4.0",
+                        "action": "advance",
+                    }, priority=10),
+                ],
+            ),
+        })
+
+        job = engine.create_job("eval-safety", w)
+        engine.start_job(job.id)
+        job = engine.get_job(job.id)
+        # Step fails gracefully (explicit advance rule didn't match), but no crash
+        assert job.status == JobStatus.FAILED
+
+    def test_exit_rule_eval_error_falls_through_to_catch_all(self, engine, store):
+        """Broken first rule falls through; catch-all fires and loops."""
+        iteration = {"count": 0}
+
+        def counting_step(inputs):
+            iteration["count"] += 1
+            if iteration["count"] >= 2:
+                return {"score": "5.0", "done": True}
+            return {"score": "not_a_number", "done": False}
+
+        register_step_fn("counting", counting_step)
+
+        w = WorkflowDefinition(steps={
+            "step_a": StepDefinition(
+                name="step_a", outputs=["score", "done"],
+                executor=ExecutorRef("callable", {"fn_name": "counting"}),
+                exit_rules=[
+                    ExitRule("high_score", "expression", {
+                        "condition": "float(outputs.score) >= 4.0",
+                        "action": "advance",
+                    }, priority=10),
+                    ExitRule("retry", "expression", {
+                        "condition": "True",
+                        "action": "loop", "target": "step_a",
+                        "max_iterations": 5,
+                    }, priority=5),
+                ],
+            ),
+        })
+
+        job = engine.create_job("fall-through", w)
+        engine.start_job(job.id)
+        job = engine.get_job(job.id)
+        assert job.status == JobStatus.COMPLETED
+        # Should have looped at least once (first iteration hit broken rule)
+        assert iteration["count"] >= 2
+
+    def test_exit_rule_eval_error_logged(self, engine, store, caplog):
+        """WARNING is logged when an exit rule expression fails."""
+        import logging
+
+        register_step_fn("bad_score", lambda inputs: {"score": None})
+
+        w = WorkflowDefinition(steps={
+            "log_test": StepDefinition(
+                name="log_test", outputs=["score"],
+                executor=ExecutorRef("callable", {"fn_name": "bad_score"}),
+                exit_rules=[
+                    ExitRule("check", "expression", {
+                        "condition": "float(outputs.get('score'))",
+                        "action": "advance",
+                    }, priority=10),
+                ],
+            ),
+        })
+
+        with caplog.at_level(logging.WARNING, logger="stepwise.engine"):
+            job = engine.create_job("log-test", w)
+            engine.start_job(job.id)
+
+        assert any("check" in r.message and "eval failed" in r.message
+                    for r in caplog.records), (
+            f"Expected warning about 'check' rule, got: {[r.message for r in caplog.records]}"
+        )
