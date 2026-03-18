@@ -355,6 +355,9 @@ def run_flow(
         stream=sys.stderr,
         force=True,
     )
+    # Suppress noisy HTTP client logging
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     # 1. Load and validate flow
     if not flow_path.exists():

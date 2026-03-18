@@ -638,11 +638,11 @@ def fulfill_watch(run_id: str, req: FulfillWatchRequest):
     engine = _get_engine()
     try:
         result = engine.fulfill_watch(run_id, req.payload)
-        _notify_change(run_id)
+        run = engine.store.load_run(run_id)
+        _notify_change(run.job_id)
         # Idempotent: already fulfilled returns a dict
         if result is not None:
             return result
-        run = engine.store.load_run(run_id)
         return {"status": "fulfilled", "run_id": run_id, "job_id": run.job_id}
     except (KeyError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
