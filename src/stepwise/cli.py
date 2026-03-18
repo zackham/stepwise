@@ -624,6 +624,12 @@ def cmd_validate(args: argparse.Namespace) -> int:
         if loop_count:
             parts.append(f"{loop_count} loops")
         io.log("success", f"{flow_path} ({', '.join(parts)})")
+        flow_warnings = wf.warnings()
+        for w in flow_warnings:
+            if w.startswith("\u2139"):
+                io.log("info", f"  {w}")
+            else:
+                io.log("warn", f"  {w}")
         return EXIT_SUCCESS
     except YAMLLoadError as e:
         io.log("error", f"{flow_path}:")
