@@ -24,6 +24,7 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8340)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--log-file", required=True)
+    parser.add_argument("--web-dir", default=None, help="Path to web UI dist directory")
     args = parser.parse_args()
 
     log_path = Path(args.log_file)
@@ -48,6 +49,8 @@ def main() -> int:
     os.environ["STEPWISE_TEMPLATES"] = args.templates_dir
     os.environ["STEPWISE_JOBS_DIR"] = args.jobs_dir
     os.environ["STEPWISE_PROJECT_DIR"] = args.project_dir
+    if args.web_dir:
+        os.environ["STEPWISE_WEB_DIR"] = args.web_dir
 
     # Write pidfile with this process's PID
     from stepwise.server_detect import write_pidfile, remove_pidfile
