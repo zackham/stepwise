@@ -246,7 +246,7 @@ def _parse_executor(
             if k in step_data:
                 config[k] = step_data[k]
     elif executor_type == "agent":
-        for k in ("prompt", "output_mode", "output_path", "emit_flow"):
+        for k in ("prompt", "output_mode", "output_path", "emit_flow", "working_dir"):
             if k in step_data:
                 config[k] = step_data[k]
         if prompt_from_file:
