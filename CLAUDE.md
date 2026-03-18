@@ -320,6 +320,56 @@ steps:
 
 ---
 
+## Flow Validation & Testing
+
+### `stepwise validate`
+
+Always run `stepwise validate <flow>` before running a flow. The validator catches more than syntax errors:
+
+- **Unbounded loops** — loops without `attempt >= N` safety caps or `max_iterations`
+- **Uncovered output combinations** — human steps where not all output field combinations have matching exit rules
+- **Type coercion safety** — notes when exit rules use `float()` or `int()` on outputs that could be None or non-numeric
+- **Missing targets** — loop exit rules pointing at non-existent steps
+- **Dead inputs** — input bindings referencing undeclared outputs
+
+Warnings are advisory (flow still runs), but treat them as defects. A warning-free validate is the quality bar.
+
+### `working_dir` for agent steps
+
+Agent steps accept `working_dir` to set the CWD before the agent starts. When set, the agent's CLAUDE.md is auto-loaded from that directory, giving it project-specific context.
+
+```yaml
+plan:
+  executor: agent
+  working_dir: $project_path    # agent starts here, loads CLAUDE.md from this dir
+  prompt: "Implement the feature described in $spec"
+  outputs: [result]
+```
+
+Use `$variable` references to pass paths from job inputs (`--var project_path=/path/to/repo`). This is essential for flows that dispatch agents into external codebases.
+
+### The ESCALATE pattern
+
+Use `action: escalate` in exit rules to pause the job for human inspection rather than failing or looping forever. This is the primary mechanism for human escalation:
+
+```yaml
+exits:
+  - name: success
+    when: "outputs.status == 'done'"
+    action: advance
+  - name: stuck
+    when: "attempt >= 3"
+    action: escalate           # pauses job, surfaces in suspension inbox
+  - name: retry
+    when: "True"
+    action: loop
+    target: implement
+```
+
+Priority pattern: success first, then escalate as safety bound, then loop as fallback. The job suspends and appears in `stepwise list --suspended` for human triage.
+
+---
+
 ## Testing
 
 ### Python (pytest, `tests/`)
