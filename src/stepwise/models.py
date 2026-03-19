@@ -748,6 +748,31 @@ class WorkflowDefinition:
                         f"the expected type"
                     )
 
+        # Config variable cross-checks
+        if self.config_vars:
+            job_fields = {
+                b.source_field
+                for s in self.steps.values()
+                for b in s.inputs
+                if b.source_step == "$job"
+            }
+            config_names = {v.name for v in self.config_vars}
+
+            for name in sorted(config_names - job_fields):
+                warns.append(
+                    f"\u26a0 Config variable '{name}' is declared but never referenced as $job.{name}"
+                )
+            for name in sorted(job_fields - config_names):
+                warns.append(
+                    f"\u2139 $job.{name} is not declared in config: block"
+                )
+            for v in self.config_vars:
+                if v.required and v.default is None and not v.example:
+                    warns.append(
+                        f"\u2139 Config variable '{v.name}' has no default or example "
+                        f"— users may not know what to provide"
+                    )
+
         return warns
 
     def entry_steps(self) -> list[str]:
