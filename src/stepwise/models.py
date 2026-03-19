@@ -291,6 +291,81 @@ class OutputFieldSpec:
         )
 
 
+# ── Config Variable ───────────────────────────────────────────────────
+
+
+@dataclass
+class ConfigVar:
+    """Declared configurable variable for a flow (maps to $job.* inputs)."""
+    name: str
+    description: str = ""
+    type: str = "str"        # str, text, number, bool, choice
+    default: Any = None
+    required: bool = True    # inferred True when no default provided
+    example: str = ""
+    options: list[str] | None = None   # choice type
+
+    def to_dict(self) -> dict:
+        d: dict = {"name": self.name}
+        if self.description:
+            d["description"] = self.description
+        if self.type != "str":
+            d["type"] = self.type
+        if self.default is not None:
+            d["default"] = self.default
+        if not self.required:
+            d["required"] = False
+        if self.example:
+            d["example"] = self.example
+        if self.options is not None:
+            d["options"] = self.options
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> ConfigVar:
+        typ = d.get("type", "str")
+        if typ not in VALID_FIELD_TYPES:
+            raise ValueError(f"ConfigVar '{d.get('name', '?')}': invalid type '{typ}' "
+                             f"(valid: {', '.join(sorted(VALID_FIELD_TYPES))})")
+        has_default = "default" in d
+        return cls(
+            name=d["name"],
+            description=d.get("description", ""),
+            type=typ,
+            default=d.get("default"),
+            required=d.get("required", not has_default),
+            example=d.get("example", ""),
+            options=d.get("options"),
+        )
+
+
+# ── Flow Requirement ──────────────────────────────────────────────────
+
+
+@dataclass
+class FlowRequirement:
+    """External tool or capability required by a flow."""
+    name: str
+    description: str = ""
+    check: str = ""          # shell command to verify availability
+
+    def to_dict(self) -> dict:
+        d: dict = {"name": self.name}
+        if self.description:
+            d["description"] = self.description
+        if self.check:
+            d["check"] = self.check
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> FlowRequirement:
+        return cls(
+            name=d["name"],
+            description=d.get("description", ""),
+            check=d.get("check", ""),
+        )
+
+
 # ── Step Definition ────────────────────────────────────────────────────
 
 
@@ -417,6 +492,9 @@ class WorkflowDefinition:
     metadata: FlowMetadata = field(default_factory=FlowMetadata)
     chains: dict[str, ChainConfig] = field(default_factory=dict)  # M7a
     source_dir: str | None = None  # M10: directory containing the flow file
+    config_vars: list[ConfigVar] = field(default_factory=list)
+    requires: list[FlowRequirement] = field(default_factory=list)
+    readme: str = ""
 
     def validate(self) -> list[str]:
         """Validate the workflow definition. Returns list of errors."""
@@ -828,6 +906,12 @@ class WorkflowDefinition:
             d["chains"] = {n: c.to_dict() for n, c in self.chains.items()}
         if self.source_dir is not None:
             d["source_dir"] = self.source_dir
+        if self.config_vars:
+            d["config_vars"] = [v.to_dict() for v in self.config_vars]
+        if self.requires:
+            d["requires"] = [r.to_dict() for r in self.requires]
+        if self.readme:
+            d["readme"] = self.readme
         return d
 
     @classmethod
@@ -839,11 +923,16 @@ class WorkflowDefinition:
         chains = {}
         for name, chain_d in d.get("chains", {}).items():
             chains[name] = ChainConfig.from_dict(chain_d)
+        config_vars = [ConfigVar.from_dict(v) for v in d.get("config_vars", [])]
+        requires = [FlowRequirement.from_dict(r) for r in d.get("requires", [])]
         return cls(
             steps=steps,
             metadata=metadata,
             chains=chains,
             source_dir=d.get("source_dir"),
+            config_vars=config_vars,
+            requires=requires,
+            readme=d.get("readme", ""),
         )
 
 

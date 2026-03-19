@@ -14,10 +14,12 @@ import yaml
 
 from stepwise.models import (
     ChainConfig,
+    ConfigVar,
     DecoratorRef,
     ExecutorRef,
     ExitRule,
     FlowMetadata,
+    FlowRequirement,
     ForEachSpec,
     InputBinding,
     OutputFieldSpec,
@@ -865,6 +867,94 @@ def _parse_metadata(data: dict, source_path: Path | None = None) -> FlowMetadata
     )
 
 
+def _parse_config(data: dict) -> list[ConfigVar]:
+    """Parse config variable declarations from top-level 'config' block."""
+    config_data = data.get("config")
+    if not config_data:
+        return []
+    if not isinstance(config_data, dict):
+        raise ValueError("'config' must be a mapping")
+
+    config_vars: list[ConfigVar] = []
+    for name, spec in config_data.items():
+        if not str(name).isidentifier():
+            raise ValueError(f"Config variable '{name}': not a valid identifier")
+
+        if spec is None:
+            spec = {}
+        if not isinstance(spec, dict):
+            raise ValueError(f"Config variable '{name}': spec must be a mapping")
+
+        typ = spec.get("type", "str")
+        if typ not in VALID_FIELD_TYPES:
+            raise ValueError(
+                f"Config variable '{name}': invalid type '{typ}' "
+                f"(valid: {', '.join(sorted(VALID_FIELD_TYPES))})"
+            )
+        if typ == "choice" and not spec.get("options"):
+            raise ValueError(
+                f"Config variable '{name}': type 'choice' requires non-empty 'options' list"
+            )
+
+        has_default = "default" in spec
+        config_vars.append(ConfigVar(
+            name=str(name),
+            description=spec.get("description", ""),
+            type=typ,
+            default=spec.get("default"),
+            required=spec.get("required", not has_default),
+            example=str(spec["example"]) if "example" in spec else "",
+            options=spec.get("options"),
+        ))
+
+    return config_vars
+
+
+def _parse_requires(data: dict) -> list[FlowRequirement]:
+    """Parse requirement declarations from top-level 'requires' block."""
+    requires_data = data.get("requires")
+    if not requires_data:
+        return []
+    if not isinstance(requires_data, list):
+        raise ValueError("'requires' must be a list")
+
+    requires: list[FlowRequirement] = []
+    for item in requires_data:
+        if isinstance(item, str):
+            # Shorthand: just a name
+            if not item:
+                raise ValueError("Requirement name cannot be empty")
+            requires.append(FlowRequirement(name=item))
+        elif isinstance(item, dict):
+            name = item.get("name", "")
+            if not name:
+                raise ValueError("Requirement must have a 'name' field")
+            requires.append(FlowRequirement(
+                name=name,
+                description=item.get("description", ""),
+                check=item.get("check", ""),
+            ))
+        else:
+            raise ValueError(f"Requirement entry must be a string or mapping, got {type(item).__name__}")
+
+    return requires
+
+
+def _load_readme(base_dir: Path | None, data: dict) -> str:
+    """Load readme content from inline YAML or README.md file."""
+    # Inline readme takes priority
+    if "readme" in data:
+        return str(data["readme"])
+
+    # For directory flows, try loading README.md
+    if base_dir and base_dir.is_dir():
+        readme_path = base_dir / "README.md"
+        if readme_path.is_file():
+            return readme_path.read_text()
+
+    return ""
+
+
 def get_author() -> str:
     """Get author name: git config → $USER → 'anonymous'."""
     import os
@@ -972,13 +1062,34 @@ def load_workflow_yaml(
     # Parse metadata from top-level fields
     metadata = _parse_metadata(data, source_path)
 
+    # Parse config variables and requirements
+    try:
+        config_vars = _parse_config(data)
+    except ValueError as e:
+        errors.append(str(e))
+        config_vars = []
+
+    try:
+        requires = _parse_requires(data)
+    except ValueError as e:
+        errors.append(str(e))
+        requires = []
+
+    if errors:
+        raise YAMLLoadError(errors)
+
+    # Load readme (inline or from README.md)
+    flow_base_dir = source_path.parent if source_path else None
+    readme = _load_readme(flow_base_dir, data)
+
     # M10: Record the source directory for script path resolution
     source_dir_str: str | None = None
     if source_path is not None:
         source_dir_str = str(source_path.parent.resolve())
 
     workflow = WorkflowDefinition(
-        steps=steps, metadata=metadata, chains=chains, source_dir=source_dir_str
+        steps=steps, metadata=metadata, chains=chains, source_dir=source_dir_str,
+        config_vars=config_vars, requires=requires, readme=readme,
     )
 
     # Run the standard workflow validation
@@ -1021,10 +1132,29 @@ def load_workflow_string(yaml_str: str) -> WorkflowDefinition:
         errors.append(str(e))
         chains = {}
 
+    # Parse config variables and requirements
+    try:
+        config_vars = _parse_config(data)
+    except ValueError as e:
+        errors.append(str(e))
+        config_vars = []
+
+    try:
+        requires = _parse_requires(data)
+    except ValueError as e:
+        errors.append(str(e))
+        requires = []
+
     if errors:
         raise YAMLLoadError(errors)
 
-    workflow = WorkflowDefinition(steps=steps, chains=chains)
+    # Load readme (inline only for string-based loading)
+    readme = _load_readme(None, data)
+
+    workflow = WorkflowDefinition(
+        steps=steps, chains=chains,
+        config_vars=config_vars, requires=requires, readme=readme,
+    )
     validation_errors = workflow.validate()
     if validation_errors:
         raise YAMLLoadError(validation_errors)
