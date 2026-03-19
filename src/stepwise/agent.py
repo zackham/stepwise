@@ -98,10 +98,14 @@ class AcpxBackend:
 
         agent = config.get("agent", self.default_agent)
         # Use stable session name if provided (session continuity), else per-attempt
-        session_name = config.get("_session_name") or f"step-{context.step_name}-{context.attempt}"
+        # Include job_id in session name to prevent collisions when multiple jobs
+        # target the same working_dir (e.g., concurrent impl-dispatch jobs)
+        job_prefix = context.job_id.replace("job-", "") if context.job_id else "local"
+        session_name = config.get("_session_name") or f"step-{job_prefix}-{context.step_name}-{context.attempt}"
 
         # Write prompt to file for acpx --file
-        step_io = Path(working_dir) / ".step-io"
+        # Use per-job subdirectory to prevent file collisions across concurrent jobs
+        step_io = Path(working_dir) / ".step-io" / (context.job_id or "local")
         step_io.mkdir(parents=True, exist_ok=True)
         prompt_file = step_io / f"{context.step_name}-{context.attempt}.prompt.md"
         prompt_file.write_text(prompt)
@@ -607,7 +611,8 @@ class AgentExecutor(Executor):
                 spawn_config["_session_name"] = prev_session
             elif use_existing and context.attempt > 1:
                 # Previous session should exist but config missing — use stable name
-                spawn_config["_session_name"] = f"step-{context.step_name}"
+                job_prefix = context.job_id.replace("job-", "") if context.job_id else "local"
+                spawn_config["_session_name"] = f"step-{job_prefix}-{context.step_name}"
 
         # Also support received session from _session_id input
         if "_session_id" in inputs and inputs["_session_id"]:
