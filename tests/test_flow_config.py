@@ -338,10 +338,21 @@ steps:
     inputs:
       foo: $job.foo
 """)
-        # No config block but has $job.foo — this should NOT warn
-        # because warnings only fire when config_vars is non-empty
+        # No config block but has $job.foo — should warn about missing config block
         warns = wf.warnings()
-        assert not any("not declared in config" in w for w in warns)
+        assert any("$job.foo" in w and "no config: block is declared" in w for w in warns)
+
+    def test_no_warning_when_no_job_inputs_and_no_config(self):
+        wf = load_workflow_string("""
+name: test
+steps:
+  a:
+    run: echo ok
+    outputs: [r]
+""")
+        # No $job.* bindings and no config block — no config-related warnings
+        warns = wf.warnings()
+        assert not any("config" in w.lower() for w in warns)
 
     def test_warning_orphan_job_input_with_config(self):
         wf = load_workflow_string("""
