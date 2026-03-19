@@ -1574,6 +1574,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             force_local=getattr(args, "local", False),
             notify_url=getattr(args, "notify", None),
             notify_context=notify_context,
+            name=getattr(args, "job_name", None),
         )
 
     # --wait mode: blocking JSON output (handles own errors as JSON)
@@ -1587,6 +1588,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             workspace=args.workspace,
             timeout=args.timeout,
             force_local=getattr(args, "local", False),
+            name=getattr(args, "job_name", None),
         )
 
     # Everything below uses stderr for errors
@@ -1595,7 +1597,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         return EXIT_USAGE_ERROR
 
     if args.watch:
-        return _run_watch(args, project, flow_path, inputs)
+        return _run_watch(args, project, flow_path, inputs)  # args.job_name accessed inside
 
     # Headless mode (default)
     return run_flow(
@@ -1610,6 +1612,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         output_json=getattr(args, "output_format", None) == "json",
         force_local=getattr(args, "local", False),
         adapter=_io(args),
+        name=getattr(args, "job_name", None),
     )
 
 
@@ -1640,10 +1643,12 @@ def _run_watch(
     from stepwise.flow_resolution import flow_display_name
     objective = args.objective or flow_display_name(flow_path)
 
+    job_name = getattr(args, "job_name", None)
+
     # If a server is already running, submit there and exit
     existing_url = detect_server(project.dot_dir)
     if existing_url:
-        return _submit_watch_job(existing_url, workflow, objective, inputs, args)
+        return _submit_watch_job(existing_url, workflow, objective, inputs, args, name=job_name)
 
     # Start a new server, submit the job once it's ready
     if args.port:
@@ -1665,7 +1670,7 @@ def _run_watch(
     print(f"  Press Ctrl+C to stop.")
 
     # Background thread: wait for server ready → submit job → open browser
-    _submit_job_when_ready(host, port, server_url, workflow, objective, inputs, args)
+    _submit_job_when_ready(host, port, server_url, workflow, objective, inputs, args, name=job_name)
 
     write_pidfile(project.dot_dir, port)
     try:
@@ -1686,17 +1691,21 @@ def _submit_watch_job(
     objective: str,
     inputs: dict,
     args,
+    name: str | None = None,
 ) -> int:
     """Submit a job to a server via REST API, start it, and open the browser."""
     import json
     import urllib.request
     import urllib.error
 
-    payload = json.dumps({
+    body: dict = {
         "objective": objective,
         "workflow": workflow.to_dict(),
         "inputs": inputs if inputs else None,
-    }).encode()
+    }
+    if name:
+        body["name"] = name
+    payload = json.dumps(body).encode()
 
     try:
         req = urllib.request.Request(
@@ -1741,6 +1750,7 @@ def _submit_job_when_ready(
     objective: str,
     inputs: dict,
     args,
+    name: str | None = None,
 ) -> None:
     """Background thread: wait for server, submit job via API, open browser."""
     import json
@@ -1761,11 +1771,14 @@ def _submit_job_when_ready(
             return  # server never came up
 
         # Submit the job
-        payload = json.dumps({
+        body: dict = {
             "objective": objective,
             "workflow": workflow.to_dict(),
             "inputs": inputs if inputs else None,
-        }).encode()
+        }
+        if name:
+            body["name"] = name
+        payload = json.dumps(body).encode()
 
         try:
             req = urllib.request.Request(
@@ -1844,6 +1857,10 @@ def cmd_jobs(args: argparse.Namespace) -> int:
 
         jobs = store.all_jobs(status=status_filter, top_level_only=True)
 
+        if getattr(args, "filter_name", None):
+            pattern = args.filter_name.lower()
+            jobs = [j for j in jobs if j.name and pattern in j.name.lower()]
+
         if not args.all:
             jobs = jobs[-args.limit:]
 
@@ -1862,10 +1879,11 @@ def cmd_jobs(args: argparse.Namespace) -> int:
             runs = store.runs_for_job(j.id)
             completed = sum(1 for r in runs if r.status.value == "completed")
             total = len(j.workflow.steps)
+            name = (j.name or "")[:30]
             obj = (j.objective or "")[:23]
             created = _relative_time(j.created_at) if j.created_at else ""
-            rows.append([j.id, j.status.value, obj, f"{completed}/{total}", created])
-        io.table(["ID", "STATUS", "OBJECTIVE", "STEPS", "CREATED"], rows)
+            rows.append([j.id, name, j.status.value, obj, f"{completed}/{total}", created])
+        io.table(["ID", "NAME", "STATUS", "OBJECTIVE", "STEPS", "CREATED"], rows)
 
         return EXIT_SUCCESS
     finally:
@@ -1904,7 +1922,10 @@ def cmd_status(args: argparse.Namespace) -> int:
 
         # Table format
         io = _io(args)
-        info = f"Job: {job.id}\nStatus: {job.status.value}\nObjective: {job.objective}"
+        info = f"Job: {job.id}"
+        if job.name:
+            info += f"\nName: {job.name}"
+        info += f"\nStatus: {job.status.value}\nObjective: {job.objective}"
         if job.created_at:
             info += f"\nCreated: {_relative_time(job.created_at)}"
         io.note(info, title="Job Details")
@@ -2008,6 +2029,7 @@ def _job_summary(job) -> dict:
     """Create a JSON-serializable job summary."""
     return {
         "id": job.id,
+        "name": job.name,
         "status": job.status.value,
         "objective": job.objective,
         "steps": len(job.workflow.steps),
@@ -3081,6 +3103,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--vars-file", help="Load variables from YAML/JSON file")
     p_run.add_argument("--port", type=int, help="Override port (for --watch)")
     p_run.add_argument("--objective", help="Set job objective (defaults to flow name)")
+    p_run.add_argument("--name", dest="job_name", help="Human-friendly job name")
     p_run.add_argument("--workspace", help="Override workspace directory")
     p_run.add_argument("--report", action="store_true", help="Generate HTML report after completion")
     p_run.add_argument("--report-output", help="Report output path (default: <flow>-report.html)")
@@ -3153,6 +3176,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_jobs.add_argument("--limit", type=int, default=20)
     p_jobs.add_argument("--all", action="store_true")
     p_jobs.add_argument("--status", help="Filter by status")
+    p_jobs.add_argument("--name", dest="filter_name", help="Filter by name (substring match)")
 
     # status
     p_status = sub.add_parser("status", help="Show job detail")

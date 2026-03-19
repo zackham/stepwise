@@ -1200,6 +1200,7 @@ class Job:
     id: str
     objective: str
     workflow: WorkflowDefinition
+    name: str | None = None
     status: JobStatus = JobStatus.PENDING
     inputs: dict = field(default_factory=dict)
     parent_job_id: str | None = None
@@ -1218,6 +1219,7 @@ class Job:
         d = {
             "id": self.id,
             "objective": self.objective,
+            "name": self.name,
             "workflow": self.workflow.to_dict(),
             "status": self.status.value,
             "inputs": self.inputs,
@@ -1241,6 +1243,7 @@ class Job:
         return cls(
             id=d["id"],
             objective=d["objective"],
+            name=d.get("name"),
             workflow=WorkflowDefinition.from_dict(d["workflow"]),
             status=JobStatus(d["status"]),
             inputs=d.get("inputs", {}),

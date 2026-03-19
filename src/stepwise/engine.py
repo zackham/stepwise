@@ -119,6 +119,7 @@ class Engine:
         parent_job_id: str | None = None,
         parent_step_run_id: str | None = None,
         workspace_path: str | None = None,
+        name: str | None = None,
     ) -> Job:
         errors = workflow.validate()
         if errors:
@@ -130,6 +131,7 @@ class Engine:
         job = Job(
             id=job_id,
             objective=objective,
+            name=name,
             workflow=workflow,
             status=JobStatus.PENDING,
             inputs=inputs or {},

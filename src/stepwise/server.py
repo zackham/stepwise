@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -106,6 +107,7 @@ class CreateJobRequest(BaseModel):
     workspace_path: str | None = None
     notify_url: str | None = None
     notify_context: dict | None = None
+    name: str | None = None
 
 
 class FulfillWatchRequest(BaseModel):
@@ -335,8 +337,17 @@ def _cleanup_zombie_jobs(store: ThreadSafeStore) -> None:
         if store.suspended_runs(job.id):
             logger.info("Skipping job %s (%s): has suspended steps waiting for input", job.id, job.objective)
             continue
-        # Fail all running step runs
+        # Kill orphaned agent processes and fail running step runs
         for run in store.running_runs(job.id):
+            # Kill the actual OS process if we have its pgid
+            if run.executor_state:
+                pgid = run.executor_state.get("pgid")
+                if pgid:
+                    try:
+                        os.killpg(pgid, signal.SIGTERM)
+                        logger.info("Killed orphaned process group %d for job %s step %s", pgid, job.id, run.step_name)
+                    except (ProcessLookupError, PermissionError):
+                        pass  # already dead
             run.status = StepRunStatus.FAILED
             run.error = "Server restarted: step was orphaned"
             run.completed_at = _now()
@@ -467,6 +478,7 @@ def create_job(req: CreateJobRequest):
             inputs=req.inputs,
             config=config,
             workspace_path=req.workspace_path,
+            name=req.name,
         )
         if req.notify_url:
             job.notify_url = req.notify_url

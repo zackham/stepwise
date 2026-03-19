@@ -80,13 +80,17 @@ class StepwiseClient:
         objective: str,
         workflow: dict,
         inputs: dict | None = None,
+        name: str | None = None,
     ) -> dict:
         """Create and optionally start a job."""
-        return self._request("POST", "/api/jobs", {
+        body: dict = {
             "objective": objective,
             "workflow": workflow,
             "inputs": inputs,
-        })
+        }
+        if name:
+            body["name"] = name
+        return self._request("POST", "/api/jobs", body)
 
     def status(self, job_id: str) -> dict:
         """Get resolved flow status for a job."""
