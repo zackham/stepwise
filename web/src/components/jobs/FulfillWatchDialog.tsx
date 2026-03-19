@@ -163,7 +163,7 @@ export function FulfillWatchDialog({
                         }))
                       }
                       placeholder={`Value for ${field}`}
-                      className="font-mono text-sm"
+                      className="font-mono text-sm min-h-[44px]"
                     />
                   </div>
                 );
