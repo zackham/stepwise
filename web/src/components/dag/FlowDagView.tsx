@@ -58,6 +58,9 @@ export function FlowDagView({
   const isDraggingRef = useRef(false);
   const didDragRef = useRef(false);
   const dragStart = useRef({ x: 0, y: 0, tx: 0, ty: 0 });
+  // Touch state refs
+  const touchStartRef = useRef<{ id: number; x: number; y: number; time: number } | null>(null);
+  const pinchStartRef = useRef<{ dist: number; scale: number; mx: number; my: number } | null>(null);
   const [zoomDisplay, setZoomDisplay] = useState(100);
   const hasCenteredRef = useRef(false);
   const [followFlow, setFollowFlow] = useState(true);
@@ -322,6 +325,103 @@ export function FlowDagView({
     }
   }, []);
 
+  // Touch event handlers for mobile pan/zoom
+  const handleTouchStart = useCallback(
+    (e: React.TouchEvent) => {
+      if (inputPanelRef.current?.contains(e.target as Node)) return;
+      if (e.touches.length === 1) {
+        const t = e.touches[0];
+        const tr = transformRef.current;
+        touchStartRef.current = { id: t.identifier, x: t.clientX, y: t.clientY, time: Date.now() };
+        dragStart.current = { x: t.clientX, y: t.clientY, tx: tr.x, ty: tr.y };
+        isDraggingRef.current = true;
+        didDragRef.current = false;
+        pinchStartRef.current = null;
+      } else if (e.touches.length === 2) {
+        e.preventDefault();
+        isDraggingRef.current = false;
+        const [a, b] = [e.touches[0], e.touches[1]];
+        const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+        const container = containerRef.current;
+        if (!container) return;
+        const rect = container.getBoundingClientRect();
+        pinchStartRef.current = {
+          dist,
+          scale: transformRef.current.scale,
+          mx: (a.clientX + b.clientX) / 2 - rect.left,
+          my: (a.clientY + b.clientY) / 2 - rect.top,
+        };
+      }
+    },
+    []
+  );
+
+  const handleTouchMove = useCallback(
+    (e: React.TouchEvent) => {
+      if (pinchStartRef.current && e.touches.length === 2) {
+        e.preventDefault();
+        const [a, b] = [e.touches[0], e.touches[1]];
+        const newDist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+        const ratio = newDist / pinchStartRef.current.dist;
+        const oldScale = pinchStartRef.current.scale;
+        const newScale = Math.min(Math.max(oldScale * ratio, 0.3), 3);
+        const t = transformRef.current;
+        const mx = pinchStartRef.current.mx;
+        const my = pinchStartRef.current.my;
+        t.x = mx - (mx - t.x) * (newScale / t.scale);
+        t.y = my - (my - t.y) * (newScale / t.scale);
+        t.scale = newScale;
+        cameraRef.current.syncFromManualInput(t.x, t.y, t.scale);
+        applyTransform();
+        setZoomDisplay(Math.round(newScale * 100));
+        setFollowFlow(false);
+        didDragRef.current = true;
+        return;
+      }
+      if (!isDraggingRef.current || e.touches.length !== 1) return;
+      const t = e.touches[0];
+      const dx = t.clientX - dragStart.current.x;
+      const dy = t.clientY - dragStart.current.y;
+      if (!didDragRef.current && Math.abs(dx) + Math.abs(dy) < DRAG_THRESHOLD) return;
+      if (!didDragRef.current) {
+        didDragRef.current = true;
+        setFollowFlow(false);
+      }
+      transformRef.current.x = dragStart.current.tx + dx;
+      transformRef.current.y = dragStart.current.ty + dy;
+      const tr = transformRef.current;
+      cameraRef.current.syncFromManualInput(tr.x, tr.y, tr.scale);
+      applyTransform();
+    },
+    [applyTransform]
+  );
+
+  const handleTouchEnd = useCallback(
+    (e: React.TouchEvent) => {
+      if (e.touches.length === 0) {
+        isDraggingRef.current = false;
+        pinchStartRef.current = null;
+        // Tap detection: short duration, no drag
+        if (!didDragRef.current && touchStartRef.current) {
+          const elapsed = Date.now() - touchStartRef.current.time;
+          if (elapsed < 300) {
+            // Let the click event fire naturally for step selection
+          }
+        }
+        touchStartRef.current = null;
+      } else if (e.touches.length === 1) {
+        // Went from 2 -> 1 finger: reset to single-touch pan
+        pinchStartRef.current = null;
+        const t = e.touches[0];
+        const tr = transformRef.current;
+        touchStartRef.current = { id: t.identifier, x: t.clientX, y: t.clientY, time: Date.now() };
+        dragStart.current = { x: t.clientX, y: t.clientY, tx: tr.x, ty: tr.y };
+        isDraggingRef.current = true;
+      }
+    },
+    []
+  );
+
   // Build a map of step_name -> sub-job tree node(s) (runtime data)
   // Arrays: length 1 for standard sub-jobs, length N for for_each
   const subJobMap = useMemo(() => {
@@ -449,13 +549,16 @@ export function FlowDagView({
   return (
     <div
       ref={containerRef}
-      className="relative w-full h-full overflow-hidden bg-zinc-950/50 rounded-lg"
+      className="relative w-full h-full overflow-hidden bg-zinc-950/50 rounded-lg touch-none"
       onWheel={handleWheel}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
       onClickCapture={handleClickCapture}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
       style={{ cursor: "grab" }}
     >
       {/* Grid background */}
