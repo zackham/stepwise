@@ -304,6 +304,7 @@ class ConfigVar:
     required: bool = True    # inferred True when no default provided
     example: str = ""
     options: list[str] | None = None   # choice type
+    sensitive: bool = False  # mask value in output, suggest env var
 
     def to_dict(self) -> dict:
         d: dict = {"name": self.name}
@@ -319,6 +320,8 @@ class ConfigVar:
             d["example"] = self.example
         if self.options is not None:
             d["options"] = self.options
+        if self.sensitive:
+            d["sensitive"] = True
         return d
 
     @classmethod
@@ -336,6 +339,7 @@ class ConfigVar:
             required=d.get("required", not has_default),
             example=d.get("example", ""),
             options=d.get("options"),
+            sensitive=d.get("sensitive", False),
         )
 
 

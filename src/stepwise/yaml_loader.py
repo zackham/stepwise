@@ -905,6 +905,7 @@ def _parse_config(data: dict) -> list[ConfigVar]:
             required=spec.get("required", not has_default),
             example=str(spec["example"]) if "example" in spec else "",
             options=spec.get("options"),
+            sensitive=bool(spec.get("sensitive", False)),
         ))
 
     return config_vars

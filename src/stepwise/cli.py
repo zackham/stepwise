@@ -2222,13 +2222,19 @@ def cmd_info(args: argparse.Namespace) -> int:
             lines.append("")
             lines.append("Config variables:")
             for v in wf.config_vars:
-                req = "required" if v.required else f"default: {v.default}"
+                if v.sensitive:
+                    req = "required, sensitive" if v.required else f"default: ***, sensitive"
+                else:
+                    req = "required" if v.required else f"default: {v.default}"
                 line = f"  {v.name} ({v.type}, {req})"
                 if v.description:
                     line += f" — {v.description}"
                 lines.append(line)
                 if v.example:
                     lines.append(f"    example: {v.example}")
+                if v.sensitive:
+                    env_name = f"STEPWISE_VAR_{v.name.upper()}"
+                    lines.append(f"    env: {env_name}")
 
         # Requirements
         if wf.requires:

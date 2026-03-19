@@ -77,14 +77,28 @@ def load_vars_file(path: str) -> dict:
 
 
 def load_flow_config(flow_path: Path, workflow) -> dict:
-    """Load config values from defaults and co-located config.local.yaml.
+    """Load config values from defaults, env vars, and co-located config.local.yaml.
+
+    Resolution order (lowest to highest priority):
+      1. Config var defaults from YAML
+      2. STEPWISE_VAR_{NAME} environment variables (for sensitive vars)
+      3. config.local.yaml values
 
     Returns a dict suitable as the lowest-priority layer in the inputs merge chain.
     """
+    import os
     import yaml
 
     # Extract defaults from config_vars
     defaults = {v.name: v.default for v in workflow.config_vars if v.default is not None}
+
+    # Resolve env vars for sensitive config vars (STEPWISE_VAR_{NAME})
+    env_values: dict = {}
+    for v in workflow.config_vars:
+        env_key = f"STEPWISE_VAR_{v.name.upper()}"
+        env_val = os.environ.get(env_key)
+        if env_val is not None:
+            env_values[v.name] = env_val
 
     # Determine config file path
     if flow_path.name == "FLOW.yaml":
@@ -108,7 +122,7 @@ def load_flow_config(flow_path: Path, workflow) -> dict:
         if isinstance(loaded, dict):
             local_values = loaded
 
-    return {**defaults, **local_values}
+    return {**defaults, **env_values, **local_values}
 
 
 def _ws_url_from_server(server_url: str) -> str:
@@ -812,14 +826,19 @@ def run_wait(
         # Enhance with config var descriptions when available
         config_map = {v.name: v for v in workflow.config_vars}
         missing_parts = []
+        usage_parts = []
         for m in sorted(missing):
             cv = config_map.get(m)
             if cv and cv.description:
                 missing_parts.append(f"{m} ({cv.description})")
             else:
                 missing_parts.append(m)
+            if cv and cv.sensitive:
+                usage_parts.append(f"STEPWISE_VAR_{m.upper()}=...")
+            else:
+                usage_parts.append(f'--var {m}="..."')
         missing_list = ", ".join(missing_parts)
-        usage = " ".join(f'--var {f}="..."' for f in sorted(missing))
+        usage = " ".join(usage_parts)
         _json_error(
             2,
             f"Missing required input(s): {missing_list}. "
