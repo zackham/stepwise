@@ -57,13 +57,17 @@ export function JobList({ selectedJobId, onSelectJob }: JobListProps) {
     return [...names].sort();
   }, [jobs]);
 
-  // Filter jobs by query (matches objective) and status toggle
+  // Filter jobs by query (matches name or objective) and status toggle
   const filteredJobs = useMemo(() => {
     const q = query.toLowerCase().trim();
     return jobs
       .filter((job) => {
         if (statusFilter && job.status !== statusFilter) return false;
-        if (q && !(job.objective || "").toLowerCase().includes(q)) return false;
+        if (q) {
+          const nameMatch = (job.name || "").toLowerCase().includes(q);
+          const objMatch = (job.objective || "").toLowerCase().includes(q);
+          if (!nameMatch && !objMatch) return false;
+        }
         return true;
       })
       .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
@@ -173,8 +177,13 @@ export function JobList({ selectedJobId, onSelectJob }: JobListProps) {
                     <Briefcase className="w-3.5 h-3.5 text-zinc-500 mt-0.5 shrink-0" />
                     <div className="min-w-0">
                       <div className="text-sm text-foreground truncate">
-                        {job.objective || "Untitled Job"}
+                        {job.name || job.objective || "Untitled Job"}
                       </div>
+                      {job.name && job.objective && (
+                        <div className="text-[11px] text-zinc-500 truncate">
+                          {job.objective}
+                        </div>
+                      )}
                       <div className="flex items-center gap-1.5 mt-1">
                         <span className="text-[10px] font-mono text-zinc-600">
                           {job.id}

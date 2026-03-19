@@ -325,7 +325,7 @@ export function JobDetailPage() {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <h2 className="text-sm font-semibold truncate text-foreground">
-                {job.objective || "Untitled Job"}
+                {job.name || job.objective || "Untitled Job"}
               </h2>
               <JobStatusBadge status={job.status} />
               {stale && (
@@ -351,6 +351,9 @@ export function JobDetailPage() {
               )}
             </div>
             <div className="text-[10px] font-mono text-zinc-600 mt-0.5">
+              {job.name && job.objective && (
+                <span className="font-sans text-zinc-500 mr-2">{job.objective}</span>
+              )}
               {job.id}
             </div>
           </div>

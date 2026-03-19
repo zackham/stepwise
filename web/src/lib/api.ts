@@ -58,6 +58,7 @@ export function createJob(data: {
   inputs?: Record<string, unknown>;
   config?: Partial<JobConfig>;
   workspace_path?: string;
+  name?: string;
 }): Promise<Job> {
   return request<Job>("/jobs", {
     method: "POST",
@@ -68,6 +69,7 @@ export function createJob(data: {
       inputs: data.inputs ?? null,
       config: data.config ?? null,
       workspace_path: data.workspace_path ?? null,
+      name: data.name ?? null,
     }),
   });
 }

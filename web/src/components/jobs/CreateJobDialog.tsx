@@ -54,6 +54,7 @@ export function CreateJobDialog({ onCreated }: CreateJobDialogProps) {
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<"flow" | "json">("flow");
+  const [jobName, setJobName] = useState("");
 
   const { data: templates = [] } = useTemplates();
   const { data: localFlows = [] } = useLocalFlows();
@@ -122,7 +123,7 @@ export function CreateJobDialog({ onCreated }: CreateJobDialogProps) {
       const objective = inputValues[jobInputFields[0]] || flowName;
 
       mutations.createJob.mutate(
-        { objective, workflow: wf, inputs, workspace_path: workspacePath || undefined },
+        { objective, workflow: wf, inputs, workspace_path: workspacePath || undefined, name: jobName.trim() || undefined },
         {
           onSuccess: (job) => {
             setOpen(false);
@@ -131,6 +132,7 @@ export function CreateJobDialog({ onCreated }: CreateJobDialogProps) {
             setWorkflowJson("");
             setInputValues({});
             setWorkspacePath("");
+            setJobName("");
             onCreated?.(job.id);
           },
         }
@@ -184,6 +186,17 @@ export function CreateJobDialog({ onCreated }: CreateJobDialogProps) {
             >
               JSON
             </button>
+          </div>
+
+          {/* Optional job name */}
+          <div className="space-y-2">
+            <Label>Name <span className="text-zinc-500 font-normal">(optional)</span></Label>
+            <Input
+              value={jobName}
+              onChange={(e) => setJobName(e.target.value)}
+              placeholder="Human-friendly job name"
+              className="text-xs"
+            />
           </div>
 
           {mode === "flow" ? (
