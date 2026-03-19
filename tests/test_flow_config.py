@@ -75,6 +75,25 @@ class TestConfigVarDataclass:
         assert restored.install == ""
         assert restored.url == ""
 
+    def test_config_var_sensitive_roundtrip(self):
+        cv = ConfigVar(
+            name="api_key",
+            description="Your API key",
+            sensitive=True,
+        )
+        d = cv.to_dict()
+        assert d["sensitive"] is True
+        restored = ConfigVar.from_dict(d)
+        assert restored.sensitive is True
+
+    def test_config_var_sensitive_default_false(self):
+        cv = ConfigVar(name="x")
+        assert cv.sensitive is False
+        d = cv.to_dict()
+        assert "sensitive" not in d
+        restored = ConfigVar.from_dict(d)
+        assert restored.sensitive is False
+
     def test_config_var_invalid_type(self):
         with pytest.raises(ValueError, match="invalid type"):
             ConfigVar.from_dict({"name": "x", "type": "invalid"})
@@ -170,6 +189,27 @@ steps:
         by_name = {v.name: v for v in wf.config_vars}
         assert by_name["with_default"].required is False
         assert by_name["no_default"].required is True
+
+    def test_parse_config_sensitive(self):
+        wf = load_workflow_string("""
+name: test
+config:
+  api_key:
+    description: "Your API key"
+    sensitive: true
+  name:
+    description: "Your name"
+steps:
+  a:
+    run: echo ok
+    outputs: [r]
+    inputs:
+      api_key: $job.api_key
+      name: $job.name
+""")
+        by_name = {v.name: v for v in wf.config_vars}
+        assert by_name["api_key"].sensitive is True
+        assert by_name["name"].sensitive is False
 
     def test_parse_config_empty_spec(self):
         """Config var with null spec should get defaults."""
@@ -459,6 +499,57 @@ steps:
         result = load_flow_config(flow_dir / "FLOW.yaml", wf)
         # config default a=1, config.local.yaml overrides b=3 and adds c=4
         assert result == {"a": "1", "b": 3, "c": 4}
+
+
+    def test_load_flow_config_env_var(self, tmp_path, monkeypatch):
+        """STEPWISE_VAR_{NAME} env vars are resolved as config values."""
+        flow_dir = tmp_path / "my-flow"
+        flow_dir.mkdir()
+        (flow_dir / "FLOW.yaml").write_text("""
+name: test
+config:
+  api_key:
+    description: "Your API key"
+    sensitive: true
+  other:
+    default: "default_val"
+steps:
+  s:
+    run: echo ok
+    outputs: [r]
+    inputs:
+      api_key: $job.api_key
+      other: $job.other
+""")
+        monkeypatch.setenv("STEPWISE_VAR_API_KEY", "sk-secret-123")
+        wf = load_workflow_yaml(str(flow_dir / "FLOW.yaml"))
+        from stepwise.runner import load_flow_config
+        result = load_flow_config(flow_dir / "FLOW.yaml", wf)
+        assert result["api_key"] == "sk-secret-123"
+        assert result["other"] == "default_val"
+
+    def test_load_flow_config_env_var_overridden_by_local(self, tmp_path, monkeypatch):
+        """config.local.yaml takes precedence over env vars."""
+        flow_dir = tmp_path / "my-flow"
+        flow_dir.mkdir()
+        (flow_dir / "FLOW.yaml").write_text("""
+name: test
+config:
+  api_key:
+    sensitive: true
+steps:
+  s:
+    run: echo ok
+    outputs: [r]
+    inputs:
+      api_key: $job.api_key
+""")
+        (flow_dir / "config.local.yaml").write_text("api_key: from-local\n")
+        monkeypatch.setenv("STEPWISE_VAR_API_KEY", "from-env")
+        wf = load_workflow_yaml(str(flow_dir / "FLOW.yaml"))
+        from stepwise.runner import load_flow_config
+        result = load_flow_config(flow_dir / "FLOW.yaml", wf)
+        assert result["api_key"] == "from-local"
 
 
 # ── Backward Compatibility ───────────────────────────────────────────
