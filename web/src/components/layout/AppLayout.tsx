@@ -27,7 +27,7 @@ export function AppLayout() {
         </Link>
         {status?.cwd && (
           <div
-            className="flex items-center gap-1.5 text-xs text-zinc-600 font-mono truncate max-w-48"
+            className="hidden md:flex items-center gap-1.5 text-xs text-zinc-600 font-mono truncate max-w-48"
             title={status.cwd}
           >
             <FolderOpen className="w-3 h-3 shrink-0" />
@@ -35,42 +35,42 @@ export function AppLayout() {
           </div>
         )}
 
-        <nav className="flex items-center gap-1 ml-4">
+        <nav className="flex items-center gap-1 ml-auto md:ml-4">
           <Link
             to="/jobs"
             className={cn(
-              "px-3 py-1.5 text-sm rounded-md transition-colors",
+              "flex items-center justify-center min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 px-2 md:px-3 py-1.5 text-sm rounded-md transition-colors",
               isJobsActive
                 ? "bg-zinc-800 text-foreground"
                 : "text-zinc-500 hover:text-foreground hover:bg-zinc-800/50"
             )}
           >
-            <LayoutGrid className="w-3.5 h-3.5 inline mr-1.5" />
-            Jobs
+            <LayoutGrid className="w-4 h-4 md:w-3.5 md:h-3.5 md:mr-1.5" />
+            <span className="hidden md:inline">Jobs</span>
           </Link>
           <Link
             to="/flows"
             className={cn(
-              "px-3 py-1.5 text-sm rounded-md transition-colors",
+              "flex items-center justify-center min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 px-2 md:px-3 py-1.5 text-sm rounded-md transition-colors",
               isFlowsActive
                 ? "bg-zinc-800 text-foreground"
                 : "text-zinc-500 hover:text-foreground hover:bg-zinc-800/50"
             )}
           >
-            <FileCode className="w-3.5 h-3.5 inline mr-1.5" />
-            Flows
+            <FileCode className="w-4 h-4 md:w-3.5 md:h-3.5 md:mr-1.5" />
+            <span className="hidden md:inline">Flows</span>
           </Link>
           <Link
             to="/settings"
             className={cn(
-              "px-3 py-1.5 text-sm rounded-md transition-colors",
+              "flex items-center justify-center min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 px-2 md:px-3 py-1.5 text-sm rounded-md transition-colors",
               isSettingsActive
                 ? "bg-zinc-800 text-foreground"
                 : "text-zinc-500 hover:text-foreground hover:bg-zinc-800/50"
             )}
           >
-            <Settings2 className="w-3.5 h-3.5 inline mr-1.5" />
-            Settings
+            <Settings2 className="w-4 h-4 md:w-3.5 md:h-3.5 md:mr-1.5" />
+            <span className="hidden md:inline">Settings</span>
           </Link>
         </nav>
 
@@ -79,7 +79,7 @@ export function AppLayout() {
         {/* Engine status */}
         {status && (
           <div className="flex items-center gap-3 text-xs text-zinc-500">
-            <div className="flex items-center gap-1.5">
+            <div className="hidden md:flex items-center gap-1.5">
               <Zap className="w-3 h-3" />
               <span>
                 {status.active_jobs} active / {status.total_jobs} total
