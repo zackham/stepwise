@@ -109,16 +109,20 @@ def init_project(target: Path | None = None, force: bool = False) -> StepwisePro
 
     # Append to parent .gitignore if it exists and doesn't already contain .stepwise/
     gitignore_outer = root / ".gitignore"
-    entry = f"{DOT_DIR_NAME}/\n"
+    entries = [f"{DOT_DIR_NAME}/", "config.local.yaml", "*.config.local.yaml"]
     if gitignore_outer.exists():
         content = gitignore_outer.read_text()
-        if DOT_DIR_NAME + "/" not in content and DOT_DIR_NAME not in content.split("\n"):
+        lines_to_add = []
+        for entry in entries:
+            if entry not in content:
+                lines_to_add.append(entry)
+        if lines_to_add:
             with open(gitignore_outer, "a") as f:
                 if not content.endswith("\n"):
                     f.write("\n")
-                f.write(entry)
+                f.write("\n".join(lines_to_add) + "\n")
     else:
-        gitignore_outer.write_text(entry)
+        gitignore_outer.write_text("\n".join(entries) + "\n")
 
     return _project_from_root(root)
 
