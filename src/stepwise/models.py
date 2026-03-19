@@ -348,6 +348,8 @@ class FlowRequirement:
     name: str
     description: str = ""
     check: str = ""          # shell command to verify availability
+    install: str = ""        # install command (e.g. "pip install camofox")
+    url: str = ""            # link to docs or project page
 
     def to_dict(self) -> dict:
         d: dict = {"name": self.name}
@@ -355,6 +357,10 @@ class FlowRequirement:
             d["description"] = self.description
         if self.check:
             d["check"] = self.check
+        if self.install:
+            d["install"] = self.install
+        if self.url:
+            d["url"] = self.url
         return d
 
     @classmethod
@@ -363,6 +369,8 @@ class FlowRequirement:
             name=d["name"],
             description=d.get("description", ""),
             check=d.get("check", ""),
+            install=d.get("install", ""),
+            url=d.get("url", ""),
         )
 
 
@@ -746,6 +754,28 @@ class WorkflowDefinition:
                         f"\u2139 Step '{name}': exit rule '{rule.name}' "
                         f"uses type coercion — verify input is always "
                         f"the expected type"
+                    )
+
+        # Ungated post-loop step detection
+        # Collect all steps involved in loops (both the step with the loop
+        # exit rule and the loop target)
+        loop_steps: set[str] = set()
+        for name, step in self.steps.items():
+            for rule in step.exit_rules:
+                if rule.config.get("action") == "loop":
+                    loop_steps.add(name)
+                    loop_steps.add(rule.config.get("target", name))
+
+        # Warn if a step has sequencing on a looping step but no when condition
+        for name, step in self.steps.items():
+            if step.when:
+                continue
+            for seq in step.sequencing:
+                if seq in loop_steps:
+                    warns.append(
+                        f"\u26a0 Step '{name}': has sequencing on looping step "
+                        f"'{seq}' but no 'when' condition — it will run after "
+                        f"the first iteration, not after the loop exits"
                     )
 
         # Config variable cross-checks

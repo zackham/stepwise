@@ -655,6 +655,10 @@ def cmd_validate(args: argparse.Namespace) -> int:
                             io.log("success", f"  Requirement '{req.name}': OK")
                         else:
                             io.log("warn", f"  ⚠ Requirement '{req.name}': check failed{desc}")
+                            if req.install:
+                                io.log("info", f"    Install: {req.install}")
+                            if req.url:
+                                io.log("info", f"    Docs: {req.url}")
                     except subprocess.TimeoutExpired:
                         desc = f" — {req.description}" if req.description else ""
                         io.log("warn", f"  ⚠ Requirement '{req.name}': check timed out{desc}")
@@ -2246,6 +2250,10 @@ def cmd_info(args: argparse.Namespace) -> int:
                 if r.description:
                     line += f" — {r.description}"
                 lines.append(line)
+                if r.install:
+                    lines.append(f"    Install: {r.install}")
+                if r.url:
+                    lines.append(f"    Docs: {r.url}")
 
         # Readme
         if wf.readme:

@@ -51,6 +51,30 @@ class TestConfigVarDataclass:
         assert restored.name == fr.name
         assert restored.check == fr.check
 
+    def test_flow_requirement_install_url_roundtrip(self):
+        fr = FlowRequirement(
+            name="camofox",
+            description="Anti-detection browser",
+            check="camofox --version",
+            install="pip install camofox",
+            url="https://github.com/user/camofox",
+        )
+        d = fr.to_dict()
+        assert d["install"] == "pip install camofox"
+        assert d["url"] == "https://github.com/user/camofox"
+        restored = FlowRequirement.from_dict(d)
+        assert restored.install == "pip install camofox"
+        assert restored.url == "https://github.com/user/camofox"
+
+    def test_flow_requirement_install_url_optional(self):
+        fr = FlowRequirement(name="ffmpeg")
+        d = fr.to_dict()
+        assert "install" not in d
+        assert "url" not in d
+        restored = FlowRequirement.from_dict(d)
+        assert restored.install == ""
+        assert restored.url == ""
+
     def test_config_var_invalid_type(self):
         with pytest.raises(ValueError, match="invalid type"):
             ConfigVar.from_dict({"name": "x", "type": "invalid"})
@@ -187,6 +211,23 @@ steps:
         assert wf.requires[0].check == "ffmpeg -version"
         assert wf.requires[1].name == "camofox"
         assert wf.requires[1].check == ""
+
+    def test_parse_requires_install_url(self):
+        wf = load_workflow_string("""
+name: test
+requires:
+  - name: camofox
+    description: Anti-detection browser
+    check: "camofox --version"
+    install: "pip install camofox"
+    url: "https://github.com/user/camofox"
+steps:
+  a:
+    run: echo ok
+    outputs: [r]
+""")
+        assert wf.requires[0].install == "pip install camofox"
+        assert wf.requires[0].url == "https://github.com/user/camofox"
 
     def test_parse_requires_shorthand(self):
         wf = load_workflow_string("""
