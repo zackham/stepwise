@@ -76,6 +76,41 @@ def load_vars_file(path: str) -> dict:
             return yaml.safe_load(content) or {}
 
 
+def load_flow_config(flow_path: Path, workflow) -> dict:
+    """Load config values from defaults and co-located config.local.yaml.
+
+    Returns a dict suitable as the lowest-priority layer in the inputs merge chain.
+    """
+    import yaml
+
+    # Extract defaults from config_vars
+    defaults = {v.name: v.default for v in workflow.config_vars if v.default is not None}
+
+    # Determine config file path
+    if flow_path.name == "FLOW.yaml":
+        config_file = flow_path.parent / "config.local.yaml"
+    else:
+        # Single-file flow: my-flow.flow.yaml → my-flow.config.local.yaml
+        stem = flow_path.stem
+        if stem.endswith(".flow"):
+            stem = stem[:-5]
+        config_file = flow_path.parent / f"{stem}.config.local.yaml"
+
+    # Load local config values
+    local_values: dict = {}
+    if config_file.is_file():
+        import logging
+        logging.getLogger("stepwise").info(
+            "Loaded config from %s (%d bytes)", config_file, config_file.stat().st_size
+        )
+        content = config_file.read_text()
+        loaded = yaml.safe_load(content)
+        if isinstance(loaded, dict):
+            local_values = loaded
+
+    return {**defaults, **local_values}
+
+
 def _ws_url_from_server(server_url: str) -> str:
     """Convert an HTTP server URL to a WebSocket URL."""
     url = server_url.rstrip("/")
@@ -774,7 +809,16 @@ def run_wait(
     provided = set((inputs or {}).keys())
     missing = required_inputs - provided
     if missing:
-        missing_list = ", ".join(sorted(missing))
+        # Enhance with config var descriptions when available
+        config_map = {v.name: v for v in workflow.config_vars}
+        missing_parts = []
+        for m in sorted(missing):
+            cv = config_map.get(m)
+            if cv and cv.description:
+                missing_parts.append(f"{m} ({cv.description})")
+            else:
+                missing_parts.append(m)
+        missing_list = ", ".join(missing_parts)
         usage = " ".join(f'--var {f}="..."' for f in sorted(missing))
         _json_error(
             2,

@@ -1203,7 +1203,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     from stepwise.flow_resolution import (
         FlowResolutionError, parse_registry_ref, resolve_flow, resolve_registry_flow,
     )
-    from stepwise.runner import run_flow, parse_vars, load_vars_file
+    from stepwise.runner import run_flow, parse_vars, load_vars_file, load_flow_config
 
     io = _io(args)
     project = _find_project_or_exit(args, auto_init=True)
@@ -1228,18 +1228,16 @@ def cmd_run(args: argparse.Namespace) -> int:
         except FlowResolutionError as e:
             return _run_flow_error(args, io, str(e))
 
-    # Parse input variables (shared across all modes)
+    # Load flow config defaults + config.local.yaml (lowest priority)
     inputs: dict = {}
     try:
-        inputs.update(parse_vars(args.vars))
-    except ValueError as e:
-        if getattr(args, "wait", False) or getattr(args, "async_mode", False):
-            from stepwise.runner import _json_error
-            _json_error(2, str(e))
-            return EXIT_USAGE_ERROR
-        print(f"Error: {e}", file=sys.stderr)
-        return EXIT_USAGE_ERROR
+        from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+        _wf = load_workflow_yaml(str(flow_path))
+        inputs.update(load_flow_config(flow_path, _wf))
+    except Exception:
+        pass  # config loading is best-effort; errors surface later during run
 
+    # Parse input variables (shared across all modes) — overrides config
     if args.vars_file:
         try:
             inputs.update(load_vars_file(args.vars_file))
@@ -1250,6 +1248,16 @@ def cmd_run(args: argparse.Namespace) -> int:
                 return EXIT_USAGE_ERROR
             print(f"Error: {e}", file=sys.stderr)
             return EXIT_USAGE_ERROR
+
+    try:
+        inputs.update(parse_vars(args.vars))
+    except ValueError as e:
+        if getattr(args, "wait", False) or getattr(args, "async_mode", False):
+            from stepwise.runner import _json_error
+            _json_error(2, str(e))
+            return EXIT_USAGE_ERROR
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
 
     # --var-file key=path: read file contents as variable value
     if args.var_files:
