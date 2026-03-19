@@ -783,13 +783,14 @@ class WorkflowDefinition:
                     )
 
         # Config variable cross-checks
+        job_fields = {
+            b.source_field
+            for s in self.steps.values()
+            for b in s.inputs
+            if b.source_step == "$job"
+        }
+
         if self.config_vars:
-            job_fields = {
-                b.source_field
-                for s in self.steps.values()
-                for b in s.inputs
-                if b.source_step == "$job"
-            }
             config_names = {v.name for v in self.config_vars}
 
             for name in sorted(config_names - job_fields):
@@ -806,6 +807,11 @@ class WorkflowDefinition:
                         f"\u2139 Config variable '{v.name}' has no default or example "
                         f"— users may not know what to provide"
                     )
+        elif job_fields:
+            for name in sorted(job_fields):
+                warns.append(
+                    f"\u2139 $job.{name} is used but no config: block is declared"
+                )
 
         return warns
 
