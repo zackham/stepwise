@@ -68,7 +68,7 @@ export function HumanControls({ job, selectedStep, runs }: HumanControlsProps) {
 
   return (
     <>
-      <div className="flex items-center gap-2 p-3 border-b border-border bg-zinc-900/50">
+      <div className="flex items-center gap-2 p-3 border-b border-border bg-zinc-900/50 overflow-x-auto flex-nowrap">
         {/* Job lifecycle actions */}
         {job.status === "pending" && (
           <Button
