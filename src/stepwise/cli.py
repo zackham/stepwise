@@ -2076,7 +2076,12 @@ def cmd_share(args: argparse.Namespace) -> int:
     # Validate first
     try:
         wf = load_workflow_yaml(str(flow_path))
-        wf.validate()
+        errors = wf.validate()
+        if errors:
+            print(f"Error: Validation failed:", file=sys.stderr)
+            for err in errors:
+                print(f"  - {err}", file=sys.stderr)
+            return EXIT_USAGE_ERROR
     except (YAMLLoadError, ValueError) as e:
         print(f"Error: Validation failed: {e}", file=sys.stderr)
         return EXIT_USAGE_ERROR
@@ -2087,6 +2092,41 @@ def cmd_share(args: argparse.Namespace) -> int:
     do_update = getattr(args, "update", False)
 
     io.log("success", f"Validated {flow_path} ({len(wf.steps)} steps)")
+
+    # Quality checks for sharing
+    share_warnings = wf.warnings()
+    if share_warnings:
+        for w in share_warnings:
+            if w.startswith("\u2139"):
+                io.log("info", f"  {w}")
+            else:
+                io.log("warn", f"  {w}")
+
+    # Additional share-specific quality checks
+    job_fields = {
+        b.source_field
+        for s in wf.steps.values()
+        for b in s.inputs
+        if b.source_step == "$job"
+    }
+    config_names = {v.name for v in wf.config_vars}
+
+    # Check required config vars have descriptions
+    for v in wf.config_vars:
+        if v.required and not v.description:
+            io.log("warn", f"  ⚠ Config variable '{v.name}' has no description — consumers won't know what to provide")
+
+    # Check requirements have check commands
+    for r in wf.requires:
+        if not r.check:
+            io.log("info", f"  ℹ Requirement '{r.name}' has no check command — consumers can't verify availability")
+
+    # Note zero-config flows
+    all_have_defaults = all(
+        v.default is not None for v in wf.config_vars
+    ) if wf.config_vars else not job_fields
+    if all_have_defaults and not wf.requires:
+        io.log("success", "  Zero-config flow — runs immediately after install")
 
     # Collect bundle files if this is a directory flow
     bundle_files: dict[str, str] | None = None
