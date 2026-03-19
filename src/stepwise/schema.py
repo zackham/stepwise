@@ -58,4 +58,9 @@ def generate_schema(workflow: WorkflowDefinition) -> dict:
     schema["outputs"] = terminal_outputs
     schema["humanSteps"] = human_steps
 
+    if workflow.config_vars:
+        schema["config"] = {v.name: v.to_dict() for v in workflow.config_vars}
+    if workflow.requires:
+        schema["requires"] = [r.to_dict() for r in workflow.requires]
+
     return schema

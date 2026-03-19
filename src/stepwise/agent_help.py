@@ -51,7 +51,14 @@ def _build_flow_entries(
                 run_ref = str(flow_path.relative_to(project_dir))
             except ValueError:
                 run_ref = flow_path.name
-        var_args = " ".join(f'--var {inp}="..."' for inp in inputs)
+        # Use config var descriptions for --var hints when available
+        config_map = {v.name: v for v in wf.config_vars} if wf.config_vars else {}
+        var_parts = []
+        for inp in inputs:
+            cv = config_map.get(inp)
+            hint = f"<{cv.description}>" if cv and cv.description else "..."
+            var_parts.append(f'--var {inp}="{hint}"')
+        var_args = " ".join(var_parts)
         cmd = f"stepwise run {run_ref} --wait"
         if var_args:
             cmd += f" {var_args}"
@@ -71,6 +78,10 @@ def _build_flow_entries(
         }
         if desc:
             entry["description"] = desc
+        if wf.config_vars:
+            entry["config"] = {v.name: v.to_dict() for v in wf.config_vars}
+        if wf.requires:
+            entry["requires"] = [r.name for r in wf.requires]
         if human_steps:
             entry["human_steps"] = []
             for hs in human_steps:
