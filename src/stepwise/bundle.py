@@ -8,7 +8,7 @@ from pathlib import Path
 MAX_BUNDLE_SIZE = 500 * 1024  # 500KB total
 MAX_FILE_COUNT = 20
 ALLOWED_EXTENSIONS = {".py", ".sh", ".bash", ".md", ".txt", ".yaml", ".yml", ".json", ".prompt"}
-BLOCKED_FILES = {".env", ".pem", "id_rsa", "credentials.json", ".DS_Store"}
+BLOCKED_FILES = {".env", ".pem", "id_rsa", "credentials.json", ".DS_Store", "config.local.yaml"}
 BLOCKED_DIRS = {".git", "__pycache__", "node_modules", ".venv", ".mypy_cache", ".pytest_cache"}
 
 
@@ -47,10 +47,15 @@ def collect_bundle(flow_dir: Path) -> dict[str, str]:
 
         # Check blocked files (before hidden-file skip so .env etc. are caught)
         if path.name in BLOCKED_FILES:
+            if path.name == "config.local.yaml":
+                continue  # silently skip user config files
             raise BundleError(
                 f"Blocked file found: {rel_str}. "
                 f"Remove it before sharing, or add it to .gitignore."
             )
+        # Skip single-file flow config siblings (e.g. my-flow.config.local.yaml)
+        if path.name.endswith(".config.local.yaml"):
+            continue
 
         # Check hidden files (except .origin.json)
         if any(part.startswith(".") for part in rel.parts) and rel_str != ".origin.json":
