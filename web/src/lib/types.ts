@@ -195,6 +195,7 @@ export interface JobConfig {
 export interface Job {
   id: string;
   objective: string;
+  name: string | null;
   workflow: FlowDefinition;
   status: JobStatus;
   inputs: Record<string, unknown>;

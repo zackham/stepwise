@@ -101,6 +101,7 @@ describe("API client", () => {
           inputs: { key: "value" },
           config: null,
           workspace_path: null,
+          name: null,
         }),
       }));
       expect(result).toEqual(created);
