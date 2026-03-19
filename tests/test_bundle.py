@@ -151,6 +151,32 @@ class TestCollectBundle:
         assert "visible.py" in files
         assert ".hidden.py" not in files
 
+    def test_excludes_config_local_yaml(self, tmp_path):
+        """config.local.yaml files are silently skipped (not bundled)."""
+        flow_dir = tmp_path / "my-flow"
+        flow_dir.mkdir()
+        (flow_dir / "FLOW.yaml").write_text(SIMPLE_FLOW)
+        (flow_dir / "config.local.yaml").write_text("persona: me\n")
+        (flow_dir / "helper.py").write_text("x = 1")
+
+        files = collect_bundle(flow_dir)
+
+        assert "config.local.yaml" not in files
+        assert "helper.py" in files
+
+    def test_excludes_config_local_yaml_pattern(self, tmp_path):
+        """*.config.local.yaml sibling files are also excluded."""
+        flow_dir = tmp_path / "my-flow"
+        flow_dir.mkdir()
+        (flow_dir / "FLOW.yaml").write_text(SIMPLE_FLOW)
+        (flow_dir / "mine.config.local.yaml").write_text("a: 1\n")
+        (flow_dir / "helper.py").write_text("x = 1")
+
+        files = collect_bundle(flow_dir)
+
+        assert "mine.config.local.yaml" not in files
+        assert "helper.py" in files
+
     def test_allows_origin_json(self, tmp_path):
         """The .origin.json file is explicitly allowed despite being hidden."""
         flow_dir = tmp_path / "my-flow"

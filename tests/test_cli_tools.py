@@ -184,6 +184,42 @@ class TestSchema:
         ])
         assert code == EXIT_USAGE_ERROR
 
+    def test_schema_includes_config(self, tmp_project):
+        flow = tmp_project / "config-test.flow.yaml"
+        flow.write_text("""\
+name: config-test
+config:
+  persona:
+    description: Your persona
+    required: true
+  style:
+    type: choice
+    options: [casual, formal]
+    default: casual
+requires:
+  - name: ffmpeg
+    check: "ffmpeg -version"
+steps:
+  a:
+    run: echo ok
+    outputs: [r]
+    inputs:
+      persona: $job.persona
+      style: $job.style
+""")
+        code, output = _capture_stdout([
+            "--project-dir", str(tmp_project),
+            "schema", str(flow),
+        ])
+
+        assert code == EXIT_SUCCESS
+        schema = json.loads(output)
+        assert "config" in schema
+        assert schema["config"]["persona"]["description"] == "Your persona"
+        assert schema["config"]["style"]["default"] == "casual"
+        assert "requires" in schema
+        assert schema["requires"][0]["name"] == "ffmpeg"
+
 
 # ── Wait Mode Tests ─────────────────────────────────────────────────────
 
