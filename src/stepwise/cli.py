@@ -2277,6 +2277,8 @@ def cmd_info(args: argparse.Namespace) -> int:
                     lines.append(f"    env: {env_name}")
 
         # Requirements
+        req_met = 0
+        req_failed: list[str] = []
         if wf.requires:
             lines.append("")
             lines.append("Requirements:")
@@ -2289,9 +2291,17 @@ def cmd_info(args: argparse.Namespace) -> int:
                             r.check, shell=True, timeout=5,
                             capture_output=True, text=True,
                         )
-                        status = " ✓" if result.returncode == 0 else " ✗"
+                        if result.returncode == 0:
+                            status = " ✓"
+                            req_met += 1
+                        else:
+                            status = " ✗"
+                            req_failed.append(r.name)
                     except (subprocess.TimeoutExpired, Exception):
                         status = " ?"
+                        req_failed.append(r.name)
+                else:
+                    req_met += 1  # no check = assume OK
                 line = f"  {r.name}{status}"
                 if r.description:
                     line += f" — {r.description}"
@@ -2300,6 +2310,26 @@ def cmd_info(args: argparse.Namespace) -> int:
                     lines.append(f"    Install: {r.install}")
                 if r.url:
                     lines.append(f"    Docs: {r.url}")
+
+        # Ready-to-run assessment
+        lines.append("")
+        required_without_defaults = [
+            v for v in wf.config_vars if v.required and v.default is None
+        ]
+        if req_failed:
+            failed_names = ", ".join(req_failed)
+            lines.append(f"Status:      Missing requirements ({failed_names})")
+        elif required_without_defaults:
+            n = len(required_without_defaults)
+            lines.append(f"Status:      Needs config ({n} required variable{'s' if n != 1 else ''} without defaults)")
+        else:
+            parts = []
+            if wf.config_vars:
+                parts.append("all config has defaults")
+            if wf.requires:
+                parts.append(f"{req_met}/{len(wf.requires)} requirements met")
+            detail = f" ({', '.join(parts)})" if parts else ""
+            lines.append(f"Status:      Ready to run{detail}")
 
         # Readme
         if wf.readme:
