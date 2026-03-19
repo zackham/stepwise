@@ -11,6 +11,8 @@ import { JobStatusBadge } from "@/components/StatusBadge";
 import { JsonView } from "@/components/JsonView";
 import type { DagSelection } from "@/lib/dag-layout";
 import { useAutoSelectSuspended } from "@/hooks/useAutoSelectSuspended";
+import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { useIsMobile } from "@/hooks/useMediaQuery";
 import {
   PanelRightClose,
   PanelLeftClose,
@@ -25,6 +27,7 @@ import {
   Monitor,
   AlertTriangle,
   DollarSign,
+  ArrowLeft,
 } from "lucide-react";
 import type { JobTreeNode, StepDefinition } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -60,6 +63,7 @@ function formatDuration(createdAt: string, updatedAt: string): string {
 export function JobDetailPage() {
   const { jobId } = useParams({ from: "/jobs/$jobId" });
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
   const { data: job, isLoading } = useJob(jobId);
   const { data: parentJob } = useJob(job?.parent_job_id ?? undefined);
   const { data: jobTree } = useJobTree(jobId);
@@ -252,8 +256,8 @@ export function JobDetailPage() {
 
   return (
     <div className="flex h-full">
-      {/* Left sidebar: job list */}
-      {!sidebarCollapsed && (
+      {/* Left sidebar: job list (hidden on mobile) */}
+      {!isMobile && !sidebarCollapsed && (
         <div className="w-72 border-r border-border flex flex-col shrink-0 overflow-hidden" style={{ maxHeight: 'calc(100vh - 3rem)' }}>
           <div className="flex items-center justify-between p-2 border-b border-border">
             <CreateJobDialog
@@ -279,8 +283,8 @@ export function JobDetailPage() {
         </div>
       )}
 
-      {/* Collapse toggle when sidebar is hidden */}
-      {sidebarCollapsed && (
+      {/* Collapse toggle when sidebar is hidden (desktop only) */}
+      {!isMobile && sidebarCollapsed && (
         <button
           onClick={() => setSidebarCollapsed(false)}
           className="w-8 border-r border-border flex items-center justify-center text-zinc-500 hover:text-foreground hover:bg-zinc-800/50 shrink-0"
@@ -310,6 +314,14 @@ export function JobDetailPage() {
 
         {/* Job header */}
         <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-zinc-950/30 shrink-0">
+          {isMobile && (
+            <Link
+              to="/jobs"
+              className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground shrink-0 min-w-[44px] min-h-[44px] justify-center"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </Link>
+          )}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <h2 className="text-sm font-semibold truncate text-foreground">
@@ -420,9 +432,9 @@ export function JobDetailPage() {
       </div>
 
       {/* Right sidebar: step details, data flow, or job details */}
-      {showRightPanel && (
-        <div className="w-80 border-l border-border shrink-0 flex flex-col overflow-hidden" style={{ maxHeight: 'calc(100vh - 3rem)' }}>
-          {resolvedStep ? (
+      {(() => {
+        const panelContent = showRightPanel ? (
+          resolvedStep ? (
             <StepDetailPanel
               jobId={resolvedStep.jobId}
               stepDef={resolvedStep.stepDef}
@@ -546,9 +558,33 @@ export function JobDetailPage() {
                 )}
               </div>
             </>
-          )}
-        </div>
-      )}
+          )
+        ) : null;
+
+        if (isMobile) {
+          return (
+            <Sheet
+              open={showRightPanel}
+              onOpenChange={(open) => {
+                if (!open) {
+                  setSelection(null);
+                  setRightPanelOpen(false);
+                }
+              }}
+            >
+              <SheetContent side="right" showCloseButton={false} className="w-[85vw] sm:max-w-sm p-0 overflow-y-auto">
+                {panelContent}
+              </SheetContent>
+            </Sheet>
+          );
+        }
+
+        return showRightPanel ? (
+          <div className="w-80 border-l border-border shrink-0 flex flex-col overflow-hidden" style={{ maxHeight: 'calc(100vh - 3rem)' }}>
+            {panelContent}
+          </div>
+        ) : null;
+      })()}
     </div>
   );
 }
