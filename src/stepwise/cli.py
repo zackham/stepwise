@@ -650,14 +650,17 @@ def cmd_validate(args: argparse.Namespace) -> int:
                             req.check, shell=True, timeout=5,
                             capture_output=True, text=True,
                         )
+                        desc = f" — {req.description}" if req.description else ""
                         if result.returncode == 0:
                             io.log("success", f"  Requirement '{req.name}': OK")
                         else:
-                            io.log("warn", f"  ⚠ Requirement '{req.name}': check failed")
+                            io.log("warn", f"  ⚠ Requirement '{req.name}': check failed{desc}")
                     except subprocess.TimeoutExpired:
-                        io.log("warn", f"  ⚠ Requirement '{req.name}': check timed out")
+                        desc = f" — {req.description}" if req.description else ""
+                        io.log("warn", f"  ⚠ Requirement '{req.name}': check timed out{desc}")
                     except Exception:
-                        io.log("warn", f"  ⚠ Requirement '{req.name}': check error")
+                        desc = f" — {req.description}" if req.description else ""
+                        io.log("warn", f"  ⚠ Requirement '{req.name}': check error{desc}")
                 else:
                     io.log("info", f"  ℹ Requirement '{req.name}': no check command")
 
