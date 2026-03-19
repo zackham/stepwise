@@ -19,11 +19,10 @@ import {
   useFlowFiles,
 } from "@/hooks/useEditor";
 import { useStepwiseMutations } from "@/hooks/useStepwise";
-import { Code, Workflow, ArrowLeft, FolderTree } from "lucide-react";
+import { Code, Workflow, FolderTree } from "lucide-react";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
 import type { FlowDefinition, ParseResult } from "@/lib/types";
 
 const EMPTY_RUNS: never[] = [];
