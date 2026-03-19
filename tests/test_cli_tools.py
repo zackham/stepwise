@@ -125,6 +125,21 @@ def _capture_stdout(argv: list[str]) -> tuple[int, str]:
     return code, output
 
 
+def _capture_stderr(argv: list[str]) -> tuple[int, str]:
+    """Run CLI and capture stderr (where IOAdapter output goes)."""
+    import io
+    import sys
+
+    old_stderr = sys.stderr
+    sys.stderr = io.StringIO()
+    try:
+        code = main(argv)
+        output = sys.stderr.getvalue()
+    finally:
+        sys.stderr = old_stderr
+    return code, output
+
+
 # ── Schema Tests ────────────────────────────────────────────────────────
 
 
@@ -676,3 +691,164 @@ class TestVarFile:
             "--var-file", "question=/nonexistent/file.txt",
         ])
         assert code == EXIT_USAGE_ERROR
+
+
+# ── Info Command Tests ─────────────────────────────────────────────────
+
+
+class TestInfo:
+    def test_info_local_flow(self, tmp_project):
+        """info command displays config vars, requirements, and readme."""
+        flow = tmp_project / "my-flow.flow.yaml"
+        flow.write_text("""\
+name: my-flow
+description: A flow with config and requirements
+
+config:
+  persona:
+    description: "Your AI persona"
+    type: str
+    example: "You are a helpful assistant"
+  max_rounds:
+    description: "Maximum iterations"
+    type: number
+    default: 3
+
+requires:
+  - name: echo
+    check: "echo ok"
+    description: "Echo command"
+  - name: jq
+    check: "jq --version"
+    description: "JSON processor"
+
+readme: |
+  # My Flow
+  This is a test flow for validation.
+
+steps:
+  greet:
+    run: |
+      python3 -c "import json; print(json.dumps({'greeting': 'hello'}))"
+    inputs:
+      persona: $job.persona
+    outputs: [greeting]
+""")
+        code, output = _capture_stderr([
+            "--project-dir", str(tmp_project),
+            "info", str(flow),
+        ])
+
+        assert code == EXIT_SUCCESS
+        assert "my-flow" in output
+        assert "persona" in output
+        assert "Your AI persona" in output
+        assert "max_rounds" in output
+        assert "Maximum iterations" in output
+        assert "default: 3" in output
+        assert "echo" in output
+        assert "Echo command" in output
+        assert "My Flow" in output
+        assert "This is a test flow for validation." in output
+
+
+# ── Config Init Tests ──────────────────────────────────────────────────
+
+
+class TestConfigInit:
+    def test_config_init_scaffold(self, tmp_project):
+        """config init scaffolds config.local.yaml with correct content."""
+        flow = tmp_project / "my-flow.flow.yaml"
+        flow.write_text("""\
+name: my-flow
+
+config:
+  api_key:
+    description: "API key for service"
+    type: str
+  max_retries:
+    description: "Number of retries"
+    type: number
+    default: 3
+  model:
+    description: "Model to use"
+    type: choice
+    options: [gpt-4, claude-3]
+    example: gpt-4
+
+steps:
+  run:
+    run: |
+      python3 -c "import json; print(json.dumps({'result': 'ok'}))"
+    inputs:
+      api_key: $job.api_key
+    outputs: [result]
+""")
+        code = main([
+            "--project-dir", str(tmp_project),
+            "config", "init", str(flow),
+        ])
+
+        assert code == EXIT_SUCCESS
+
+        config_path = tmp_project / "my-flow.config.local.yaml"
+        assert config_path.exists()
+        content = config_path.read_text()
+        # Required var with no default → blank value for user to fill
+        assert 'api_key: ""' in content
+        # Optional var with default → commented out
+        assert "# max_retries: 3" in content
+        # Choice options listed
+        assert "Options: gpt-4, claude-3" in content
+        # Example shown
+        assert "Example: gpt-4" in content
+
+    def test_config_init_already_exists(self, tmp_project):
+        """config init errors if config.local.yaml already exists."""
+        flow = tmp_project / "my-flow.flow.yaml"
+        flow.write_text("""\
+name: my-flow
+
+config:
+  api_key:
+    description: "API key"
+    type: str
+
+steps:
+  run:
+    run: |
+      python3 -c "import json; print(json.dumps({'result': 'ok'}))"
+    inputs:
+      api_key: $job.api_key
+    outputs: [result]
+""")
+        # Pre-create the config file
+        config_path = tmp_project / "my-flow.config.local.yaml"
+        config_path.write_text("api_key: existing\n")
+
+        code = main([
+            "--project-dir", str(tmp_project),
+            "config", "init", str(flow),
+        ])
+
+        assert code == EXIT_USAGE_ERROR
+        # Original content preserved
+        assert config_path.read_text() == "api_key: existing\n"
+
+    def test_config_init_no_config_block(self, tmp_project):
+        """config init on flow without config block returns success with info message."""
+        flow = tmp_project / "simple.flow.yaml"
+        flow.write_text("""\
+name: simple
+steps:
+  run:
+    run: |
+      python3 -c "import json; print(json.dumps({'result': 'ok'}))"
+    outputs: [result]
+""")
+        code = main([
+            "--project-dir", str(tmp_project),
+            "config", "init", str(flow),
+        ])
+
+        assert code == EXIT_SUCCESS
