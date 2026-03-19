@@ -933,6 +933,8 @@ def _parse_requires(data: dict) -> list[FlowRequirement]:
                 name=name,
                 description=item.get("description", ""),
                 check=item.get("check", ""),
+                install=item.get("install", ""),
+                url=item.get("url", ""),
             ))
         else:
             raise ValueError(f"Requirement entry must be a string or mapping, got {type(item).__name__}")
