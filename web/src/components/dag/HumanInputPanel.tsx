@@ -124,7 +124,7 @@ export function HumanInputPanel({
     });
 
   const textareaClass =
-    "w-full min-h-[32px] rounded-md border border-zinc-700 bg-zinc-800/80 px-2.5 py-1.5 text-sm text-foreground placeholder:text-zinc-600 focus:outline-none focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/20 transition-colors";
+    "w-full min-h-[44px] rounded-md border border-zinc-700 bg-zinc-800/80 px-2.5 py-2 text-sm text-foreground placeholder:text-zinc-600 focus:outline-none focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/20 transition-colors";
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey && hasValues) {
@@ -135,8 +135,7 @@ export function HumanInputPanel({
 
   return (
     <div
-      className="rounded-lg border border-amber-500/30 bg-zinc-900/95 backdrop-blur-sm shadow-xl shadow-amber-500/5"
-      style={{ width: 320 }}
+      className="w-80 max-w-[calc(100vw-2rem)] rounded-lg border border-amber-500/30 bg-zinc-900/95 backdrop-blur-sm shadow-xl shadow-amber-500/5"
       onClick={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}
     >
@@ -214,7 +213,7 @@ export function HumanInputPanel({
         <button
           type="submit"
           disabled={isPending || !hasValues}
-          className="w-full h-8 rounded-md bg-amber-600/90 hover:bg-amber-500/90 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-medium text-white flex items-center justify-center gap-1.5 transition-colors"
+          className="w-full min-h-[44px] h-8 rounded-md bg-amber-600/90 hover:bg-amber-500/90 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-medium text-white flex items-center justify-center gap-1.5 transition-colors"
         >
           {isPending ? (
             <>
