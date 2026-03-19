@@ -39,6 +39,7 @@ POST /api/jobs
 
 ```json
 {
+  "name": "ux-fix-sprint-12",
   "objective": "deploy-pipeline",
   "workflow": {
     "steps": {
@@ -55,7 +56,8 @@ POST /api/jobs
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `objective` | string | Yes | Job name/description |
+| `name` | string | No | Human-friendly job name (not unique) |
+| `objective` | string | Yes | Job goal/description |
 | `workflow` | object | Yes | Workflow definition (steps, executors, bindings) |
 | `inputs` | object | No | Initial input values (accessed via `$job.field`) |
 | `config` | object | No | Job configuration overrides |
