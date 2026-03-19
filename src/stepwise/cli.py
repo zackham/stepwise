@@ -1241,6 +1241,178 @@ def cmd_check(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
+def cmd_preflight(args: argparse.Namespace) -> int:
+    """Combined pre-run check: config + requirements + model resolution."""
+    from stepwise.config import load_config, DEFAULT_LABELS
+    from stepwise.flow_resolution import FlowResolutionError, resolve_flow
+    from stepwise.runner import load_flow_config
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+    import subprocess
+    import yaml
+
+    io = _io(args)
+    project_dir = _project_dir(args) or Path.cwd()
+
+    try:
+        flow_path = resolve_flow(args.flow, project_dir)
+    except FlowResolutionError as e:
+        io.log("error", str(e))
+        return EXIT_USAGE_ERROR
+
+    try:
+        wf = load_workflow_yaml(str(flow_path))
+    except (YAMLLoadError, Exception) as e:
+        io.log("error", f"Failed to load flow: {e}")
+        return EXIT_USAGE_ERROR
+
+    errors = wf.validate()
+    if errors:
+        io.log("error", "Validation failed:")
+        for err in errors:
+            io.log("info", f"  - {err}")
+        return EXIT_JOB_FAILED
+
+    io.log("success", f"Flow: {flow_path.name} ({len(wf.steps)} steps)")
+    has_issues = False
+
+    # ── Config resolution ────────────────────────────────────────
+    job_fields = {
+        b.source_field
+        for s in wf.steps.values()
+        for b in s.inputs
+        if b.source_step == "$job"
+    }
+
+    if job_fields:
+        config = load_flow_config(flow_path, wf)
+        # Also apply --var overrides for checking
+        var_overrides = {}
+        for pair in getattr(args, "var", None) or []:
+            if "=" in pair:
+                k, v = pair.split("=", 1)
+                var_overrides[k] = v
+        merged = {**config, **var_overrides}
+
+        from_defaults = sum(1 for v in wf.config_vars if v.default is not None and v.name in job_fields)
+        from_local = sum(1 for k in merged if k not in {v.name: v for v in wf.config_vars if v.default is not None} and k in job_fields)
+        resolved = sum(1 for f in job_fields if f in merged)
+        missing = sorted(job_fields - set(merged.keys()))
+
+        io.log(
+            "success" if not missing else "warn",
+            f"Config:       {resolved}/{len(job_fields)} variables resolved"
+        )
+        if missing:
+            has_issues = True
+            config_map = {v.name: v for v in wf.config_vars}
+            for m in missing:
+                cv = config_map.get(m)
+                desc = f" ({cv.description})" if cv and cv.description else ""
+                if cv and cv.sensitive:
+                    io.log("info", f"  ✗ {m}{desc} — set STEPWISE_VAR_{m.upper()} or config.local.yaml")
+                else:
+                    io.log("info", f"  ✗ {m}{desc} — use --var {m}=\"...\" or config.local.yaml")
+    else:
+        io.log("success", "Config:       no config variables needed")
+
+    # ── Requirements ─────────────────────────────────────────────
+    if wf.requires:
+        req_ok = 0
+        req_fail = 0
+        failed_reqs: list[str] = []
+        for r in wf.requires:
+            if r.check:
+                try:
+                    result = subprocess.run(
+                        r.check, shell=True, timeout=5,
+                        capture_output=True, text=True,
+                    )
+                    if result.returncode == 0:
+                        io.log("success", f"  ✓ {r.name}")
+                        req_ok += 1
+                    else:
+                        desc = f" — {r.description}" if r.description else ""
+                        io.log("warn", f"  ✗ {r.name}{desc}")
+                        if r.install:
+                            io.log("info", f"    Install: {r.install}")
+                        if r.url:
+                            io.log("info", f"    Docs: {r.url}")
+                        req_fail += 1
+                        failed_reqs.append(r.name)
+                except (subprocess.TimeoutExpired, Exception):
+                    io.log("warn", f"  ? {r.name}")
+                    req_fail += 1
+                    failed_reqs.append(r.name)
+            else:
+                req_ok += 1
+
+        io.log(
+            "success" if not req_fail else "warn",
+            f"Requirements: {req_ok}/{req_ok + req_fail} met"
+        )
+        if req_fail:
+            has_issues = True
+    else:
+        io.log("success", "Requirements: none")
+
+    # ── Model resolution ─────────────────────────────────────────
+    cfg = load_config(project_dir)
+    with open(flow_path) as f:
+        data = yaml.safe_load(f)
+
+    steps = data.get("steps", {})
+    llm_steps = []
+    providers_needed: set[str] = set()
+    for step_name, step_def in steps.items():
+        if not isinstance(step_def, dict):
+            continue
+        executor = step_def.get("executor", {})
+        exec_type = executor.get("type") if isinstance(executor, dict) else executor
+        if exec_type != "llm":
+            continue
+        config_block = executor.get("config", {}) if isinstance(executor, dict) else {}
+        model_ref = config_block.get("model") or cfg.default_model or "balanced"
+        resolved = cfg.resolve_model(model_ref)
+        llm_steps.append((step_name, model_ref, resolved))
+        if "/" in resolved:
+            providers_needed.add(resolved.split("/")[0])
+
+    if llm_steps:
+        for step_name, model_ref, resolved in llm_steps:
+            label = f" ({model_ref})" if model_ref != resolved else ""
+            io.log("info", f"  {step_name}: {resolved}{label}")
+
+        # Check provider keys
+        key_status = []
+        if "openrouter" in str(providers_needed) or not cfg.anthropic_api_key:
+            if cfg.openrouter_api_key:
+                key_status.append("openrouter ✓")
+            else:
+                key_status.append("openrouter ✗")
+                has_issues = True
+        if any(p in ("anthropic",) for p in providers_needed):
+            if cfg.anthropic_api_key:
+                key_status.append("anthropic ✓")
+            else:
+                key_status.append("anthropic ✗")
+                has_issues = True
+        if key_status:
+            io.log(
+                "success" if all("✓" in s for s in key_status) else "warn",
+                f"Models:       {' | '.join(key_status)}"
+            )
+    else:
+        io.log("success", "Models:       no LLM steps")
+
+    # ── Summary ──────────────────────────────────────────────────
+    if has_issues:
+        io.log("warn", "Preflight:    issues found — resolve before running")
+        return EXIT_JOB_FAILED
+    else:
+        io.log("success", "Preflight:    ready to run")
+        return EXIT_SUCCESS
+
+
 def _try_registry_fetch(flow_ref: str, project_dir: Path, io: IOAdapter) -> Path | None:
     """Fetch a flow from the registry into .stepwise/registry/@author/slug/.
 
@@ -2926,6 +3098,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_validate = sub.add_parser("validate", help="Validate a flow file")
     p_validate.add_argument("flow", help="Flow name or path to .flow.yaml file")
 
+    # preflight
+    p_preflight = sub.add_parser("preflight", help="Pre-run check: config + requirements + models")
+    p_preflight.add_argument("flow", help="Flow name or path to .flow.yaml file")
+    p_preflight.add_argument("--var", action="append", help="Variable override (key=value)")
+
     # diagram
     p_diagram = sub.add_parser("diagram", help="Generate a diagram from a flow file")
     p_diagram.add_argument("flow", help="Flow name or path to .flow.yaml file")
@@ -3102,6 +3279,7 @@ def main(argv: list[str] | None = None) -> int:
         "run": cmd_run,
         "new": cmd_new,
         "validate": cmd_validate,
+        "preflight": cmd_preflight,
         "diagram": cmd_diagram,
         "templates": cmd_templates,
         "config": cmd_config,
