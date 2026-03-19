@@ -1063,8 +1063,78 @@ def cmd_config(args: argparse.Namespace) -> int:
             print(val)
         return EXIT_SUCCESS
 
+    elif action == "init":
+        # Scaffold config.local.yaml for a flow
+        from stepwise.flow_resolution import FlowResolutionError, resolve_flow
+        from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+        flow_ref = args.key
+        if not flow_ref:
+            print("Error: config init requires a flow name or path", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+
+        project_dir = _project_dir(args) or Path.cwd()
+        try:
+            flow_path = resolve_flow(flow_ref, project_dir)
+        except FlowResolutionError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+
+        try:
+            wf = load_workflow_yaml(str(flow_path))
+        except (YAMLLoadError, Exception) as e:
+            print(f"Error loading flow: {e}", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+
+        if not wf.config_vars:
+            io = _io(args)
+            io.log("info", f"Flow '{flow_ref}' has no config: block — nothing to scaffold.")
+            return EXIT_SUCCESS
+
+        # Determine output path
+        if flow_path.name == "FLOW.yaml":
+            config_path = flow_path.parent / "config.local.yaml"
+        else:
+            stem = flow_path.stem
+            if stem.endswith(".flow"):
+                stem = stem[:-5]
+            config_path = flow_path.parent / f"{stem}.config.local.yaml"
+
+        if config_path.exists():
+            print(f"Config file already exists: {config_path}", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+
+        # Scaffold YAML with comments
+        lines = [
+            f"# Configuration for {wf.metadata.name or flow_ref}",
+            f"# See: stepwise info {flow_ref}",
+            "",
+        ]
+        for v in wf.config_vars:
+            if v.description:
+                lines.append(f"# {v.description}" + (f" ({v.type})" if v.type != "str" else ""))
+            if v.options:
+                lines.append(f"# Options: {', '.join(v.options)}")
+            if v.example:
+                lines.append(f"# Example: {v.example}")
+
+            if v.default is not None:
+                # Has default — comment out
+                lines.append(f"# {v.name}: {v.default}")
+            elif v.required:
+                # Required, no default — leave blank for user
+                lines.append(f'{v.name}: ""')
+            else:
+                lines.append(f"# {v.name}:")
+            lines.append("")
+
+        config_path.write_text("\n".join(lines))
+        io = _io(args)
+        io.log("success", f"Created {config_path}")
+        return EXIT_SUCCESS
+
     else:
-        print("Error: config requires 'get' or 'set' action", file=sys.stderr)
+        print("Error: config requires 'get', 'set', or 'init' action", file=sys.stderr)
         return EXIT_USAGE_ERROR
 
 
@@ -2078,21 +2148,98 @@ def cmd_search(args: argparse.Namespace) -> int:
 
 
 def cmd_info(args: argparse.Namespace) -> int:
-    """Show details about a published flow."""
-    from stepwise.registry_client import fetch_flow, RegistryError
+    """Show details about a flow (local or registry)."""
+    from stepwise.flow_resolution import FlowResolutionError, parse_registry_ref, resolve_flow
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
 
-    slug = args.name
-    if not slug:
+    io = _io(args)
+    flow_ref = args.name
+    if not flow_ref:
         print("Error: flow info requires a flow name", file=sys.stderr)
         return EXIT_USAGE_ERROR
 
+    # Try local resolution first
+    project_dir = _project_dir(args) or Path.cwd()
+    local_flow = None
     try:
-        data = fetch_flow(slug)
+        local_flow = resolve_flow(flow_ref, project_dir)
+    except FlowResolutionError:
+        pass
+
+    if local_flow and local_flow.exists():
+        try:
+            wf = load_workflow_yaml(str(local_flow))
+        except (YAMLLoadError, Exception) as e:
+            print(f"Error loading flow: {e}", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+
+        meta = wf.metadata
+        lines = [
+            f"Name:        {meta.name or local_flow.stem}",
+        ]
+        if meta.author:
+            lines.append(f"Author:      {meta.author}")
+        if meta.version:
+            lines.append(f"Version:     {meta.version}")
+        if meta.description:
+            lines.append(f"Description: {meta.description}")
+        if meta.tags:
+            lines.append(f"Tags:        {', '.join(meta.tags)}")
+        lines.append(f"Steps:       {len(wf.steps)}")
+        lines.append(f"File:        {local_flow}")
+
+        # Config variables
+        if wf.config_vars:
+            lines.append("")
+            lines.append("Config variables:")
+            for v in wf.config_vars:
+                req = "required" if v.required else f"default: {v.default}"
+                line = f"  {v.name} ({v.type}, {req})"
+                if v.description:
+                    line += f" — {v.description}"
+                lines.append(line)
+                if v.example:
+                    lines.append(f"    example: {v.example}")
+
+        # Requirements
+        if wf.requires:
+            lines.append("")
+            lines.append("Requirements:")
+            for r in wf.requires:
+                status = ""
+                if r.check:
+                    import subprocess
+                    try:
+                        result = subprocess.run(
+                            r.check, shell=True, timeout=5,
+                            capture_output=True, text=True,
+                        )
+                        status = " ✓" if result.returncode == 0 else " ✗"
+                    except (subprocess.TimeoutExpired, Exception):
+                        status = " ?"
+                line = f"  {r.name}{status}"
+                if r.description:
+                    line += f" — {r.description}"
+                lines.append(line)
+
+        # Readme
+        if wf.readme:
+            lines.append("")
+            lines.append("─" * 40)
+            lines.append(wf.readme.rstrip())
+
+        io.note("\n".join(lines), title=meta.name or "Flow Info")
+        return EXIT_SUCCESS
+
+    # Fall back to registry lookup
+    from stepwise.registry_client import fetch_flow, RegistryError
+
+    try:
+        data = fetch_flow(flow_ref)
     except RegistryError as e:
         print(f"Error: {e}", file=sys.stderr)
         return EXIT_USAGE_ERROR
 
-    io = _io(args)
     tags = ", ".join(data.get("tags", []))
     executors = data.get("executor_types", [])
     steps = data.get("steps", 0)
@@ -2682,8 +2829,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     # config
     p_config = sub.add_parser("config", help="Manage configuration")
-    p_config.add_argument("config_action", choices=["get", "set"], help="Action")
-    p_config.add_argument("key", nargs="?", help="Config key")
+    p_config.add_argument("config_action", choices=["get", "set", "init"], help="Action")
+    p_config.add_argument("key", nargs="?", help="Config key or flow name (for init)")
     p_config.add_argument("value", nargs="?", help="Config value (for set)")
     p_config.add_argument("--stdin", action="store_true", help="Read value from stdin")
     p_config.add_argument("--unmask", action="store_true", help="Show full values")
