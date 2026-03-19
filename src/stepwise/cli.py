@@ -639,6 +639,28 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 io.log("info", f"  {w}")
             else:
                 io.log("warn", f"  {w}")
+
+        # Check requirements
+        if wf.requires:
+            import subprocess
+            for req in wf.requires:
+                if req.check:
+                    try:
+                        result = subprocess.run(
+                            req.check, shell=True, timeout=5,
+                            capture_output=True, text=True,
+                        )
+                        if result.returncode == 0:
+                            io.log("success", f"  Requirement '{req.name}': OK")
+                        else:
+                            io.log("warn", f"  ⚠ Requirement '{req.name}': check failed")
+                    except subprocess.TimeoutExpired:
+                        io.log("warn", f"  ⚠ Requirement '{req.name}': check timed out")
+                    except Exception:
+                        io.log("warn", f"  ⚠ Requirement '{req.name}': check error")
+                else:
+                    io.log("info", f"  ℹ Requirement '{req.name}': no check command")
+
         return EXIT_SUCCESS
     except YAMLLoadError as e:
         io.log("error", f"{flow_path}:")
