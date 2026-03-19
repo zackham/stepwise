@@ -186,6 +186,12 @@ Same as headless mode (shows step progress to stderr) but prints structured JSON
 | `--report` | Generate HTML report after completion |
 | `--report-output PATH` | Custom report file path (default: `<flow>-report.html`) |
 | `--no-open` | Don't auto-open browser (for `--watch`) |
+| `--name STR` | Human-friendly job name (optional) |
+
+```bash
+# Name a job for easy identification
+stepwise run deploy.flow.yaml --name "deploy-v2.1"
+```
 
 ---
 
@@ -304,10 +310,10 @@ stepwise jobs --output json        # JSON output
 ```
 
 ```
-ID               STATUS       OBJECTIVE                STEPS    CREATED
-job-a1b2c3d4     completed    deploy-pipeline          3/3      2 hours ago
-job-e5f6g7h8     running      content-review           2/4      5 min ago
-job-i9j0k1l2     failed       data-analysis            1/3      1 hours ago
+ID               NAME              STATUS       OBJECTIVE                STEPS    CREATED
+job-a1b2c3d4     ux-fix            completed    deploy-pipeline          3/3      2 hours ago
+job-e5f6g7h8                       running      content-review           2/4      5 min ago
+job-i9j0k1l2                       failed       data-analysis            1/3      1 hours ago
 ```
 
 | Flag | Description |
@@ -316,6 +322,11 @@ job-i9j0k1l2     failed       data-analysis            1/3      1 hours ago
 | `--limit INT` | Number of recent jobs to show (default: 20) |
 | `--all` | Show all jobs (ignore limit) |
 | `--status STR` | Filter by status: `pending`, `running`, `paused`, `completed`, `failed`, `cancelled` |
+| `--name STR` | Filter by name (case-insensitive substring match) |
+
+```bash
+stepwise jobs --name "ux fix"          # filter by name substring
+```
 
 ---
 
