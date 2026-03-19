@@ -23,6 +23,8 @@ import {
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { useIsMobile } from "@/hooks/useMediaQuery";
 import { cn } from "@/lib/utils";
 import type { LocalFlow, RegistryFlow } from "@/lib/types";
 
@@ -32,6 +34,7 @@ type Tab = "local" | "registry";
 
 export function FlowsPage() {
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
   const [tab, setTab] = useState<Tab>("local");
   const [filter, setFilter] = useState("");
   const [showNewFlowInput, setShowNewFlowInput] = useState(false);
@@ -238,7 +241,7 @@ export function FlowsPage() {
       {tab === "local" ? (
         <div className="flex-1 flex min-h-0">
           {/* Flow list */}
-          <div className="w-72 border-r border-border shrink-0 flex flex-col">
+          <div className="w-full md:w-72 md:border-r border-border md:shrink-0 flex flex-col">
             <div className="p-3 border-b border-border">
               <div className="relative">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" />
@@ -283,7 +286,13 @@ export function FlowsPage() {
                 filtered.map((flow) => (
                   <button
                     key={flow.path}
-                    onClick={() => setSelectedLocalFlow(flow)}
+                    onClick={() => {
+                      if (isMobile) {
+                        handleEdit(flow);
+                      } else {
+                        setSelectedLocalFlow(flow);
+                      }
+                    }}
                     onDoubleClick={() => handleEdit(flow)}
                     className={cn(
                       "w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors",
@@ -314,83 +323,109 @@ export function FlowsPage() {
             </div>
           </div>
 
-          {/* DAG preview + detail panel */}
-          {selectedLocalFlow ? (
-            <>
-              <div className="flex-1 min-w-0">
-                {localFlowDetail?.flow && Object.keys(localFlowDetail.flow.steps).length > 0 ? (
-                  <FlowDagView
-                    workflow={localDagWorkflow}
-                    runs={EMPTY_RUNS}
-                    jobTree={null}
-                    expandedSteps={localExpandedSteps}
-                    onToggleExpand={toggleLocalExpand}
-                    selectedStep={null}
-                    onSelectStep={() => {}}
+          {/* DAG preview + detail panel (desktop only) */}
+          {!isMobile && (
+            selectedLocalFlow ? (
+              <>
+                <div className="flex-1 min-w-0">
+                  {localFlowDetail?.flow && Object.keys(localFlowDetail.flow.steps).length > 0 ? (
+                    <FlowDagView
+                      workflow={localDagWorkflow}
+                      runs={EMPTY_RUNS}
+                      jobTree={null}
+                      expandedSteps={localExpandedSteps}
+                      onToggleExpand={toggleLocalExpand}
+                      selectedStep={null}
+                      onSelectStep={() => {}}
+                    />
+                  ) : (
+                    <div className="flex items-center justify-center h-full text-zinc-600 text-sm">
+                      {localFlowDetail ? "No steps defined" : "Loading preview..."}
+                    </div>
+                  )}
+                </div>
+                <div className="w-80 border-l border-border shrink-0">
+                  <LocalFlowInfoPanel
+                    flow={selectedLocalFlow}
+                    detail={localFlowDetail}
+                    onEdit={() => handleEdit(selectedLocalFlow)}
+                    onRun={() => handleRun(selectedLocalFlow)}
+                    onDelete={() => handleDelete(selectedLocalFlow)}
+                    onPatchMetadata={handlePatchMetadata}
                   />
-                ) : (
-                  <div className="flex items-center justify-center h-full text-zinc-600 text-sm">
-                    {localFlowDetail ? "No steps defined" : "Loading preview..."}
-                  </div>
-                )}
+                </div>
+              </>
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-zinc-600 text-sm">
+                Select a flow to preview
               </div>
-              <div className="w-80 border-l border-border shrink-0">
-                <LocalFlowInfoPanel
-                  flow={selectedLocalFlow}
-                  detail={localFlowDetail}
-                  onEdit={() => handleEdit(selectedLocalFlow)}
-                  onRun={() => handleRun(selectedLocalFlow)}
-                  onDelete={() => handleDelete(selectedLocalFlow)}
-                  onPatchMetadata={handlePatchMetadata}
-                />
-              </div>
-            </>
-          ) : (
-            <div className="flex-1 flex items-center justify-center text-zinc-600 text-sm">
-              Select a flow to preview
-            </div>
+            )
           )}
         </div>
       ) : (
         <div className="flex-1 flex min-h-0">
-          <div className="w-72 border-r border-border shrink-0">
+          <div className="w-full md:w-72 md:border-r border-border md:shrink-0">
             <RegistryBrowser
               selectedSlug={selectedRegistryFlow?.slug}
-              onSelect={setSelectedRegistryFlow}
+              onSelect={(flow) => {
+                setSelectedRegistryFlow(flow);
+              }}
             />
           </div>
-          {selectedRegistryFlow ? (
-            <>
-              <div className="flex-1 min-w-0">
-                {registryFlowDetail?.flow ? (
-                  <FlowDagView
-                    workflow={registryDagWorkflow}
-                    runs={EMPTY_RUNS}
-                    jobTree={null}
-                    expandedSteps={expandedSteps}
-                    onToggleExpand={toggleExpand}
-                    selectedStep={null}
-                    onSelectStep={() => {}}
+          {!isMobile && (
+            selectedRegistryFlow ? (
+              <>
+                <div className="flex-1 min-w-0">
+                  {registryFlowDetail?.flow ? (
+                    <FlowDagView
+                      workflow={registryDagWorkflow}
+                      runs={EMPTY_RUNS}
+                      jobTree={null}
+                      expandedSteps={expandedSteps}
+                      onToggleExpand={toggleExpand}
+                      selectedStep={null}
+                      onSelectStep={() => {}}
+                    />
+                  ) : (
+                    <div className="flex items-center justify-center h-full text-zinc-600 text-sm">
+                      Loading preview...
+                    </div>
+                  )}
+                </div>
+                <div className="w-80 border-l border-border shrink-0">
+                  <FlowInfoPanel
+                    flow={selectedRegistryFlow}
+                    onInstall={handleInstall}
+                    isInstalling={installMutation.isPending}
+                    isInstalled={installedSlugs.has(selectedRegistryFlow.slug)}
                   />
-                ) : (
-                  <div className="flex items-center justify-center h-full text-zinc-600 text-sm">
-                    Loading preview...
-                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-zinc-600 text-sm">
+                Select a flow from the registry
+              </div>
+            )
+          )}
+          {/* Registry detail as Sheet on mobile */}
+          {isMobile && (
+            <Sheet
+              open={!!selectedRegistryFlow}
+              onOpenChange={(open) => {
+                if (!open) setSelectedRegistryFlow(null);
+              }}
+            >
+              <SheetContent side="right" showCloseButton={false} className="w-[85vw] sm:max-w-sm p-0 overflow-y-auto">
+                {selectedRegistryFlow && (
+                  <FlowInfoPanel
+                    flow={selectedRegistryFlow}
+                    onInstall={handleInstall}
+                    isInstalling={installMutation.isPending}
+                    isInstalled={installedSlugs.has(selectedRegistryFlow.slug)}
+                  />
                 )}
-              </div>
-              <div className="w-80 border-l border-border shrink-0">
-                <FlowInfoPanel
-                  flow={selectedRegistryFlow}
-                  onInstall={handleInstall}
-                  isInstalling={installMutation.isPending}
-                  isInstalled={installedSlugs.has(selectedRegistryFlow.slug)}
-                />
-              </div>
-            </>
-          ) : (
-            <div className="flex-1 flex items-center justify-center text-zinc-600 text-sm">
-              Select a flow from the registry
-            </div>
+              </SheetContent>
+            </Sheet>
           )}
         </div>
       )}
