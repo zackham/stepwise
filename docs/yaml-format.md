@@ -90,6 +90,18 @@ steps:
 ```yaml
 name: workflow-name          # required, identifier
 description: "..."           # optional, human-readable
+config:                      # optional, declared config variables
+  var_name:
+    description: "..."
+    type: str                # str, text, number, bool, choice
+    default: "..."           # has default → required: false
+    sensitive: true          # masks value in output, suggests env var
+requires:                    # optional, external tool dependencies
+  - name: tool_name
+    description: "..."
+    check: "command"         # shell command to verify availability
+    install: "command"       # shown when check fails
+    url: "https://..."       # docs link shown when check fails
 chains:                      # optional, context chain definitions (M7a)
   chain_name: { ... }
 steps:                       # required, map of step definitions
@@ -493,6 +505,121 @@ steps:
 - `StepDefinition.loop_prompt = "..."`
 - `StepDefinition.max_continuous_attempts = 5`
 
+## Common Patterns
+
+### Gating a post-loop step
+
+Steps run as soon as their inputs or sequencing deps are satisfied — they don't wait for a loop to finish. This means a step sequenced after a looping step will fire after the **first iteration**, not after the loop exits.
+
+**Bug (runs too early):**
+
+```yaml
+steps:
+  draft:
+    executor: llm
+    prompt: "Write about $topic"
+    inputs: { topic: $job.topic }
+    outputs: [content]
+
+  review:
+    executor: human
+    prompt: "Score this: $content"
+    inputs: { content: draft.content }
+    outputs: [score]
+    exits:
+      - name: good
+        when: "float(outputs.score) >= 0.8"
+        action: advance
+      - name: retry
+        when: "attempt < 3"
+        action: loop
+        target: draft
+        max_iterations: 3
+
+  publish:
+    run: './publish.sh "$content"'
+    inputs: { content: draft.content }
+    sequencing: [review]              # BUG: runs after review's first completion
+    outputs: [url]
+```
+
+Here `publish` runs as soon as `review` completes once — even if review loops back to `draft`. The fix is to add a `when` condition that gates on the loop's exit state:
+
+**Fix (gated with `when`):**
+
+```yaml
+  publish:
+    run: './publish.sh "$content"'
+    inputs:
+      content: draft.content
+      score: review.score
+    when: "float(score) >= 0.8"       # only runs when the loop exits via "good"
+    outputs: [url]
+```
+
+**General principle:** Any step downstream of a loop needs an explicit `when` condition to ensure it only runs after the loop terminates with the desired outcome. The engine has no concept of "loop finished" — it only knows "step completed." `stepwise validate` will warn about this pattern.
+
+## Config Variables
+
+Declare configurable variables in a top-level `config:` block. These map to `$job.*` input bindings.
+
+```yaml
+config:
+  persona:
+    description: "Your AI persona"
+    type: str
+    required: true
+    example: "You are a researcher..."
+  api_key:
+    description: "Service API key"
+    sensitive: true                # masks in output, resolves from STEPWISE_VAR_API_KEY
+  max_rounds:
+    type: number
+    default: 5
+  voice_style:
+    type: choice
+    options: [conversational, formal, casual]
+    default: conversational
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `description` | string | `""` | Human-readable description |
+| `type` | string | `"str"` | `str`, `text`, `number`, `bool`, `choice` |
+| `default` | any | `None` | Default value (has default → `required: false`) |
+| `required` | bool | `true` | Inferred from default presence |
+| `example` | string | `""` | Example value shown in `stepwise info` |
+| `options` | list | `None` | Required for `choice` type |
+| `sensitive` | bool | `false` | Masks value in output, suggests env var |
+
+**Resolution priority** (highest wins): `--var` → `--vars-file` → `config.local.yaml` → `STEPWISE_VAR_{NAME}` env vars → config defaults.
+
+**Sensitive variables:** When `sensitive: true`, the value is masked in `stepwise info` output, missing-input errors suggest `STEPWISE_VAR_{NAME}` instead of `--var`, and the env var is auto-resolved by `load_flow_config`.
+
+## Requirements
+
+Declare external tool dependencies in a top-level `requires:` block.
+
+```yaml
+requires:
+  - name: ffmpeg
+    description: "Audio processing"
+    check: "ffmpeg -version"
+    install: "apt install ffmpeg"
+    url: "https://ffmpeg.org"
+  - camofox                        # shorthand: just a name
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | yes | Tool or capability name |
+| `description` | string | no | What this requirement is for |
+| `check` | string | no | Shell command to verify (5s timeout) |
+| `install` | string | no | Install command shown when check fails |
+| `url` | string | no | Docs link shown when check fails |
+
+Requirements are checked by `stepwise validate`, `stepwise info`, and `stepwise preflight`. They are advisory — they don't block `stepwise run`.
+
 ## How It Maps to the Data Model
 
 | YAML | Data Model |
@@ -517,3 +644,5 @@ steps:
 | `continue_session: true` | `StepDefinition.continue_session = True` |
 | `loop_prompt: "..."` | `StepDefinition.loop_prompt = "..."` |
 | `max_continuous_attempts: 5` | `StepDefinition.max_continuous_attempts = 5` |
+| `config: {var: {...}}` | `WorkflowDefinition.config_vars = [ConfigVar(...)]` |
+| `requires: [{name: "..."}]` | `WorkflowDefinition.requires = [FlowRequirement(...)]` |

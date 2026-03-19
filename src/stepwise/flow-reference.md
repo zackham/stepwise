@@ -33,6 +33,10 @@ config:                            # optional — declared config variables
     type: str                      # str, text, number, bool, choice
     required: true                 # inferred true when no default
     example: "You are a researcher..."
+  api_key:
+    description: "Service API key"
+    type: str
+    sensitive: true                # masks value in output, suggests env var
   voice_style:
     description: "TTS voice style"
     type: choice
@@ -43,6 +47,8 @@ requires:                          # optional — external tool dependencies
   - name: ffmpeg
     description: "Audio processing"
     check: "ffmpeg -version"       # validated by stepwise validate (5s timeout)
+    install: "apt install ffmpeg"  # shown when check fails
+    url: "https://ffmpeg.org"      # docs link shown when check fails
   - camofox                        # shorthand: just a name
 
 readme: |                          # optional — extended documentation
@@ -704,6 +710,58 @@ decorators:
         config: { command: "echo '{\"result\": \"fallback\"}'" }
 ```
 
+## Common Patterns
+
+### Gating a post-loop step
+
+Steps run as soon as their inputs or sequencing deps are satisfied — they don't wait for a loop to finish. A step sequenced after a looping step fires after the **first iteration**, not after the loop exits.
+
+**Bug (runs too early):**
+
+```yaml
+steps:
+  draft:
+    executor: llm
+    prompt: "Write about $topic"
+    inputs: { topic: $job.topic }
+    outputs: [content]
+
+  review:
+    executor: human
+    prompt: "Score this: $content"
+    inputs: { content: draft.content }
+    outputs: [score]
+    exits:
+      - name: good
+        when: "float(outputs.score) >= 0.8"
+        action: advance
+      - name: retry
+        when: "attempt < 3"
+        action: loop
+        target: draft
+        max_iterations: 3
+
+  publish:
+    run: './publish.sh "$content"'
+    inputs: { content: draft.content }
+    sequencing: [review]              # BUG: runs after review's first completion
+    outputs: [url]
+```
+
+`publish` runs as soon as `review` completes once — even if review loops back to `draft`. Fix: gate with `when` on the loop's exit state:
+
+```yaml
+  publish:
+    run: './publish.sh "$content"'
+    inputs:
+      content: draft.content
+      score: review.score
+    when: "float(score) >= 0.8"       # only runs when loop exits via "good"
+    outputs: [url]
+```
+
+**Principle:** Any step downstream of a loop needs an explicit `when` condition. The engine has no concept of "loop finished" — only "step completed." `stepwise validate` warns about ungated post-loop steps.
+
 ## Gotchas
 
 1. **Input bindings already imply ordering.** Don't add `sequencing: [A]` if you already have `inputs: {x: A.field}`.
@@ -723,6 +781,7 @@ decorators:
 15. **Optional inputs use dict syntax.** `score: {from: "review.score", optional: true}` — not `score: review.score?` or similar shorthand.
 16. **Exit rules with `advance` actions fail on no-match.** When you define explicit `advance` rules, the step fails if none match. Add a catch-all `advance` rule or handle all cases.
 17. **`_session_id` is auto-emitted.** Don't declare it in `outputs:` — it's automatically added by agent steps with `continue_session: true`.
+18. **Post-loop steps need `when` gates.** A step with `sequencing: [looping-step]` fires after the first iteration, not after the loop exits. Add a `when` condition to gate on the loop's exit state.
 
 ## Config Variables
 
@@ -735,6 +794,10 @@ config:
     type: str           # str, text, number, bool, choice
     required: true      # inferred true when no default provided
     example: "You are a senior researcher..."
+  api_key:
+    description: "Service API key"
+    type: str
+    sensitive: true     # masks value in output, suggests env var
   max_rounds:
     description: "Maximum iteration count"
     type: number
@@ -747,17 +810,23 @@ config:
 
 **Types:** Uses the same set as output field schemas — `str`, `text`, `number`, `bool`, `choice`. Choice type requires an `options` list.
 
+**Sensitive variables:** `sensitive: true` marks a config var as containing secrets. Effects:
+- `stepwise info` masks default values and shows `env: STEPWISE_VAR_{NAME}` hint
+- Missing-input errors suggest env var instead of `--var` flag
+- `load_flow_config` resolves `STEPWISE_VAR_{NAME}` environment variables automatically
+
 **User config values:** Users provide their values in a co-located `config.local.yaml` file (gitignored, auto-loaded):
 
 - Directory flows (`my-flow/FLOW.yaml`): `my-flow/config.local.yaml`
 - Single-file flows (`my-flow.flow.yaml`): `my-flow.config.local.yaml` sibling
 
-**Resolution priority** (highest wins): `--var` → `--vars-file` → `config.local.yaml` → config defaults.
+**Resolution priority** (highest wins): `--var` → `--vars-file` → `config.local.yaml` → `STEPWISE_VAR_{NAME}` env vars → config defaults.
 
 **CLI commands:**
 - `stepwise config init <flow>` — scaffold a `config.local.yaml` from declarations
-- `stepwise info <flow>` — show config variables, requirements, and readme
+- `stepwise info <flow>` — show config variables, requirements, readme, and readiness status
 - `stepwise validate <flow>` — warns on mismatches between config and `$job.*` bindings
+- `stepwise preflight <flow>` — combined pre-run check: config resolution + requirements + model resolution
 
 ## Requirements
 
@@ -768,14 +837,26 @@ requires:
   - name: ffmpeg
     description: "Audio/video processing"
     check: "ffmpeg -version"      # shell command, validated by stepwise validate
+    install: "apt install ffmpeg" # shown when check fails
+    url: "https://ffmpeg.org"     # docs link shown when check fails
   - name: camofox
     description: "Browser automation"
     check: "docker ps | grep camofox"
+    install: "pip install camofox"
   - jq                            # shorthand: just a name, no check
 ```
 
-- `check` commands run during `stepwise validate` and `stepwise info` (5-second timeout)
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | yes | Tool or capability name |
+| `description` | string | no | What this requirement is for |
+| `check` | string | no | Shell command to verify availability (5s timeout) |
+| `install` | string | no | Install command shown when check fails |
+| `url` | string | no | Documentation link shown when check fails |
+
+- `check` commands run during `stepwise validate`, `stepwise info`, and `stepwise preflight` (5-second timeout)
 - Requirements are advisory — they don't block `stepwise run`
+- When a check fails, `install` and `url` are shown to guide the user
 - Included in `stepwise schema` and `stepwise agent-help` output
 
 ## Validation Checklist
@@ -792,5 +873,6 @@ Before outputting a flow, verify:
 8. For-each: source produces a list; sub-flow accesses item via `$job.<as>`
 9. Branching: `when` conditions reference input variable names; `any_of` has >= 2 sources with valid `step.field` refs
 10. All sub-flows (flow steps, for-each) produce all declared parent `outputs`
+11. Post-loop steps: any step with `sequencing` on a looping step has a `when` condition to gate execution
 
 After generating, validate with `stepwise validate <flow>`.
