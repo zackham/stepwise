@@ -20,6 +20,8 @@ import {
 } from "@/hooks/useEditor";
 import { useStepwiseMutations } from "@/hooks/useStepwise";
 import { Code, Workflow, ArrowLeft, FolderTree } from "lucide-react";
+import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import type { FlowDefinition, ParseResult } from "@/lib/types";
@@ -85,6 +87,7 @@ function PromptEditor({
 export function EditorPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const isCompact = useMediaQuery("(max-width: 1023px)");
 
   const params = useParams({ strict: false }) as { flowName?: string };
   const flowName = params.flowName;
@@ -323,16 +326,32 @@ export function EditorPage() {
       />
       <div className="flex-1 flex min-h-0">
         {/* File tree for directory flows — toggled */}
-        {showFileTree && isDirectoryFlow && flowFilesData?.files && (
-          <div className="w-48 border-r border-border shrink-0 overflow-y-auto">
-            <FlowFileTree
-              files={flowFilesData.files}
-              selectedFile={viewingFile}
-              onSelectFile={handleSelectFile}
-              onRefresh={() => refetchFiles()}
-              isRefreshing={isRefetchingFiles}
-            />
-          </div>
+        {isCompact ? (
+          <Sheet open={showFileTree && isDirectoryFlow && !!flowFilesData?.files} onOpenChange={setShowFileTree}>
+            <SheetContent side="left" showCloseButton={false} className="w-[70vw] sm:max-w-xs p-0 overflow-y-auto">
+              {flowFilesData?.files && (
+                <FlowFileTree
+                  files={flowFilesData.files}
+                  selectedFile={viewingFile}
+                  onSelectFile={(f) => { handleSelectFile(f); setShowFileTree(false); }}
+                  onRefresh={() => refetchFiles()}
+                  isRefreshing={isRefetchingFiles}
+                />
+              )}
+            </SheetContent>
+          </Sheet>
+        ) : (
+          showFileTree && isDirectoryFlow && flowFilesData?.files && (
+            <div className="w-48 border-r border-border shrink-0 overflow-y-auto">
+              <FlowFileTree
+                files={flowFilesData.files}
+                selectedFile={viewingFile}
+                onSelectFile={handleSelectFile}
+                onRefresh={() => refetchFiles()}
+                isRefreshing={isRefetchingFiles}
+              />
+            </div>
+          )
         )}
 
         {/* Center panel */}
@@ -420,44 +439,102 @@ export function EditorPage() {
         </div>
 
         {/* Step inspector */}
-        {selectedStepDef && (
-          <div className="w-80 border-l border-border shrink-0 flex flex-col">
-            <StepDefinitionPanel
-              stepDef={selectedStepDef}
-              onClose={() => {
+        {isCompact ? (
+          <Sheet
+            open={!!selectedStepDef}
+            onOpenChange={(open) => {
+              if (!open) {
                 setSelectedStep(null);
                 setEditingPrompt(null);
                 setViewingFile("FLOW.yaml");
-              }}
-              onDelete={handleDeleteStep}
-              onViewFile={(path) => {
-                setViewingFile(path);
-                setCenterTab("source");
-              }}
-              onViewSource={(field) => {
-                setEditingPrompt({ step: selectedStep!, field });
-                setViewingFile(null);
-                setCenterTab("source");
-              }}
-            />
-          </div>
+              }
+            }}
+          >
+            <SheetContent side="right" showCloseButton={false} className="w-[85vw] sm:max-w-sm p-0 overflow-y-auto">
+              {selectedStepDef && (
+                <StepDefinitionPanel
+                  stepDef={selectedStepDef}
+                  onClose={() => {
+                    setSelectedStep(null);
+                    setEditingPrompt(null);
+                    setViewingFile("FLOW.yaml");
+                  }}
+                  onDelete={handleDeleteStep}
+                  onViewFile={(path) => {
+                    setViewingFile(path);
+                    setCenterTab("source");
+                    setSelectedStep(null);
+                  }}
+                  onViewSource={(field) => {
+                    setEditingPrompt({ step: selectedStep!, field });
+                    setViewingFile(null);
+                    setCenterTab("source");
+                    setSelectedStep(null);
+                  }}
+                />
+              )}
+            </SheetContent>
+          </Sheet>
+        ) : (
+          selectedStepDef && (
+            <div className="w-80 border-l border-border shrink-0 flex flex-col">
+              <StepDefinitionPanel
+                stepDef={selectedStepDef}
+                onClose={() => {
+                  setSelectedStep(null);
+                  setEditingPrompt(null);
+                  setViewingFile("FLOW.yaml");
+                }}
+                onDelete={handleDeleteStep}
+                onViewFile={(path) => {
+                  setViewingFile(path);
+                  setCenterTab("source");
+                }}
+                onViewSource={(field) => {
+                  setEditingPrompt({ step: selectedStep!, field });
+                  setViewingFile(null);
+                  setCenterTab("source");
+                }}
+              />
+            </div>
+          )
         )}
 
         {/* Chat sidebar */}
-        {chatOpen && (
-          <ChatSidebar
-            messages={chat.messages}
-            isStreaming={chat.isStreaming}
-            onSend={chat.send}
-            onReset={chat.reset}
-            onApplyYaml={chat.applyYaml}
-            agentMode={chat.agentMode}
-            onModeChange={chat.setAgentMode}
-            sessionId={chat.sessionId}
-            flowPath={selectedFlow?.path ?? null}
-            stepContext={stepContext}
-            onRemoveStepContext={() => setStepContext(null)}
-          />
+        {isCompact ? (
+          <Sheet open={chatOpen} onOpenChange={setChatOpen}>
+            <SheetContent side="right" showCloseButton={false} className="w-[85vw] sm:max-w-md p-0 overflow-y-auto">
+              <ChatSidebar
+                messages={chat.messages}
+                isStreaming={chat.isStreaming}
+                onSend={chat.send}
+                onReset={chat.reset}
+                onApplyYaml={chat.applyYaml}
+                agentMode={chat.agentMode}
+                onModeChange={chat.setAgentMode}
+                sessionId={chat.sessionId}
+                flowPath={selectedFlow?.path ?? null}
+                stepContext={stepContext}
+                onRemoveStepContext={() => setStepContext(null)}
+              />
+            </SheetContent>
+          </Sheet>
+        ) : (
+          chatOpen && (
+            <ChatSidebar
+              messages={chat.messages}
+              isStreaming={chat.isStreaming}
+              onSend={chat.send}
+              onReset={chat.reset}
+              onApplyYaml={chat.applyYaml}
+              agentMode={chat.agentMode}
+              onModeChange={chat.setAgentMode}
+              sessionId={chat.sessionId}
+              flowPath={selectedFlow?.path ?? null}
+              stepContext={stepContext}
+              onRemoveStepContext={() => setStepContext(null)}
+            />
+          )
         )}
       </div>
     </div>
