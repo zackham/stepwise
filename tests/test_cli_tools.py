@@ -751,6 +751,16 @@ steps:
         assert "My Flow" in output
         assert "This is a test flow for validation." in output
 
+    def test_info_no_config_flow(self, simple_flow, tmp_project):
+        """info command works on flows without config/requires/readme."""
+        code, output = _capture_stderr([
+            "--project-dir", str(tmp_project),
+            "info", str(simple_flow),
+        ])
+        assert code == EXIT_SUCCESS
+        assert "simple" in output
+        assert "Config variables:" not in output
+
 
 # ── Config Init Tests ──────────────────────────────────────────────────
 

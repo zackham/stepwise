@@ -8,6 +8,7 @@ import pytest
 from stepwise.models import (
     ExitRule,
     ExecutorRef,
+    InputBinding,
     OutputFieldSpec,
     StepDefinition,
     WorkflowDefinition,
@@ -223,3 +224,108 @@ steps:
         # Should have catch-all warning and uncovered combination warning
         assert any("catch-all" in w for w in warns), f"Expected catch-all warning, got: {warns}"
         assert any("uncovered" in w for w in warns), f"Expected uncovered warning, got: {warns}"
+
+
+class TestUngatedPostLoopWarning:
+    """Warn when a step has sequencing on a looping step but no when condition."""
+
+    def test_ungated_sequencing_on_loop_target(self):
+        """Step with sequencing on a loop target and no 'when' produces a warning."""
+        wf = WorkflowDefinition(steps={
+            "draft": _callable_step("draft", ["content"], []),
+            "review": _callable_step("review", ["score"], [
+                ExitRule("good", "expression", {
+                    "condition": "float(outputs.get('score', 0)) >= 0.8",
+                    "action": "advance",
+                }, priority=10),
+                ExitRule("retry", "expression", {
+                    "condition": "attempt < 3",
+                    "action": "loop", "target": "draft", "max_iterations": 3,
+                }, priority=5),
+            ]),
+            "publish": StepDefinition(
+                name="publish",
+                outputs=["url"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+                inputs=[InputBinding("content", "draft", "content")],
+                sequencing=["review"],
+                # no when condition — this is the bug
+            ),
+        })
+        warns = wf.warnings()
+        post_loop_warns = [w for w in warns if "looping step" in w]
+        assert len(post_loop_warns) == 1
+        assert "publish" in post_loop_warns[0]
+        assert "review" in post_loop_warns[0]
+
+    def test_gated_sequencing_on_loop_target_no_warning(self):
+        """Step with sequencing on a loop target AND a 'when' condition produces no warning."""
+        wf = WorkflowDefinition(steps={
+            "draft": _callable_step("draft", ["content"], []),
+            "review": _callable_step("review", ["score"], [
+                ExitRule("good", "expression", {
+                    "condition": "float(outputs.get('score', 0)) >= 0.8",
+                    "action": "advance",
+                }, priority=10),
+                ExitRule("retry", "expression", {
+                    "condition": "attempt < 3",
+                    "action": "loop", "target": "draft", "max_iterations": 3,
+                }, priority=5),
+            ]),
+            "publish": StepDefinition(
+                name="publish",
+                outputs=["url"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+                inputs=[
+                    InputBinding("content", "draft", "content"),
+                    InputBinding("score", "review", "score"),
+                ],
+                sequencing=["review"],
+                when="float(score) >= 0.8",  # properly gated
+            ),
+        })
+        warns = wf.warnings()
+        post_loop_warns = [w for w in warns if "looping step" in w]
+        assert len(post_loop_warns) == 0
+
+    def test_self_loop_sequencing_warning(self):
+        """Step with sequencing on a self-looping step produces a warning."""
+        wf = WorkflowDefinition(steps={
+            "retry_step": _callable_step("retry_step", ["result"], [
+                ExitRule("done", "expression", {
+                    "condition": "outputs.get('done', False)",
+                    "action": "advance",
+                }, priority=10),
+                ExitRule("retry", "expression", {
+                    "condition": "True",
+                    "action": "loop", "target": "retry_step", "max_iterations": 5,
+                }, priority=1),
+            ]),
+            "next_step": StepDefinition(
+                name="next_step",
+                outputs=["out"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+                sequencing=["retry_step"],
+                # no when
+            ),
+        })
+        warns = wf.warnings()
+        post_loop_warns = [w for w in warns if "looping step" in w]
+        assert len(post_loop_warns) == 1
+        assert "next_step" in post_loop_warns[0]
+        assert "retry_step" in post_loop_warns[0]
+
+    def test_no_warning_when_no_loop(self):
+        """Step with sequencing on a non-looping step produces no warning."""
+        wf = WorkflowDefinition(steps={
+            "step_a": _callable_step("step_a", ["result"], []),
+            "step_b": StepDefinition(
+                name="step_b",
+                outputs=["out"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+                sequencing=["step_a"],
+            ),
+        })
+        warns = wf.warnings()
+        post_loop_warns = [w for w in warns if "looping step" in w]
+        assert len(post_loop_warns) == 0
