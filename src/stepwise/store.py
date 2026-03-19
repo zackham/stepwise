@@ -125,6 +125,7 @@ class SQLiteStore:
             ("heartbeat_at", "TEXT", None),
             ("notify_url", "TEXT", None),
             ("notify_context", "TEXT", None),
+            ("name", "TEXT", None),
         ]:
             if col not in job_columns:
                 default_clause = f" DEFAULT {default}" if default else ""
@@ -138,8 +139,8 @@ class SQLiteStore:
             """INSERT INTO jobs
                 (id, objective, workflow, status, inputs, parent_job_id,
                  parent_step_run_id, workspace_path, config, created_at, updated_at,
-                 created_by, runner_pid, heartbeat_at, notify_url, notify_context)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 created_by, runner_pid, heartbeat_at, notify_url, notify_context, name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 objective = excluded.objective,
                 workflow = excluded.workflow,
@@ -154,7 +155,8 @@ class SQLiteStore:
                 runner_pid = excluded.runner_pid,
                 heartbeat_at = excluded.heartbeat_at,
                 notify_url = excluded.notify_url,
-                notify_context = excluded.notify_context
+                notify_context = excluded.notify_context,
+                name = excluded.name
             """,
             (
                 job.id,
@@ -173,6 +175,7 @@ class SQLiteStore:
                 job.heartbeat_at.isoformat() if job.heartbeat_at else None,
                 job.notify_url,
                 _dumps(job.notify_context) if job.notify_context else None,
+                job.name,
             ),
         )
         self._conn.commit()
@@ -189,6 +192,7 @@ class SQLiteStore:
         return Job(
             id=row["id"],
             objective=row["objective"] or "",
+            name=row["name"] if "name" in row.keys() else None,
             workflow=WorkflowDefinition.from_dict(json.loads(row["workflow"])),
             status=JobStatus(row["status"]),
             inputs=json.loads(row["inputs"]) if row["inputs"] else {},
