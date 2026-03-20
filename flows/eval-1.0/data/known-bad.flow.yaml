@@ -1,0 +1,63 @@
+# Deliberately broken flow for ground truth calibration.
+# This file contains 5 intentional defects that stepwise validate must catch.
+# Used by the eval-1.0 preflight to confirm the validator is working correctly.
+
+name: known-bad
+description: "Intentionally broken flow — DO NOT RUN"
+
+steps:
+  # Defect 1: Invalid executor type (no "quantum" executor exists)
+  bad-executor:
+    executor: quantum
+    config:
+      model: imaginary
+    outputs: [result]
+
+  # Defect 2: References a nonexistent step's output
+  bad-input-ref:
+    run: |
+      printf '{"out": 1}'
+    inputs:
+      data: nonexistent-step.output
+    outputs: [out]
+
+  # Defect 3: Circular dependency (a→b→a without optional edges)
+  cycle-a:
+    run: |
+      printf '{"x": 1}'
+    inputs:
+      val: cycle-b.y
+    outputs: [x]
+
+  cycle-b:
+    run: |
+      printf '{"y": 1}'
+    inputs:
+      val: cycle-a.x
+    outputs: [y]
+
+  # Defect 4: Loop exit rule with no max_iterations (unbounded loop warning)
+  unbounded-loop:
+    run: |
+      printf '{"status": "retry"}'
+    outputs: [status]
+    exits:
+      - name: done
+        when: "outputs.status == 'done'"
+        action: advance
+      - name: retry
+        when: "True"
+        action: loop
+        target: unbounded-loop
+
+  # Defect 5: Loop target references nonexistent step
+  bad-loop-target:
+    run: |
+      printf '{"v": 1}'
+    outputs: [v]
+    exits:
+      - name: go
+        when: "True"
+        action: loop
+        target: does-not-exist
+        max_iterations: 3
