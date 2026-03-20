@@ -176,9 +176,9 @@ export function JsonView({
           </span>
         </button>
         {expanded && (
-          <div className="ml-4 border-l border-zinc-700/50 pl-3 mt-1 space-y-0.5">
+          <div className="ml-4 border-l border-zinc-700/50 pl-3 mt-1 space-y-0.5 min-w-0">
             {data.map((item, i) => (
-              <div key={i} className="text-sm">
+              <div key={i} className="text-sm min-w-0">
                 <JsonView
                   data={item}
                   name={String(i)}
@@ -205,7 +205,7 @@ export function JsonView({
     }
 
     return (
-      <div>
+      <div className={depth === 0 ? "overflow-x-auto" : undefined}>
         <div className="flex items-center gap-1">
           <button
             onClick={() => setExpanded(!expanded)}
@@ -238,9 +238,9 @@ export function JsonView({
           )}
         </div>
         {expanded && (
-          <div className="ml-4 border-l border-zinc-700/50 pl-3 mt-1 space-y-0.5">
+          <div className="ml-4 border-l border-zinc-700/50 pl-3 mt-1 space-y-0.5 min-w-0">
             {entries.map(([key, value]) => (
-              <div key={key} className="text-sm">
+              <div key={key} className="text-sm min-w-0">
                 <JsonView
                   data={value}
                   name={key}
