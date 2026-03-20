@@ -350,7 +350,7 @@ export function JobDetailPage() {
                 </span>
               )}
             </div>
-            <div className="text-[10px] font-mono text-zinc-600 mt-0.5">
+            <div className="text-[10px] font-mono text-zinc-600 mt-0.5 break-all">
               {job.name && job.objective && (
                 <span className="font-sans text-zinc-500 mr-2">{job.objective}</span>
               )}
