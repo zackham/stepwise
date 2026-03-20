@@ -24,7 +24,8 @@ Usage:
     stepwise output <job-id> [--step] [--run] Retrieve job/step outputs
     stepwise fulfill <run-id> '<json>'     Satisfy a suspended human step (or --stdin, --wait)
     stepwise agent-help [--update <file>]  Generate agent instructions
-    stepwise update                   Upgrade to the latest version
+    stepwise update                        Upgrade to the latest version
+    stepwise uninstall [--yes] [--force]   Remove stepwise from this project
 """
 
 from __future__ import annotations
@@ -514,42 +515,53 @@ def _server_start_detached(
     return EXIT_JOB_FAILED
 
 
-def _server_stop(args: argparse.Namespace) -> int:
+def _stop_server_for_project(dot_dir: Path, io: IOAdapter) -> bool:
+    """Stop a running server for the given project directory.
+
+    Returns True if a server was stopped, False if none was running.
+    """
     import os
     import signal
     import time
 
-    io = _io(args)
-    project = _find_project_or_exit(args)
-
     from stepwise.server_detect import read_pidfile, remove_pidfile, _pid_alive
 
-    data = read_pidfile(project.dot_dir)
+    data = read_pidfile(dot_dir)
     pid = data.get("pid")
 
     if not pid or not _pid_alive(pid):
         if pid:
             # Stale pidfile
-            remove_pidfile(project.dot_dir)
-        io.log("info", "Server is not running")
-        return EXIT_SUCCESS
+            remove_pidfile(dot_dir)
+        return False
 
     # Send SIGTERM and wait
+    io.log("info", f"Stopping server (PID {pid})...")
     os.kill(pid, signal.SIGTERM)
     for _ in range(50):  # up to 5 seconds
         time.sleep(0.1)
         if not _pid_alive(pid):
-            remove_pidfile(project.dot_dir)
+            remove_pidfile(dot_dir)
             io.log("success", "Server stopped")
-            return EXIT_SUCCESS
+            return True
 
     # Force kill
     try:
         os.kill(pid, signal.SIGKILL)
     except OSError:
         pass
-    remove_pidfile(project.dot_dir)
+    remove_pidfile(dot_dir)
     io.log("warn", f"Server (PID {pid}) did not stop gracefully, sent SIGKILL")
+    return True
+
+
+def _server_stop(args: argparse.Namespace) -> int:
+    io = _io(args)
+    project = _find_project_or_exit(args)
+
+    stopped = _stop_server_for_project(project.dot_dir, io)
+    if not stopped:
+        io.log("info", "Server is not running")
     return EXIT_SUCCESS
 
 
@@ -3055,6 +3067,135 @@ def cmd_self_update(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
+def cmd_uninstall(args: argparse.Namespace) -> int:
+    """Remove stepwise from this project."""
+    import shutil
+
+    io = _io(args)
+    removed: list[str] = []
+
+    # --- Find project ---
+    start = Path(args.project_dir) if args.project_dir else None
+    try:
+        project = find_project(start)
+    except ProjectNotFoundError:
+        project = None
+
+    if project is None and not getattr(args, "cli", False):
+        io.log("info", "No .stepwise/ project found. Nothing to remove.")
+        return EXIT_SUCCESS
+
+    if project is not None:
+        # --- Stop running server ---
+        try:
+            _stop_server_for_project(project.dot_dir, io)
+        except Exception:
+            pass  # No server running or pidfile missing — fine
+
+        # --- Check for active jobs ---
+        try:
+            from stepwise.models import JobStatus
+            from stepwise.store import SQLiteStore
+
+            store = SQLiteStore(str(project.db_path))
+            active = store.active_jobs()
+            # Also check paused (suspended) jobs
+            paused_rows = store._conn.execute(
+                "SELECT * FROM jobs WHERE status = ?", (JobStatus.PAUSED.value,)
+            ).fetchall()
+            paused = [store._row_to_job(r) for r in paused_rows]
+            in_flight = active + paused
+
+            if in_flight and not getattr(args, "force", False):
+                io.log("warn", f"Found {len(in_flight)} active/paused job(s):")
+                for job in in_flight:
+                    io.log("warn", f"  {job.id[:12]}  {job.status.value:10s}  {job.objective or ''}")
+                io.log("error", "Aborting. Pass --force to remove anyway.")
+                return EXIT_USAGE_ERROR
+        except (OSError, Exception):
+            if not getattr(args, "force", False):
+                io.log("warn", "Could not check for active jobs (DB may be locked). Use --force to proceed.")
+                return EXIT_USAGE_ERROR
+
+        # --- Confirm and remove .stepwise/ ---
+        yes = getattr(args, "yes", False)
+        if not yes:
+            if not io.prompt_confirm(f"Remove {project.dot_dir} and all job data?", default=False):
+                io.log("info", "Aborted.")
+                return EXIT_SUCCESS
+
+        try:
+            shutil.rmtree(project.dot_dir)
+            removed.append(str(project.dot_dir))
+            io.log("success", f"Removed {project.dot_dir}")
+        except OSError as e:
+            io.log("error", f"Failed to remove {project.dot_dir}: {e}")
+
+        # --- Optionally remove flows/ ---
+        flows_dir = project.root / "flows"
+        if flows_dir.is_dir():
+            remove_flows = getattr(args, "remove_flows", False)
+            if not remove_flows and not yes:
+                remove_flows = io.prompt_confirm(f"Also remove {flows_dir}?", default=False)
+            if remove_flows:
+                try:
+                    shutil.rmtree(flows_dir)
+                    removed.append(str(flows_dir))
+                    io.log("success", f"Removed {flows_dir}")
+                except OSError as e:
+                    io.log("error", f"Failed to remove {flows_dir}: {e}")
+
+        # --- Clean .gitignore ---
+        gitignore = project.root / ".gitignore"
+        if gitignore.exists():
+            try:
+                content = gitignore.read_text()
+                stepwise_entries = {f"{DOT_DIR_NAME}/", "config.local.yaml", "*.config.local.yaml"}
+                lines = content.splitlines(keepends=True)
+                cleaned = [l for l in lines if l.strip() not in stepwise_entries]
+                new_content = "".join(cleaned)
+                # Remove trailing blank lines that may be left over
+                new_content = new_content.rstrip("\n") + "\n" if new_content.strip() else ""
+                if new_content != content:
+                    gitignore.write_text(new_content)
+                    io.log("info", "Cleaned stepwise entries from .gitignore")
+            except OSError:
+                pass
+
+    # --- Optionally uninstall CLI tool ---
+    if getattr(args, "cli", False):
+        import subprocess
+
+        method = _detect_install_method()
+        uninstall_cmds = {
+            "uv": ["uv", "tool", "uninstall", "stepwise-run"],
+            "pipx": ["pipx", "uninstall", "stepwise-run"],
+            "pip": [sys.executable, "-m", "pip", "uninstall", "-y", "stepwise-run"],
+        }
+        cmd = uninstall_cmds[method]
+        io.log("info", f"Uninstalling CLI via {method}...")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            removed.append(f"stepwise CLI ({method})")
+            io.log("success", "CLI tool uninstalled.")
+        else:
+            io.log("error", f"CLI uninstall failed: {result.stderr.strip()}")
+            io.log("info", f"You can uninstall manually: {' '.join(cmd)}")
+
+    # --- Summary ---
+    if removed:
+        io.log("success", "Uninstall complete. Removed:")
+        for item in removed:
+            io.log("info", f"  {item}")
+    elif project is None:
+        pass  # already printed "nothing to remove"
+    else:
+        io.log("info", "Nothing was removed.")
+
+    io.log("info", "Thanks for using Stepwise!")
+    return EXIT_SUCCESS
+
+
 def _open_browser(url: str) -> None:
     """Open URL in default browser (best-effort, non-blocking)."""
     try:
@@ -3274,6 +3415,17 @@ def build_parser() -> argparse.ArgumentParser:
     # welcome
     sub.add_parser("welcome", help="Try the interactive welcome demo")
 
+    # uninstall
+    p_uninstall = sub.add_parser("uninstall", help="Remove stepwise from this project")
+    p_uninstall.add_argument("--yes", "-y", action="store_true",
+                              help="Skip confirmation prompts")
+    p_uninstall.add_argument("--force", action="store_true",
+                              help="Proceed even with active/paused jobs")
+    p_uninstall.add_argument("--remove-flows", action="store_true",
+                              help="Also remove flows/ directory")
+    p_uninstall.add_argument("--cli", action="store_true",
+                              help="Also uninstall the stepwise CLI tool")
+
     return parser
 
 
@@ -3355,6 +3507,7 @@ def main(argv: list[str] | None = None) -> int:
         "agent-help": cmd_agent_help,
         "update": cmd_self_update,
         "welcome": cmd_welcome,
+        "uninstall": cmd_uninstall,
     }
 
     handler = handlers.get(args.command)
