@@ -932,27 +932,23 @@ def _build_flow_graph(wf, fmt: str, name: str | None = None):
             if dep in wf.steps:
                 dot.edge(dep, step_name, style="dashed", color="#666")
 
+        # Loop-back edges from exit rules
+        for rule in step.exit_rules:
+            action = rule.config.get("action", "")
+            target = rule.config.get("target", "")
+            if action == "loop" and target and target in wf.steps:
+                dot.edge(step_name, target, label=f"↺ {rule.name}",
+                         color="#f59e0b", fontcolor="#f59e0b",
+                         penwidth="2.5", style="bold",
+                         arrowhead="normal", arrowsize="1.2",
+                         constraint="false")
+
     # Edges from terminal steps to Outputs node
     if terminal_outputs:
         for step_name, fields in terminal_outputs.items():
             edge_label = ", ".join(fields)
             dot.edge(step_name, OUTPUTS_ID, label=edge_label,
                      color="#065f46", fontcolor="#6ee7b7", style="dashed")
-
-        # Exit rules
-        for rule in step.exit_rules:
-            action = rule.config.get("action", "")
-            target = rule.config.get("target", "")
-            if action == "loop" and target and target in wf.steps:
-                dot.edge(step_name, target, label=rule.name, style="dotted",
-                         color="#f59e0b", fontcolor="#f59e0b", constraint="false")
-
-        # For-each edge
-        if step.for_each:
-            src = step.for_each.source_step
-            if src in wf.steps:
-                dot.edge(src, step_name, label="for each", style="bold",
-                         color="#a78bfa", fontcolor="#a78bfa", penwidth="2")
 
     return dot
 
