@@ -21,77 +21,66 @@ steps:
   # ═══ Test 1: Basic file-based polling ═══════════════════════════════════
   setup-basic:
     description: "Create marker file after delay"
-    run: |
-      markers_dir="$(pwd)/markers"
-      mkdir -p "$markers_dir"
-      marker_path="$markers_dir/basic.json"
-      ( sleep "$delay_seconds" && printf '{"ready": true, "marker_id": "basic", "delay_seconds": %s}' "$delay_seconds" > "$marker_path" ) &
-      printf '{"marker_path": "%s", "flow_dir": "%s"}' "$marker_path" "$STEPWISE_FLOW_DIR"
+    run: bash scripts/setup-marker.sh basic
     inputs:
       delay_seconds: $job.basic_delay_seconds
-    outputs: [marker_path, flow_dir]
+    outputs: [marker_path]
 
   poll-basic:
     description: "Poll for basic marker file"
     executor: poll
-    check_command: bash $flow_dir/scripts/check-marker.sh $marker_path
+    check_command: |
+      if [ -f "$marker_path" ]; then
+        cat "$marker_path"
+      fi
     interval_seconds: 2
-    prompt: "Polling for basic marker file (delay: $basic_delay_seconds seconds)"
+    prompt: "Waiting for basic marker file..."
     inputs:
       marker_path: setup-basic.marker_path
-      flow_dir: setup-basic.flow_dir
-      basic_delay_seconds: $job.basic_delay_seconds
-    outputs: [ready, marker_id, delay_seconds]
+    outputs: [ready]
 
   # ═══ Test 2: Server restart survival ════════════════════════════════════
   setup-restart:
     description: "Create marker file with 30s delay for restart test"
-    run: |
-      markers_dir="$(pwd)/markers"
-      mkdir -p "$markers_dir"
-      marker_path="$markers_dir/restart.json"
-      ( sleep 30 && printf '{"ready": true, "marker_id": "restart", "delay_seconds": 30}' > "$marker_path" ) &
-      printf '{"marker_path": "%s", "flow_dir": "%s"}' "$marker_path" "$STEPWISE_FLOW_DIR"
-    outputs: [marker_path, flow_dir]
+    run: bash scripts/setup-marker.sh restart 30
+    outputs: [marker_path]
 
   poll-restart:
     description: "Poll survives server restart"
     executor: poll
-    check_command: bash $flow_dir/scripts/check-marker.sh $marker_path
+    check_command: |
+      if [ -f "$marker_path" ]; then
+        cat "$marker_path"
+      fi
     interval_seconds: 5
     prompt: |
-      Restart test — marker appears in ~30s.
-      Try: stepwise server restart
-      Known gap: poll timer is NOT re-scheduled after restart (engine.py:2502).
+      Server restart test: run 'stepwise server restart' now, then wait for the
+      marker at $marker_path to appear. If the poll resumes after restart, the test passes.
     inputs:
       marker_path: setup-restart.marker_path
-      flow_dir: setup-restart.flow_dir
-    outputs: [ready, marker_id, delay_seconds]
+    outputs: [ready]
 
   # ═══ Test 3: Long-running poll (>5 min) ═════════════════════════════════
   setup-longrun:
     description: "Create marker file with long delay"
-    run: |
-      markers_dir="$(pwd)/markers"
-      mkdir -p "$markers_dir"
-      marker_path="$markers_dir/longrun.json"
-      ( sleep "$delay_seconds" && printf '{"ready": true, "marker_id": "longrun", "delay_seconds": %s}' "$delay_seconds" > "$marker_path" ) &
-      printf '{"marker_path": "%s", "flow_dir": "%s"}' "$marker_path" "$STEPWISE_FLOW_DIR"
+    run: bash scripts/setup-marker.sh longrun
     inputs:
       delay_seconds: $job.longrun_delay_seconds
-    outputs: [marker_path, flow_dir]
+    outputs: [marker_path]
 
   poll-longrun:
     description: "Long-running poll (default 6 min)"
     executor: poll
-    check_command: bash $flow_dir/scripts/check-marker.sh $marker_path
+    check_command: |
+      if [ -f "$marker_path" ]; then
+        cat "$marker_path"
+      fi
     interval_seconds: 30
-    prompt: "Long-running poll — waiting $longrun_delay_seconds seconds"
+    prompt: "Long-running poll — checking every 30s for up to $longrun_delay_seconds seconds"
     inputs:
       marker_path: setup-longrun.marker_path
-      flow_dir: setup-longrun.flow_dir
       longrun_delay_seconds: $job.longrun_delay_seconds
-    outputs: [ready, marker_id, delay_seconds]
+    outputs: [ready]
 
   # ═══ Test 4: Simulated backoff ══════════════════════════════════════════
   setup-backoff:
@@ -102,32 +91,48 @@ steps:
       markers_dir="$(pwd)/markers"
       mkdir -p "$markers_dir"
       marker_path="$markers_dir/backoff.json"
-      printf '{"marker_path": "%s", "state_dir": "%s", "flow_dir": "%s"}' \
-        "$marker_path" "$state_dir" "$STEPWISE_FLOW_DIR"
-    outputs: [marker_path, state_dir, flow_dir]
+      printf '{"marker_path": "%s", "state_dir": "%s", "max_fails": "%s"}' \
+        "$marker_path" "$state_dir" "$max_fails"
+    inputs:
+      max_fails: $job.backoff_fail_count
+    outputs: [marker_path, state_dir, max_fails]
 
   poll-backoff:
     description: "Poll with simulated backoff"
     executor: poll
-    check_command: bash $flow_dir/scripts/check-backoff.sh $marker_path $state_dir $max_fails
+    check_command: |
+      count_file="$state_dir/attempt_count"
+      n=0; [ -f "$count_file" ] && n=$(cat "$count_file")
+      n=$((n + 1)); echo "$n" > "$count_file"
+      echo "Attempt $n of $max_fails" >&2
+      if [ "$n" -gt "$max_fails" ]; then
+        printf '{"ready": true, "attempts": %d}' "$n"
+      fi
     interval_seconds: 3
     prompt: "Backoff simulation — fails $max_fails times before succeeding"
     inputs:
       marker_path: setup-backoff.marker_path
       state_dir: setup-backoff.state_dir
-      flow_dir: setup-backoff.flow_dir
-      max_fails: $job.backoff_fail_count
-    outputs: [ready, attempts, max_fails]
+      max_fails: setup-backoff.max_fails
+    outputs: [ready, attempts]
 
   # ═══ Summary ════════════════════════════════════════════════════════════
   summarize:
     description: "Collect results from all poll tests"
     run: |
-      printf '{"basic": "%s", "restart": "%s", "longrun": "%s", "backoff": "%s", "all_passed": true}' \
-        "$basic_ready" "$restart_ready" "$longrun_ready" "$backoff_ready"
+      basic_ok="false"; [ "$basic_ready" = "true" ] && basic_ok="true"
+      restart_ok="false"; [ "$restart_ready" = "true" ] && restart_ok="true"
+      longrun_ok="false"; [ "$longrun_ready" = "true" ] && longrun_ok="true"
+      backoff_ok="false"; [ "$backoff_ready" = "true" ] && backoff_ok="true"
+      all="false"
+      if [ "$basic_ok" = "true" ] && [ "$restart_ok" = "true" ] && [ "$longrun_ok" = "true" ] && [ "$backoff_ok" = "true" ]; then
+        all="true"
+      fi
+      printf '{"basic_passed": %s, "restart_passed": %s, "longrun_passed": %s, "backoff_passed": %s, "all_passed": %s}' \
+        "$basic_ok" "$restart_ok" "$longrun_ok" "$backoff_ok" "$all"
     inputs:
       basic_ready: poll-basic.ready
       restart_ready: poll-restart.ready
       longrun_ready: poll-longrun.ready
       backoff_ready: poll-backoff.ready
-    outputs: [basic, restart, longrun, backoff, all_passed]
+    outputs: [basic_passed, restart_passed, longrun_passed, backoff_passed, all_passed]
