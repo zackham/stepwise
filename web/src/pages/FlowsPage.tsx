@@ -156,7 +156,7 @@ export function FlowsPage() {
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="flex items-center gap-2 md:gap-4 px-3 md:px-6 py-4 border-b border-border shrink-0">
+      <div className="flex items-center gap-2 sm:gap-4 px-3 sm:px-6 py-3 sm:py-4 border-b border-border shrink-0">
         <div className="flex items-center gap-2">
           <button
             onClick={() => { setTab("local"); setSelectedRegistryFlow(null); }}
@@ -198,7 +198,7 @@ export function FlowsPage() {
                   value={newFlowName}
                   onChange={(e) => setNewFlowName(e.target.value)}
                   placeholder="flow-name"
-                  className="w-32 sm:w-40 h-8 text-sm bg-zinc-900 border-zinc-700"
+                  className="w-28 sm:w-40 h-8 text-sm bg-zinc-900 border-zinc-700"
                   onKeyDown={(e) => {
                     if (e.key === "Escape") {
                       setShowNewFlowInput(false);
