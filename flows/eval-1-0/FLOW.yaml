@@ -1,4 +1,4 @@
-name: eval-1.0
+name: eval-1-0
 description: "Stepwise 1.0 readiness evaluation — self-hosted on Stepwise"
 author: stepwise
 tags: [evaluation, self-hosted, agents, human-in-the-loop]

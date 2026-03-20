@@ -1,9 +1,9 @@
 #!/bin/bash
 # Adaptive 3-run evaluation harness for Stepwise 1.0 readiness.
 #
-# Usage: ./flows/eval-1.0/run-eval-3x.sh [stepwise_path]
+# Usage: ./flows/eval-1-0/run-eval-3x.sh [stepwise_path]
 #
-# Runs the eval-1.0 flow up to 3 times with adaptive early stopping:
+# Runs the eval-1-0 flow up to 3 times with adaptive early stopping:
 # - If Run 1 fails a hard gate, Runs 2 and 3 are skipped
 # - Final output includes variance analysis across completed runs
 
@@ -35,7 +35,7 @@ run_eval() {
     echo ""
 
     local output
-    output=$(uv run stepwise run --wait --local eval-1.0 \
+    output=$(uv run stepwise run --wait --local eval-1-0 \
         --var "stepwise_path=$STEPWISE_PATH" \
         --var "eval_run_number=$run_num" \
         2>/dev/null) || true
