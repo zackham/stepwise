@@ -1,0 +1,206 @@
+name: research-proposal
+description: "Deep research → two council review rounds → human checkpoint → finalize"
+author: zack
+tags: [research, council, human-in-the-loop, iterative]
+
+config:
+  topic:
+    type: str
+    description: "The research topic or question to investigate"
+    required: true
+    example: "Should we add a plugin system for custom executor types?"
+  grounding_paths:
+    type: str
+    description: "Comma-separated paths to files/directories for grounding context"
+    default: ""
+  project:
+    type: str
+    description: "Optional project name for organizing the report"
+    default: ""
+
+steps:
+  # ═══ Phase 1: Deep Research ═════════════════════════════════════════════
+  init:
+    description: "Deep research and initial report creation"
+    executor: agent
+    prompt_file: prompts/init.md
+    output_mode: file
+    inputs:
+      topic: $job.topic
+      grounding_paths: $job.grounding_paths
+      project: $job.project
+    outputs: [title, slug, report_path, url, notes, draft_content]
+    limits:
+      max_cost_usd: 10.0
+      max_duration_minutes: 30
+
+  # ═══ Phase 2: Model Setup ══════════════════════════════════════════════
+  setup-models:
+    description: "Define the frontier model panel for council reviews"
+    run: |
+      printf '{"models": ["anthropic/claude-sonnet-4-20250514", "openai/gpt-4.1", "google/gemini-2.5-pro-preview-06-05", "deepseek/deepseek-r1"]}'
+    sequencing: [init]
+    outputs: [models]
+
+  # ═══ Phase 3: Council Round 1 ══════════════════════════════════════════
+  council-1:
+    description: "Fan out initial draft to frontier models for review"
+    for_each: setup-models.models
+    as: model_id
+    on_error: continue
+    flow:
+      steps:
+        review:
+          executor: llm
+          model: $model_id
+          prompt_file: prompts/council-review-1.md
+          temperature: 0.7
+          outputs: [response]
+          inputs:
+            model_id: $job.model_id
+            draft_content: $job.draft_content
+            topic: $job.topic
+    outputs: [results]
+    inputs:
+      draft_content: init.draft_content
+      topic: $job.topic
+
+  synthesize-1:
+    description: "Synthesize round 1 council feedback"
+    executor: llm
+    model: strong
+    prompt_file: prompts/council-synthesize.md
+    outputs: [synthesis]
+    inputs:
+      results: council-1.results
+      topic: $job.topic
+    limits:
+      max_cost_usd: 2.0
+
+  # ═══ Phase 4: First Revision ═══════════════════════════════════════════
+  revise-1:
+    description: "Revise report based on round 1 council feedback"
+    executor: agent
+    prompt_file: prompts/revise.md
+    output_mode: file
+    inputs:
+      report_path: init.report_path
+      synthesis: synthesize-1.synthesis
+      topic: $job.topic
+    outputs: [report_content, result]
+    limits:
+      max_cost_usd: 5.0
+      max_duration_minutes: 15
+
+  # ═══ Phase 5: Council Round 2 ══════════════════════════════════════════
+  council-2:
+    description: "Fan out revised draft to frontier models for second review"
+    for_each: setup-models.models
+    as: model_id
+    on_error: continue
+    flow:
+      steps:
+        review:
+          executor: llm
+          model: $model_id
+          prompt_file: prompts/council-review-2.md
+          temperature: 0.7
+          outputs: [response]
+          inputs:
+            model_id: $job.model_id
+            report_content: $job.report_content
+            topic: $job.topic
+    outputs: [results]
+    inputs:
+      report_content: revise-1.report_content
+      topic: $job.topic
+
+  synthesize-2:
+    description: "Synthesize round 2 council feedback"
+    executor: llm
+    model: strong
+    prompt_file: prompts/council-synthesize.md
+    outputs: [synthesis]
+    inputs:
+      results: council-2.results
+      topic: $job.topic
+    limits:
+      max_cost_usd: 2.0
+
+  # ═══ Phase 6: Second Revision ══════════════════════════════════════════
+  revise-2:
+    description: "Revise report based on round 2 council feedback and optional human input"
+    executor: agent
+    prompt_file: prompts/revise.md
+    output_mode: file
+    inputs:
+      report_path: init.report_path
+      synthesis: synthesize-2.synthesis
+      topic: $job.topic
+      human_feedback:
+        from: human-checkpoint.feedback
+        optional: true
+    outputs: [report_content, result]
+    limits:
+      max_cost_usd: 5.0
+      max_duration_minutes: 15
+
+  # ═══ Phase 7: Human Checkpoint ═════════════════════════════════════════
+  human-checkpoint:
+    description: "Human review of revised proposal"
+    executor: human
+    prompt: |
+      # Research Proposal: $title
+
+      **Report:** $report_path
+      **Topic:** $topic
+
+      ## Latest revision summary
+      $result
+
+      ---
+      Review the proposal and choose:
+      - **approved**: Accept the proposal as-is → finalize
+      - **feedback**: Provide feedback → another revision round
+      - **done**: Skip finalize, mark complete as-is
+    inputs:
+      title: init.title
+      report_path: init.report_path
+      topic: $job.topic
+      result:
+        any_of:
+          - revise-2.result
+          - revise-1.result
+    outputs:
+      choice:
+        type: choice
+        options: [approved, feedback, done]
+        description: "Your decision on the research proposal"
+      feedback:
+        type: text
+        description: "Optional feedback for another revision round"
+    exits:
+      - name: approved
+        when: "outputs.choice in ('approved', 'done')"
+        action: advance
+      - name: feedback
+        when: "True"
+        action: loop
+        target: revise-2
+
+  # ═══ Phase 8: Finalize ═════════════════════════════════════════════════
+  finalize:
+    description: "Final cleanup and publish"
+    executor: agent
+    prompt_file: prompts/finalize.md
+    output_mode: file
+    inputs:
+      report_path: init.report_path
+      topic: $job.topic
+      title: init.title
+      choice: human-checkpoint.choice
+    when: "choice in ('approved', 'done')"
+    outputs: [result]
+    limits:
+      max_cost_usd: 2.0
+      max_duration_minutes: 10
