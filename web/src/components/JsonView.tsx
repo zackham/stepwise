@@ -160,7 +160,7 @@ export function JsonView({
     }
 
     return (
-      <div>
+      <div className={depth === 0 ? "overflow-x-auto" : undefined}>
         <button
           onClick={() => setExpanded(!expanded)}
           className="flex items-center gap-1 hover:text-foreground text-zinc-400 text-sm"
