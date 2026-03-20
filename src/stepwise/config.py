@@ -110,6 +110,8 @@ class StepwiseConfig:
     labels: dict[str, str | dict] = field(default_factory=dict)
     billing: str = "subscription"  # "subscription" | "api_key"
     default_agent: str | None = None  # "claude" | "codex" | etc.
+    notify_url: str | None = None
+    notify_context: dict = field(default_factory=dict)
 
     def resolve_model(self, model_ref: str) -> str:
         """Resolve a model reference (label or concrete ID) to a concrete model ID.
@@ -144,6 +146,10 @@ class StepwiseConfig:
             d["billing"] = self.billing
         if self.default_agent is not None:
             d["default_agent"] = self.default_agent
+        if self.notify_url is not None:
+            d["notify_url"] = self.notify_url
+        if self.notify_context:
+            d["notify_context"] = self.notify_context
         return d
 
     @staticmethod
@@ -167,6 +173,8 @@ class StepwiseConfig:
             labels=labels,
             billing=d.get("billing", "subscription"),
             default_agent=d.get("default_agent"),
+            notify_url=d.get("notify_url"),
+            notify_context=d.get("notify_context", {}),
         )
 
 
@@ -309,6 +317,9 @@ def load_config(project_dir: Path | None = None) -> StepwiseConfig:
         billing=billing,
         default_agent=(local.default_agent or project.default_agent
                        or user.default_agent),
+        notify_url=(local.notify_url or project.notify_url or user.notify_url),
+        notify_context=(local.notify_context or project.notify_context
+                        or user.notify_context),
     )
 
 
@@ -374,6 +385,9 @@ def load_config_with_sources(project_dir: Path | None = None) -> ConfigWithSourc
         billing=billing,
         default_agent=(local.default_agent or project.default_agent
                        or user.default_agent),
+        notify_url=(local.notify_url or project.notify_url or user.notify_url),
+        notify_context=(local.notify_context or project.notify_context
+                        or user.notify_context),
     )
 
     return ConfigWithSources(config=config, label_info=label_info, api_key_source=api_key_source)

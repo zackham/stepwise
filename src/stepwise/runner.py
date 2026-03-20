@@ -785,6 +785,8 @@ def run_wait(
     timeout: int | None = None,
     config: StepwiseConfig | None = None,
     force_local: bool = False,
+    notify_url: str | None = None,
+    notify_context: dict | None = None,
     name: str | None = None,
 ) -> int:
     """Run a flow in blocking mode with JSON output on stdout.
@@ -862,6 +864,13 @@ def run_wait(
         )
         return EXIT_USAGE_ERROR
 
+    # Fall back to project config for notify_url if not passed via CLI
+    if notify_url is None:
+        _cfg = load_config(project.root)
+        if _cfg.notify_url:
+            notify_url = _cfg.notify_url
+            notify_context = notify_context or _cfg.notify_context
+
     # Check for running server — delegate if available
     if not force_local:
         from stepwise.server_detect import detect_server
@@ -874,12 +883,14 @@ def run_wait(
                 inputs=inputs,
                 workspace=workspace,
                 timeout=timeout,
+                notify_url=notify_url,
+                notify_context=notify_context,
                 name=name,
             )
 
     # Create engine
     if config is None:
-        config = load_config()
+        config = load_config(project.root)
 
     from stepwise.registry_factory import create_default_registry
 
@@ -896,6 +907,10 @@ def run_wait(
         workspace_path=workspace,
         name=name,
     )
+    if notify_url:
+        job.notify_url = notify_url
+        job.notify_context = notify_context or {}
+        store.save_job(job)
 
     try:
         return asyncio.run(_async_wait_for_job(engine, store, job.id, timeout=timeout))
@@ -910,10 +925,12 @@ def _delegated_run_wait(
     inputs: dict | None,
     workspace: str | None,
     timeout: int | None,
+    notify_url: str | None = None,
+    notify_context: dict | None = None,
     name: str | None = None,
 ) -> int:
     """Delegate --wait mode to a running server. Returns exit code."""
-    job_id, err = _delegated_create_and_start(server_url, workflow, objective, inputs, workspace, name=name)
+    job_id, err = _delegated_create_and_start(server_url, workflow, objective, inputs, workspace, notify_url=notify_url, notify_context=notify_context, name=name)
     if err:
         _json_stdout({"status": "error", "exit_code": EXIT_JOB_FAILED, "error": err})
         return EXIT_JOB_FAILED
@@ -1419,6 +1436,13 @@ def run_async(
         _json_error(2, f"Invalid flow: {'; '.join(errors)}")
         return EXIT_USAGE_ERROR
 
+    # Fall back to project config for notify_url if not passed via CLI
+    if notify_url is None:
+        _cfg = load_config(project.root)
+        if _cfg.notify_url:
+            notify_url = _cfg.notify_url
+            notify_context = notify_context or _cfg.notify_context
+
     # Check for running server — delegate if available
     if not force_local:
         from stepwise.server_detect import detect_server
@@ -1428,7 +1452,7 @@ def run_async(
 
     # Create the job in the store so we have a job_id
     if config is None:
-        config = load_config()
+        config = load_config(project.root)
 
     from stepwise.registry_factory import create_default_registry
 

@@ -1059,6 +1059,24 @@ def cmd_config(args: argparse.Namespace) -> int:
             config.anthropic_api_key = value
         elif args.key == "default_model":
             config.default_model = value
+        elif args.key == "notify_url":
+            from stepwise.config import save_project_local_config
+            project_dir = _project_dir(args) or Path.cwd()
+            save_project_local_config(project_dir, notify_url=value)
+            _io(args).log("success", f"Set {args.key} in project config")
+            return EXIT_SUCCESS
+        elif args.key == "notify_context":
+            import json as _json
+            try:
+                ctx = _json.loads(value)
+            except _json.JSONDecodeError:
+                print(f"Error: notify_context must be valid JSON", file=sys.stderr)
+                return EXIT_USAGE_ERROR
+            from stepwise.config import save_project_local_config
+            project_dir = _project_dir(args) or Path.cwd()
+            save_project_local_config(project_dir, notify_context=ctx)
+            _io(args).log("success", f"Set {args.key} in project config")
+            return EXIT_SUCCESS
         else:
             print(f"Error: Unknown config key '{args.key}'", file=sys.stderr)
             return EXIT_USAGE_ERROR
@@ -1072,7 +1090,8 @@ def cmd_config(args: argparse.Namespace) -> int:
             print("Error: config get requires a key", file=sys.stderr)
             return EXIT_USAGE_ERROR
 
-        config = load_config()
+        project_dir = _project_dir(args) or Path.cwd()
+        config = load_config(project_dir)
 
         if args.key == "openrouter_api_key":
             val = config.openrouter_api_key or ""
@@ -1080,6 +1099,12 @@ def cmd_config(args: argparse.Namespace) -> int:
             val = config.anthropic_api_key or ""
         elif args.key == "default_model":
             val = config.default_model or ""
+        elif args.key == "notify_url":
+            val = config.notify_url or ""
+        elif args.key == "notify_context":
+            import json as _json
+            print(_json.dumps(config.notify_context) if config.notify_context else "{}")
+            return EXIT_SUCCESS
         else:
             print(f"Error: Unknown config key '{args.key}'", file=sys.stderr)
             return EXIT_USAGE_ERROR
@@ -1580,6 +1605,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     # --wait mode: blocking JSON output (handles own errors as JSON)
     if getattr(args, "wait", False):
         from stepwise.runner import run_wait
+        wait_notify_context = None
+        if getattr(args, "notify_context", None):
+            import json as _json
+            try:
+                wait_notify_context = _json.loads(args.notify_context)
+            except _json.JSONDecodeError:
+                from stepwise.runner import _json_error
+                _json_error(2, f"Invalid --notify-context JSON: {args.notify_context}")
+                return EXIT_USAGE_ERROR
         return run_wait(
             flow_path=flow_path,
             project=project,
@@ -1588,6 +1622,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             workspace=args.workspace,
             timeout=args.timeout,
             force_local=getattr(args, "local", False),
+            notify_url=getattr(args, "notify", None),
+            notify_context=wait_notify_context,
             name=getattr(args, "job_name", None),
         )
 
