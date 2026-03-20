@@ -147,17 +147,17 @@ export function StepDetailPanel({
             </h4>
             <div className="grid grid-cols-2 gap-2 text-sm">
               <div className="text-zinc-500">Executor</div>
-              <div className="text-foreground font-mono text-xs">
+              <div className="text-foreground font-mono text-xs min-w-0 break-all">
                 {stepDef.executor.type}
               </div>
               <div className="text-zinc-500">Outputs</div>
-              <div className="text-foreground font-mono text-xs">
+              <div className="text-foreground font-mono text-xs min-w-0 break-all">
                 {stepDef.outputs.join(", ") || "-"}
               </div>
               {stepDef.sequencing.length > 0 && (
                 <>
                   <div className="text-zinc-500">Sequencing</div>
-                  <div className="text-foreground font-mono text-xs">
+                  <div className="text-foreground font-mono text-xs min-w-0 break-all">
                     {stepDef.sequencing.join(", ")}
                   </div>
                 </>
@@ -379,7 +379,7 @@ export function StepDetailPanel({
                             {formatTimestamp(run.completed_at)}
                           </span>
                           <span className="text-zinc-500">Run ID</span>
-                          <span className="text-zinc-600 font-mono text-[10px]">
+                          <span className="text-zinc-600 font-mono text-[10px] break-all">
                             {run.id}
                           </span>
                         </div>

@@ -20,7 +20,7 @@ export function FlowInfoPanel({
   return (
     <div className="flex flex-col h-full">
       <div className="p-4 border-b border-border">
-        <h3 className="font-semibold text-foreground">{flow.name}</h3>
+        <h3 className="font-semibold text-foreground break-words">{flow.name}</h3>
         <div className="flex items-center gap-2 mt-1 text-xs text-zinc-500">
           <span className="flex items-center gap-1">
             <User className="w-3 h-3" />

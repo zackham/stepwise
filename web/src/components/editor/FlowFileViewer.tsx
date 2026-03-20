@@ -105,7 +105,7 @@ export function FlowFileViewer({ flowPath, filePath, onClose }: FlowFileViewerPr
       {/* Editor */}
       {isYaml ? (
         <div className="flex-1 overflow-auto">
-          <pre className="text-xs text-zinc-300 p-3 font-mono leading-relaxed">
+          <pre className="text-xs text-zinc-300 p-3 font-mono leading-relaxed whitespace-pre-wrap break-words overflow-x-auto">
             <code>{content}</code>
           </pre>
           <div className="px-3 pb-3">

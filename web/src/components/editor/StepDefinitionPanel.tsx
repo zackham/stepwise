@@ -155,9 +155,9 @@ function EditSourceLink({
 /** A small key-value row. */
 function KV({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex items-baseline gap-2 text-xs">
+    <div className="flex items-baseline gap-2 text-xs min-w-0">
       <span className="text-zinc-500 shrink-0">{label}</span>
-      <span className="text-zinc-300 font-mono">{children}</span>
+      <span className="text-zinc-300 font-mono min-w-0 break-all">{children}</span>
     </div>
   );
 }
@@ -195,7 +195,7 @@ function OutputSchemaTable({
       {entries.map(([name, field]) => (
         <div
           key={name}
-          className="flex items-baseline gap-2 text-xs font-mono bg-zinc-900/50 rounded px-2 py-1.5"
+          className="flex items-baseline gap-2 text-xs font-mono bg-zinc-900/50 rounded px-2 py-1.5 min-w-0"
         >
           <span className="text-blue-400">{name}</span>
           <Badge className="bg-zinc-800 text-zinc-400 border-zinc-700">
@@ -609,16 +609,16 @@ export function StepDefinitionPanel({
                     <span className="text-xs text-zinc-500">For-Each</span>
                     <div className="grid grid-cols-2 gap-1 text-xs font-mono">
                       <span className="text-zinc-500">Source</span>
-                      <span className="text-zinc-400">
+                      <span className="text-zinc-400 break-all">
                         {stepDef.for_each.source_step}.
                         {stepDef.for_each.source_field}
                       </span>
                       <span className="text-zinc-500">Item Var</span>
-                      <span className="text-zinc-400">
+                      <span className="text-zinc-400 break-all">
                         {stepDef.for_each.item_var}
                       </span>
                       <span className="text-zinc-500">On Error</span>
-                      <span className="text-zinc-400">
+                      <span className="text-zinc-400 break-all">
                         {stepDef.for_each.on_error}
                       </span>
                     </div>

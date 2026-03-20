@@ -78,7 +78,7 @@ function renderInline(text: string): ReactNode[] {
     if (match[2]) {
       parts.push(<strong key={key++} className="font-semibold text-zinc-200">{match[2]}</strong>);
     } else if (match[3]) {
-      parts.push(<code key={key++} className="px-1 py-0.5 rounded bg-zinc-800 text-zinc-300 font-mono text-[11px]">{match[3]}</code>);
+      parts.push(<code key={key++} className="px-1 py-0.5 rounded bg-zinc-800 text-zinc-300 font-mono text-[11px] break-all">{match[3]}</code>);
     }
     last = match.index + match[0].length;
   }
@@ -176,7 +176,7 @@ export function ChatMessages({ messages, isStreaming, onApplyYaml, emptyMessage 
             {msg.content && (
               msg.role === "user" ? (
                 <div className="text-xs text-blue-300 bg-blue-950/30 rounded px-2.5 py-1.5">
-                  <span className="whitespace-pre-wrap">{msg.content}</span>
+                  <span className="whitespace-pre-wrap break-words">{msg.content}</span>
                 </div>
               ) : (
                 <div className="text-xs text-zinc-300 leading-relaxed">
@@ -202,7 +202,7 @@ export function ChatMessages({ messages, isStreaming, onApplyYaml, emptyMessage 
             {msg.yamlBlocks?.map((block, blockIdx) => (
               <div
                 key={block.apply_id}
-                className="bg-zinc-900 border border-zinc-700 rounded overflow-hidden"
+                className="bg-zinc-900 border border-zinc-700 rounded overflow-hidden min-w-0"
               >
                 <pre className="text-[11px] text-zinc-300 p-2 overflow-x-auto max-h-48">
                   <code>{block.content}</code>
