@@ -244,7 +244,7 @@ def _parse_executor(
             config["prompt"] = prompt
     elif executor_type == "mock_llm":
         # Pass through any config
-        for k in ("failure_rate", "partial_rate", "garbage_rate"):
+        for k in ("failure_rate", "partial_rate", "latency_range", "responses"):
             if k in step_data:
                 config[k] = step_data[k]
     elif executor_type == "agent":
@@ -325,6 +325,9 @@ def _parse_exit_rules(exits_data: list[dict], step_name: str) -> list[ExitRule]:
         }
         if target:
             config["target"] = target
+        max_iter = rule_data.get("max_iterations")
+        if max_iter is not None:
+            config["max_iterations"] = max_iter
 
         # Map priority from position (first rule = highest priority)
         priority = len(exits_data) - i
