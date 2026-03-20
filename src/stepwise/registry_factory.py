@@ -65,8 +65,11 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
     default_agent = (config.default_agent
                      or os.environ.get("STEPWISE_DEFAULT_AGENT")
                      or "claude")
+    import shutil
+    acpx_env = os.environ.get("ACPX_PATH")
+    acpx_path = acpx_env or shutil.which("acpx") or "acpx"
     acpx_backend = AcpxBackend(
-        acpx_path=os.environ.get("ACPX_PATH", "acpx"),
+        acpx_path=acpx_path,
         default_agent=default_agent,
     )
     registry.register("agent", lambda cfg: AgentExecutor(
