@@ -120,10 +120,10 @@ steps:
   summarize:
     description: "Collect results from all poll tests"
     run: |
-      basic_ok="false"; [ "$basic_ready" = "true" ] && basic_ok="true"
-      restart_ok="false"; [ "$restart_ready" = "true" ] && restart_ok="true"
-      longrun_ok="false"; [ "$longrun_ready" = "true" ] && longrun_ok="true"
-      backoff_ok="false"; [ "$backoff_ready" = "true" ] && backoff_ok="true"
+      basic_ok="false"; [ "$basic_ready" = "True" ] && basic_ok="true"
+      restart_ok="false"; [ "$restart_ready" = "True" ] && restart_ok="true"
+      longrun_ok="false"; [ "$longrun_ready" = "True" ] && longrun_ok="true"
+      backoff_ok="false"; [ "$backoff_ready" = "True" ] && backoff_ok="true"
       all="false"
       if [ "$basic_ok" = "true" ] && [ "$restart_ok" = "true" ] && [ "$longrun_ok" = "true" ] && [ "$backoff_ok" = "true" ]; then
         all="true"
