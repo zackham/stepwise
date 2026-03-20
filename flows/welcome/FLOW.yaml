@@ -1,7 +1,18 @@
 name: welcome
-description: "From issue to deploy — a real dev workflow in one YAML file"
+description: "From issue to deploy — a real dev workflow with AI review, config, and escalation"
 author: stepwise
-tags: [demo, human-in-the-loop, for-each, branching, loops]
+tags: [demo, human-in-the-loop, for-each, branching, loops, config, mock-llm, optional-inputs, escalate]
+
+config:
+  team_name:
+    type: str
+    default: "acme-eng"
+    description: "Team name displayed in PR titles"
+  reviewer_style:
+    type: choice
+    options: [thorough, quick]
+    default: thorough
+    description: "AI reviewer thoroughness"
 
 steps:
   # ─── 1. The "Issue" ──────────────────────────────────────────────
@@ -12,7 +23,7 @@ steps:
       Welcome to Stepwise — workflow orchestration for agents and humans.
 
       We're going to simulate a real dev workflow: plan, implement
-      in parallel, open a PR, loop through code review, and deploy.
+      in parallel, open a PR, loop through AI code review, and deploy.
       Everything you see is defined in a single YAML file.
 
       Pick a feature to "build":
@@ -26,24 +37,16 @@ steps:
   plan:
     description: "Planning tasks"
     run: |
-      sleep 1
-      rev_file=".plan-revision"
-      if [ -f "$rev_file" ]; then
-        rev=$(cat "$rev_file")
-        rev=$((rev + 1))
-      else
-        rev=1
-      fi
-      printf '%d' "$rev" > "$rev_file"
+      revision=$STEPWISE_ATTEMPT
       case "$feature" in
         todo-list)
-          printf '{"tasks": ["data-model", "api-routes", "react-ui"], "plan": "3 tasks", "revision": %d}' "$rev"
+          printf '{"tasks": ["data-model", "api-routes", "react-ui"], "plan": "3 tasks", "revision": %d}' "$revision"
           ;;
         auth-system)
-          printf '{"tasks": ["user-model", "jwt-auth", "login-page"], "plan": "3 tasks", "revision": %d}' "$rev"
+          printf '{"tasks": ["user-model", "jwt-auth", "login-page"], "plan": "3 tasks", "revision": %d}' "$revision"
           ;;
         *)
-          printf '{"tasks": ["indexer", "query-parser", "results-api"], "plan": "3 tasks", "revision": %d}' "$rev"
+          printf '{"tasks": ["indexer", "query-parser", "results-api"], "plan": "3 tasks", "revision": %d}' "$revision"
           ;;
       esac
     outputs: [tasks, plan, revision]
@@ -76,9 +79,10 @@ steps:
         when: "outputs.decision == 'approve'"
         action: advance
       - name: revise
-        when: "outputs.decision == 'revise'"
+        when: "True"
         action: loop
         target: plan
+        max_iterations: 10
 
   # ─── 4. Write Code (for-each: fan-out per task) ─────────────────
   #     Each task: implement → test → branch (pass or fix loop)
@@ -88,14 +92,13 @@ steps:
     as: task
     inputs:
       tasks: plan.tasks
-    sequencing: [approve-plan]
+      decision: approve-plan.decision
     outputs: [results]
     flow:
       steps:
         task-implement:
           description: "Implementing"
           run: |
-            sleep 2
             printf '{"files": 3, "task": "%s"}' "$task"
           outputs: [files, task]
           inputs:
@@ -103,7 +106,6 @@ steps:
         task-run-tests:
           description: "Running unit tests"
           run: |
-            sleep 1
             printf '{"passed": 4, "failed": 2, "status": "fail"}'
           outputs: [passed, failed, status]
           sequencing: [task-implement]
@@ -118,7 +120,6 @@ steps:
         task-fix:
           description: "Fixing tests"
           run: |
-            sleep 1
             printf '{"fixes": "applied"}'
           outputs: [fixes]
           inputs:
@@ -127,7 +128,6 @@ steps:
         task-retest:
           description: "Re-running tests"
           run: |
-            sleep 1
             if [ "$STEPWISE_ATTEMPT" -ge 2 ]; then
               printf '{"result": "passed"}'
             else
@@ -144,13 +144,13 @@ steps:
               when: "True"
               action: loop
               target: task-fix
+              max_iterations: 3
 
   # ─── 5. Integration Tests ───────────────────────────────────────
   #     Branch: pass → tests-ok, fail → fix-tests loop
   run-tests:
     description: "Running integration tests"
     run: |
-      sleep 1
       printf '{"passed": 8, "failed": 3, "status": "fail"}'
     outputs: [passed, failed, status]
     sequencing: [write-code]
@@ -167,7 +167,6 @@ steps:
   fix-tests:
     description: "Fixing tests"
     run: |
-      sleep 1
       printf '{"fixes": "applied"}'
     outputs: [fixes]
     inputs:
@@ -177,7 +176,6 @@ steps:
   rerun-tests:
     description: "Re-running tests"
     run: |
-      sleep 1
       if [ "$STEPWISE_ATTEMPT" -ge 2 ]; then
         printf '{"result": "passed"}'
       else
@@ -194,6 +192,7 @@ steps:
         when: "True"
         action: loop
         target: fix-tests
+        max_iterations: 5
 
   # ─── 6. Open PR (sub-flow: push + create) ────────────────────────
   open-pr:
@@ -203,39 +202,41 @@ steps:
         push-initial:
           description: "Pushing code"
           run: |
-            sleep 1
             printf '{"commit": "initial push"}'
           outputs: [commit]
         create-pr:
           description: "Creating PR"
           run: |
-            sleep 1
-            raw=$(od -A n -N 1 -t u1 /dev/urandom | tr -d ' \n')
-            raw=${raw:-128}
-            pr=$((raw % 900 + 100))
-            printf '{"pr": "#%d", "branch": "feat/%s", "pr_title": "New Feature: %s"}' "$pr" "$feature" "$feature"
+            pr=$(($(printf '%s' "$feature" | cksum | cut -d' ' -f1) % 900 + 100))
+            printf '{"pr": "#%d", "branch": "feat/%s", "pr_title": "[%s] %s"}' "$pr" "$feature" "$team_name" "$feature"
           outputs: [pr, branch, pr_title]
           inputs:
             commit: push-initial.commit
             feature: $job.feature
+            team_name: $job.team_name
     outputs: [pr, branch, pr_title]
     inputs:
       feature: pick-feature.feature
+      team_name: $job.team_name
       test_result:
         any_of:
           - tests-ok.result
           - rerun-tests.result
 
   # ─── 7. Code Review ─────────────────────────────────────────────
-  #     Branch: approved → review-ok, changes → revise loop
+  #     mock_llm simulates an AI reviewer; branch on result
   await-review:
-    description: "Code review"
-    run: |
-      sleep 2
-      printf '{"result": "changes", "reviewer": "alice"}'
-    outputs: [result, reviewer]
+    executor: mock_llm
+    description: "AI code review"
+    responses:
+      await-review:
+        result: "changes"
+        reviewer: "ai-copilot"
+        feedback: "Add input validation and error handling"
+    outputs: [result, reviewer, feedback]
     inputs:
       pr: open-pr.pr
+      reviewer_style: $job.reviewer_style
 
   review-ok:
     description: "Review approved"
@@ -249,17 +250,18 @@ steps:
   revise-code:
     description: "Revising code"
     run: |
-      sleep 2
-      printf '{"changes": "revised"}'
+      printf '{"changes": "revised — addressed: %s"}' "$feedback"
     outputs: [changes]
     inputs:
       result: await-review.result
+      feedback:
+        from: await-review.feedback
+        optional: true
     when: "result != 'approved'"
 
   push-fix:
     description: "Pushing fixes"
     run: |
-      sleep 1
       printf '{"pushed": true}'
     outputs: [pushed]
     inputs:
@@ -268,7 +270,6 @@ steps:
   re-review:
     description: "Re-reviewing"
     run: |
-      sleep 2
       if [ "$STEPWISE_ATTEMPT" -ge 2 ]; then
         printf '{"outcome": "approved"}'
       else
@@ -281,21 +282,28 @@ steps:
       - name: approved
         when: "outputs.outcome == 'approved'"
         action: advance
+      - name: stuck
+        when: "attempt >= 4"
+        action: escalate
       - name: changes
         when: "True"
         action: loop
         target: revise-code
+        max_iterations: 5
 
   # ─── 8. Deploy Decision ─────────────────────────────────────────
   ship-it:
     executor: human
     description: "Deploy decision"
     prompt: |
-      "$pr_title" ($pr) approved by $reviewer!
+      "$pr_title" ($pr) reviewed by $reviewer!
 
-      The review loop just resolved — revise-code, push-fix, and re-review cycled until approved. That loop-back edge in the DAG is an exit rule.
+      The review loop just resolved — revise-code, push-fix, and re-review
+      cycled until approved. An escalate exit rule at attempt >= 4 would
+      pause the job if the loop got stuck.
 
-      Now your choice branches the workflow — each downstream step has a `when` condition, so only one path executes and the other is skipped.
+      Now your choice branches the workflow — each downstream step has a
+      `when` condition, so only one path executes and the other is skipped.
     outputs:
       decision:
         type: choice
@@ -314,18 +322,17 @@ steps:
   merge:
     description: "Merging PR"
     run: |
-      sleep 1
-      printf '{"action": "merged", "pr": "%s"}' "$pr"
-    outputs: [action, pr]
+      printf '{"action": "merged", "pr": "%s", "team": "%s"}' "$pr" "$team_name"
+    outputs: [action, pr, team]
     inputs:
       pr: open-pr.pr
+      team_name: $job.team_name
       decision: ship-it.decision
     when: "decision == 'deploy'"
 
   deploy-prod:
     description: "Deploying to prod"
     run: |
-      sleep 2
       printf '{"status": "live", "pr_title": "%s"}' "$pr_title"
     outputs: [status, pr_title]
     inputs:
@@ -335,7 +342,6 @@ steps:
   close-pr:
     description: "Closing PR"
     run: |
-      sleep 1
       printf '{"status": "closed", "pr_title": "%s"}' "$pr_title"
     outputs: [status, pr_title]
     inputs:
