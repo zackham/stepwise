@@ -86,7 +86,7 @@ def test_cli(project_path):
         f"Exit {rc}: {out or err}"))
 
     # C4: validate bad flow
-    bad = os.path.join(project_path, "flows", "eval-1.0", "data", "known-bad.flow.yaml")
+    bad = os.path.join(project_path, "flows", "eval-1-0", "data", "known-bad.flow.yaml")
     if os.path.exists(bad):
         rc, out, err = run_cmd(["uv", "run", "stepwise", "validate", bad], cwd=project_path)
         results.append(rubric_item("C4", "stepwise validate rejects invalid flow",
