@@ -822,10 +822,18 @@ def run_wait(
         return EXIT_USAGE_ERROR
 
     # Validate required inputs
+    # A $job input is required unless the binding is optional OR
+    # the corresponding config_var has required=False.
+    config_var_map = {v.name: v for v in workflow.config_vars}
     required_inputs = set()
     for step in workflow.steps.values():
         for binding in step.inputs:
             if binding.source_step == "$job":
+                if binding.optional:
+                    continue
+                cv = config_var_map.get(binding.source_field)
+                if cv and not cv.required:
+                    continue
                 required_inputs.add(binding.source_field)
 
     provided = set((inputs or {}).keys())

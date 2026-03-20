@@ -607,3 +607,106 @@ steps:
         assert len(restored.requires) == 1
         assert restored.requires[0].name == "ffmpeg"
         assert "Readme" in restored.readme
+
+
+# ── run_wait: optional config vars ──────────────────────────────────
+
+
+class TestRunWaitOptionalConfigVars:
+    """Config vars with required: false should not block run_wait."""
+
+    def _make_project(self, tmp_path):
+        from stepwise.project import StepwiseProject
+        dot_dir = tmp_path / ".stepwise"
+        dot_dir.mkdir(exist_ok=True)
+        jobs_dir = dot_dir / "jobs"
+        jobs_dir.mkdir(exist_ok=True)
+        templates_dir = dot_dir / "templates"
+        templates_dir.mkdir(exist_ok=True)
+        return StepwiseProject(
+            root=tmp_path,
+            dot_dir=dot_dir,
+            db_path=dot_dir / "stepwise.db",
+            jobs_dir=jobs_dir,
+            templates_dir=templates_dir,
+        )
+
+    def test_optional_config_var_no_default_not_required(self, tmp_path):
+        """A config var with required: false and no default should not cause
+        a 'Missing required input(s)' error when omitted."""
+        from stepwise.runner import run_wait
+
+        flow = tmp_path / "test.flow.yaml"
+        flow.write_text(
+            'name: test-optional\n'
+            'config:\n'
+            '  project:\n'
+            '    description: Project name for registry lookup\n'
+            '    required: false\n'
+            'steps:\n'
+            '  a:\n'
+            '    run: |\n'
+            '      echo \'{"result": "ok"}\'\n'
+            '    inputs:\n'
+            '      project: $job.project\n'
+            '    outputs: [result]\n'
+        )
+        project = self._make_project(tmp_path)
+        # Should succeed (exit 0) without providing 'project'
+        result = run_wait(
+            flow_path=flow,
+            project=project,
+            force_local=True,
+        )
+        assert result == 0
+
+    def test_required_config_var_still_enforced(self, tmp_path):
+        """A config var with required: true (default) should still error."""
+        from stepwise.runner import run_wait, EXIT_USAGE_ERROR
+
+        flow = tmp_path / "test.flow.yaml"
+        flow.write_text(
+            'name: test-required\n'
+            'config:\n'
+            '  project:\n'
+            '    description: Project name\n'
+            'steps:\n'
+            '  a:\n'
+            '    run: |\n'
+            '      echo \'{"result": "ok"}\'\n'
+            '    inputs:\n'
+            '      project: $job.project\n'
+            '    outputs: [result]\n'
+        )
+        project = self._make_project(tmp_path)
+        result = run_wait(
+            flow_path=flow,
+            project=project,
+            force_local=True,
+        )
+        assert result == EXIT_USAGE_ERROR
+
+    def test_optional_binding_not_required(self, tmp_path):
+        """An input binding with optional: true should not be required."""
+        from stepwise.runner import run_wait
+
+        flow = tmp_path / "test.flow.yaml"
+        flow.write_text(
+            'name: test-optional-binding\n'
+            'steps:\n'
+            '  a:\n'
+            '    run: |\n'
+            '      echo \'{"result": "ok"}\'\n'
+            '    inputs:\n'
+            '      project:\n'
+            '        from: $job.project\n'
+            '        optional: true\n'
+            '    outputs: [result]\n'
+        )
+        project = self._make_project(tmp_path)
+        result = run_wait(
+            flow_path=flow,
+            project=project,
+            force_local=True,
+        )
+        assert result == 0
