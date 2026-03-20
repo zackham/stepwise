@@ -1,0 +1,310 @@
+name: eval-1.0
+description: "Stepwise 1.0 readiness evaluation — self-hosted on Stepwise"
+author: stepwise
+tags: [evaluation, self-hosted, agents, human-in-the-loop]
+
+config:
+  stepwise_path:
+    type: str
+    description: "Absolute path to the stepwise project root"
+    required: true
+    example: "/home/user/work/stepwise"
+  server_port:
+    type: str
+    default: "8340"
+    description: "Port the stepwise server is running on"
+  eval_run_number:
+    type: str
+    default: "1"
+    description: "Which evaluation run this is (1, 2, or 3)"
+
+steps:
+  # ═══ Phase 0: Ground Truth Calibration ═══════════════════════════════
+  preflight:
+    description: "Smoke tests and ground truth calibration"
+    run: python3 scripts/preflight.py
+    inputs:
+      stepwise_path: $job.stepwise_path
+      server_port: $job.server_port
+    outputs: [preflight_passed, preflight_checks, abort_reason]
+    limits:
+      max_duration_minutes: 2
+
+  # ═══ Phase 1: Codebase Metadata ══════════════════════════════════════
+  discover:
+    description: "Collect project metadata and inventory"
+    run: python3 scripts/discover.py
+    sequencing: [preflight]
+    inputs:
+      stepwise_path: $job.stepwise_path
+    outputs: [version, project_path, file_counts, python_loc, typescript_loc, flows, test_files, doc_files]
+    limits:
+      max_duration_minutes: 2
+
+  # ═══ Phase 2: Automated Testing (parallel) ═══════════════════════════
+
+  # --- 2a: Script-based test dimensions ---
+
+  test-core:
+    description: "CLI + Server + Lifecycle (HARD GATE)"
+    run: python3 scripts/test_core.py
+    inputs:
+      project_path: discover.project_path
+      server_port: $job.server_port
+    outputs: [dimension, rubric_results, pass_count, fail_count, insufficient_count, score_pct, cli_results, server_results, lifecycle_results]
+    limits:
+      max_duration_minutes: 10
+
+  test-security:
+    description: "Security posture with severity model (HARD GATE)"
+    run: python3 scripts/test_security.py
+    inputs:
+      project_path: discover.project_path
+      server_port: $job.server_port
+    outputs: [dimension, rubric_results, pass_count, fail_count, insufficient_count, score_pct, has_blocker, blocker_ids]
+    limits:
+      max_duration_minutes: 5
+
+  test-migration:
+    description: "Backwards compatibility (HARD GATE)"
+    run: python3 scripts/test_migration.py
+    inputs:
+      project_path: discover.project_path
+      server_port: $job.server_port
+    outputs: [dimension, rubric_results, pass_count, fail_count, insufficient_count, score_pct]
+    limits:
+      max_duration_minutes: 5
+
+  test-data-integrity:
+    description: "Data integrity — store and artifacts (HARD GATE)"
+    run: python3 scripts/test_data_integrity.py
+    inputs:
+      project_path: discover.project_path
+      server_port: $job.server_port
+    outputs: [dimension, rubric_results, pass_count, fail_count, insufficient_count, score_pct]
+    limits:
+      max_duration_minutes: 5
+
+  test-quality:
+    description: "7 non-gate quality dimensions"
+    run: python3 scripts/test_quality.py
+    inputs:
+      project_path: discover.project_path
+      server_port: $job.server_port
+    outputs: [dimension, rubric_results, pass_count, fail_count, insufficient_count, score_pct, dimensions]
+    limits:
+      max_duration_minutes: 15
+
+  # --- 2b: Agent-based probes ---
+
+  adversarial-probe:
+    description: "Chaos engineering — malformed inputs, injection, edge cases"
+    executor: agent
+    prompt_file: prompts/adversarial-probe.md
+    working_dir: $project_path
+    inputs:
+      project_path: discover.project_path
+    outputs: [adversarial_results, critical_findings, handled_well, silent_failures, score_pct]
+    limits:
+      max_cost_usd: 5.0
+      max_duration_minutes: 20
+
+  new-user-test:
+    description: "Simulate a new user building their first flow"
+    executor: agent
+    prompt_file: prompts/new-user-test.md
+    working_dir: $project_path
+    inputs:
+      project_path: discover.project_path
+    outputs: [flow_yaml, success, confusion_points, docs_consulted, evidence, score_pct]
+    limits:
+      max_cost_usd: 5.0
+      max_duration_minutes: 20
+
+  # ═══ Phase 3: Qualitative Synthesis (parallel, after Phase 2) ═══════
+
+  synthesize-docs:
+    description: "Documentation quality synthesis"
+    executor: agent
+    prompt_file: prompts/synthesize-docs.md
+    working_dir: $project_path
+    inputs:
+      project_path: discover.project_path
+      doc_files: discover.doc_files
+      confusion_points: new-user-test.confusion_points
+      new_user_evidence: new-user-test.evidence
+    sequencing: [test-core, test-security, test-migration, test-data-integrity, test-quality, adversarial-probe]
+    outputs: [rubric_results, qualitative_summary, score_pct]
+    limits:
+      max_cost_usd: 3.0
+      max_duration_minutes: 15
+
+  synthesize-code:
+    description: "Code quality synthesis"
+    executor: agent
+    prompt_file: prompts/synthesize-code.md
+    working_dir: $project_path
+    inputs:
+      project_path: discover.project_path
+      security_results: test-security.rubric_results
+      security_has_blocker: test-security.has_blocker
+      adversarial_results: adversarial-probe.adversarial_results
+      adversarial_critical: adversarial-probe.critical_findings
+    sequencing: [test-core, test-migration, test-data-integrity, test-quality, new-user-test]
+    outputs: [rubric_results, qualitative_summary, score_pct]
+    limits:
+      max_cost_usd: 3.0
+      max_duration_minutes: 15
+
+  synthesize-ux:
+    description: "UX and developer experience synthesis"
+    executor: agent
+    prompt_file: prompts/synthesize-ux.md
+    working_dir: $project_path
+    inputs:
+      project_path: discover.project_path
+      new_user_confusion: new-user-test.confusion_points
+      new_user_success: new-user-test.success
+    sequencing: [test-core, test-security, test-migration, test-data-integrity, test-quality, adversarial-probe]
+    outputs: [rubric_results, qualitative_summary, score_pct]
+    limits:
+      max_cost_usd: 3.0
+      max_duration_minutes: 15
+
+  # ═══ Phase 4: Aggregation & Report ═══════════════════════════════════
+
+  aggregate-scores:
+    description: "Hard gates, scoring, and GO/NO-GO recommendation"
+    run: python3 scripts/aggregate.py
+    inputs:
+      # Hard gate dimensions
+      core_score: test-core.score_pct
+      core_results: test-core.rubric_results
+      security_score: test-security.score_pct
+      security_results: test-security.rubric_results
+      security_has_blocker: test-security.has_blocker
+      security_blocker_ids: test-security.blocker_ids
+      migration_score: test-migration.score_pct
+      migration_results: test-migration.rubric_results
+      data_integrity_score: test-data-integrity.score_pct
+      data_integrity_results: test-data-integrity.rubric_results
+      # Non-gate dimensions
+      quality_score: test-quality.score_pct
+      quality_results: test-quality.rubric_results
+      quality_dimensions: test-quality.dimensions
+      adversarial_score: adversarial-probe.score_pct
+      adversarial_results: adversarial-probe.adversarial_results
+      adversarial_critical: adversarial-probe.critical_findings
+      new_user_score: new-user-test.score_pct
+      # Synthesis dimensions
+      docs_score: synthesize-docs.score_pct
+      docs_results: synthesize-docs.rubric_results
+      code_score: synthesize-code.score_pct
+      code_results: synthesize-code.rubric_results
+      ux_score: synthesize-ux.score_pct
+      ux_results: synthesize-ux.rubric_results
+      # Metadata
+      run_number: $job.eval_run_number
+    outputs: [scorecard, gates, all_gates_passed, security_veto, overall_avg, recommendation, recommendation_reason, remediation, insufficient_evidence_warnings, run_number]
+    limits:
+      max_duration_minutes: 2
+
+  generate-report:
+    description: "LLM-generated evaluation report"
+    executor: llm
+    prompt_file: prompts/generate-report.md
+    inputs:
+      scorecard: aggregate-scores.scorecard
+      gates: aggregate-scores.gates
+      recommendation: aggregate-scores.recommendation
+      recommendation_reason: aggregate-scores.recommendation_reason
+      remediation: aggregate-scores.remediation
+      overall_avg: aggregate-scores.overall_avg
+      security_veto: aggregate-scores.security_veto
+      insufficient_evidence_warnings: aggregate-scores.insufficient_evidence_warnings
+      adversarial_results: adversarial-probe.adversarial_results
+      adversarial_critical: adversarial-probe.critical_findings
+      new_user_evidence: new-user-test.evidence
+      new_user_confusion: new-user-test.confusion_points
+      version: discover.version
+      python_loc: discover.python_loc
+      typescript_loc: discover.typescript_loc
+    outputs: [report_content]
+    limits:
+      max_cost_usd: 2.0
+      max_duration_minutes: 5
+
+  # ═══ Phase 5: Human Gate ═════════════════════════════════════════════
+
+  human-approval:
+    description: "Human review of evaluation results"
+    executor: human
+    prompt: |
+      # Stepwise 1.0 Readiness Evaluation — Run $run_number
+
+      ## Recommendation: $recommendation
+      $recommendation_reason
+
+      ## Overall Score: $overall_avg%
+
+      ## Hard Gates
+      $gates
+
+      ## Scorecard
+      $scorecard
+
+      ## Remediation Priorities
+      $remediation
+
+      ---
+      Review the results and choose:
+      - **approve**: Accept the recommendation as-is
+      - **reject**: Block — do not publish the report
+      - **override**: Flip the recommendation (GO↔NO-GO) with justification
+    inputs:
+      recommendation: aggregate-scores.recommendation
+      recommendation_reason: aggregate-scores.recommendation_reason
+      scorecard: aggregate-scores.scorecard
+      gates: aggregate-scores.gates
+      overall_avg: aggregate-scores.overall_avg
+      remediation: aggregate-scores.remediation
+      run_number: $job.eval_run_number
+      report_content: generate-report.report_content
+    outputs:
+      choice:
+        type: choice
+        options: [approve, reject, override]
+        description: "Your decision on the 1.0 readiness recommendation"
+      notes:
+        type: text
+        description: "Optional notes explaining your decision"
+    exits:
+      - name: approved
+        when: "outputs.choice == 'approve'"
+        action: advance
+      - name: rejected
+        when: "outputs.choice == 'reject'"
+        action: advance
+      - name: overridden
+        when: "outputs.choice == 'override'"
+        action: advance
+
+  # ═══ Phase 6: Publish ════════════════════════════════════════════════
+
+  publish-report:
+    description: "Generate and save HTML report"
+    run: python3 scripts/publish.py
+    inputs:
+      report_content: generate-report.report_content
+      human_decision: human-approval.choice
+      human_notes: human-approval.notes
+      recommendation: aggregate-scores.recommendation
+      scorecard: aggregate-scores.scorecard
+      overall_avg: aggregate-scores.overall_avg
+      gates: aggregate-scores.gates
+      security_veto: aggregate-scores.security_veto
+      run_number: $job.eval_run_number
+      stepwise_path: $job.stepwise_path
+    outputs: [report_path, status, human_decision, run_number]
+    limits:
+      max_duration_minutes: 2
