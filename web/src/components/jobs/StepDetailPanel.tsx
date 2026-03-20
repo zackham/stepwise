@@ -396,7 +396,7 @@ export function StepDetailPanel({
                                 </span>
                               )}
                             </div>
-                            <div className="text-red-300/80 text-xs font-mono whitespace-pre-wrap">
+                            <div className="text-red-300/80 text-xs font-mono whitespace-pre-wrap break-words">
                               {run.error}
                             </div>
                           </div>
