@@ -59,7 +59,7 @@ Each execution of a step is a **step run** with its own attempt number, status, 
 
 ## Executors
 
-An **executor** is what does the actual work inside a step. Stepwise ships with four executor types:
+An **executor** is what does the actual work inside a step. Stepwise ships with five executor types:
 
 | Type | What it does | Use when |
 |------|-------------|----------|
@@ -67,6 +67,7 @@ An **executor** is what does the actual work inside a step. Stepwise ships with 
 | **LLM** | Single LLM API call via OpenRouter | Scoring, classification, text generation, structured extraction |
 | **Agent** | Full agentic session (LLM + tools, iterating) | Complex tasks requiring tool use, code generation, research |
 | **Human** | Suspends for human input via the web UI | Approvals, creative judgment, decisions that need a person |
+| **Poll** | Runs a check command on an interval until it returns JSON | Waiting for CI, deployments, PR reviews, external conditions |
 
 Executors are **serializable references** — a type name plus configuration. No live Python objects in the durable model. This means jobs can be persisted, resumed, and inspected without executing code.
 
@@ -86,7 +87,6 @@ score:
 # Agent — full agentic session
 research:
   executor: agent
-  model: anthropic/claude-opus-4
   prompt: "Research $topic thoroughly"
   outputs: [findings, sources]
 

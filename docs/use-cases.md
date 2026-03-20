@@ -94,7 +94,7 @@ Content never publishes without human approval, but the LLM does the heavy lifti
 
 ## Deploy pipeline
 
-Build, test, human approval, then a route step branches to deploy or rollback.
+Build, test, human approval, then `when` conditions branch to deploy or rollback.
 
 ```yaml
 name: deploy
@@ -107,7 +107,8 @@ steps:
     outputs: [artifact, sha]
 
   test:
-    run: cd $repo_path && make test && echo "{\"passed\": true}"
+    run: |
+      cd $repo_path && make test && echo "{\"passed\": true}"
     inputs: { repo_path: $job.repo_path }
     outputs: [passed]
     sequencing: [build]
@@ -118,29 +119,27 @@ steps:
     outputs: [decision]
     inputs: { sha: build.sha }
 
-  deploy-or-rollback:
-    route:
-      - name: deploy
-        when: "inputs.decision == 'deploy'"
-        flow:
-          steps:
-            run-deploy:
-              run: |
-                kubectl set image deployment/app app=$artifact
-                echo "{\"status\": \"deployed\"}"
-              inputs: { artifact: $job.artifact }
-              outputs: [status]
-      - name: rollback
-        flow:
-          steps:
-            run-rollback:
-              run: kubectl rollout undo deployment/app && echo "{\"status\": \"rolled_back\"}"
-              outputs: [status]
-    inputs: { decision: approve.decision, artifact: build.artifact }
+  deploy:
+    run: |
+      kubectl set image deployment/app app=$artifact
+      echo "{\"status\": \"deployed\"}"
+    inputs:
+      decision: approve.decision
+      artifact: build.artifact
+    when: "decision == 'deploy'"
+    outputs: [status]
+
+  rollback:
+    run: |
+      kubectl rollout undo deployment/app
+      echo "{\"status\": \"rolled_back\"}"
+    inputs:
+      decision: approve.decision
+    when: "decision != 'deploy'"
     outputs: [status]
 ```
 
-The `route:` step branches based on the human's decision. Each branch is its own sub-flow, keeping deploy and rollback logic cleanly separated.
+Each branch is a separate step with a `when` condition on the human's decision. The engine only activates the matching branch and skips the other.
 
 ## Research synthesis
 
