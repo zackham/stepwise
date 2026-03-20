@@ -109,7 +109,6 @@ A full agentic session — an LLM with tools, iterating autonomously until the t
 ```yaml
 implement_feature:
   executor: agent
-  model: anthropic/claude-opus-4
   prompt: |
     Implement the following feature in the codebase:
 
@@ -130,7 +129,7 @@ implement_feature:
 **How it works:**
 - Spawns an agent subprocess via the ACP (Agent Client Protocol)
 - The agent has access to tools (file read/write, shell execution, search)
-- The engine polls the agent each tick — it doesn't block
+- The agent runs in the engine's thread pool via `asyncio.to_thread()` — it doesn't block the event loop
 - Output is streamed in real-time to the web UI via WebSocket
 - On completion, the agent's final output is parsed as the step's result
 
@@ -138,11 +137,12 @@ implement_feature:
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `model` | Yes | Full model ID or tier alias |
 | `prompt` | Yes | The agent's objective. Supports `$variable` substitution from inputs. |
 | `limits.cost_usd` | No | Maximum cost in USD before the agent is stopped |
 | `limits.duration_minutes` | No | Maximum wall-clock time |
 | `limits.max_iterations` | No | Maximum tool-use iterations |
+
+**Agent selection:** Use `config: { agent: "claude" }` (or `"codex"`, `"gemini"`) to choose the agent backend. The `model:` shorthand is only for the LLM executor.
 
 **When to use:** Code generation, research with web browsing, complex analysis requiring tool use, any task where the number of steps isn't known in advance. Agents are powerful but expensive — use LLM executor for simpler tasks.
 

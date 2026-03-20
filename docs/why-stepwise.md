@@ -24,7 +24,6 @@ This is what Stepwise does. Each step declares its executor (script, LLM, agent,
 steps:
   research:
     executor: agent
-    model: anthropic/claude-opus-4
     prompt: "Research $topic and produce structured findings"
     outputs: [findings, sources]
     inputs:
@@ -63,7 +62,7 @@ These solve agent *construction* — how to build a single agent or hand off bet
 
 These solve durable execution and scheduling — but they're infrastructure. Temporal requires a server, workers, and persistent storage. Prefect needs a control plane. These are the right tools for distributed production systems with teams of engineers.
 
-Stepwise is for a different use case: a single developer or small team who wants to orchestrate AI workflows on their machine. SQLite, not Postgres. One process, not a cluster. Install with `pip`, not Helm charts.
+Stepwise is for a different use case: a single developer or small team who wants to orchestrate AI workflows on their machine. SQLite, not Postgres. One process, not a cluster. Install with one command, not Helm charts.
 
 ### State Machine Libraries (LangGraph)
 

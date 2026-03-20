@@ -114,12 +114,12 @@ steps:
 
 ## Features
 
-- **DAG engine** — automatic parallelism, conditional loops, route steps, expression-based branching
-- **Three CLI modes** — headless `run`, ephemeral `--watch` UI, persistent `serve`
+- **DAG engine** — automatic parallelism, conditional loops, `when` branching, expression-based exit rules
+- **Four run modes** — headless `run`, ephemeral `--watch` UI, blocking `--wait` JSON, fire-and-forget `--async`
 - **Human-in-the-loop** — stdin prompts in headless mode, schema-driven web forms in watch mode
 - **Real-time streaming** — agent output (text + tool calls) streamed live via WebSocket
 - **Context chains** — session continuity across agent steps via compiled transcripts
-- **Expression exit rules** — `outputs.score >= 0.8`, `attempt < 5`, route on any output value
+- **Expression exit rules** — `outputs.score >= 0.8`, `attempt < 5`, branch on any output value
 - **Cost tracking** — cap spend, duration, or iterations per step
 - **Decorators** — timeout, retry, fallback (composable per step)
 

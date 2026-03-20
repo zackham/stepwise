@@ -1,6 +1,6 @@
 #!/bin/sh
 # Stepwise universal installer
-# Usage: curl -fsSL https://stepwise.run/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/zackham/stepwise/master/install.sh | sh
 set -e
 
 BOLD='\033[1m'
