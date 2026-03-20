@@ -45,25 +45,25 @@ def main():
 
     # Hard gate dimensions
     dimensions["core_execution"] = {
-        "score_pct": parse_float_env("core_score"),
+        "score_pct": parse_float_env("core_score_pct"),
         "rubric_results": parse_json_env("core_results", []),
         "is_hard_gate": True,
         "threshold": 80,
     }
     dimensions["security"] = {
-        "score_pct": parse_float_env("security_score"),
+        "score_pct": parse_float_env("security_score_pct"),
         "rubric_results": parse_json_env("security_results", []),
         "is_hard_gate": True,
         "threshold": 80,
     }
     dimensions["migration"] = {
-        "score_pct": parse_float_env("migration_score"),
+        "score_pct": parse_float_env("migration_score_pct"),
         "rubric_results": parse_json_env("migration_results", []),
         "is_hard_gate": True,
         "threshold": 80,
     }
     dimensions["data_integrity"] = {
-        "score_pct": parse_float_env("data_integrity_score"),
+        "score_pct": parse_float_env("data_integrity_score_pct"),
         "rubric_results": parse_json_env("data_integrity_results", []),
         "is_hard_gate": True,
         "threshold": 80,
@@ -71,35 +71,35 @@ def main():
 
     # Non-gate script dimensions
     dimensions["quality"] = {
-        "score_pct": parse_float_env("quality_score"),
+        "score_pct": parse_float_env("quality_score_pct"),
         "rubric_results": parse_json_env("quality_results", []),
         "sub_dimensions": parse_json_env("quality_dimensions", {}),
         "is_hard_gate": False,
     }
     dimensions["adversarial"] = {
-        "score_pct": parse_float_env("adversarial_score"),
+        "score_pct": parse_float_env("adversarial_score_pct"),
         "rubric_results": parse_json_env("adversarial_results", []),
         "critical_findings": parse_json_env("adversarial_critical", []),
         "is_hard_gate": False,
     }
     dimensions["new_user"] = {
-        "score_pct": parse_float_env("new_user_score"),
+        "score_pct": parse_float_env("new_user_score_pct"),
         "is_hard_gate": False,
     }
 
     # Synthesis dimensions
     dimensions["docs"] = {
-        "score_pct": parse_float_env("docs_score"),
+        "score_pct": parse_float_env("docs_score_pct"),
         "rubric_results": parse_json_env("docs_results", []),
         "is_hard_gate": False,
     }
     dimensions["code_quality"] = {
-        "score_pct": parse_float_env("code_score"),
+        "score_pct": parse_float_env("code_score_pct"),
         "rubric_results": parse_json_env("code_results", []),
         "is_hard_gate": False,
     }
     dimensions["ux"] = {
-        "score_pct": parse_float_env("ux_score"),
+        "score_pct": parse_float_env("ux_score_pct"),
         "rubric_results": parse_json_env("ux_results", []),
         "is_hard_gate": False,
     }
@@ -232,7 +232,7 @@ def main():
             "gate_passed": gates.get(dim_name, {}).get("passed") if dim.get("is_hard_gate") else None,
         }
 
-    run_number = os.environ.get("run_number", "1")
+    run_number = os.environ.get("eval_run_number", "1")
 
     output = {
         "scorecard": scorecard,

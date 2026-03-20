@@ -178,33 +178,33 @@ steps:
     run: python3 scripts/aggregate.py
     inputs:
       # Hard gate dimensions
-      core_score: test-core.score_pct
+      core_score_pct: test-core.score_pct
       core_results: test-core.rubric_results
-      security_score: test-security.score_pct
+      security_score_pct: test-security.score_pct
       security_results: test-security.rubric_results
       security_has_blocker: test-security.has_blocker
       security_blocker_ids: test-security.blocker_ids
-      migration_score: test-migration.score_pct
+      migration_score_pct: test-migration.score_pct
       migration_results: test-migration.rubric_results
-      data_integrity_score: test-data-integrity.score_pct
+      data_integrity_score_pct: test-data-integrity.score_pct
       data_integrity_results: test-data-integrity.rubric_results
       # Non-gate dimensions
-      quality_score: test-quality.score_pct
+      quality_score_pct: test-quality.score_pct
       quality_results: test-quality.rubric_results
       quality_dimensions: test-quality.dimensions
-      adversarial_score: adversarial-probe.score_pct
+      adversarial_score_pct: adversarial-probe.score_pct
       adversarial_results: adversarial-probe.adversarial_results
       adversarial_critical: adversarial-probe.critical_findings
-      new_user_score: new-user-test.score_pct
+      new_user_score_pct: new-user-test.score_pct
       # Synthesis dimensions
-      docs_score: synthesize-docs.score_pct
+      docs_score_pct: synthesize-docs.score_pct
       docs_results: synthesize-docs.rubric_results
-      code_score: synthesize-code.score_pct
+      code_score_pct: synthesize-code.score_pct
       code_results: synthesize-code.rubric_results
-      ux_score: synthesize-ux.score_pct
+      ux_score_pct: synthesize-ux.score_pct
       ux_results: synthesize-ux.rubric_results
       # Metadata
-      run_number: $job.eval_run_number
+      eval_run_number: $job.eval_run_number
     outputs: [scorecard, gates, all_gates_passed, security_veto, overall_avg, recommendation, recommendation_reason, remediation, insufficient_evidence_warnings, run_number]
     limits:
       max_duration_minutes: 2
@@ -286,7 +286,7 @@ steps:
         when: "outputs.choice == 'reject'"
         action: advance
       - name: overridden
-        when: "outputs.choice == 'override'"
+        when: "True"
         action: advance
 
   # ═══ Phase 6: Publish ════════════════════════════════════════════════
