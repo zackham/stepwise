@@ -24,6 +24,8 @@ Usage:
     stepwise output <job-id> [--step] [--run] Retrieve job/step outputs
     stepwise fulfill <run-id> '<json>'     Satisfy a suspended external step (or --stdin, --wait)
     stepwise agent-help [--update <file>]  Generate agent instructions
+    stepwise login                          Log in to the Stepwise registry
+    stepwise logout                         Log out of the Stepwise registry
     stepwise update                        Upgrade to the latest version
     stepwise uninstall [--yes] [--force]   Remove stepwise from this project
 """
@@ -2334,11 +2336,99 @@ def cmd_get(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
+def cmd_login(args: argparse.Namespace) -> int:
+    """Log in to the Stepwise registry via GitHub Device Flow."""
+    import time
+
+    from stepwise.registry_client import (
+        RegistryError,
+        get_registry_url,
+        initiate_device_flow,
+        load_auth,
+        poll_device_flow,
+        save_auth,
+        verify_auth,
+    )
+
+    io = _io(args)
+
+    # Check existing auth
+    auth = load_auth()
+    if auth and auth.get("auth_token"):
+        try:
+            verify_auth(auth["auth_token"])
+            io.log("success", f"Already logged in as @{auth.get('github_username', '?')}")
+            return EXIT_SUCCESS
+        except RegistryError:
+            pass  # Token invalid, proceed to re-login
+
+    # Initiate Device Flow
+    try:
+        flow = initiate_device_flow()
+    except RegistryError as e:
+        io.log("error", f"Failed to start login: {e}")
+        return EXIT_USAGE_ERROR
+
+    device_code = flow["device_code"]
+    user_code = flow["user_code"]
+    verification_uri = flow["verification_uri"]
+    interval = flow.get("interval", 5)
+
+    io.log("info", f"Visit {verification_uri} and enter code: {user_code}")
+
+    # Poll loop
+    try:
+        while True:
+            time.sleep(interval)
+            try:
+                result = poll_device_flow(device_code)
+            except RegistryError as e:
+                io.log("error", f"Login failed: {e}")
+                return EXIT_USAGE_ERROR
+
+            if "auth_token" in result:
+                registry_url = get_registry_url()
+                save_auth(result["auth_token"], result["github_username"], registry_url)
+                io.log("success", f"Logged in as @{result['github_username']}. You can now publish flows with `stepwise share`.")
+                return EXIT_SUCCESS
+
+            error = result.get("error", "")
+            if error == "authorization_pending":
+                continue
+            elif error == "slow_down":
+                interval += 5
+                continue
+            elif error in ("expired_token", "access_denied"):
+                io.log("error", f"Login failed: {error.replace('_', ' ')}")
+                return EXIT_USAGE_ERROR
+            else:
+                io.log("error", f"Unexpected response: {error or result}")
+                return EXIT_USAGE_ERROR
+    except KeyboardInterrupt:
+        io.log("info", "\nLogin cancelled.")
+        return EXIT_USAGE_ERROR
+
+
+def cmd_logout(args: argparse.Namespace) -> int:
+    """Log out of the Stepwise registry."""
+    from stepwise.registry_client import clear_auth, load_auth
+
+    io = _io(args)
+
+    if load_auth() is None:
+        io.log("info", "Not logged in.")
+        return EXIT_SUCCESS
+
+    clear_auth()
+    io.log("success", "Logged out.")
+    return EXIT_SUCCESS
+
+
 def cmd_share(args: argparse.Namespace) -> int:
     """Publish a flow to the registry."""
     from stepwise.bundle import BundleError, collect_bundle
     from stepwise.flow_resolution import FlowResolutionError, resolve_flow
-    from stepwise.registry_client import publish_flow, update_flow, RegistryError
+    from stepwise.registry_client import load_auth, publish_flow, update_flow, RegistryError
     from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
 
     flow_arg = args.flow
@@ -2426,6 +2516,14 @@ def cmd_share(args: argparse.Namespace) -> int:
                 io.log("info", "Cancelled.")
                 return EXIT_SUCCESS
 
+    # Load auth credentials
+    auth = load_auth()
+    auth_token = auth["auth_token"] if auth else None
+
+    if not do_update and not auth_token:
+        io.log("error", "You need to log in first. Run `stepwise login`.")
+        return EXIT_USAGE_ERROR
+
     try:
         if do_update:
             import yaml as yaml_lib
@@ -2433,10 +2531,10 @@ def cmd_share(args: argparse.Namespace) -> int:
             name = data.get("name", flow_path.stem.replace(".flow", ""))
             import re
             slug = re.sub(r"[^a-z0-9]+", "-", name.lower().strip()).strip("-")
-            result = update_flow(slug, yaml_content)
+            result = update_flow(slug, yaml_content, auth_token=auth_token)
             io.log("success", f"Updated: {result.get('url', slug)}")
         else:
-            result = publish_flow(yaml_content, author=author, files=bundle_files)
+            result = publish_flow(yaml_content, author=author, files=bundle_files, auth_token=auth_token)
             slug = result.get("slug", "")
             file_msg = f" + {len(bundle_files)} file(s)" if bundle_files else ""
             io.log("info", f"Publishing as \"{result.get('name', '')}\" by {result.get('author', 'anonymous')}...")
@@ -2446,6 +2544,8 @@ def cmd_share(args: argparse.Namespace) -> int:
                 io.log("info", "Token saved to ~/.config/stepwise/tokens.json")
     except RegistryError as e:
         io.log("error", str(e))
+        if e.status_code == 401:
+            io.log("info", "Your session may have expired. Run `stepwise login` to re-authenticate.")
         return EXIT_USAGE_ERROR
 
     return EXIT_SUCCESS
@@ -3465,6 +3565,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_cache_debug.add_argument("--var", action="append", dest="vars", metavar="KEY=VALUE",
                                help="Input variable (repeatable)")
 
+    # login
+    sub.add_parser("login", help="Log in to the Stepwise registry via GitHub")
+
+    # logout
+    sub.add_parser("logout", help="Log out of the Stepwise registry")
+
     # update
     sub.add_parser("update", help="Upgrade stepwise to the latest version")
 
@@ -3684,6 +3790,8 @@ def main(argv: list[str] | None = None) -> int:
         "templates": cmd_templates,
         "config": cmd_config,
         "check": cmd_check,
+        "login": cmd_login,
+        "logout": cmd_logout,
         "share": cmd_share,
         "get": cmd_get,
         "search": cmd_search,
