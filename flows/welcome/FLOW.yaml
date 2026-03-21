@@ -98,6 +98,7 @@ steps:
         task-implement:
           description: "Implementing"
           run: |
+            sleep 3
             printf '{"files": 3, "task": "%s"}' "$task"
           outputs: [files, task]
           inputs:
@@ -105,6 +106,7 @@ steps:
         task-run-tests:
           description: "Running unit tests"
           run: |
+            sleep 2
             printf '{"passed": 4, "failed": 2, "status": "fail"}'
           outputs: [passed, failed, status]
           sequencing: [task-implement]
@@ -119,6 +121,7 @@ steps:
         task-fix:
           description: "Fixing tests"
           run: |
+            sleep 1
             printf '{"fixes": "applied"}'
           outputs: [fixes]
           inputs:
@@ -127,6 +130,7 @@ steps:
         task-retest:
           description: "Re-running tests"
           run: |
+            sleep 2
             if [ "$STEPWISE_ATTEMPT" -ge 2 ]; then
               printf '{"result": "passed"}'
             else
@@ -150,6 +154,7 @@ steps:
   run-tests:
     description: "Running integration tests"
     run: |
+      sleep 3
       printf '{"passed": 8, "failed": 3, "status": "fail"}'
     outputs: [passed, failed, status]
     sequencing: [write-code]
@@ -166,6 +171,7 @@ steps:
   fix-tests:
     description: "Fixing tests"
     run: |
+      sleep 2
       printf '{"fixes": "applied"}'
     outputs: [fixes]
     inputs:
@@ -175,6 +181,7 @@ steps:
   rerun-tests:
     description: "Re-running tests"
     run: |
+      sleep 2
       if [ "$STEPWISE_ATTEMPT" -ge 2 ]; then
         printf '{"result": "passed"}'
       else
@@ -201,11 +208,13 @@ steps:
         push-initial:
           description: "Pushing code"
           run: |
+            sleep 2
             printf '{"commit": "initial push"}'
           outputs: [commit]
         create-pr:
           description: "Creating PR"
           run: |
+            sleep 1
             pr=$(($(printf '%s' "$feature" | cksum | cut -d' ' -f1) % 900 + 100))
             printf '{"pr": "#%d", "branch": "feat/%s", "pr_title": "[%s] %s"}' "$pr" "$feature" "$team_name" "$feature"
           outputs: [pr, branch, pr_title]
@@ -249,6 +258,7 @@ steps:
   revise-code:
     description: "Revising code"
     run: |
+      sleep 2
       printf '{"changes": "revised — addressed: %s"}' "$feedback"
     outputs: [changes]
     inputs:
@@ -261,6 +271,7 @@ steps:
   push-fix:
     description: "Pushing fixes"
     run: |
+      sleep 1
       printf '{"pushed": true}'
     outputs: [pushed]
     inputs:
@@ -269,6 +280,7 @@ steps:
   re-review:
     description: "Re-reviewing"
     run: |
+      sleep 2
       if [ "$STEPWISE_ATTEMPT" -ge 2 ]; then
         printf '{"outcome": "approved"}'
       else
