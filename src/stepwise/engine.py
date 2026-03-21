@@ -974,7 +974,8 @@ class Engine:
 
     def _job_complete(self, job: Job) -> bool:
         """Job is complete when nothing is in motion, nothing is ready,
-        and at least one terminal has a current completed run."""
+        and at least one terminal has a current completed run — or all
+        steps are resolved (completed or skipped)."""
         # Anything in motion → not done
         if (self.store.running_runs(job.id) or
                 self.store.suspended_runs(job.id) or
@@ -989,7 +990,16 @@ class Engine:
             latest = self.store.latest_completed_run(job.id, t)
             if latest and self._is_current(job, latest):
                 return True
-        return False  # no terminal completed → will be failed by caller
+        # Also complete if every step has been resolved (completed or skipped)
+        # This handles cases where terminal steps were skipped due to
+        # conditional branching (when conditions) after a loop resolved.
+        all_resolved = True
+        for step_name in job.workflow.steps:
+            latest = self.store.latest_run(job.id, step_name)
+            if not latest or latest.status not in (StepRunStatus.COMPLETED, StepRunStatus.SKIPPED):
+                all_resolved = False
+                break
+        return all_resolved
 
     def _settle_unstarted_steps(self, job: Job) -> None:
         """Mark never-run steps as SKIPPED for bookkeeping. Called at job settlement."""

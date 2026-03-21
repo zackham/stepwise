@@ -138,14 +138,6 @@ steps:
               action: loop
               target: task-run-tests
               max_iterations: 3
-        task-done:
-          description: "All tests passing"
-          run: |
-            printf '{"result": "passed"}'
-          outputs: [result]
-          inputs:
-            status: task-run-tests.status
-          when: "status == 'pass'"
 
   # ─── 5. Integration Tests ───────────────────────────────────────
   #     test → fix → retest loop
