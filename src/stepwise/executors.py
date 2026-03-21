@@ -122,6 +122,15 @@ class ExecutorRegistry:
                 case _:
                     raise KeyError(f"Unknown decorator type: '{dec_ref.type}'")
 
+        # Auto-apply transient retry for agent executors if no retry decorator specified
+        if ref.type == "agent" and not any(d.type == "retry" for d in ref.decorators):
+            executor = RetryDecorator(executor, {
+                "max_retries": 3,
+                "backoff": "exponential",
+                "backoff_base": 30,
+                "transient_only": True,
+            })
+
         return executor
 
 
