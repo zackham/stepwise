@@ -171,7 +171,7 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
 
         // Check if target step is active
         const targetStatus = latestRuns?.[edge.to]?.status;
-        const isRunning = targetStatus === "running";
+        const isRunning = targetStatus === "running" || targetStatus === "delegated";
         const isSuspended = targetStatus === "suspended";
         const isActive = isRunning || isSuspended;
 
