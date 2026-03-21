@@ -36,6 +36,7 @@ steps:
     description: "Planning tasks"
     run: |
       revision=$STEPWISE_ATTEMPT
+      sleep 2
       case "$feature" in
         todo-list)
           printf '{"tasks": ["data-model", "api-routes", "react-ui"], "plan": "3 tasks", "revision": %d}' "$revision"
