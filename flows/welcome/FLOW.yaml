@@ -207,57 +207,23 @@ steps:
       test_status: run-tests.status
 
   # ─── 7. Code Review ─────────────────────────────────────────────
-  #     mock_llm simulates an AI reviewer; loops revise→push→review
+  #     review → revise → push → loop back to review
   await-review:
-    executor: mock_llm
     description: "AI code review"
-    responses:
-      await-review:
-        result: "changes"
-        reviewer: "ai-copilot"
-        feedback: "Add input validation and error handling"
+    run: |
+      sleep 2
+      if [ "$STEPWISE_ATTEMPT" -ge 2 ]; then
+        printf '{"result": "approved", "reviewer": "ai-copilot", "feedback": ""}'
+      else
+        printf '{"result": "changes", "reviewer": "ai-copilot", "feedback": "Add input validation and error handling"}'
+      fi
     outputs: [result, reviewer, feedback]
     inputs:
       pr: open-pr.pr
       reviewer_style: $job.reviewer_style
-
-  revise-code:
-    description: "Revising code"
-    run: |
-      sleep 2
-      printf '{"changes": "revised — addressed: %s"}' "$feedback"
-    outputs: [changes]
-    inputs:
-      result: await-review.result
-      feedback:
-        from: await-review.feedback
-        optional: true
-    when: "result != 'approved'"
-
-  push-fix:
-    description: "Pushing fixes"
-    run: |
-      sleep 1
-      printf '{"pushed": true}'
-    outputs: [pushed]
-    inputs:
-      changes: revise-code.changes
-
-  re-review:
-    description: "Re-reviewing"
-    run: |
-      sleep 2
-      if [ "$STEPWISE_ATTEMPT" -ge 2 ]; then
-        printf '{"outcome": "approved"}'
-      else
-        printf '{"outcome": "changes"}'
-      fi
-    outputs: [outcome]
-    inputs:
-      pushed: push-fix.pushed
     exits:
       - name: approved
-        when: "outputs.outcome == 'approved'"
+        when: "outputs.result == 'approved'"
         action: advance
       - name: stuck
         when: "attempt >= 4"
@@ -268,6 +234,32 @@ steps:
         target: revise-code
         max_iterations: 5
 
+  revise-code:
+    description: "Revising code"
+    run: |
+      sleep 2
+      printf '{"changes": "revised — addressed: %s"}' "$feedback"
+    outputs: [changes]
+    inputs:
+      feedback:
+        from: await-review.feedback
+        optional: true
+
+  push-fix:
+    description: "Pushing fixes"
+    run: |
+      sleep 1
+      printf '{"pushed": true}'
+    outputs: [pushed]
+    inputs:
+      changes: revise-code.changes
+    exits:
+      - name: re-review
+        when: "True"
+        action: loop
+        target: await-review
+        max_iterations: 5
+
   # ─── 8. Deploy Decision ─────────────────────────────────────────
   ship-it:
     executor: external
@@ -275,12 +267,9 @@ steps:
     prompt: |
       "$pr_title" ($pr) reviewed by $reviewer!
 
-      The review loop just resolved — revise-code, push-fix, and re-review
-      cycled until approved. An escalate exit rule at attempt >= 4 would
-      pause the job if the loop got stuck.
+      The review loop just resolved — await-review requested changes, revise-code and push-fix addressed them, then push-fix looped back to await-review which approved on the second pass. An escalate rule at attempt >= 4 would pause if the loop got stuck.
 
-      Now your choice branches the workflow — each downstream step has a
-      `when` condition, so only one path executes and the other is skipped.
+      Now your choice branches the workflow — each downstream step has a `when` condition, so only one path executes and the other is skipped.
     outputs:
       decision:
         type: choice
@@ -290,7 +279,7 @@ steps:
       pr: open-pr.pr
       pr_title: open-pr.pr_title
       reviewer: await-review.reviewer
-      review_outcome: re-review.outcome
+      review_result: await-review.result
 
   # ─── 9. Deploy or Close ──────────────────────────────────────────
   merge:
