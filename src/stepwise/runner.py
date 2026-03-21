@@ -451,9 +451,13 @@ def run_flow(
     # 1c. Check for running server — delegate if available
     flow_name = objective or flow_display_name(flow_path)
     if not force_local:
-        from stepwise.server_detect import detect_server
+        from stepwise.server_detect import detect_server, verify_server_identity
         server_url = detect_server(project.dot_dir)
         if server_url:
+            if not verify_server_identity(server_url, project.root):
+                adapter.log("error", f"Server at {server_url} belongs to a different project")
+                adapter.log("info", "Use --local to run without delegation, or stop the other server")
+                return EXIT_JOB_FAILED
             return _delegated_run_flow(
                 server_url=server_url,
                 workflow=workflow,
@@ -886,9 +890,15 @@ def run_wait(
 
     # Check for running server — delegate if available
     if not force_local:
-        from stepwise.server_detect import detect_server
+        from stepwise.server_detect import detect_server, verify_server_identity
         server_url = detect_server(project.dot_dir)
         if server_url:
+            if not verify_server_identity(server_url, project.root):
+                import logging
+                logging.getLogger("stepwise.runner").error(
+                    "Server at %s belongs to a different project", server_url
+                )
+                return EXIT_JOB_FAILED
             return _delegated_run_wait(
                 server_url=server_url,
                 workflow=workflow,
@@ -1458,9 +1468,15 @@ def run_async(
 
     # Check for running server — delegate if available
     if not force_local:
-        from stepwise.server_detect import detect_server
+        from stepwise.server_detect import detect_server, verify_server_identity
         server_url = detect_server(project.dot_dir)
         if server_url:
+            if not verify_server_identity(server_url, project.root):
+                import logging
+                logging.getLogger("stepwise.runner").error(
+                    "Server at %s belongs to a different project", server_url
+                )
+                return EXIT_JOB_FAILED
             return _delegated_run_async(server_url, workflow, objective or flow_display_name(flow_path), inputs, workspace, notify_url, notify_context, name=name)
 
     # Create the job in the store so we have a job_id
