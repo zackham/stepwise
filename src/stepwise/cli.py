@@ -22,7 +22,7 @@ Usage:
     stepwise config get|set [key] [value]  Manage configuration
     stepwise schema <flow>                 Generate JSON tool contract
     stepwise output <job-id> [--step] [--run] Retrieve job/step outputs
-    stepwise fulfill <run-id> '<json>'     Satisfy a suspended human step (or --stdin, --wait)
+    stepwise fulfill <run-id> '<json>'     Satisfy a suspended external step (or --stdin, --wait)
     stepwise agent-help [--update <file>]  Generate agent instructions
     stepwise update                        Upgrade to the latest version
     stepwise uninstall [--yes] [--force]   Remove stepwise from this project
@@ -782,11 +782,11 @@ def _executor_subtitle(step) -> str:
         if model:
             parts.append(model)
         return " ".join(parts)
-    elif exec_type == "human":
+    elif exec_type == "external":
         prompt = config.get("prompt", "")
         if prompt:
             return prompt[:36] if len(prompt) <= 36 else prompt[:34] + ".."
-        return "human input"
+        return "external input"
     elif exec_type == "poll":
         return "poll"
     elif exec_type == "mock_llm":
@@ -815,7 +815,7 @@ def _build_flow_graph(wf, fmt: str, name: str | None = None):
 
     _EXECUTOR_SHAPES = {
         "script": "box",
-        "human": "parallelogram",
+        "external": "parallelogram",
         "llm": "box",
         "agent": "doubleoctagon",
         "poll": "hexagon",
@@ -2194,19 +2194,8 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 def _parse_duration(s: str) -> int | None:
     """Parse a duration string like '24h', '7d', '30m' into seconds."""
-    import re
-    m = re.match(r'^(\d+)([hdm])$', s)
-    if not m:
-        return None
-    value = int(m.group(1))
-    unit = m.group(2)
-    if unit == 'h':
-        return value * 3600
-    elif unit == 'd':
-        return value * 86400
-    elif unit == 'm':
-        return value * 60
-    return None
+    from stepwise.models import parse_duration
+    return parse_duration(s)
 
 
 def _format_age(seconds: int) -> str:
@@ -2770,7 +2759,7 @@ def cmd_output(args: argparse.Namespace) -> int:
 
 
 def cmd_fulfill(args: argparse.Namespace) -> int:
-    """Satisfy a suspended human step from the command line."""
+    """Satisfy a suspended external step from the command line."""
     # Server routing (always JSON)
     server_url = _detect_server_url(args)
     if server_url:
@@ -3390,7 +3379,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_wait.add_argument("--timeout", type=int, help="Timeout in seconds")
 
     # fulfill
-    p_fulfill = sub.add_parser("fulfill", help="Satisfy a suspended human step")
+    p_fulfill = sub.add_parser("fulfill", help="Satisfy a suspended external step")
     p_fulfill.add_argument("run_id", help="Run ID of the suspended step")
     p_fulfill.add_argument("payload", nargs="?", default=None,
                            help="JSON payload with field values (use --stdin or '-' to read from stdin)")

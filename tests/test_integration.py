@@ -17,7 +17,7 @@ from stepwise.executors import (
     ExecutorRegistry,
     ExecutorResult,
     ExecutorStatus,
-    HumanExecutor,
+    ExternalExecutor,
     MockLLMExecutor,
     ScriptExecutor,
 )
@@ -44,7 +44,7 @@ def make_registry():
     reg = ExecutorRegistry()
     reg.register("callable", lambda config: CallableExecutor(fn_name=config.get("fn_name", "default")))
     reg.register("script", lambda config: ScriptExecutor(command=config.get("command", "echo '{}'")))
-    reg.register("human", lambda config: HumanExecutor(prompt=config.get("prompt", "")))
+    reg.register("external", lambda config: ExternalExecutor(prompt=config.get("prompt", "")))
     reg.register("mock_llm", lambda config: MockLLMExecutor(
         failure_rate=config.get("failure_rate", 0.0),
         partial_rate=config.get("partial_rate", 0.0),
@@ -311,11 +311,11 @@ class TestPollWatch:
         assert watch_state.get("last_error") is not None
 
 
-# ── Test 14: Human watch fulfilled via API ───────────────────────────
+# ── Test 14: External watch fulfilled via API ───────────────────────────
 
 
-class TestHumanWatch:
-    def test_human_watch_fulfilled(self):
+class TestExternalWatch:
+    def test_external_watch_fulfilled(self):
         store = SQLiteStore(":memory:")
         reg = make_registry()
         engine = Engine(store=store, registry=reg)
@@ -323,7 +323,7 @@ class TestHumanWatch:
         w = WorkflowDefinition(steps={
             "review": StepDefinition(
                 name="review", outputs=["decision", "comments"],
-                executor=ExecutorRef("human", {
+                executor=ExecutorRef("external", {
                     "prompt": "Review this code",
                 }),
             ),
@@ -334,7 +334,7 @@ class TestHumanWatch:
 
         runs = engine.get_runs(job.id, "review")
         assert runs[0].status == StepRunStatus.SUSPENDED
-        assert runs[0].watch.mode == "human"
+        assert runs[0].watch.mode == "external"
 
         engine.fulfill_watch(runs[0].id, {
             "decision": True,
@@ -358,7 +358,7 @@ class TestHumanWatch:
         w = WorkflowDefinition(steps={
             "review": StepDefinition(
                 name="review", outputs=["decision", "comments"],
-                executor=ExecutorRef("human", {"prompt": "Review"}),
+                executor=ExecutorRef("external", {"prompt": "Review"}),
             ),
         })
 
@@ -393,7 +393,7 @@ class TestCrashRecovery:
             ),
             "b": StepDefinition(
                 name="b", outputs=["result"],
-                executor=ExecutorRef("human", {"prompt": "approve"}),
+                executor=ExecutorRef("external", {"prompt": "approve"}),
                 inputs=[InputBinding("data", "a", "value")],
             ),
         })
@@ -547,7 +547,7 @@ class TestCancelPropagation:
         sub_flow = WorkflowDefinition(steps={
             "slow": StepDefinition(
                 name="slow", outputs=["result"],
-                executor=ExecutorRef("human", {"prompt": "do something slow"}),
+                executor=ExecutorRef("external", {"prompt": "do something slow"}),
             ),
         })
 
@@ -598,7 +598,7 @@ class TestRerunSafetyDelegated:
         sub_flow = WorkflowDefinition(steps={
             "inner": StepDefinition(
                 name="inner", outputs=["result"],
-                executor=ExecutorRef("human", {"prompt": "waiting"}),
+                executor=ExecutorRef("external", {"prompt": "waiting"}),
             ),
         })
 
@@ -674,7 +674,7 @@ class TestInjectContext:
         w = WorkflowDefinition(steps={
             "a": StepDefinition(
                 name="a", outputs=["value"],
-                executor=ExecutorRef("human", {"prompt": "do something"}),
+                executor=ExecutorRef("external", {"prompt": "do something"}),
             ),
         })
 
@@ -697,7 +697,7 @@ class TestInjectContext:
         w = WorkflowDefinition(steps={
             "a": StepDefinition(
                 name="a", outputs=["value"],
-                executor=ExecutorRef("human", {"prompt": "do something"}),
+                executor=ExecutorRef("external", {"prompt": "do something"}),
             ),
         })
 
@@ -747,7 +747,7 @@ class TestInjectContext:
         w = WorkflowDefinition(steps={
             "a": StepDefinition(
                 name="a", outputs=["value"],
-                executor=ExecutorRef("human", {"prompt": "step 1"}),
+                executor=ExecutorRef("external", {"prompt": "step 1"}),
             ),
             "b": StepDefinition(
                 name="b", outputs=["result"],
@@ -860,7 +860,7 @@ class TestPauseResume:
         w = WorkflowDefinition(steps={
             "a": StepDefinition(
                 name="a", outputs=["value"],
-                executor=ExecutorRef("human", {"prompt": "do something"}),
+                executor=ExecutorRef("external", {"prompt": "do something"}),
             ),
         })
 
@@ -888,7 +888,7 @@ class TestCancelJob:
         w = WorkflowDefinition(steps={
             "a": StepDefinition(
                 name="a", outputs=["value"],
-                executor=ExecutorRef("human", {"prompt": "do something"}),
+                executor=ExecutorRef("external", {"prompt": "do something"}),
             ),
         })
 

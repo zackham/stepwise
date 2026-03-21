@@ -112,7 +112,7 @@ class TestResolvedFlowStatus:
         assert status["sub_jobs"] == []
 
     def test_flow_with_suspended_step(self, engine, store):
-        """Flow with a suspended human step shows prompt, run_id, expected_outputs."""
+        """Flow with a suspended external step shows prompt, run_id, expected_outputs."""
         register_step_fn("prep", lambda inputs: {"data": "ready"})
 
         wf = WorkflowDefinition(steps={
@@ -122,7 +122,7 @@ class TestResolvedFlowStatus:
             ),
             "review": StepDefinition(
                 name="review", outputs=["approved"],
-                executor=ExecutorRef("human", {"prompt": "Review the data"}),
+                executor=ExecutorRef("external", {"prompt": "Review the data"}),
                 inputs=[InputBinding("data", "prep", "data")],
             ),
         })
@@ -227,7 +227,7 @@ class TestIdempotentFulfill:
             ),
             "review": StepDefinition(
                 name="review", outputs=["approved"],
-                executor=ExecutorRef("human", {"prompt": "Approve"}),
+                executor=ExecutorRef("external", {"prompt": "Approve"}),
                 inputs=[InputBinding("data", "prep", "data")],
             ),
         })
@@ -287,12 +287,12 @@ def tmp_project(tmp_path):
 
 
 @pytest.fixture
-def human_flow(tmp_project):
-    """A flow with a human step for CLI tests."""
-    flow = tmp_project / "human.flow.yaml"
+def external_flow(tmp_project):
+    """A flow with an external step for CLI tests."""
+    flow = tmp_project / "external.flow.yaml"
     flow.write_text("""\
-name: human-test
-description: Flow with human approval
+name: external-test
+description: Flow with external approval
 
 steps:
   prepare:
@@ -301,7 +301,7 @@ steps:
     outputs: [data, count]
 
   approve:
-    executor: human
+    executor: external
     prompt: "Review and approve"
     outputs: [approved, reason]
     inputs:
@@ -320,12 +320,12 @@ steps:
 class TestStatusJsonCLI:
     """Tests for `status --output json` using resolved_flow_status."""
 
-    def test_status_json_uses_resolved_format(self, human_flow, tmp_project):
+    def test_status_json_uses_resolved_format(self, external_flow, tmp_project):
         """status --output json returns the resolved flow status format."""
         # Run to get a job
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
-            "run", str(human_flow), "--wait", "--timeout", "5",
+            "run", str(external_flow), "--wait", "--timeout", "5",
             "--var", "repo=test",
         ])
         data = json.loads(output)
@@ -353,12 +353,12 @@ class TestStatusJsonCLI:
 class TestOutputStepCLI:
     """Tests for `output --step` and `output --run`."""
 
-    def test_output_step_completed(self, human_flow, tmp_project):
+    def test_output_step_completed(self, external_flow, tmp_project):
         """output --step retrieves specific step outputs."""
         # Run until suspended (prepare completes, approve suspends)
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
-            "run", str(human_flow), "--wait", "--timeout", "5",
+            "run", str(external_flow), "--wait", "--timeout", "5",
         ])
         data = json.loads(output)
         job_id = data["job_id"]
@@ -373,11 +373,11 @@ class TestOutputStepCLI:
         assert result["prepare"]["data"] == "ready"
         assert result["prepare"]["count"] == 42
 
-    def test_output_step_not_completed(self, human_flow, tmp_project):
+    def test_output_step_not_completed(self, external_flow, tmp_project):
         """output --step for incomplete step returns null + status."""
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
-            "run", str(human_flow), "--wait", "--timeout", "5",
+            "run", str(external_flow), "--wait", "--timeout", "5",
         ])
         data = json.loads(output)
         job_id = data["job_id"]
@@ -391,11 +391,11 @@ class TestOutputStepCLI:
         result = json.loads(output)
         assert result["deploy"] is None
 
-    def test_output_step_nonexistent(self, human_flow, tmp_project):
+    def test_output_step_nonexistent(self, external_flow, tmp_project):
         """output --step for nonexistent step shows error."""
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
-            "run", str(human_flow), "--wait", "--timeout", "5",
+            "run", str(external_flow), "--wait", "--timeout", "5",
         ])
         data = json.loads(output)
         job_id = data["job_id"]
@@ -408,11 +408,11 @@ class TestOutputStepCLI:
         result = json.loads(output)
         assert "_error" in result["nonexistent"]
 
-    def test_output_step_inputs(self, human_flow, tmp_project):
+    def test_output_step_inputs(self, external_flow, tmp_project):
         """output --step --inputs retrieves step inputs."""
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
-            "run", str(human_flow), "--wait", "--timeout", "5",
+            "run", str(external_flow), "--wait", "--timeout", "5",
         ])
         data = json.loads(output)
         job_id = data["job_id"]
@@ -427,11 +427,11 @@ class TestOutputStepCLI:
         assert "approve" in result
         assert result["approve"]["data"] == "ready"
 
-    def test_output_run_id(self, human_flow, tmp_project):
+    def test_output_run_id(self, external_flow, tmp_project):
         """output --run retrieves by run ID."""
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
-            "run", str(human_flow), "--wait", "--timeout", "5",
+            "run", str(external_flow), "--wait", "--timeout", "5",
         ])
         data = json.loads(output)
         job_id = data["job_id"]
@@ -465,11 +465,11 @@ class TestOutputStepCLI:
 class TestCancelJsonCLI:
     """Tests for `cancel --output json`."""
 
-    def test_cancel_json_output(self, human_flow, tmp_project):
+    def test_cancel_json_output(self, external_flow, tmp_project):
         """cancel --output json returns completed/cancelled/remaining steps."""
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
-            "run", str(human_flow), "--wait", "--timeout", "5",
+            "run", str(external_flow), "--wait", "--timeout", "5",
         ])
         data = json.loads(output)
         job_id = data["job_id"]
@@ -491,11 +491,11 @@ class TestCancelJsonCLI:
 class TestListSuspendedCLI:
     """Tests for `list --suspended`."""
 
-    def test_list_suspended_json(self, human_flow, tmp_project):
-        """list --suspended --output json shows pending human steps."""
+    def test_list_suspended_json(self, external_flow, tmp_project):
+        """list --suspended --output json shows pending external steps."""
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
-            "run", str(human_flow), "--wait", "--timeout", "5",
+            "run", str(external_flow), "--wait", "--timeout", "5",
         ])
         data = json.loads(output)
         assert data["status"] in ("suspended", "timeout")
@@ -536,11 +536,11 @@ class TestListSuspendedCLI:
 class TestWaitSuspension:
     """Tests for --wait returning on suspension."""
 
-    def test_wait_returns_on_suspension(self, human_flow, tmp_project):
+    def test_wait_returns_on_suspension(self, external_flow, tmp_project):
         """--wait returns EXIT_SUSPENDED with suspended step details."""
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
-            "run", str(human_flow), "--wait",
+            "run", str(external_flow), "--wait",
         ])
 
         assert code == EXIT_SUSPENDED
@@ -565,12 +565,12 @@ class TestWaitSuspension:
 class TestFulfillWait:
     """Tests for fulfill --wait chaining."""
 
-    def test_fulfill_and_wait_to_completion(self, human_flow, tmp_project):
+    def test_fulfill_and_wait_to_completion(self, external_flow, tmp_project):
         """fulfill --wait fulfills step then blocks until completion."""
         # Start and get suspended
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
-            "run", str(human_flow), "--wait",
+            "run", str(external_flow), "--wait",
         ])
         assert code == EXIT_SUSPENDED
         data = json.loads(output)
@@ -590,12 +590,12 @@ class TestFulfillWait:
 class TestWaitCommand:
     """Tests for `stepwise wait <job-id>`."""
 
-    def test_wait_on_suspended_job(self, human_flow, tmp_project):
+    def test_wait_on_suspended_job(self, external_flow, tmp_project):
         """wait on a suspended job returns immediately with suspended status."""
         # Start and get suspended
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
-            "run", str(human_flow), "--wait",
+            "run", str(external_flow), "--wait",
         ])
         assert code == EXIT_SUSPENDED
         data = json.loads(output)
@@ -610,12 +610,12 @@ class TestWaitCommand:
         data = json.loads(output)
         assert data["status"] == "suspended"
 
-    def test_wait_on_completed_job(self, human_flow, tmp_project):
+    def test_wait_on_completed_job(self, external_flow, tmp_project):
         """wait on a completed job returns immediately."""
         # Run the full flow
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
-            "run", str(human_flow), "--wait",
+            "run", str(external_flow), "--wait",
         ])
         data = json.loads(output)
         job_id = data["job_id"]
@@ -710,7 +710,7 @@ class TestHooks:
         from stepwise.hooks import fire_hook_for_event
         result = fire_hook_for_event(
             "step.suspended",
-            {"step": "approve", "run_id": "run-abc", "watch_mode": "human"},
+            {"step": "approve", "run_id": "run-abc", "watch_mode": "external"},
             "job-456",
             dot_dir,
         )
@@ -853,7 +853,7 @@ class TestHookEngineIntegration:
             ),
             "review": StepDefinition(
                 name="review", outputs=["approved"],
-                executor=ExecutorRef("human", {"prompt": "Review please"}),
+                executor=ExecutorRef("external", {"prompt": "Review please"}),
                 inputs=[InputBinding("x", "prep", "x")],
             ),
         })
@@ -1059,13 +1059,13 @@ class TestServerEndpoints:
     def test_fulfill_returns_job_id(self, client):
         """POST /api/runs/{run_id}/fulfill returns job_id in response."""
         import time
-        # Create a job with a human step
+        # Create a job with an external step
         workflow = {
             "steps": {
                 "approve": {
                     "name": "approve",
                     "outputs": ["ok"],
-                    "executor": {"type": "human", "config": {"prompt": "Approve?"}},
+                    "executor": {"type": "external", "config": {"prompt": "Approve?"}},
                 }
             }
         }
@@ -1073,7 +1073,7 @@ class TestServerEndpoints:
         job_id = resp.json()["id"]
         client.post(f"/api/jobs/{job_id}/start")
 
-        # Wait for async engine to suspend the human step
+        # Wait for async engine to suspend the external step
         suspended = []
         for _ in range(50):
             time.sleep(0.1)

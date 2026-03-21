@@ -120,7 +120,7 @@ class DecoratorRef:
 
 @dataclass
 class ExecutorRef:
-    type: str  # registered name: "script", "mock_llm", "human", etc.
+    type: str  # registered name: "script", "mock_llm", "external", etc.
     config: dict = field(default_factory=dict)
     decorators: list[DecoratorRef] = field(default_factory=list)
 
@@ -247,7 +247,7 @@ VALID_FIELD_TYPES = {"str", "text", "number", "bool", "choice"}
 
 @dataclass
 class OutputFieldSpec:
-    """Typed output field specification for human steps."""
+    """Typed output field specification for external steps."""
     type: str = "str"        # str, text, number, bool, choice
     required: bool = True
     default: Any = None
@@ -378,6 +378,52 @@ class FlowRequirement:
         )
 
 
+# ── Cache Config ──────────────────────────────────────────────────────
+
+
+def parse_duration(s: str) -> int | None:
+    """Parse a duration string like '24h', '7d', '30m' into seconds."""
+    import re
+    m = re.match(r'^(\d+)([hdms])$', s)
+    if not m:
+        return None
+    value = int(m.group(1))
+    unit = m.group(2)
+    if unit == 'h':
+        return value * 3600
+    elif unit == 'd':
+        return value * 86400
+    elif unit == 'm':
+        return value * 60
+    elif unit == 's':
+        return value
+    return None
+
+
+@dataclass
+class CacheConfig:
+    """Per-step result caching configuration."""
+    enabled: bool = True
+    ttl: int | None = None  # seconds; None = use executor-type default
+    key_extra: str | None = None  # extra string to include in cache key
+
+    def to_dict(self) -> dict:
+        d: dict = {"enabled": self.enabled}
+        if self.ttl is not None:
+            d["ttl"] = self.ttl
+        if self.key_extra is not None:
+            d["key_extra"] = self.key_extra
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> CacheConfig:
+        return cls(
+            enabled=d.get("enabled", True),
+            ttl=d.get("ttl"),
+            key_extra=d.get("key_extra"),
+        )
+
+
 # ── Step Definition ────────────────────────────────────────────────────
 
 
@@ -401,6 +447,7 @@ class StepDefinition:
     continue_session: bool = False  # reuse agent session across loop iterations
     loop_prompt: str | None = None  # alternate prompt template on attempt > 1
     max_continuous_attempts: int | None = None  # circuit breaker for session reuse
+    cache: CacheConfig | None = None  # opt-in result caching
 
     def to_dict(self) -> dict:
         d = {
@@ -432,6 +479,8 @@ class StepDefinition:
             d["loop_prompt"] = self.loop_prompt
         if self.max_continuous_attempts is not None:
             d["max_continuous_attempts"] = self.max_continuous_attempts
+        if self.cache is not None:
+            d["cache"] = self.cache.to_dict()
         return d
 
     @classmethod
@@ -454,6 +503,7 @@ class StepDefinition:
             continue_session=d.get("continue_session", False),
             loop_prompt=d.get("loop_prompt"),
             max_continuous_attempts=d.get("max_continuous_attempts"),
+            cache=CacheConfig.from_dict(d["cache"]) if d.get("cache") else None,
         )
 
 
@@ -703,8 +753,8 @@ class WorkflowDefinition:
                     f"catch-all (when: 'True')"
                 )
 
-            # Output-space coverage for human steps
-            if (step.executor.type == "human" and step.output_schema):
+            # Output-space coverage for external steps
+            if (step.executor.type == "external" and step.output_schema):
                 domains: dict[str, list] = {}
                 for field_name, spec in step.output_schema.items():
                     vals: list = []
@@ -1062,7 +1112,7 @@ class HandoffEnvelope:
 
 @dataclass
 class WatchSpec:
-    mode: str  # "poll", "human", "timeout"
+    mode: str  # "poll", "external", "timeout"
     config: dict = field(default_factory=dict)
     fulfillment_outputs: list[str] = field(default_factory=list)
     output_schema: dict[str, dict] = field(default_factory=dict)

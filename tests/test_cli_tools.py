@@ -61,12 +61,12 @@ steps:
 
 
 @pytest.fixture
-def human_flow(tmp_project):
-    """A flow with a human step."""
-    flow = tmp_project / "human.flow.yaml"
+def external_flow(tmp_project):
+    """A flow with an external step."""
+    flow = tmp_project / "external.flow.yaml"
     flow.write_text("""\
-name: human-test
-description: Flow with human approval
+name: external-test
+description: Flow with external approval
 
 steps:
   prepare:
@@ -77,7 +77,7 @@ steps:
       repo: $job.repo
 
   approve:
-    executor: human
+    executor: external
     prompt: "Review and approve"
     outputs: [approved, reason]
     inputs:
@@ -156,21 +156,21 @@ class TestSchema:
         assert schema["description"] == "A simple test flow"
         assert schema["inputs"] == ["question"]
         assert schema["outputs"] == ["formatted"]
-        assert schema["humanSteps"] == []
+        assert schema["externalSteps"] == []
 
-    def test_schema_with_human_steps(self, human_flow, tmp_project):
+    def test_schema_with_external_steps(self, external_flow, tmp_project):
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
-            "schema", str(human_flow),
+            "schema", str(external_flow),
         ])
 
         assert code == EXIT_SUCCESS
         schema = json.loads(output)
         assert schema["inputs"] == ["repo"]
         assert schema["outputs"] == ["url"]
-        assert len(schema["humanSteps"]) == 1
-        assert schema["humanSteps"][0]["step"] == "approve"
-        assert schema["humanSteps"][0]["fields"] == ["approved", "reason"]
+        assert len(schema["externalSteps"]) == 1
+        assert schema["externalSteps"][0]["step"] == "approve"
+        assert schema["externalSteps"][0]["fields"] == ["approved", "reason"]
 
     def test_schema_no_inputs(self, no_input_flow, tmp_project):
         code, output = _capture_stdout([
@@ -448,7 +448,7 @@ class TestFulfillCommand:
 
 
 class TestAgentHelp:
-    def test_agent_help_compact_default(self, simple_flow, human_flow, tmp_project):
+    def test_agent_help_compact_default(self, simple_flow, external_flow, tmp_project):
         """Default compact format lists flows concisely with CLI reference."""
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
@@ -457,7 +457,7 @@ class TestAgentHelp:
 
         assert code == EXIT_SUCCESS
         assert "**simple**" in output
-        assert "**human-test**" in output
+        assert "**external-test**" in output
         assert "--wait" in output
         # Compact includes CLI reference section
         assert "stepwise run" in output
@@ -474,7 +474,7 @@ class TestAgentHelp:
         assert "question" in output
         assert '--var question="..."' in output
 
-    def test_agent_help_compact_shows_human_steps(self, human_flow, tmp_project):
+    def test_agent_help_compact_shows_external_steps(self, external_flow, tmp_project):
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
             "agent-help",
@@ -482,7 +482,7 @@ class TestAgentHelp:
 
         assert code == EXIT_SUCCESS
         assert "approve" in output
-        assert "human:" in output
+        assert "external:" in output
 
     def test_agent_help_json_format(self, simple_flow, tmp_project):
         """--format json returns structured JSON."""
@@ -650,11 +650,11 @@ steps:
 class TestWaitTimeout:
     """Test --wait --timeout behavior."""
 
-    def test_timeout_on_human_step(self, human_flow, tmp_project):
-        """--wait returns suspended status when human step blocks (before timeout)."""
+    def test_timeout_on_external_step(self, external_flow, tmp_project):
+        """--wait returns suspended status when external step blocks (before timeout)."""
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
-            "run", str(human_flow),
+            "run", str(external_flow),
             "--wait",
             "--timeout", "5",  # generous timeout — suspension detected first
             "--var", "repo=/tmp/test",

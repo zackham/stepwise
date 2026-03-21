@@ -61,7 +61,7 @@ class TestGenerateSchema:
         assert schema["version"] == "1.0"
         assert schema["inputs"] == ["url"]
         assert schema["outputs"] == ["summary", "score"]
-        assert schema["humanSteps"] == []
+        assert schema["externalSteps"] == []
 
     def test_parallel_flow(self):
         """Parallel flow with multiple terminal steps."""
@@ -95,10 +95,10 @@ class TestGenerateSchema:
         # Both analyze_a and analyze_b are terminal
         assert "sentiment" in schema["outputs"]
         assert "entities" in schema["outputs"]
-        assert schema["humanSteps"] == []
+        assert schema["externalSteps"] == []
 
-    def test_human_step_flow(self):
-        """Flow with a human approval step."""
+    def test_external_step_flow(self):
+        """Flow with an external approval step."""
         wf = _workflow(
             steps={
                 "build": StepDefinition(
@@ -113,7 +113,7 @@ class TestGenerateSchema:
                 "approve": StepDefinition(
                     name="approve",
                     outputs=["approved", "reason"],
-                    executor=ExecutorRef("human", {
+                    executor=ExecutorRef("external", {
                         "prompt": "Review this deployment package. Approve or reject with a reason.",
                     }),
                     inputs=[InputBinding("artifact", "build", "artifact")],
@@ -133,8 +133,8 @@ class TestGenerateSchema:
 
         assert schema["inputs"] == ["branch", "repo"]
         assert schema["outputs"] == ["url", "version"]
-        assert len(schema["humanSteps"]) == 1
-        hs = schema["humanSteps"][0]
+        assert len(schema["externalSteps"]) == 1
+        hs = schema["externalSteps"][0]
         assert hs["step"] == "approve"
         assert "Review this deployment" in hs["prompt"]
         assert hs["fields"] == ["approved", "reason"]
@@ -256,8 +256,8 @@ class TestGenerateSchema:
         # Should be deduplicated and sorted
         assert schema["inputs"] == ["context", "question", "temperature"]
 
-    def test_multiple_human_steps(self):
-        """Flow with multiple human steps."""
+    def test_multiple_external_steps(self):
+        """Flow with multiple external steps."""
         wf = _workflow(
             steps={
                 "draft": StepDefinition(
@@ -269,7 +269,7 @@ class TestGenerateSchema:
                 "review1": StepDefinition(
                     name="review1",
                     outputs=["feedback"],
-                    executor=ExecutorRef("human", {"prompt": "Review draft"}),
+                    executor=ExecutorRef("external", {"prompt": "Review draft"}),
                     inputs=[InputBinding("text", "draft", "text")],
                 ),
                 "revise": StepDefinition(
@@ -281,7 +281,7 @@ class TestGenerateSchema:
                 "review2": StepDefinition(
                     name="review2",
                     outputs=["approved"],
-                    executor=ExecutorRef("human", {"prompt": "Final approval"}),
+                    executor=ExecutorRef("external", {"prompt": "Final approval"}),
                     inputs=[InputBinding("text", "revise", "text")],
                 ),
             },
@@ -290,8 +290,8 @@ class TestGenerateSchema:
 
         schema = generate_schema(wf)
 
-        assert len(schema["humanSteps"]) == 2
-        names = [hs["step"] for hs in schema["humanSteps"]]
+        assert len(schema["externalSteps"]) == 2
+        names = [hs["step"] for hs in schema["externalSteps"]]
         assert "review1" in names
         assert "review2" in names
 

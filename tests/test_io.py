@@ -5,7 +5,7 @@ from io import StringIO
 import pytest
 
 from stepwise.io import (
-    HumanInputAborted,
+    ExternalInputAborted,
     IOAdapter,
     LiveFlowHandle,
     PlainAdapter,
@@ -371,22 +371,22 @@ class TestCollectField:
         assert "Your name" in out.getvalue()
 
 
-# ── collect_human_input ──────────────────────────────────────────────
+# ── collect_external_input ──────────────────────────────────────────────
 
 
-class TestCollectHumanInput:
+class TestCollectExternalInput:
     def test_single_field(self):
         inp = StringIO("Alice\n")
         out = StringIO()
         adapter = PlainAdapter(output=out, input_stream=inp)
-        payload = adapter.collect_human_input("What's your name?", ["name"])
+        payload = adapter.collect_external_input("What's your name?", ["name"])
         assert payload == {"name": "Alice"}
 
     def test_multi_field(self):
         inp = StringIO("y\nhello\n")
         out = StringIO()
         adapter = PlainAdapter(output=out, input_stream=inp)
-        payload = adapter.collect_human_input(
+        payload = adapter.collect_external_input(
             "Review",
             ["approved", "feedback"],
             {"approved": {"type": "bool"}, "feedback": {"type": "str"}},
@@ -398,18 +398,18 @@ class TestCollectHumanInput:
         inp = StringIO("ok\n")
         out = StringIO()
         adapter = PlainAdapter(output=out, input_stream=inp)
-        adapter.collect_human_input("Please review this.", ["response"])
+        adapter.collect_external_input("Please review this.", ["response"])
         assert "Please review this" in out.getvalue()
 
 
-class TestHumanInputAborted:
+class TestExternalInputAborted:
     def test_exception_carries_action(self):
-        e = HumanInputAborted("suspend")
+        e = ExternalInputAborted("suspend")
         assert e.action == "suspend"
         assert "suspend" in str(e)
 
     def test_cancel_action(self):
-        e = HumanInputAborted("cancel")
+        e = ExternalInputAborted("cancel")
         assert e.action == "cancel"
 
 

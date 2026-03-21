@@ -12,10 +12,10 @@ class TestCreateDefaultRegistry:
     """create_default_registry() registers all built-in executor types."""
 
     def test_registers_core_types(self):
-        """Core types (script, human, mock_llm, agent) always present."""
+        """Core types (script, external, mock_llm, agent) always present."""
         registry = create_default_registry(StepwiseConfig())
         assert "script" in registry._factories
-        assert "human" in registry._factories
+        assert "external" in registry._factories
         assert "mock_llm" in registry._factories
         assert "agent" in registry._factories
 
@@ -35,7 +35,7 @@ class TestCreateDefaultRegistry:
     def test_output_matches_server_types(self):
         """Registry has same executor types as server.py registration."""
         # The expected types that server.py registers (without API key or CLI)
-        expected_types = {"script", "human", "poll", "mock_llm", "agent"}
+        expected_types = {"script", "external", "human", "poll", "mock_llm", "agent"}
         config = StepwiseConfig()
         with patch("stepwise.cli_llm_client.detect_cli_backend", return_value=None):
             registry = create_default_registry(config)
@@ -58,11 +58,11 @@ class TestCreateDefaultRegistry:
         executor = registry.create(ref)
         assert isinstance(executor, ScriptExecutor)
 
-    def test_human_executor_created(self):
-        """Human factory produces a HumanExecutor."""
-        from stepwise.executors import HumanExecutor
+    def test_external_executor_created(self):
+        """External factory produces a ExternalExecutor."""
+        from stepwise.executors import ExternalExecutor
         from stepwise.models import ExecutorRef
         registry = create_default_registry(StepwiseConfig())
-        ref = ExecutorRef(type="human", config={"prompt": "Review this"})
+        ref = ExecutorRef(type="external", config={"prompt": "Review this"})
         executor = registry.create(ref)
-        assert isinstance(executor, HumanExecutor)
+        assert isinstance(executor, ExternalExecutor)

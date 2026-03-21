@@ -10,7 +10,7 @@ from unittest.mock import patch, MagicMock
 
 from stepwise.config import StepwiseConfig
 from stepwise.engine import Engine
-from stepwise.executors import ExecutorRegistry, ScriptExecutor, HumanExecutor, MockLLMExecutor
+from stepwise.executors import ExecutorRegistry, ScriptExecutor, ExternalExecutor, MockLLMExecutor
 from stepwise.io import PlainAdapter, create_adapter
 from stepwise.models import (
     ExecutorRef,
@@ -69,11 +69,11 @@ steps:
     outputs: [result]
 """
 
-HUMAN_STEP_FLOW = """\
-name: with-human
+EXTERNAL_STEP_FLOW = """\
+name: with-external
 steps:
   ask:
-    executor: human
+    executor: external
     prompt: "What is your name?"
     outputs: [name]
   greet:
@@ -83,11 +83,11 @@ steps:
       user_name: ask.name
 """
 
-HUMAN_MULTI_FIELD_FLOW = """\
-name: multi-field-human
+EXTERNAL_MULTI_FIELD_FLOW = """\
+name: multi-field-external
 steps:
   review:
-    executor: human
+    executor: external
     prompt: "Review this draft."
     outputs: [decision, feedback]
 """
@@ -193,12 +193,12 @@ steps:
         assert rc == EXIT_SUCCESS
 
 
-class TestHumanStepEndToEnd:
-    """End-to-end: human step in headless mode with mocked stdin."""
+class TestExternalStepEndToEnd:
+    """End-to-end: external step in headless mode with mocked stdin."""
 
-    def test_human_step_flow_completes(self, tmp_path):
+    def test_external_step_flow_completes(self, tmp_path):
         project = init_project(tmp_path)
-        flow = _write_flow(tmp_path, HUMAN_STEP_FLOW)
+        flow = _write_flow(tmp_path, EXTERNAL_STEP_FLOW)
         input_stream = StringIO("Zack\n")
         output_stream = StringIO()
 
@@ -215,9 +215,9 @@ class TestHumanStepEndToEnd:
         output_text = output_stream.getvalue()
         assert "completed" in output_text
 
-    def test_multi_field_human_step(self, tmp_path):
+    def test_multi_field_external_step(self, tmp_path):
         project = init_project(tmp_path)
-        flow = _write_flow(tmp_path, HUMAN_MULTI_FIELD_FLOW)
+        flow = _write_flow(tmp_path, EXTERNAL_MULTI_FIELD_FLOW)
         input_stream = StringIO("approve\nLooks good\n")
         output_stream = StringIO()
 

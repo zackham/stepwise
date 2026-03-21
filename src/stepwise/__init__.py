@@ -9,7 +9,7 @@ from stepwise.engine import Engine
 from stepwise.events import (
     CONTEXT_INJECTED,
     EXIT_RESOLVED,
-    HUMAN_RERUN,
+    EXTERNAL_RERUN,
     JOB_COMPLETED,
     JOB_FAILED,
     JOB_PAUSED,
@@ -33,12 +33,13 @@ from stepwise.executors import (
     ExecutorRegistry,
     ExecutorResult,
     ExecutorStatus,
-    HumanExecutor,
+    ExternalExecutor,
     MockLLMExecutor,
     PollExecutor,
     ScriptExecutor,
 )
 from stepwise.models import (
+    CacheConfig,
     DecoratorRef,
     Event,
     ExitRule,
@@ -64,6 +65,7 @@ __all__ = [
     # Engine
     "Engine",
     # Models
+    "CacheConfig",
     "DecoratorRef",
     "Event",
     "ExitRule",
@@ -88,7 +90,7 @@ __all__ = [
     "ExecutorRegistry",
     "ExecutorResult",
     "ExecutorStatus",
-    "HumanExecutor",
+    "ExternalExecutor",
     "MockLLMExecutor",
     "PollExecutor",
     "ScriptExecutor",
@@ -99,7 +101,7 @@ __all__ = [
     # Events
     "CONTEXT_INJECTED",
     "EXIT_RESOLVED",
-    "HUMAN_RERUN",
+    "EXTERNAL_RERUN",
     "JOB_COMPLETED",
     "JOB_FAILED",
     "JOB_PAUSED",
