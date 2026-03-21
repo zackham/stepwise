@@ -39,6 +39,9 @@ make build-web                             # npm build → copies web/dist/ → 
 | `stepwise server stop` | Gracefully stop the server |
 | `stepwise server restart` | Stop + start (passes through `--detach`, `--port`, etc.) |
 | `stepwise server status` | Show PID, port, uptime, log path (or "not running") |
+| `stepwise cache stats` | Show cache entries, hits, size, per-flow/step breakdown |
+| `stepwise cache clear` | Clear cached results (`--flow`, `--step` filters) |
+| `stepwise cache debug <flow> <step>` | Show computed cache key for a step (requires `--var`) |
 
 All delegation modes (`run`, `--wait`, `--async`) use WebSocket notifications from the server for low-latency updates, falling back to REST polling at 2s intervals if WS connection fails.
 
@@ -165,7 +168,7 @@ Every executor's `start()` returns an `ExecutorResult` with one of these `type` 
 ### Core model chain (`src/stepwise/models.py`)
 
 ```
-Job → WorkflowDefinition → StepDefinition (with InputBinding, ExitRule, ExecutorRef)
+Job → WorkflowDefinition → StepDefinition (with InputBinding, ExitRule, ExecutorRef, CacheConfig)
 Job ← StepRun ← HandoffEnvelope (with artifact dict, Sidecar, executor_meta)
 ```
 
@@ -252,6 +255,31 @@ steps:
 ```
 
 The `check_command` runs every `interval_seconds`. Empty stdout or non-zero exit = not ready. JSON dict on stdout = fulfilled (dict becomes the artifact). `$var` placeholders in `check_command` and `prompt` are interpolated from inputs.
+
+Step result caching (opt-in, content-addressable):
+
+```yaml
+steps:
+  fetch:
+    run: 'curl -s "$url" | jq .'
+    inputs:
+      url: $job.url
+    outputs: [data]
+    cache: true                    # enable with default TTL (1h for script)
+
+  analyze:
+    executor: llm
+    config:
+      prompt: "Analyze: $data"
+    inputs:
+      data: fetch.data
+    outputs: [analysis]
+    cache:
+      ttl: 30m                    # override default TTL
+      key_extra: v2                # bump to invalidate existing cache
+```
+
+Cache key = SHA-256 of `(resolved_inputs, executor_config, engine_version, key_extra)`. Same inputs + config → cache hit. Human, poll, and emit_flow agent steps are never cached. Default TTLs: script/callable = 1h, llm/agent = 24h. Use `--rerun <step>` to bypass cache for a specific step in a single run. Cache stored in `.stepwise/cache/results.db`.
 
 Optional inputs (weak-reference bindings that resolve to `None` when unavailable):
 
@@ -421,7 +449,7 @@ Other patterns:
 
 ## Key files
 
-**Engine:** `engine.py` (AsyncEngine event queue + legacy Engine tick loop, readiness, launching), `models.py` (all dataclasses), `executors.py` (ABC + built-in executors), `store.py` (SQLite + heartbeat + stale detection), `events.py` (event type constants), `decorators.py` (retry, timeout, fallback), `hooks.py` (project hooks — fires shell scripts on engine events like suspend, complete, fail)
+**Engine:** `engine.py` (AsyncEngine event queue + legacy Engine tick loop, readiness, launching), `models.py` (all dataclasses), `executors.py` (ABC + built-in executors), `store.py` (SQLite + heartbeat + stale detection), `cache.py` (step result cache — content-addressable SQLite store in `.stepwise/cache/results.db`), `events.py` (event type constants), `decorators.py` (retry, timeout, fallback), `hooks.py` (project hooks — fires shell scripts on engine events like suspend, complete, fail)
 
 **CLI/Runner:** `cli.py` (all CLI commands), `runner.py` (headless `stepwise run` + server delegation), `runner_bg.py` (background mode), `server_bg.py` (detached server entry point for `--detach`), `agent.py` (AgentExecutor + AcpxBackend), `agent_help.py` (agent instruction generation), `server_detect.py` (PID file + health probe for server detection), `io.py` (terminal I/O adapter — TerminalAdapter/PlainAdapter/QuietAdapter for rendering flows and collecting input), `api_client.py` (HTTP client for CLI→server delegation)
 
