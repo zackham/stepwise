@@ -8,7 +8,7 @@ Stepwise has three runtime concepts, a dependency system, and a control flow mec
 |---------|-----------|------------|
 | **Job** | A unit of work with inputs and a workflow | Persists to SQLite, can spawn sub-jobs |
 | **Step** | A typed node in the workflow graph | Declares outputs, executor, inputs, exit rules |
-| **Executor** | What does the work inside a step | script, llm, agent, human, poll |
+| **Executor** | What does the work inside a step | script, llm, agent, external, poll |
 | **Input binding** | Pulls data from upstream outputs | `findings: research.findings` |
 | **Exit rule** | Decides what happens after step completion | advance, loop, escalate, abandon |
 | **For-each** | Iterates over a list with embedded sub-flows | Items execute in parallel |
@@ -32,13 +32,13 @@ Jobs can spawn **sub-jobs**. A planning step might decompose a large objective i
 A **step** is a typed node in a job's workflow graph. Each step declares:
 
 - **Outputs** — the fields it produces (e.g., `[findings, sources]`)
-- **Executor** — what does the work (script, LLM, agent, or human)
+- **Executor** — what does the work (script, LLM, agent, or external)
 - **Inputs** — data pulled from other steps' outputs
 - **Exit rules** — what happens after the step completes (advance, loop, escalate)
 
 ```yaml
 review:
-  executor: human
+  executor: external
   prompt: "Review this draft. Approve or request revisions."
   outputs: [decision, feedback]
   inputs:
@@ -66,7 +66,7 @@ An **executor** is what does the actual work inside a step. Stepwise ships with 
 | **Script** | Runs a shell command or script | Data processing, API calls, file operations |
 | **LLM** | Single LLM API call via OpenRouter | Scoring, classification, text generation, structured extraction |
 | **Agent** | Full agentic session (LLM + tools, iterating) | Complex tasks requiring tool use, code generation, research |
-| **Human** | Suspends for human input via the web UI | Approvals, creative judgment, decisions that need a person |
+| **External** | Suspends for external input via the web UI or API | Approvals, creative judgment, decisions that need a person |
 | **Poll** | Runs a check command on an interval until it returns JSON | Waiting for CI, deployments, PR reviews, external conditions |
 
 Executors are **serializable references** — a type name plus configuration. No live Python objects in the durable model. This means jobs can be persisted, resumed, and inspected without executing code.
@@ -90,9 +90,9 @@ research:
   prompt: "Research $topic thoroughly"
   outputs: [findings, sources]
 
-# Human — waits for human input
+# External — waits for external input
 approve:
-  executor: human
+  executor: external
   prompt: "Approve this deployment?"
   outputs: [approved, reason]
 ```
@@ -326,7 +326,7 @@ The engine is designed to make the implicit explicit. When something goes wrong 
 
 ## Flows as Tools
 
-A Stepwise flow is a prompted workflow run with a working directory. The input is a string (the objective) plus optional string variables. The output is an array of terminal step artifacts. This makes flows callable by external agents via CLI — turning flows from "things humans run" into "tools agents delegate to."
+A Stepwise flow is a prompted workflow run with a working directory. The input is a string (the objective) plus optional string variables. The output is an array of terminal step artifacts. This makes flows callable by agents via CLI — turning flows from "things humans run" into "tools agents delegate to."
 
 **No MCP servers, no protocol layers, no required background services.** Just CLI commands that agents call via bash:
 
@@ -343,18 +343,18 @@ stepwise agent-help --update CLAUDE.md
 Agents interact with flows in five modes, all using the same flow definition:
 
 1. **Automated** — Run end-to-end, get structured output. `stepwise run <flow> --wait`
-2. **Mediated** — Run with human steps; agent fulfills them interactively. `--wait` returns exit 5 on suspension; `fulfill --wait` resumes.
+2. **Mediated** — Run with external steps; agent fulfills them interactively. `--wait` returns exit 5 on suspension; `fulfill --wait` resumes.
 3. **Monitoring** — Check job progress and suspension inbox. `status --output json`, `list --suspended`.
 4. **Data Grab** — Retrieve specific outputs from completed steps. `output --step a,b`, `output --step a --inputs`.
 5. **Takeover** — Cancel and inspect a running job. `cancel --output json`, `wait <job-id>`.
 
 ### Key Mechanics
 
-- **`--wait`** blocks until the flow completes or all progress is blocked by human steps (exit 5). Returns JSON with `suspended_steps` including `run_id`, `prompt`, and `fields`.
+- **`--wait`** blocks until the flow completes or all progress is blocked by external steps (exit 5). Returns JSON with `suspended_steps` including `run_id`, `prompt`, and `fields`.
 - **`--async`** spawns a detached background process — no server required. Poll with `stepwise status`, retrieve with `stepwise output`.
-- **`stepwise fulfill <run-id> '{...}' --wait`** satisfies a human step and continues blocking until the next suspension or completion.
-- **`stepwise list --suspended --output json`** shows all pending human steps across all active jobs — the agent's "inbox."
-- **`stepwise schema`** generates a JSON tool contract: inputs, outputs, human steps.
+- **`stepwise fulfill <run-id> '{...}' --wait`** satisfies an external step and continues blocking until the next suspension or completion.
+- **`stepwise list --suspended --output json`** shows all pending external steps across all active jobs — the agent's "inbox."
+- **`stepwise schema`** generates a JSON tool contract: inputs, outputs, external steps.
 - **`stepwise agent-help`** generates markdown instructions with the 5-mode interaction model. Self-documenting, zero infrastructure.
 
 ### Design for Agents

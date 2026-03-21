@@ -28,7 +28,7 @@ stepwise agent-help --update CLAUDE.md
 ```
 
 This scans your project for `.flow.yaml` files and generates a markdown block with:
-- Per-flow entries (inputs, outputs, human steps, run command)
+- Per-flow entries (inputs, outputs, external steps, run command)
 - Expected output shapes for every terminal state
 - CLI quick reference
 - Exit codes
@@ -55,7 +55,7 @@ stepwise agent-help --update CLAUDE.md
 Claude Code reads `CLAUDE.md` automatically. After running `agent-help --update`, Claude can discover and call your flows without additional prompting. It will:
 - Use `stepwise schema <flow>` to check inputs before calling
 - Use `--wait` for flows it needs results from
-- Use `--timeout` for flows with human steps
+- Use `--timeout` for flows with external steps
 - Handle errors based on exit codes
 
 ## 2. Discover What a Flow Needs
@@ -72,14 +72,14 @@ stepwise schema council
   "description": "Ask multiple frontier models and synthesize responses",
   "inputs": ["question"],
   "outputs": ["synthesis", "model_responses"],
-  "humanSteps": []
+  "externalSteps": []
 }
 ```
 
 Key fields:
 - **inputs** — required `--var` flags. If empty, the flow needs no inputs.
 - **outputs** — fields in the terminal step artifacts. This is what you get back on success.
-- **humanSteps** — steps that will suspend and wait for human input. If non-empty, use `--timeout` with `--wait` to avoid blocking forever.
+- **externalSteps** — steps that will suspend and wait for external input. If non-empty, use `--timeout` with `--wait` to avoid blocking forever.
 
 ## 3. Call a Flow (Blocking)
 
@@ -231,7 +231,7 @@ Some flows have steps that pause for human input. When you hit one:
 stepwise run review.flow.yaml --wait --timeout 300 --var content="Draft text"
 ```
 
-If the flow reaches a human step and the timeout fires, you get:
+If the flow reaches an external step and the timeout fires, you get:
 
 ```json
 {
@@ -263,7 +263,7 @@ stepwise output job-a1b2c3d4
 }
 ```
 
-The `fields` array tells you exactly what the human step expects.
+The `fields` array tells you exactly what the external step expects.
 
 ### Fulfill the step
 
@@ -333,12 +333,12 @@ echo "$findings" > /tmp/findings.txt
 stepwise run report.flow.yaml --wait --var-file findings=/tmp/findings.txt
 ```
 
-### Conditional on human steps
+### Conditional on external steps
 
 ```bash
-# Check schema first — if human steps exist, use timeout
+# Check schema first — if external steps exist, use timeout
 schema=$(stepwise schema flow.yaml)
-has_human=$(echo "$schema" | jq '.humanSteps | length')
+has_human=$(echo "$schema" | jq '.externalSteps | length')
 
 if [ "$has_human" -gt 0 ]; then
     stepwise run flow.yaml --wait --timeout 300 --var k=v
@@ -351,7 +351,7 @@ fi
 
 **"Missing required input"** — The flow needs `--var` flags. Run `stepwise schema flow.yaml` to see what inputs are required.
 
-**Timeout on human step** — The flow is waiting for human input. Use `stepwise output <job-id>` to see the suspended step, then `stepwise fulfill` to provide the input.
+**Timeout on external step** — The flow is waiting for external input. Use `stepwise output <job-id>` to see the suspended step, then `stepwise fulfill` to provide the input.
 
 **Empty outputs array** — The job may still be running. Check `stepwise status <job-id>`. If it's completed but outputs are empty, the terminal step may not have produced output fields.
 

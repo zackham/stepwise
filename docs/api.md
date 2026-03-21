@@ -302,7 +302,7 @@ GET /api/status
 {
   "active_jobs": 2,
   "total_jobs": 15,
-  "registered_executors": ["script", "human", "mock_llm", "llm", "agent"]
+  "registered_executors": ["script", "external", "mock_llm", "llm", "agent"]
 }
 ```
 
@@ -316,7 +316,7 @@ GET /api/executors
 
 ```json
 {
-  "executors": ["script", "human", "mock_llm", "llm", "agent"]
+  "executors": ["script", "external", "mock_llm", "llm", "agent"]
 }
 ```
 

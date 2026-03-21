@@ -124,7 +124,7 @@ URL:         https://stepwise.run/flows/code-review
 
 Steps:
   analyze     agent    → review the code changes
-  approve     human    → decide: approve, request changes, or escalate
+  approve     external → decide: approve, request changes, or escalate
   merge       script   → merge the PR
 
 Loops:

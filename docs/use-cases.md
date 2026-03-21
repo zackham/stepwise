@@ -24,7 +24,7 @@ steps:
     outputs: [verdict, issues, suggestions]
 
   decide:
-    executor: human
+    executor: external
     prompt: "Review found $issues. Accept or request changes?"
     outputs: [decision]
     inputs: { issues: review.issues }
@@ -68,7 +68,7 @@ steps:
     outputs: [title, body, summary]
 
   review:
-    executor: human
+    executor: external
     prompt: "Title: $title\n\n$body\n\nApprove or revise?"
     outputs: [decision]
     inputs: { title: draft.title, body: draft.body }
@@ -114,7 +114,7 @@ steps:
     sequencing: [build]
 
   approve:
-    executor: human
+    executor: external
     prompt: "Build $sha ready. Tests passed. Deploy to production?"
     outputs: [decision]
     inputs: { sha: build.sha }

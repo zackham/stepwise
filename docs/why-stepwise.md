@@ -38,7 +38,7 @@ steps:
       findings: research.findings
 
   review:
-    executor: human
+    executor: external
     prompt: "Review this draft. Approve or request revisions."
     outputs: [decision, feedback]
     inputs:
