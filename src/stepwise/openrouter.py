@@ -52,7 +52,7 @@ class OpenRouterClient:
             f"{self.base_url}/chat/completions",
             json=payload,
             headers=headers,
-            timeout=600.0,
+            timeout=900.0,
         )
         resp.raise_for_status()
 

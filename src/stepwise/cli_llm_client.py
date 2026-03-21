@@ -90,11 +90,11 @@ class CliLLMClient:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=600,
+                timeout=900,
                 env=env,
             )
         except subprocess.TimeoutExpired as e:
-            raise RuntimeError(f"CLI LLM call timed out after 600s: {e}") from e
+            raise RuntimeError(f"CLI LLM call timed out after 900s: {e}") from e
         except FileNotFoundError as e:
             raise RuntimeError(
                 f"acpx not found at '{self.acpx_path}'. "
