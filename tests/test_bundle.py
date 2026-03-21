@@ -264,11 +264,19 @@ class TestUnpackBundle:
 
 
 class TestShareWithBundle:
+    def _setup_auth(self, tmp_path, monkeypatch):
+        """Set up auth file for share tests."""
+        import json
+        auth_file = tmp_path / "auth.json"
+        auth_file.write_text(json.dumps({"auth_token": "tok_test", "github_username": "test", "registry_url": "https://stepwise.run"}))
+        monkeypatch.setattr("stepwise.registry_client.AUTH_FILE", auth_file)
+
     def test_share_directory_flow_bundles_files(self, tmp_path, capsys, monkeypatch):
         """stepwise share with a directory flow collects and bundles files."""
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr("stepwise.registry_client.TOKENS_FILE", tmp_path / "tokens.json")
         monkeypatch.setattr("stepwise.registry_client.CONFIG_DIR", tmp_path)
+        self._setup_auth(tmp_path, monkeypatch)
 
         # Create a directory flow
         flow_dir = tmp_path / "my-flow"
@@ -317,6 +325,7 @@ class TestShareWithBundle:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr("stepwise.registry_client.TOKENS_FILE", tmp_path / "tokens.json")
         monkeypatch.setattr("stepwise.registry_client.CONFIG_DIR", tmp_path)
+        self._setup_auth(tmp_path, monkeypatch)
 
         flow = tmp_path / "test.flow.yaml"
         flow.write_text(SIMPLE_FLOW)
@@ -347,6 +356,7 @@ class TestShareWithBundle:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr("stepwise.registry_client.TOKENS_FILE", tmp_path / "tokens.json")
         monkeypatch.setattr("stepwise.registry_client.CONFIG_DIR", tmp_path)
+        self._setup_auth(tmp_path, monkeypatch)
 
         flow_dir = tmp_path / "my-flow"
         flow_dir.mkdir()
