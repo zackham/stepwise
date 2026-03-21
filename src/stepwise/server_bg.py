@@ -49,6 +49,7 @@ def main() -> int:
     os.environ["STEPWISE_TEMPLATES"] = args.templates_dir
     os.environ["STEPWISE_JOBS_DIR"] = args.jobs_dir
     os.environ["STEPWISE_PROJECT_DIR"] = args.project_dir
+    os.environ["STEPWISE_PORT"] = str(args.port)
     if args.web_dir:
         os.environ["STEPWISE_WEB_DIR"] = args.web_dir
 
