@@ -866,10 +866,10 @@ class WorkflowDefinition:
         # Cache on uncacheable step types
         for name, step in self.steps.items():
             if step.cache is not None and step.cache.enabled:
-                if step.executor.type in ("human", "external"):
+                if step.executor.type == "external":
                     warns.append(
                         f"\u26a0 Step '{name}': cache has no effect on "
-                        f"human/external steps"
+                        f"external steps"
                     )
                 elif step.executor.type == "poll":
                     warns.append(
