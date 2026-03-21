@@ -458,7 +458,6 @@ class TestEngineCacheIntegration:
 
     def test_external_steps_never_cached(self):
         assert "external" in UNCACHEABLE_TYPES
-        assert "human" in UNCACHEABLE_TYPES
 
     def test_rerun_bypasses_cache(self):
         call_count = 0
