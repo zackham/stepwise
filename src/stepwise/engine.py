@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 from datetime import datetime, timezone
@@ -14,7 +15,7 @@ from stepwise.events import (
     EXIT_RESOLVED,
     FOR_EACH_COMPLETED,
     FOR_EACH_STARTED,
-    HUMAN_RERUN,
+    EXTERNAL_RERUN,
     JOB_COMPLETED,
     JOB_FAILED,
     JOB_PAUSED,
@@ -62,6 +63,8 @@ from stepwise.models import (
 from stepwise.hooks import fire_hook_for_event, fire_notify_webhook
 from stepwise.store import SQLiteStore
 
+_engine_logger = logging.getLogger("stepwise.engine")
+
 
 def _interpolate_config(config: dict, inputs: dict) -> dict:
     """Substitute $variable references in executor config string values."""
@@ -99,6 +102,7 @@ class Engine:
         project_dir: Path | None = None,
         billing_mode: str = "subscription",
         config: object | None = None,
+        cache: "StepResultCache | None" = None,
     ) -> None:
         self.store = store
         self.registry = registry or ExecutorRegistry()
@@ -106,7 +110,9 @@ class Engine:
         self.project_dir = project_dir  # .stepwise/ dir for hooks
         self.billing_mode = billing_mode  # "subscription" | "api_key"
         self.config = config  # StepwiseConfig — used for emit_flow instructions
+        self.cache = cache  # step result cache (optional)
         self._injected_contexts: dict[str, list[str]] = {}  # job_id -> contexts
+        self._rerun_steps: dict[str, set[str]] = {}  # job_id -> step names to bypass cache
 
     # ── Job Lifecycle ─────────────────────────────────────────────────────
 
@@ -147,6 +153,10 @@ class Engine:
         job = self.store.load_job(job_id)
         if job.status != JobStatus.PENDING:
             raise ValueError(f"Cannot start job in status {job.status.value}")
+        # Extract rerun_steps from job metadata
+        rerun = job.config.metadata.get("rerun_steps", [])
+        if rerun:
+            self._rerun_steps[job_id] = set(rerun)
         job.status = JobStatus.RUNNING
         job.updated_at = _now()
         self.store.save_job(job)
@@ -240,7 +250,7 @@ class Engine:
                 f"Cancel the active run first."
             )
 
-        self._emit(job_id, HUMAN_RERUN, {"step": step_name})
+        self._emit(job_id, EXTERNAL_RERUN, {"step": step_name})
 
         # Make sure job is running
         if job.status in (JobStatus.PAUSED, JobStatus.COMPLETED, JobStatus.FAILED):
@@ -248,7 +258,7 @@ class Engine:
             job.updated_at = _now()
             self.store.save_job(job)
 
-        # Launch directly — this is the human API, synchronous launch.
+        # Launch directly — this is the external API, synchronous launch.
         # The new run supersedes any existing completed run.
         run = self._launch(job, step_name)
         return run
@@ -390,7 +400,7 @@ class Engine:
 
         self._emit(run.job_id, WATCH_FULFILLED, {
             "run_id": run_id,
-            "mode": "human",
+            "mode": "external",
             "payload": payload,
         })
 
@@ -1031,6 +1041,10 @@ class Engine:
         # Normal step: prepare, execute synchronously, process result
         run, exec_ref, inputs, ctx = self._prepare_step_run(job, step_name)
 
+        # Cache hit — _prepare_step_run already completed the run
+        if exec_ref is None:
+            return run
+
         try:
             executor = self.registry.create(exec_ref)
             result = executor.start(inputs, ctx)
@@ -1040,6 +1054,103 @@ class Engine:
 
         self._process_launch_result(job, run, result)
         return run
+
+    def _get_engine_version(self) -> str:
+        """Get engine version for cache key computation."""
+        try:
+            from importlib.metadata import version
+            return version("stepwise-run")
+        except Exception:
+            return "0.0.0"
+
+    def _check_step_cache(
+        self,
+        job: Job,
+        step_def: StepDefinition,
+        exec_ref: ExecutorRef,
+        inputs: dict,
+        run: StepRun,
+    ) -> HandoffEnvelope | None:
+        """Check cache for a step result. Returns envelope on hit, None on miss."""
+        from stepwise.cache import UNCACHEABLE_TYPES, compute_cache_key
+
+        if self.cache is None or step_def.cache is None:
+            return None
+        if not step_def.cache.enabled:
+            return None
+        if exec_ref.type in UNCACHEABLE_TYPES:
+            return None
+        # Agent steps with emit_flow are uncacheable
+        if exec_ref.type == "agent" and exec_ref.config.get("emit_flow"):
+            return None
+        # --rerun bypass
+        if run.step_name in self._rerun_steps.get(job.id, set()):
+            _engine_logger.info(
+                "Cache bypassed for step '%s' (--rerun)", run.step_name
+            )
+            return None
+
+        key = compute_cache_key(
+            inputs, exec_ref, self._get_engine_version(),
+            step_def.cache.key_extra,
+        )
+
+        envelope = self.cache.get(key)
+        if envelope is not None:
+            _engine_logger.info(
+                "Cache hit for step '%s' (key=%s…)", run.step_name, key[:12]
+            )
+            return envelope
+
+        _engine_logger.debug(
+            "Cache miss for step '%s' (key=%s…)", run.step_name, key[:12]
+        )
+        return None
+
+    def _write_step_cache(
+        self,
+        job: Job,
+        step_def: StepDefinition,
+        run: StepRun,
+        envelope: HandoffEnvelope,
+    ) -> None:
+        """Write a successful step result to cache."""
+        from stepwise.cache import DEFAULT_TTL, UNCACHEABLE_TYPES, compute_cache_key
+
+        if self.cache is None or step_def.cache is None:
+            return
+        if not step_def.cache.enabled:
+            return
+        if step_def.executor.type in UNCACHEABLE_TYPES:
+            return
+        if step_def.executor.type == "agent" and step_def.executor.config.get("emit_flow"):
+            return
+
+        # Recompute cache key from the run's resolved inputs and the step's executor config
+        exec_ref = step_def.executor
+        interpolated = _interpolate_config(exec_ref.config, run.inputs or {})
+        if interpolated != exec_ref.config:
+            exec_ref = ExecutorRef(
+                type=exec_ref.type, config=interpolated,
+                decorators=exec_ref.decorators,
+            )
+
+        cache_key = compute_cache_key(
+            run.inputs or {}, exec_ref, self._get_engine_version(),
+            step_def.cache.key_extra,
+        )
+
+        # Determine TTL
+        ttl = step_def.cache.ttl
+        if ttl is None:
+            ttl = DEFAULT_TTL.get(step_def.executor.type, 3600)
+
+        flow_name = job.workflow.metadata.name if job.workflow.metadata else ""
+        self.cache.put(cache_key, run.step_name, flow_name, envelope, ttl)
+        _engine_logger.debug(
+            "Cached result for step '%s' (key=%s…, ttl=%ds)",
+            run.step_name, cache_key[:12], ttl,
+        )
 
     def _prepare_step_run(
         self, job: Job, step_name: str,
@@ -1100,6 +1211,22 @@ class Engine:
                 type=exec_ref.type, config=interpolated,
                 decorators=exec_ref.decorators,
             )
+
+        # Cache check: after interpolation, before executor dispatch
+        cached_envelope = self._check_step_cache(job, step_def, exec_ref, inputs, run)
+        if cached_envelope is not None:
+            run.result = cached_envelope
+            run.status = StepRunStatus.COMPLETED
+            run.completed_at = _now()
+            run.executor_state = {"from_cache": True}
+            self.store.save_run(run)
+            self._emit(job.id, STEP_COMPLETED, {
+                "step": step_name,
+                "attempt": run.attempt,
+                "from_cache": True,
+            })
+            self._process_completion(job, run)
+            return run, None, None, None  # sentinel: cache hit
 
         if step_def.outputs and "output_fields" not in exec_ref.config:
             exec_ref = exec_ref.with_config({"output_fields": step_def.outputs})
@@ -1210,6 +1337,8 @@ class Engine:
                             "attempt": attempt,
                         })
                         self._emit_effector_events(job.id, result.envelope)
+                        # Write to cache if enabled
+                        self._write_step_cache(job, step_def, run, result.envelope)
                         self._process_completion(job, run)
 
             case "watch":
@@ -2226,8 +2355,9 @@ class AsyncEngine(Engine):
         project_dir: Path | None = None,
         billing_mode: str = "subscription",
         config: object | None = None,
+        cache: "StepResultCache | None" = None,
     ) -> None:
-        super().__init__(store, registry, jobs_dir, project_dir, billing_mode=billing_mode, config=config)
+        super().__init__(store, registry, jobs_dir, project_dir, billing_mode=billing_mode, config=config, cache=cache)
         self._queue: asyncio.Queue = asyncio.Queue()
         self._tasks: dict = {}  # run_id → Task or Future (for cancellation)
         self._poll_tasks: dict = {}  # run_id → asyncio.Task (poll watch timers)
@@ -2397,6 +2527,11 @@ class AsyncEngine(Engine):
 
         # Normal step: prepare run, dispatch executor to thread pool
         run, exec_ref, inputs, ctx = self._prepare_step_run(job, step_name)
+
+        # Cache hit — _prepare_step_run already completed the run
+        if exec_ref is None:
+            self._after_step_change(job.id)
+            return run
 
         coro = self._run_executor(job.id, step_name, run.id, exec_ref, inputs, ctx)
         try:
