@@ -59,7 +59,7 @@ steps:
       Feature: $feature — $plan (revision $revision)
       Tasks: $tasks
 
-      External steps like this one pause the workflow and wait for input. That input can come from you here in the web UI, from a CLI command (`stepwise fulfill`), from a webhook, or from a script in your CI pipeline.
+      External steps like this one pause the workflow and wait for input. That input can come from you here in the web UI, from a CLI command (`stepwise fulfill`), from a webhook, or from a script in your project.
 
       If you approve, each task fans out as a parallel sub-pipeline. Or revise to re-plan.
     outputs:
