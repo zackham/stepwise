@@ -38,7 +38,7 @@ def generate_schema(workflow: WorkflowDefinition) -> dict:
     # Collect external steps
     external_steps: list[dict] = []
     for name, step in workflow.steps.items():
-        if step.executor.type in ("external", "human"):
+        if step.executor.type == "external":
             entry: dict = {
                 "step": name,
                 "prompt": step.executor.config.get("prompt", ""),
