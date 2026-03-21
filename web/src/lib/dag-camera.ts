@@ -175,6 +175,9 @@ export class DagCamera {
         this.prevPanY = this.panY.pos;
         this.blendStartTime = this.getNow();
         this.isBlending = true;
+        // Zero spring velocities so stale momentum doesn't fight the blend
+        this.panX.vel = 0;
+        this.panY.vel = 0;
       }
     }
 
