@@ -52,6 +52,46 @@ def save_token(slug: str, token: str) -> None:
     _save_tokens(tokens)
 
 
+# ── Auth management ────────────────────────────────────────────────
+
+AUTH_FILE = CONFIG_DIR / "auth.json"
+
+
+def load_auth() -> dict[str, str] | None:
+    """Load auth credentials from disk. Returns dict or None if missing/invalid."""
+    try:
+        if AUTH_FILE.exists():
+            return json.loads(AUTH_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        pass
+    return None
+
+
+def save_auth(auth_token: str, github_username: str, registry_url: str) -> None:
+    """Save auth credentials with restricted permissions."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    AUTH_FILE.write_text(
+        json.dumps(
+            {
+                "auth_token": auth_token,
+                "github_username": github_username,
+                "registry_url": registry_url,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    AUTH_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0600
+
+
+def clear_auth() -> None:
+    """Remove auth credentials file."""
+    try:
+        AUTH_FILE.unlink()
+    except FileNotFoundError:
+        pass
+
+
 # ── Disk cache ─────────────────────────────────────────────────────
 
 
@@ -97,6 +137,56 @@ def _ensure_json(resp: httpx.Response, context: str) -> dict[str, Any]:
             resp.status_code,
         )
     return resp.json()
+
+
+# ── Auth API ───────────────────────────────────────────────────────
+
+
+def initiate_device_flow(registry_url: str | None = None) -> dict[str, Any]:
+    """Start GitHub Device Flow. Returns device_code, user_code, verification_uri, interval, expires_in."""
+    url = registry_url or get_registry_url()
+    with _client() as client:
+        resp = client.post(f"{url}/api/auth/device")
+    if resp.status_code != 200:
+        raise RegistryError(
+            f"Failed to initiate login: {resp.status_code} {resp.text}",
+            resp.status_code,
+        )
+    return _ensure_json(resp, "initiate device flow")
+
+
+def poll_device_flow(
+    device_code: str, registry_url: str | None = None
+) -> dict[str, Any]:
+    """Poll for Device Flow completion. Returns raw server response."""
+    url = registry_url or get_registry_url()
+    with _client() as client:
+        resp = client.post(
+            f"{url}/api/auth/poll", json={"device_code": device_code}
+        )
+    if resp.status_code != 200:
+        raise RegistryError(
+            f"Poll failed: {resp.status_code} {resp.text}", resp.status_code
+        )
+    return _ensure_json(resp, "poll device flow")
+
+
+def verify_auth(
+    auth_token: str, registry_url: str | None = None
+) -> dict[str, Any]:
+    """Verify an auth token. Returns user info or raises RegistryError."""
+    url = registry_url or get_registry_url()
+    with _client() as client:
+        resp = client.get(
+            f"{url}/api/auth/verify",
+            headers={"Authorization": f"Bearer {auth_token}"},
+        )
+    if resp.status_code != 200:
+        raise RegistryError(
+            f"Auth verification failed: {resp.status_code} {resp.text}",
+            resp.status_code,
+        )
+    return _ensure_json(resp, "verify auth")
 
 
 def fetch_flow(slug: str, *, use_cache: bool = True) -> dict[str, Any]:
@@ -169,6 +259,7 @@ def publish_flow(
     yaml_content: str,
     author: str | None = None,
     files: dict[str, str] | None = None,
+    auth_token: str | None = None,
 ) -> dict[str, Any]:
     """Publish a flow to the registry.
 
@@ -182,8 +273,12 @@ def publish_flow(
     if files:
         payload["files"] = files
 
+    headers = {}
+    if auth_token:
+        headers["Authorization"] = f"Bearer {auth_token}"
+
     with _client() as client:
-        resp = client.post(f"{url}/api/flows", json=payload)
+        resp = client.post(f"{url}/api/flows", json=payload, headers=headers)
 
     if resp.status_code == 409:
         raise RegistryError(
@@ -206,13 +301,19 @@ def update_flow(
     slug: str,
     yaml_content: str,
     changelog: str | None = None,
+    auth_token: str | None = None,
 ) -> dict[str, Any]:
-    """Update an existing flow in the registry (requires stored token)."""
+    """Update an existing flow in the registry.
+
+    Uses per-flow update token if available, falls back to session auth_token.
+    """
     token = get_token(slug)
+    if not token:
+        token = auth_token
     if not token:
         raise RegistryError(
             f"No update token for '{slug}'. "
-            f"You can only update flows you published from this machine."
+            f"Run `stepwise login` or publish from the original machine."
         )
 
     url = get_registry_url()
