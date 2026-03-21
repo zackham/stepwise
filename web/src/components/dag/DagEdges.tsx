@@ -175,6 +175,9 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
         const isSuspended = targetStatus === "suspended";
         const isActive = isRunning || isSuspended;
 
+        // Data edges are always blue when active (loop edges are orange)
+        const activeColor = "oklch(0.6 0.15 250)";
+
         const pathD = buildPath(edge.points);
 
         return (
@@ -184,7 +187,7 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
               <path
                 d={pathD}
                 fill="none"
-                stroke={isSuspended ? "oklch(0.7 0.15 85)" : "oklch(0.6 0.15 250)"}
+                stroke={activeColor}
                 strokeWidth={6}
                 opacity={0.15}
                 strokeLinecap="round"
@@ -195,12 +198,12 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
               fill="none"
               stroke={
                 isActive
-                  ? isSuspended ? "oklch(0.7 0.15 85)" : "oklch(0.6 0.15 250)"
+                  ? activeColor
                   : isSequencingOnly ? "oklch(0.35 0 0)" : "oklch(0.4 0 0)"
               }
               strokeWidth={isActive ? 2 : isSequencingOnly ? 1 : 1.5}
               strokeDasharray={isActive ? "8 12" : isSequencingOnly ? "4 3" : "none"}
-              markerEnd={isActive ? (isSuspended ? "url(#arrowhead-suspended)" : "url(#arrowhead-active)") : "url(#arrowhead)"}
+              markerEnd={isActive ? "url(#arrowhead-active)" : "url(#arrowhead)"}
               opacity={isActive ? 0.8 : isSequencingOnly ? 0.4 : 0.5}
               className={isActive ? "edge-active" : undefined}
             />
