@@ -150,7 +150,7 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
         >
           <polygon
             points="0 0, 8 3, 0 6"
-            fill="oklch(0.55 0.15 300)"
+            fill="oklch(0.65 0.15 55)"
             opacity="0.7"
           />
         </marker>
@@ -305,7 +305,7 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
               stroke={
                 isActive
                   ? isSuspended ? "oklch(0.7 0.15 85)" : "oklch(0.6 0.15 250)"
-                  : "oklch(0.55 0.15 300)"
+                  : "oklch(0.65 0.15 55)"
               }
               strokeWidth={isActive ? 2 : 1.5}
               strokeDasharray={isActive ? "8 12" : "6 3"}
@@ -317,7 +317,7 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
               x={le.labelPos.x}
               y={le.labelPos.y}
               textAnchor="start"
-              className={isActive ? (isSuspended ? "fill-amber-400 text-[10px] font-medium" : "fill-blue-400 text-[10px] font-medium") : "fill-purple-400/80 text-[10px] font-medium"}
+              className={isActive ? (isSuspended ? "fill-amber-400 text-[10px] font-medium" : "fill-blue-400 text-[10px] font-medium") : "fill-orange-400/80 text-[10px] font-medium"}
               style={{ fontFamily: "monospace" }}
             >
               {le.label}
