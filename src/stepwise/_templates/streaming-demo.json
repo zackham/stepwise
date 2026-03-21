@@ -1,6 +1,6 @@
 {
   "name": "streaming-demo",
-  "description": "Demo: clarify \u2192 human answer \u2192 check (loop) \u2192 plan \u2192 evaluate+refine (loop) \u2192 word count",
+  "description": "Demo: clarify \u2192 external answer \u2192 check (loop) \u2192 plan \u2192 evaluate+refine (loop) \u2192 word count",
   "workflow": {
     "steps": {
       "clarify": {
@@ -23,7 +23,7 @@
       "answer": {
         "name": "answer",
         "executor": {
-          "type": "human",
+          "type": "external",
           "config": {
             "prompt": "Answer the clarifying question from the 'clarify' step. Click on the clarify node in the DAG to see the question."
           },

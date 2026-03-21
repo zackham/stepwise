@@ -1,11 +1,11 @@
 ---
 name: stepwise
-description: Stepwise workflow orchestration — run, create, and manage .flow.yaml workflows. Use when working with multi-step pipelines, DAGs, or agent/human/LLM workflows.
+description: Stepwise workflow orchestration — run, create, and manage .flow.yaml workflows. Use when working with multi-step pipelines, DAGs, or agent/external/LLM workflows.
 ---
 
 # Stepwise
 
-Workflow orchestration for agents and humans. Runs multi-step pipelines with LLM, agent, human, and script executors.
+Workflow orchestration for agents and humans. Runs multi-step pipelines with LLM, agent, external, and script executors.
 
 ## When to Use
 
@@ -65,7 +65,7 @@ stepwise output <job-id>                      # retrieve terminal outputs
 stepwise output <job-id> --step a,b           # per-step outputs
 stepwise output <job-id> --step a --inputs    # step inputs
 stepwise output --run <run-id>                # direct run output
-stepwise fulfill <run-id> '{"field": "val"}'  # satisfy human step
+stepwise fulfill <run-id> '{"field": "val"}'  # satisfy external step
 stepwise fulfill <run-id> '{}' --wait         # fulfill and block on job
 stepwise list --suspended --output json       # global suspension inbox
 stepwise wait <job-id>                        # block on existing job
@@ -88,7 +88,7 @@ stepwise info <name>                          # registry flow details
 | 2 | Input validation error |
 | 3 | Timeout (--wait mode) |
 | 4 | Cancelled (--wait mode) |
-| 5 | Suspended (all progress blocked by human steps) |
+| 5 | Suspended (all progress blocked by external steps) |
 
 ### Output Format (--wait mode)
 
@@ -129,7 +129,7 @@ Flows fetched from the registry (via `stepwise get @author:name`) are cached in 
 ## Creating & Modifying Flows
 
 Read `FLOW_REFERENCE.md` in this skill directory for the complete YAML format specification including:
-- Step definitions, executor types (script, human, poll, llm, agent)
+- Step definitions, executor types (script, external, poll, llm, agent)
 - Input bindings, exit rules, loop patterns
 - For-each (fan-out/fan-in), route steps (conditional dispatch)
 - Decorators, limits, idempotency modes
