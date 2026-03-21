@@ -216,6 +216,14 @@ class SQLiteStore:
         ).fetchall()
         return [self._row_to_job(r) for r in rows]
 
+    def pending_jobs(self) -> list[Job]:
+        """Return all jobs in PENDING status, ordered by creation time (FIFO)."""
+        rows = self._conn.execute(
+            "SELECT * FROM jobs WHERE status = ? ORDER BY created_at",
+            (JobStatus.PENDING.value,),
+        ).fetchall()
+        return [self._row_to_job(r) for r in rows]
+
     def delete_job(self, job_id: str) -> None:
         """Delete a job and all associated runs and events."""
         self._conn.execute("DELETE FROM events WHERE job_id = ?", (job_id,))

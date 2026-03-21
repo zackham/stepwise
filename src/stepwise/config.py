@@ -112,6 +112,7 @@ class StepwiseConfig:
     default_agent: str | None = None  # "claude" | "codex" | etc.
     notify_url: str | None = None
     notify_context: dict = field(default_factory=dict)
+    max_concurrent_jobs: int = 10
 
     def resolve_model(self, model_ref: str) -> str:
         """Resolve a model reference (label or concrete ID) to a concrete model ID.
@@ -150,6 +151,8 @@ class StepwiseConfig:
             d["notify_url"] = self.notify_url
         if self.notify_context:
             d["notify_context"] = self.notify_context
+        if self.max_concurrent_jobs != 10:
+            d["max_concurrent_jobs"] = self.max_concurrent_jobs
         return d
 
     @staticmethod
@@ -175,6 +178,7 @@ class StepwiseConfig:
             default_agent=d.get("default_agent"),
             notify_url=d.get("notify_url"),
             notify_context=d.get("notify_context", {}),
+            max_concurrent_jobs=d.get("max_concurrent_jobs", 10),
         )
 
 
@@ -320,6 +324,11 @@ def load_config(project_dir: Path | None = None) -> StepwiseConfig:
         notify_url=(local.notify_url or project.notify_url or user.notify_url),
         notify_context=(local.notify_context or project.notify_context
                         or user.notify_context),
+        max_concurrent_jobs=next(
+            (l.max_concurrent_jobs for l in (local, project, user)
+             if l.max_concurrent_jobs != 10),
+            10,
+        ),
     )
 
 

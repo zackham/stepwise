@@ -419,7 +419,7 @@ async def lifespan(app: FastAPI):
     registry = create_default_registry(config)
 
     dot_dir = _project_dir / ".stepwise"
-    _engine = AsyncEngine(store, registry, jobs_dir=jobs_dir, project_dir=dot_dir if dot_dir.is_dir() else None, billing_mode=config.billing, config=config)
+    _engine = AsyncEngine(store, registry, jobs_dir=jobs_dir, project_dir=dot_dir if dot_dir.is_dir() else None, billing_mode=config.billing, config=config, max_concurrent_jobs=config.max_concurrent_jobs)
 
     # Fail zombie jobs: server-owned jobs left in running/pending from a dead process
     _cleanup_zombie_jobs(store)

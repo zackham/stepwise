@@ -19,6 +19,7 @@ from stepwise.events import (
     JOB_COMPLETED,
     JOB_FAILED,
     JOB_PAUSED,
+    JOB_QUEUED,
     JOB_RESUMED,
     JOB_STARTED,
     LOOP_ITERATION,
@@ -64,6 +65,9 @@ from stepwise.hooks import fire_hook_for_event, fire_notify_webhook
 from stepwise.store import SQLiteStore
 
 _engine_logger = logging.getLogger("stepwise.engine")
+
+# Default max artifact size (5 MB). Prevents runaway outputs from bloating the DB.
+MAX_ARTIFACT_BYTES = 5 * 1024 * 1024
 
 
 def _interpolate_config(config: dict, inputs: dict) -> dict:
@@ -1324,6 +1328,8 @@ class Engine:
                                    error_category=error_cat)
                 else:
                     validation_error = self._validate_artifact(step_def, result.envelope)
+                    if not validation_error:
+                        validation_error = self._check_artifact_size(step_def, result.envelope)
                     if validation_error:
                         run.status = StepRunStatus.FAILED
                         run.error = validation_error
@@ -2179,6 +2185,23 @@ class Engine:
 
     # ── Validation ────────────────────────────────────────────────────────
 
+    def _check_artifact_size(self, step_def: StepDefinition, envelope: HandoffEnvelope | None) -> str | None:
+        """Reject artifacts over MAX_ARTIFACT_BYTES. Returns error string or None."""
+        if not envelope or not envelope.artifact:
+            return None
+        try:
+            size = len(json.dumps(envelope.artifact, default=str))
+        except (TypeError, ValueError):
+            return None  # can't measure — let it through
+        if size > MAX_ARTIFACT_BYTES:
+            mb = size / (1024 * 1024)
+            limit_mb = MAX_ARTIFACT_BYTES / (1024 * 1024)
+            return (
+                f"Step '{step_def.name}' artifact too large: {mb:.1f}MB "
+                f"(limit: {limit_mb:.0f}MB). Reduce output size or split into smaller steps."
+            )
+        return None
+
     def _validate_artifact(self, step_def: StepDefinition, envelope: HandoffEnvelope | None) -> str | None:
         """M1: hard validation — artifact must contain all declared output fields.
         Returns error string if validation fails, None if valid.
@@ -2493,6 +2516,7 @@ class AsyncEngine(Engine):
         billing_mode: str = "subscription",
         config: object | None = None,
         cache: "StepResultCache | None" = None,
+        max_concurrent_jobs: int = 10,
     ) -> None:
         super().__init__(store, registry, jobs_dir, project_dir, billing_mode=billing_mode, config=config, cache=cache)
         self._queue: asyncio.Queue = asyncio.Queue()
@@ -2502,6 +2526,7 @@ class AsyncEngine(Engine):
         self._loop: asyncio.AbstractEventLoop | None = None  # set by run()
         self.on_broadcast: Callable[[dict], None] | None = None
         self._session_locks = _SessionLockManager()
+        self.max_concurrent_jobs = max_concurrent_jobs
         pool_size = int(os.environ.get("STEPWISE_EXECUTOR_THREADS", "32"))
         self._executor_pool = ThreadPoolExecutor(
             max_workers=pool_size, thread_name_prefix="stepwise-exec"
@@ -2551,10 +2576,21 @@ class AsyncEngine(Engine):
     # ── Job lifecycle overrides ──────────────────────────────────────────
 
     def start_job(self, job_id: str) -> None:
-        """Start a job and dispatch all initially-ready steps."""
+        """Start a job and dispatch all initially-ready steps.
+
+        If max_concurrent_jobs is reached, the job stays PENDING and will be
+        started when a slot opens (see _start_queued_jobs).
+        """
         job = self.store.load_job(job_id)
         if job.status != JobStatus.PENDING:
             raise ValueError(f"Cannot start job in status {job.status.value}")
+        if len(self.store.active_jobs()) >= self.max_concurrent_jobs:
+            self._emit(job_id, JOB_QUEUED)
+            _async_logger.info(
+                "Job %s queued: %d concurrent jobs at limit",
+                job_id, self.max_concurrent_jobs,
+            )
+            return  # stays PENDING, started later by _start_queued_jobs
         job.status = JobStatus.RUNNING
         job.updated_at = _now()
         self.store.save_job(job)
@@ -2896,6 +2932,25 @@ class AsyncEngine(Engine):
             # Cascade to parent
             if job.parent_job_id:
                 self._handle_sub_job_done(job)
+            # A slot opened — start queued jobs
+            self._start_queued_jobs()
+
+    def _start_queued_jobs(self) -> None:
+        """Start PENDING jobs if slots are available (FIFO order)."""
+        active_count = len(self.store.active_jobs())
+        if active_count >= self.max_concurrent_jobs:
+            return
+        for pending_job in self.store.pending_jobs():
+            if active_count >= self.max_concurrent_jobs:
+                break
+            # Only auto-start top-level pending jobs (sub-jobs are managed by parent)
+            if pending_job.parent_job_id:
+                continue
+            try:
+                self.start_job(pending_job.id)
+                active_count += 1
+            except ValueError:
+                pass  # job status changed between query and start
 
     def _broadcast(self, event: dict) -> None:
         """Fire the on_broadcast callback if set."""
