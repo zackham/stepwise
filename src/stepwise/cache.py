@@ -39,7 +39,7 @@ DEFAULT_TTL: dict[str, int] = {
 }
 
 # Executor types that must never be cached
-UNCACHEABLE_TYPES = frozenset({"external", "poll", "for_each", "sub_flow"})
+UNCACHEABLE_TYPES = frozenset({"human", "external", "poll", "for_each", "sub_flow"})
 
 
 def _dumps(obj: Any) -> str:
