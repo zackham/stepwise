@@ -993,18 +993,52 @@ def cmd_new(args: argparse.Namespace) -> int:
     flow_dir.mkdir(parents=True)
     template = (
         f"name: {name}\n"
-        f"description: \"\"\n"
+        f'description: ""\n'
+        f"\n"
+        f"# A 3-step workflow: gather data → analyze with LLM → format results\n"
+        f"# Run with: stepwise run {name} --var topic=\"your topic\"\n"
+        f"\n"
+        f"config:\n"
+        f"  topic:\n"
+        f"    type: str\n"
+        f"    description: The topic to research\n"
+        f"    required: true\n"
+        f"    example: machine learning\n"
         f"\n"
         f"steps:\n"
-        f"  hello:\n"
-        f"    run: 'echo \"{{\\\"message\\\": \\\"hello from {name}\\\"}}\"'\n"
-        f"    outputs: [message]\n"
+        f"  gather-info:\n"
+        f"    # Script steps use 'run:' — stdout must be valid JSON\n"
+        f"    run: |\n"
+        f"      echo '{{\"topic\": \"'\"$topic\"'\", \"timestamp\": \"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'\"}}'\n"
+        f"    inputs:\n"
+        f"      topic: $job.topic\n"
+        f"    outputs: [topic, timestamp]\n"
+        f"\n"
+        f"  analyze:\n"
+        f"    # LLM steps use 'executor: llm' with a prompt template\n"
+        f"    executor: llm\n"
+        f"    prompt: |\n"
+        f"      Briefly summarize what \"$topic\" is in 2-3 sentences.\n"
+        f"      Gathered at: $timestamp\n"
+        f"    inputs:\n"
+        f"      topic: gather-info.topic\n"
+        f"      timestamp: gather-info.timestamp\n"
+        f"    outputs: [summary]\n"
+        f"\n"
+        f"  format-report:\n"
+        f"    # This step depends on the LLM output\n"
+        f"    run: |\n"
+        f"      echo '{{\"report\": \"Topic: '\"$topic\"'\\nSummary: '\"$summary\"'\"}}'\n"
+        f"    inputs:\n"
+        f"      topic: gather-info.topic\n"
+        f"      summary: analyze.summary\n"
+        f"    outputs: [report]\n"
     )
     (flow_dir / FLOW_DIR_MARKER).write_text(template)
 
     io.log("success", f"Created flows/{name}/{FLOW_DIR_MARKER}")
     io.log("info", f"Edit: {flow_dir / FLOW_DIR_MARKER}")
-    io.log("info", f"Run:  stepwise run {name}")
+    io.log("info", f"Run:  stepwise run {name} --var topic=\"your topic\"")
     return EXIT_SUCCESS
 
 
@@ -1784,8 +1818,18 @@ def _submit_watch_job(
         print(f"Error: Failed to start job: {e}", file=sys.stderr)
         return EXIT_JOB_FAILED
 
+    project_label = ""
+    try:
+        with urllib.request.urlopen(f"{server_url}/api/health", timeout=2) as hr:
+            hp = json.loads(hr.read()).get("project_path")
+            if hp:
+                home = str(Path.home())
+                project_label = f" ({hp.replace(home, '~', 1) if hp.startswith(home) else hp})"
+    except Exception:
+        pass
+
     job_url = f"{server_url}/jobs/{job_id}"
-    print(f"▸ job submitted to running server")
+    print(f"▸ job submitted to running server{project_label}")
     print(f"  {job_url}")
 
     if not getattr(args, "no_open", False):
