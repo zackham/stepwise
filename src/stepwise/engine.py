@@ -2355,7 +2355,10 @@ class AsyncEngine(Engine):
         job = self.store.load_job(job_id)
         if job.status != JobStatus.RUNNING:
             return
-        for step_name in self._find_ready(job):
+        ready = self._find_ready(job)
+        if ready:
+            _async_logger.info(f"Dispatching {len(ready)} ready step(s) for job {job_id}: {ready}")
+        for step_name in ready:
             self._launch(job, step_name)
             # Reload — _launch may change job status (for_each, route, sub_flow)
             job = self.store.load_job(job_id)
@@ -2417,6 +2420,9 @@ class AsyncEngine(Engine):
         ctx: ExecutionContext,
     ) -> None:
         """Run executor.start() in thread pool, push result to queue."""
+        _async_logger.info(
+            f"Executor coroutine started for {step_name} (job {job_id}, type={exec_ref.type})"
+        )
         try:
             executor = self.registry.create(exec_ref)
 
@@ -2441,6 +2447,10 @@ class AsyncEngine(Engine):
 
             # Session locking: if inputs contain _session_id, serialize access
             loop = asyncio.get_running_loop()
+            active = len([t for t in self._executor_pool._threads if t.is_alive()])
+            _async_logger.info(
+                f"Submitting {step_name} to thread pool (active threads: {active}/{self._executor_pool._max_workers})"
+            )
             session_id = inputs.get("_session_id")
             if session_id:
                 lock = self._session_locks.get_lock(session_id)
