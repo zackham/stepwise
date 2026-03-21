@@ -107,23 +107,19 @@ steps:
           description: "Running tests"
           run: |
             sleep 2
-            if [ "${fixed:-false}" = "true" ]; then
+            if [ "$STEPWISE_ATTEMPT" -ge 2 ]; then
               printf '{"passed": 6, "failed": 0, "status": "pass"}'
             else
               printf '{"passed": 4, "failed": 2, "status": "fail"}'
             fi
           outputs: [passed, failed, status]
           sequencing: [task-implement]
-          inputs:
-            fixed:
-              from: task-fix.fixed
-              optional: true
         task-fix:
           description: "Fixing failed tests"
           run: |
             sleep 2
-            printf '{"fixed": "true"}'
-          outputs: [fixed]
+            printf '{"fixes": "applied"}'
+          outputs: [fixes]
           inputs:
             status: task-run-tests.status
           when: "status == 'fail'"
@@ -140,24 +136,20 @@ steps:
     description: "Running integration tests"
     run: |
       sleep 3
-      if [ "${fixed:-false}" = "true" ]; then
+      if [ "$STEPWISE_ATTEMPT" -ge 2 ]; then
         printf '{"passed": 11, "failed": 0, "status": "pass"}'
       else
         printf '{"passed": 8, "failed": 3, "status": "fail"}'
       fi
     outputs: [passed, failed, status]
     sequencing: [write-code]
-    inputs:
-      fixed:
-        from: fix-tests.fixed
-        optional: true
 
   fix-tests:
     description: "Fixing integration tests"
     run: |
       sleep 2
-      printf '{"fixed": "true"}'
-    outputs: [fixed]
+      printf '{"fixes": "applied"}'
+    outputs: [fixes]
     inputs:
       status: run-tests.status
     when: "status == 'fail'"
