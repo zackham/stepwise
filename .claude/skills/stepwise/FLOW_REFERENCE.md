@@ -61,7 +61,7 @@ steps:
     # Executor (exactly one required)
     run: scripts/foo.sh              # shorthand for script executor
     # OR
-    executor: human                  # human | llm | agent
+    executor: external                  # external | llm | agent
     prompt: "Instructions for executor"
     # OR
     prompt_file: prompts/task.md     # mutually exclusive with prompt
@@ -134,13 +134,13 @@ count_words:
 
 **Directory flows:** `run:` paths resolve relative to the flow directory. E.g., `run: analyze.py` in `my-flow/FLOW.yaml` resolves to `my-flow/analyze.py`. Scripts execute with cwd=workspace.
 
-### human
+### external
 
 Suspends for user input via web UI (`--watch`) or terminal (headless).
 
 ```yaml
 approve:
-  executor: human
+  executor: external
   prompt: "Review the plan and decide: approve or reject."
   outputs: [decision, reason]
   inputs:
@@ -473,7 +473,7 @@ steps:
     inputs:
       feedback: review.feedback     # null on first iteration — design prompts accordingly
   review:
-    executor: human
+    executor: external
     prompt: "Review. Set approved=true or provide feedback."
     outputs: [approved, feedback]
     sequencing: [draft]
@@ -727,7 +727,7 @@ steps:
     outputs: [content]
 
   review:
-    executor: human
+    executor: external
     prompt: "Score this: $content"
     inputs: { content: draft.content }
     outputs: [score]
