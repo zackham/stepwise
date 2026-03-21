@@ -217,7 +217,7 @@ class TestStepRunPersistence:
                                attempt=1, status=StepRunStatus.RUNNING))
         store.save_run(StepRun(id="r2", job_id="job-sr6", step_name="a",
                                attempt=2, status=StepRunStatus.SUSPENDED,
-                               watch=WatchSpec("human", {}, [])))
+                               watch=WatchSpec("external", {}, [])))
         store.save_run(StepRun(id="r3", job_id="job-sr6", step_name="a",
                                attempt=3, status=StepRunStatus.DELEGATED,
                                sub_job_id="sub-1"))

@@ -83,7 +83,7 @@ All registered in `src/stepwise/registry_factory.py:create_default_registry()`:
 | Type name | Class | Source | Behavior |
 |---|---|---|---|
 | `script` | `ScriptExecutor` | `executors.py` | Synchronous shell command, parses stdout as JSON |
-| `human` | `HumanExecutor` | `executors.py` | Immediately suspends for human input via API |
+| `external` | `ExternalExecutor` | `executors.py` | Immediately suspends for external input via API |
 | `poll` | `PollExecutor` | `executors.py` | Suspends with poll watch — engine runs `check_command` at `interval_seconds`; JSON dict on stdout = fulfilled |
 | `llm` | `LLMExecutor` | `executors.py` | OpenRouter API call (only registered if API key configured) |
 | `mock_llm` | `MockLLMExecutor` | `executors.py` | Test-only LLM stub with configurable failure/latency |
@@ -98,7 +98,7 @@ Every executor's `start()` returns an `ExecutorResult` with one of these `type` 
 | `type` | Meaning | What to set |
 |---|---|---|
 | `"data"` | Synchronous completion | `envelope=HandoffEnvelope(artifact={...}, sidecar=Sidecar(), workspace=..., timestamp=_now())` |
-| `"watch"` | Suspend for external input | `watch=WatchSpec(mode="human"\|"poll", ...)` |
+| `"watch"` | Suspend for external input | `watch=WatchSpec(mode="external"\|"poll", ...)` |
 | `"async"` | Legacy: long-running, poll via `check_status()` | `executor_state={...}` (opaque dict persisted by engine). No built-in executor uses this — prefer blocking in `start()` (safe in AsyncEngine's thread pool). |
 | `"delegate"` | Dynamic sub-flow | `sub_job_def=SubJobDefinition(...)` — engine creates sub-job, run transitions to DELEGATED |
 
@@ -137,10 +137,10 @@ Every executor's `start()` returns an `ExecutorResult` with one of these `type` 
 - `hooks/useEditor.ts` — Flow file CRUD, YAML parsing, step editing, registry search/install
 - `hooks/useEditorChat.ts` — Agent-assisted flow editing (streaming chat with YAML generation)
 - `hooks/useConfig.ts` — Config management (model labels, API keys, default model, OpenRouter search)
-- `hooks/useAutoSelectSuspended.ts` — Auto-select first suspended human step
+- `hooks/useAutoSelectSuspended.ts` — Auto-select first suspended external step
 
 **Component directories:**
-- `components/dag/` — Interactive DAG visualization: `FlowDagView` (pan/zoom/follow-flow), `StepNode`, `DagEdges` (animated intake/loopback edges), `ExpandedStepContainer` (sub-flow rendering), `ForEachExpandedContainer` (fan-out instances), `HumanInputPanel`, `DataFlowPanel`, `TypedField`
+- `components/dag/` — Interactive DAG visualization: `FlowDagView` (pan/zoom/follow-flow), `StepNode`, `DagEdges` (animated intake/loopback edges), `ExpandedStepContainer` (sub-flow rendering), `ForEachExpandedContainer` (fan-out instances), `ExternalInputPanel`, `DataFlowPanel`, `TypedField`
 - `components/editor/` — Visual flow editor: `YamlEditor` (CodeMirror), `ChatPanel` (agent-assisted editing with Claude/Codex/Simple modes), `StepDefinitionPanel`, `AddStepDialog`, `RegistryBrowser`, `FlowFileTree`, `EditorToolbar`
 - `components/jobs/` — Job detail views: `StepDetailPanel`, `JobDetailSidebar`, `AgentStreamView`, `HandoffEnvelopeView`, `FulfillWatchDialog` (schema-driven human input form), `JobTreeView`, `JobList`, `CreateJobDialog`
 - `components/ui/` — shadcn/ui primitives
@@ -327,7 +327,7 @@ steps:
 Always run `stepwise validate <flow>` before running a flow. The validator catches more than syntax errors:
 
 - **Unbounded loops** — loops without `attempt >= N` safety caps or `max_iterations`
-- **Uncovered output combinations** — human steps where not all output field combinations have matching exit rules
+- **Uncovered output combinations** — external steps where not all output field combinations have matching exit rules
 - **Type coercion safety** — notes when exit rules use `float()` or `int()` on outputs that could be None or non-numeric
 - **Missing targets** — loop exit rules pointing at non-existent steps
 - **Dead inputs** — input bindings referencing undeclared outputs
@@ -379,7 +379,7 @@ Fixtures in `tests/conftest.py`:
 | Fixture | Provides |
 |---|---|
 | `store()` | In-memory `SQLiteStore(":memory:")` |
-| `registry()` | `ExecutorRegistry` with `callable`, `script`, `human`, `mock_llm` registered |
+| `registry()` | `ExecutorRegistry` with `callable`, `script`, `external`, `mock_llm` registered |
 | `engine(store, registry)` | Legacy `Engine` instance (tick-based) |
 | `async_engine(store, registry)` | `AsyncEngine` instance (event-driven, preferred for new tests) |
 | `cleanup_step_fns` | Autouse — clears `CallableExecutor` registry after each test |

@@ -356,11 +356,11 @@ class PollExecutor(Executor):
         pass
 
 
-# ── HumanExecutor ──────────────────────────────────────────────────────
+# ── ExternalExecutor ───────────────────────────────────────────────────
 
 
-class HumanExecutor(Executor):
-    """Immediately suspends with a human watch."""
+class ExternalExecutor(Executor):
+    """Immediately suspends with an external watch."""
 
     def __init__(self, prompt: str) -> None:
         self.prompt = prompt
@@ -374,7 +374,7 @@ class HumanExecutor(Executor):
         return ExecutorResult(
             type="watch",
             watch=WatchSpec(
-                mode="human",
+                mode="external",
                 config=config,
                 fulfillment_outputs=context_to_outputs(context),
             ),
@@ -390,7 +390,7 @@ class HumanExecutor(Executor):
 def context_to_outputs(context: ExecutionContext) -> list[str]:
     """Get expected outputs from the step definition context.
 
-    HumanExecutor doesn't know the step's declared outputs at construction time.
+    ExternalExecutor doesn't know the step's declared outputs at construction time.
     The engine sets fulfillment_outputs from the step definition after receiving the watch.
     """
     return []  # Engine will override from step definition

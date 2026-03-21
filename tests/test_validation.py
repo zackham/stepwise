@@ -15,12 +15,12 @@ from stepwise.models import (
 )
 
 
-def _human_step(name, outputs, exit_rules, output_schema=None):
-    """Helper: create a human step with exit rules."""
+def _external_step(name, outputs, exit_rules, output_schema=None):
+    """Helper: create an external step with exit rules."""
     return StepDefinition(
         name=name,
         outputs=outputs,
-        executor=ExecutorRef("human", {"prompt": "test"}),
+        executor=ExecutorRef("external", {"prompt": "test"}),
         exit_rules=exit_rules,
         output_schema=output_schema or {},
     )
@@ -80,11 +80,11 @@ class TestNoCatchAllWarning:
         assert "check" in catch_all_warns[0]
 
 
-class TestHumanStepStallDetection:
-    def test_human_step_stall_detection(self):
-        """Human step with output gap produces a stall warning."""
+class TestExternalStepStallDetection:
+    def test_external_step_stall_detection(self):
+        """External step with output gap produces a stall warning."""
         wf = WorkflowDefinition(steps={
-            "approve": _human_step(
+            "approve": _external_step(
                 "approve", ["approved", "feedback"],
                 exit_rules=[
                     ExitRule("approved", "expression", {
@@ -112,10 +112,10 @@ class TestHumanStepStallDetection:
         gap_warn = [w for w in stall_warns if "False" in w and "None" in w]
         assert len(gap_warn) >= 1, f"Expected gap for approved=False/feedback=None, got: {stall_warns}"
 
-    def test_human_step_full_coverage_no_warning(self):
-        """Human step with catch-all has no stall warning."""
+    def test_external_step_full_coverage_no_warning(self):
+        """External step with catch-all has no stall warning."""
         wf = WorkflowDefinition(steps={
-            "approve": _human_step(
+            "approve": _external_step(
                 "approve", ["approved", "feedback"],
                 exit_rules=[
                     ExitRule("approved", "expression", {
@@ -175,7 +175,7 @@ class TestCombinationCap:
             for i in range(9)
         }
         wf = WorkflowDefinition(steps={
-            "big_form": _human_step(
+            "big_form": _external_step(
                 "big_form",
                 [f"field_{i}" for i in range(9)],
                 exit_rules=[
@@ -204,7 +204,7 @@ class TestCLIValidateWarnings:
         flow_content = """\
 steps:
   review:
-    executor: human
+    executor: external
     prompt: "Review this"
     outputs:
       approved:

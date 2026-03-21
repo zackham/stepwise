@@ -194,13 +194,13 @@ class TestAsyncChainReaction:
 
 
 class TestAsyncWatchFulfill:
-    def test_human_step_suspends_then_fulfills(self, async_engine):
-        """Human step suspends; fulfill triggers next steps."""
+    def test_external_step_suspends_then_fulfills(self, async_engine):
+        """External step suspends; fulfill triggers next steps."""
         register_step_fn("use", lambda inputs: {"result": inputs["answer"]})
         wf = WorkflowDefinition(steps={
             "ask": StepDefinition(
                 name="ask",
-                executor=ExecutorRef(type="human", config={"prompt": "What?"}),
+                executor=ExecutorRef(type="external", config={"prompt": "What?"}),
                 outputs=["answer"],
             ),
             "use": StepDefinition(

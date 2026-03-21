@@ -403,7 +403,7 @@ class TestInflightSupersession:
         job = engine.create_job("Supersession test", w)
         engine.start_job(job.id)
 
-        # A is suspended (human watch)
+        # A is suspended (external watch)
         runs = engine.get_runs(job.id, "a")
         assert len(runs) == 1
         a1 = runs[0]

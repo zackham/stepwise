@@ -759,11 +759,11 @@ class TestInjectContext:
         job = engine.create_job("Context passthrough", w)
         engine.start_job(job.id)
 
-        # Inject context while waiting for human step
+        # Inject context while waiting for external step
         engine.inject_context(job.id, "Focus on API first")
         engine.inject_context(job.id, "Also consider caching")
 
-        # Fulfill the human step
+        # Fulfill the external step
         runs = engine.get_runs(job.id, "a")
         engine.fulfill_watch(runs[0].id, {"value": "human input"})
         engine.tick()

@@ -101,7 +101,7 @@ class TestWatchMode:
         mock_browser.assert_not_called()
 
     def test_watch_does_not_use_stdin_handler(self, tmp_path, capsys, monkeypatch):
-        """--watch mode uses web UI for human steps, not stdin."""
+        """--watch mode uses web UI for external steps, not stdin."""
         init_project(tmp_path)
         monkeypatch.chdir(tmp_path)
         flow = self._write_flow(tmp_path)

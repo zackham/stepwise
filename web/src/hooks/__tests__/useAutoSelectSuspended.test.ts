@@ -26,7 +26,7 @@ function makeRun(overrides: Partial<StepRun> = {}): StepRun {
 }
 
 describe("useAutoSelectSuspended", () => {
-  it("auto-selects first newly suspended human step when nothing selected", () => {
+  it("auto-selects first newly suspended external step when nothing selected", () => {
     const onSelect = vi.fn();
     const runs: StepRun[] = [
       makeRun({
@@ -34,7 +34,7 @@ describe("useAutoSelectSuspended", () => {
         step_name: "review",
         status: "suspended",
         watch: {
-          mode: "human",
+          mode: "external",
           config: {},
           fulfillment_outputs: ["decision"],
         },
@@ -54,7 +54,7 @@ describe("useAutoSelectSuspended", () => {
         step_name: "review",
         status: "suspended",
         watch: {
-          mode: "human",
+          mode: "external",
           config: {},
           fulfillment_outputs: ["decision"],
         },
@@ -80,7 +80,7 @@ describe("useAutoSelectSuspended", () => {
         step_name: "review",
         status: "suspended",
         watch: {
-          mode: "human",
+          mode: "external",
           config: {},
           fulfillment_outputs: ["decision"],
         },

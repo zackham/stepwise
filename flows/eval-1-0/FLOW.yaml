@@ -22,7 +22,8 @@ steps:
   # ═══ Phase 0: Ground Truth Calibration ═══════════════════════════════
   preflight:
     description: "Smoke tests and ground truth calibration"
-    run: python3 scripts/preflight.py
+    run: |
+      python3 scripts/preflight.py
     inputs:
       stepwise_path: $job.stepwise_path
       server_port: $job.server_port
@@ -33,7 +34,8 @@ steps:
   # ═══ Phase 1: Codebase Metadata ══════════════════════════════════════
   discover:
     description: "Collect project metadata and inventory"
-    run: python3 scripts/discover.py
+    run: |
+      python3 scripts/discover.py
     sequencing: [preflight]
     inputs:
       stepwise_path: $job.stepwise_path
@@ -47,7 +49,8 @@ steps:
 
   test-core:
     description: "CLI + Server + Lifecycle (HARD GATE)"
-    run: python3 scripts/test_core.py
+    run: |
+      python3 scripts/test_core.py
     inputs:
       project_path: discover.project_path
       server_port: $job.server_port
@@ -57,7 +60,8 @@ steps:
 
   test-security:
     description: "Security posture with severity model (HARD GATE)"
-    run: python3 scripts/test_security.py
+    run: |
+      python3 scripts/test_security.py
     inputs:
       project_path: discover.project_path
       server_port: $job.server_port
@@ -67,7 +71,8 @@ steps:
 
   test-migration:
     description: "Backwards compatibility (HARD GATE)"
-    run: python3 scripts/test_migration.py
+    run: |
+      python3 scripts/test_migration.py
     inputs:
       project_path: discover.project_path
       server_port: $job.server_port
@@ -77,7 +82,8 @@ steps:
 
   test-data-integrity:
     description: "Data integrity — store and artifacts (HARD GATE)"
-    run: python3 scripts/test_data_integrity.py
+    run: |
+      python3 scripts/test_data_integrity.py
     inputs:
       project_path: discover.project_path
       server_port: $job.server_port
@@ -87,7 +93,8 @@ steps:
 
   test-quality:
     description: "7 non-gate quality dimensions"
-    run: python3 scripts/test_quality.py
+    run: |
+      python3 scripts/test_quality.py
     inputs:
       project_path: discover.project_path
       server_port: $job.server_port
@@ -101,6 +108,7 @@ steps:
     description: "Chaos engineering — malformed inputs, injection, edge cases"
     executor: agent
     prompt_file: prompts/adversarial-probe.md
+    output_mode: file
     working_dir: $project_path
     inputs:
       project_path: discover.project_path
@@ -113,6 +121,7 @@ steps:
     description: "Simulate a new user building their first flow"
     executor: agent
     prompt_file: prompts/new-user-test.md
+    output_mode: file
     working_dir: $project_path
     inputs:
       project_path: discover.project_path
@@ -127,6 +136,7 @@ steps:
     description: "Documentation quality synthesis"
     executor: agent
     prompt_file: prompts/synthesize-docs.md
+    output_mode: file
     working_dir: $project_path
     inputs:
       project_path: discover.project_path
@@ -143,6 +153,7 @@ steps:
     description: "Code quality synthesis"
     executor: agent
     prompt_file: prompts/synthesize-code.md
+    output_mode: file
     working_dir: $project_path
     inputs:
       project_path: discover.project_path
@@ -160,6 +171,7 @@ steps:
     description: "UX and developer experience synthesis"
     executor: agent
     prompt_file: prompts/synthesize-ux.md
+    output_mode: file
     working_dir: $project_path
     inputs:
       project_path: discover.project_path
@@ -175,7 +187,8 @@ steps:
 
   aggregate-scores:
     description: "Hard gates, scoring, and GO/NO-GO recommendation"
-    run: python3 scripts/aggregate.py
+    run: |
+      python3 scripts/aggregate.py
     inputs:
       # Hard gate dimensions
       core_score_pct: test-core.score_pct
@@ -234,11 +247,11 @@ steps:
       max_cost_usd: 2.0
       max_duration_minutes: 5
 
-  # ═══ Phase 5: Human Gate ═════════════════════════════════════════════
+  # ═══ Phase 5: External Gate ══════════════════════════════════════════
 
-  human-approval:
-    description: "Human review of evaluation results"
-    executor: human
+  external-approval:
+    description: "External review of evaluation results"
+    executor: external
     prompt: |
       # Stepwise 1.0 Readiness Evaluation — Run $run_number
 
@@ -293,11 +306,12 @@ steps:
 
   publish-report:
     description: "Generate and save HTML report"
-    run: python3 scripts/publish.py
+    run: |
+      python3 scripts/publish.py
     inputs:
       report_content: generate-report.report_content
-      human_decision: human-approval.choice
-      human_notes: human-approval.notes
+      human_decision: external-approval.choice
+      human_notes: external-approval.notes
       recommendation: aggregate-scores.recommendation
       scorecard: aggregate-scores.scorecard
       overall_avg: aggregate-scores.overall_avg

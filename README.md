@@ -78,7 +78,7 @@ steps:
     outputs: [verdict, issues, suggestions]
 
   decide:
-    executor: human
+    executor: external
     prompt: "Review found $issue_count issues. Apply fixes or skip?"
     outputs: [decision]
     inputs:

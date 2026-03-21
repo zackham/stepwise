@@ -10,7 +10,7 @@ import type { HoveredLabelInfo } from "./DagEdges";
 import { ExpandedStepContainer } from "./ExpandedStepContainer";
 import { ForEachExpandedContainer } from "./ForEachExpandedContainer";
 import { FlowPortNode } from "./FlowPortNode";
-import { HumanInputPanel, getWatchProps } from "./HumanInputPanel";
+import { ExternalInputPanel, getWatchProps } from "./ExternalInputPanel";
 import type { FlowDefinition, StepRun, JobTreeNode } from "@/lib/types";
 
 function formatTooltipValue(value: unknown): string {
@@ -138,9 +138,9 @@ export function FlowDagView({
     return map;
   }, [runs]);
 
-  // Estimated screen-pixel height of the HumanInputPanel popover
-  const HUMAN_PANEL_SCREEN_HEIGHT = 280;
-  const HUMAN_PANEL_GAP = 12; // gap between node bottom and panel top
+  // Estimated screen-pixel height of the ExternalInputPanel popover
+  const EXTERNAL_PANEL_SCREEN_HEIGHT = 280;
+  const EXTERNAL_PANEL_GAP = 12; // gap between node bottom and panel top
 
   // Collect active step IDs (stable identity, independent of layout positions)
   const activeStepInfo = useMemo(() => {
@@ -184,7 +184,7 @@ export function FlowDagView({
       if (activeNodeIds.includes(n.id)) {
         const hasPopover = selectedStep === n.id && suspendedIds.has(n.id);
         const popoverExtra = hasPopover
-          ? HUMAN_PANEL_GAP + HUMAN_PANEL_SCREEN_HEIGHT / scale
+          ? EXTERNAL_PANEL_GAP + EXTERNAL_PANEL_SCREEN_HEIGHT / scale
           : 0;
         rects.push({
           x: n.x,
@@ -679,7 +679,7 @@ export function FlowDagView({
           );
         })}
 
-        {/* Inline human input panel — counter-scaled to stay at screen size */}
+        {/* Inline external input panel — counter-scaled to stay at screen size */}
         {(() => {
           if (!selectedStep || !onFulfillWatch) return null;
           const run = latestRuns[selectedStep];
@@ -701,7 +701,7 @@ export function FlowDagView({
                 zIndex: 50,
               }}
             >
-              <HumanInputPanel
+              <ExternalInputPanel
                 prompt={watchProps.prompt}
                 outputs={watchProps.outputs}
                 outputSchema={watchProps.outputSchema}

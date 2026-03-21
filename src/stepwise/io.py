@@ -14,12 +14,12 @@ from dataclasses import dataclass, field
 from typing import Any, Generator, TextIO
 
 
-class HumanInputAborted(Exception):
-    """Raised when user aborts human input collection."""
+class ExternalInputAborted(Exception):
+    """Raised when user aborts external input collection."""
 
     def __init__(self, action: str):
         self.action = action  # "suspend" or "cancel"
-        super().__init__(f"Human input aborted: {action}")
+        super().__init__(f"External input aborted: {action}")
 
 
 # ── Live flow handle ──────────────────────────────────────────────────
@@ -220,13 +220,13 @@ class IOAdapter(abc.ABC):
             return field_name, default
         return field_name, result
 
-    def collect_human_input(
+    def collect_external_input(
         self,
         prompt: str,
         fields: list[str],
         schema: dict[str, dict] | None = None,
     ) -> dict[str, Any]:
-        """Collect all fields for a human step. Returns payload dict."""
+        """Collect all fields for an external step. Returns payload dict."""
         if prompt:
             self.note(prompt)
 
@@ -878,7 +878,7 @@ class TerminalAdapter(IOAdapter):
         finally:
             self._active_handle = None
 
-    def collect_human_input(
+    def collect_external_input(
         self,
         prompt: str,
         fields: list[str],
@@ -902,13 +902,13 @@ class TerminalAdapter(IOAdapter):
 
         # Delegate to base class, catching Ctrl+C for abort menu
         try:
-            return super().collect_human_input(prompt, fields, schema)
+            return super().collect_external_input(prompt, fields, schema)
         except KeyboardInterrupt:
             self._console.print()  # newline after ^C
             return self._interrupt_menu()
 
     def _interrupt_menu(self) -> dict[str, Any]:
-        """Show abort menu after Ctrl+C during human input. Never returns normally."""
+        """Show abort menu after Ctrl+C during external input. Never returns normally."""
         choices = ["Retry input", "Leave suspended", "Cancel job"]
         try:
             import questionary
@@ -922,11 +922,11 @@ class TerminalAdapter(IOAdapter):
 
         if choice == "Retry input":
             # Signal caller to re-prompt — use a sentinel that runner handles
-            raise HumanInputAborted("retry")
+            raise ExternalInputAborted("retry")
         elif choice == "Cancel job":
-            raise HumanInputAborted("cancel")
+            raise ExternalInputAborted("cancel")
         else:
-            raise HumanInputAborted("suspend")
+            raise ExternalInputAborted("suspend")
 
     def prompt_confirm(self, message: str, default: bool = True) -> bool:
         try:

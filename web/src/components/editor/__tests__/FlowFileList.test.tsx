@@ -29,7 +29,7 @@ const mockFlows: LocalFlow[] = [
     steps_count: 5,
     modified_at: "2026-03-09T14:00:00",
     is_directory: true,
-    executor_types: ["human", "llm"],
+    executor_types: ["external", "llm"],
   },
 ];
 

@@ -1,5 +1,5 @@
 name: research-proposal
-description: "Deep research → two council review rounds → human checkpoint → finalize"
+description: "Deep research → two council review rounds → external checkpoint → finalize"
 author: zack
 tags: [research, council, human-in-the-loop, iterative]
 
@@ -137,18 +137,18 @@ steps:
       report_path: init.report_path
       synthesis: synthesize-2.synthesis
       topic: $job.topic
-      human_feedback:
-        from: human-checkpoint.feedback
+      external_feedback:
+        from: external-checkpoint.feedback
         optional: true
     outputs: [report_content, result]
     limits:
       max_cost_usd: 5.0
       max_duration_minutes: 15
 
-  # ═══ Phase 7: Human Checkpoint ═════════════════════════════════════════
-  human-checkpoint:
-    description: "Human review of revised proposal"
-    executor: human
+  # ═══ Phase 7: External Checkpoint ═══════════════════════════════════════
+  external-checkpoint:
+    description: "External review of revised proposal"
+    executor: external
     prompt: |
       # Research Proposal: $title
 
@@ -187,6 +187,7 @@ steps:
         when: "True"
         action: loop
         target: revise-2
+        max_iterations: 50
 
   # ═══ Phase 8: Finalize ═════════════════════════════════════════════════
   finalize:
@@ -198,7 +199,7 @@ steps:
       report_path: init.report_path
       topic: $job.topic
       title: init.title
-      choice: human-checkpoint.choice
+      choice: external-checkpoint.choice
     when: "choice in ('approved', 'done')"
     outputs: [result]
     limits:
