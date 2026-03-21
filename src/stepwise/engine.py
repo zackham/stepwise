@@ -2566,10 +2566,32 @@ class AsyncEngine(Engine):
     def _poll_external_changes(self) -> None:
         """Check for runs that were fulfilled externally (by another engine instance).
 
+        Also detects stuck RUNNING steps whose executor task has vanished from
+        the task registry (e.g. thread pool crash without pushing to queue).
+
         _dispatch_ready is idempotent — it only launches steps whose deps are
         met and that don't already have a run. Safe to call unconditionally.
         """
         for job in self.store.active_jobs():
+            # Detect stuck running steps: run is RUNNING but no task in registry.
+            # Only flag if started >60s ago (avoids race with task creation).
+            for run in self.store.running_runs(job.id):
+                if run.id not in self._tasks and run.started_at:
+                    age = (_now() - run.started_at).total_seconds()
+                    if age > 60:
+                        _async_logger.warning(
+                            "Stuck running step detected: %s/%s (run %s, age %.0fs) — "
+                            "no executor task found, failing run",
+                            job.id, run.step_name, run.id, age,
+                        )
+                        run.status = StepRunStatus.FAILED
+                        run.error = "Executor task lost (possible thread pool crash)"
+                        run.completed_at = _now()
+                        self.store.save_run(run)
+                        self._emit(job.id, STEP_FAILED, {
+                            "step": run.step_name,
+                            "error": run.error,
+                        })
             self._dispatch_ready(job.id)
             self._check_job_terminal(job.id)
 
@@ -2788,6 +2810,10 @@ class AsyncEngine(Engine):
             # Task was cancelled (job cancellation) — don't push event
             return
         except Exception as e:
+            _async_logger.error(
+                "Executor thread failed for step %s (job %s, run %s): %s",
+                step_name, job_id, run_id, e, exc_info=True,
+            )
             await self._queue.put(("step_error", job_id, step_name, run_id, e))
 
     # ── Poll watch scheduling ────────────────────────────────────────────

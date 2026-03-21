@@ -908,11 +908,25 @@ class AgentExecutor(Executor):
                             file_path = Path(state["output_path"]).parent / "output.json"
 
                     try:
-                        artifact = json.loads(file_path.read_text())
+                        content = file_path.read_text()
+                        # Retry once if empty — filesystem flush delay
+                        if not content.strip():
+                            import time
+                            time.sleep(0.1)
+                            content = file_path.read_text()
+                        artifact = json.loads(content)
                         if not isinstance(artifact, dict):
                             artifact = {"result": artifact}
                     except (FileNotFoundError, json.JSONDecodeError):
-                        artifact = {"status": "completed", "output_file_missing": True}
+                        # Retry once after brief delay — handles filesystem flush
+                        import time
+                        time.sleep(0.1)
+                        try:
+                            artifact = json.loads(file_path.read_text())
+                            if not isinstance(artifact, dict):
+                                artifact = {"result": artifact}
+                        except (FileNotFoundError, json.JSONDecodeError):
+                            artifact = {"status": "completed", "output_file_missing": True}
 
                 case "stream_result":
                     # Extract text from ACP agent_message_chunk events
