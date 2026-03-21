@@ -52,8 +52,8 @@ steps:
     description: Summarize concurrency test results
     run: |
       python3 -c "
-      import json
-      results = json.loads('$results_json')
+      import json, os
+      results = json.loads(os.environ['results_json'])
       total = len(results)
       succeeded = sum(1 for r in results if not r.get('_error'))
       failed = total - succeeded
