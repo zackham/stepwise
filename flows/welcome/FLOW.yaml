@@ -37,17 +37,32 @@ steps:
     run: |
       revision=$STEPWISE_ATTEMPT
       sleep 2
-      case "$feature" in
-        todo-list)
-          printf '{"tasks": ["data-model", "api-routes", "react-ui"], "plan": "3 tasks", "revision": %d}' "$revision"
-          ;;
-        auth-system)
-          printf '{"tasks": ["user-model", "jwt-auth", "login-page"], "plan": "3 tasks", "revision": %d}' "$revision"
-          ;;
-        *)
-          printf '{"tasks": ["indexer", "query-parser", "results-api"], "plan": "3 tasks", "revision": %d}' "$revision"
-          ;;
-      esac
+      if [ "$revision" -ge 2 ]; then
+        # Revised plan adds a test task
+        case "$feature" in
+          todo-list)
+            printf '{"tasks": ["data-model", "api-routes", "react-ui", "e2e-tests"], "plan": "4 tasks (added e2e-tests)", "revision": %d}' "$revision"
+            ;;
+          auth-system)
+            printf '{"tasks": ["user-model", "jwt-auth", "login-page", "security-audit"], "plan": "4 tasks (added security-audit)", "revision": %d}' "$revision"
+            ;;
+          *)
+            printf '{"tasks": ["indexer", "query-parser", "results-api", "load-tests"], "plan": "4 tasks (added load-tests)", "revision": %d}' "$revision"
+            ;;
+        esac
+      else
+        case "$feature" in
+          todo-list)
+            printf '{"tasks": ["data-model", "api-routes", "react-ui"], "plan": "3 tasks", "revision": %d}' "$revision"
+            ;;
+          auth-system)
+            printf '{"tasks": ["user-model", "jwt-auth", "login-page"], "plan": "3 tasks", "revision": %d}' "$revision"
+            ;;
+          *)
+            printf '{"tasks": ["indexer", "query-parser", "results-api"], "plan": "3 tasks", "revision": %d}' "$revision"
+            ;;
+        esac
+      fi
     outputs: [tasks, plan, revision]
     inputs:
       feature: pick-feature.feature
@@ -99,8 +114,8 @@ steps:
           description: "Implementing"
           run: |
             sleep 3
-            printf '{"files": 3, "task": "%s"}' "$task"
-          outputs: [files, task]
+            printf '{"files": 3, "task": "%s", "status": "implemented"}' "$task"
+          outputs: [files, task, status]
           inputs:
             task: $job.task
         task-run-tests:
@@ -146,9 +161,9 @@ steps:
     run: |
       sleep 3
       if [ "$STEPWISE_ATTEMPT" -ge 2 ]; then
-        printf '{"passed": 11, "failed": 0, "status": "pass"}'
+        printf '{"passed": 24, "failed": 0, "status": "pass"}'
       else
-        printf '{"passed": 8, "failed": 3, "status": "fail"}'
+        printf '{"passed": 19, "failed": 5, "status": "fail"}'
       fi
     outputs: [passed, failed, status]
     sequencing: [write-code]
