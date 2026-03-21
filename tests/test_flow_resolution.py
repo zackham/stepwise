@@ -248,7 +248,7 @@ class TestNewCommand:
         assert marker.exists()
         content = marker.read_text()
         assert "name: my-flow" in content
-        assert "hello from my-flow" in content
+        assert "gather-info" in content  # 3-step template
         captured = capsys.readouterr()
         combined = captured.out + captured.err
         assert "Created" in combined
