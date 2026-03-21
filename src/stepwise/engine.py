@@ -2183,6 +2183,7 @@ class Engine:
 
 import asyncio
 import logging as _logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
 _async_logger = _logging.getLogger("stepwise.async_engine")
@@ -2234,6 +2235,18 @@ class AsyncEngine(Engine):
         self._loop: asyncio.AbstractEventLoop | None = None  # set by run()
         self.on_broadcast: Callable[[dict], None] | None = None
         self._session_locks = _SessionLockManager()
+        pool_size = int(os.environ.get("STEPWISE_EXECUTOR_THREADS", "32"))
+        self._executor_pool = ThreadPoolExecutor(
+            max_workers=pool_size, thread_name_prefix="stepwise-exec"
+        )
+
+    async def shutdown(self) -> None:
+        """Clean up thread pool and cancel pending tasks."""
+        self._executor_pool.shutdown(wait=False)
+        for task in self._tasks.values():
+            task.cancel()
+        for task in self._poll_tasks.values():
+            task.cancel()
 
     # ── Main loop ────────────────────────────────────────────────────────
 
@@ -2407,20 +2420,38 @@ class AsyncEngine(Engine):
         try:
             executor = self.registry.create(exec_ref)
 
+            # Capture event loop ref — update_state runs in thread pool
+            # and must schedule store access back on the event loop to avoid
+            # concurrent sqlite3 access with the engine's main thread.
+            try:
+                _loop = asyncio.get_running_loop()
+            except RuntimeError:
+                _loop = None
+
             def update_state(state: dict) -> None:
-                run = self.store.load_run(run_id)
-                run.executor_state = state
-                self.store.save_run(run)
+                def _do_update():
+                    run = self.store.load_run(run_id)
+                    run.executor_state = state
+                    self.store.save_run(run)
+                if _loop and _loop.is_running():
+                    _loop.call_soon_threadsafe(_do_update)
+                else:
+                    _do_update()
             ctx.state_update_fn = update_state
 
             # Session locking: if inputs contain _session_id, serialize access
+            loop = asyncio.get_running_loop()
             session_id = inputs.get("_session_id")
             if session_id:
                 lock = self._session_locks.get_lock(session_id)
                 async with lock:
-                    result = await asyncio.to_thread(executor.start, inputs, ctx)
+                    result = await loop.run_in_executor(
+                        self._executor_pool, executor.start, inputs, ctx
+                    )
             else:
-                result = await asyncio.to_thread(executor.start, inputs, ctx)
+                result = await loop.run_in_executor(
+                    self._executor_pool, executor.start, inputs, ctx
+                )
 
             await self._queue.put(("step_result", job_id, step_name, run_id, result))
         except asyncio.CancelledError:
