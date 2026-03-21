@@ -90,7 +90,6 @@ steps:
     for_each: plan.tasks
     as: task
     inputs:
-      tasks: plan.tasks
       decision: approve-plan.decision
     outputs: [results]
     flow:
