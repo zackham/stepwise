@@ -10,13 +10,18 @@ Client: acpx — headless CLI client for ACP agents
 from __future__ import annotations
 
 import json
+import logging
 import os
 import signal
 import subprocess
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from string import Template
 from typing import Any, Protocol
+
+logger = logging.getLogger("stepwise.agent")
 
 from stepwise.executors import (
     ExecutionContext,
@@ -93,6 +98,11 @@ class AcpxBackend:
         self.default_agent = default_agent
 
     def spawn(self, prompt: str, config: dict, context: ExecutionContext) -> AgentProcess:
+        t0 = time.monotonic()
+        thread = threading.current_thread().name
+        step_id = f"{context.step_name}@{context.job_id or 'local'}"
+        logger.info(f"[{step_id}] spawn started (thread={thread})")
+
         working_dir = str(Path(config.get("working_dir", context.workspace_path)).resolve())
         Path(working_dir).mkdir(parents=True, exist_ok=True)
 
@@ -116,11 +126,14 @@ class AcpxBackend:
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
         # Create named session first (acpx requires it before prompting)
+        t_ensure = time.monotonic()
+        logger.info(f"[{step_id}] sessions ensure starting (session={session_name})")
         subprocess.run(
             [self.acpx_path, "--cwd", working_dir,
              agent, "sessions", "ensure", "--name", session_name],
             capture_output=True, timeout=30, env=env,
         )
+        logger.info(f"[{step_id}] sessions ensure done ({time.monotonic() - t_ensure:.1f}s)")
 
         # Build acpx prompt command
         args = [self.acpx_path, "--format", "json", "--approve-all",
@@ -134,15 +147,22 @@ class AcpxBackend:
 
         # Spawn — clear CLAUDECODE to allow nested agent sessions
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-        with open(output_file, "w") as out_f:
-            proc = subprocess.Popen(
-                args,
-                cwd=working_dir,
-                stdout=out_f,
-                stderr=subprocess.PIPE,
-                start_new_session=True,
-                env=env,
-            )
+        # Open output file WITHOUT context manager — Popen is non-blocking so
+        # `with` would close the fd before the subprocess writes anything.
+        # The OS dups the fd into the child process; closing the parent's copy
+        # after Popen returns is safe — the child retains its own copy.
+        out_f = open(output_file, "w")
+        proc = subprocess.Popen(
+            args,
+            cwd=working_dir,
+            stdout=out_f,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+            env=env,
+        )
+        out_f.close()  # Child has its own fd copy; safe to close parent's
+
+        logger.info(f"[{step_id}] process spawned pid={proc.pid} ({time.monotonic() - t0:.1f}s total)")
 
         return AgentProcess(
             pid=proc.pid,
@@ -154,15 +174,19 @@ class AcpxBackend:
 
     def wait(self, process: AgentProcess) -> AgentStatus:
         """Block until agent subprocess exits. Safe to call from thread pool."""
+        t0 = time.monotonic()
+        thread = threading.current_thread().name
+        logger.info(f"[pid={process.pid}] wait started (session={process.session_name}, thread={thread})")
         try:
             _, status = os.waitpid(process.pid, 0)  # blocking wait
             exit_code = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
         except ChildProcessError:
             # Not our child — poll until process disappears
             while self._is_process_alive(process.pid):
-                import time
                 time.sleep(0.5)
             exit_code = 0
+        elapsed = time.monotonic() - t0
+        logger.info(f"[pid={process.pid}] wait done exit_code={exit_code} ({elapsed:.1f}s)")
         return self._completed_status(process, exit_code)
 
     def check(self, process: AgentProcess) -> AgentStatus:
@@ -258,8 +282,6 @@ class AcpxBackend:
 
         Skipped when capture_transcript is False (agent steps not in a chain).
         """
-        import logging
-        logger = logging.getLogger("stepwise.agent")
 
         if not process.capture_transcript:
             return
@@ -588,6 +610,11 @@ class AgentExecutor(Executor):
 
     def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
         """Spawn agent, block until completion. Runs in thread pool via AsyncEngine."""
+        t0 = time.monotonic()
+        thread = threading.current_thread().name
+        step_id = f"{context.step_name}@{context.job_id or 'local'}"
+        logger.info(f"[{step_id}] executor start (thread={thread}, attempt={context.attempt})")
+
         # For file output mode, generate step-specific output filename to prevent
         # collisions when multiple agent steps share the same workspace.
         output_file = self.output_path
@@ -619,6 +646,7 @@ class AgentExecutor(Executor):
             spawn_config["_session_name"] = inputs["_session_id"]
 
         process = self.backend.spawn(prompt, spawn_config, context)
+        logger.info(f"[{step_id}] spawn complete ({time.monotonic() - t0:.1f}s elapsed)")
         process.capture_transcript = bool(context.chain)
 
         if context.state_update_fn:
@@ -634,6 +662,7 @@ class AgentExecutor(Executor):
 
         # Block until agent exits (safe — AsyncEngine runs this in thread pool)
         agent_status = self.backend.wait(process)
+        logger.info(f"[{step_id}] executor done ({time.monotonic() - t0:.1f}s total, status={agent_status.state})")
 
         state = {
             "pid": process.pid,
@@ -701,9 +730,6 @@ class AgentExecutor(Executor):
         step_outputs: list[str],
     ) -> ExecutorResult:
         """Build a delegate ExecutorResult from an emitted flow file."""
-        import logging
-        logger = logging.getLogger("stepwise.agent")
-
         from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
 
         try:
