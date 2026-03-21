@@ -1401,6 +1401,83 @@ class Engine:
 
     # ── For-Each Launching ────────────────────────────────────────────────
 
+    def _for_each_batch_cache_check(
+        self,
+        step_def: StepDefinition,
+        parent_inputs: dict,
+        source_list: list,
+        item_var: str,
+    ) -> dict[int, dict]:
+        """Batch check cache for for-each items. Returns {index: artifact_dict} for hits."""
+        from stepwise.cache import UNCACHEABLE_TYPES, compute_cache_key
+
+        if self.cache is None:
+            return {}
+
+        # Find cacheable terminal steps in the sub-flow
+        sub_flow = step_def.sub_flow
+        if sub_flow is None:
+            return {}
+
+        # Look for terminal steps with cache enabled
+        cacheable_terminals: list[StepDefinition] = []
+        terminal_names = self._find_terminal_steps(sub_flow)
+        for tname in terminal_names:
+            tstep = sub_flow.steps[tname]
+            if tstep.cache is not None and tstep.cache.enabled:
+                if tstep.executor.type not in UNCACHEABLE_TYPES:
+                    cacheable_terminals.append(tstep)
+
+        if not cacheable_terminals:
+            return {}
+
+        # For simplicity, cache check on the first cacheable terminal step
+        target_step = cacheable_terminals[0]
+        engine_version = self._get_engine_version()
+
+        # Compute cache keys for each item
+        keys_by_index: dict[str, int] = {}  # cache_key → item_index
+        for i, item in enumerate(source_list):
+            sub_inputs = {**parent_inputs, item_var: item}
+            exec_ref = target_step.executor
+            interpolated = _interpolate_config(exec_ref.config, sub_inputs)
+            if interpolated != exec_ref.config:
+                exec_ref = ExecutorRef(
+                    type=exec_ref.type, config=interpolated,
+                    decorators=exec_ref.decorators,
+                )
+            key = compute_cache_key(
+                sub_inputs, exec_ref, engine_version,
+                target_step.cache.key_extra if target_step.cache else None,
+            )
+            keys_by_index[key] = i
+
+        # Batch query
+        hits = self.cache.batch_get(list(keys_by_index.keys()))
+
+        results: dict[int, dict] = {}
+        for key, envelope in hits.items():
+            idx = keys_by_index[key]
+            results[idx] = envelope.artifact
+            _engine_logger.info(
+                "For-each cache hit for item %d (key=%s…)", idx, key[:12]
+            )
+
+        return results
+
+    def _find_terminal_steps(self, workflow: WorkflowDefinition) -> list[str]:
+        """Find terminal steps (no other step depends on them)."""
+        all_steps = set(workflow.steps.keys())
+        has_dependents: set[str] = set()
+        for step in workflow.steps.values():
+            for binding in step.inputs:
+                if binding.source_step != "$job" and binding.source_step in all_steps:
+                    has_dependents.add(binding.source_step)
+            for seq in step.sequencing:
+                if seq in all_steps:
+                    has_dependents.add(seq)
+        return [s for s in all_steps if s not in has_dependents]
+
     def _launch_for_each(self, job: Job, step_def: StepDefinition) -> StepRun:
         """Launch a for_each step: resolve source list, create N sub-jobs."""
         fe = step_def.for_each
@@ -1474,9 +1551,18 @@ class Engine:
             self._process_completion(job, run)
             return run
 
-        # Create sub-jobs for each item
-        sub_job_ids: list[str] = []
+        # Batch cache check for for-each items
+        cached_results: dict[int, dict] = {}  # index → artifact dict
+        if self.cache is not None:
+            cached_results = self._for_each_batch_cache_check(
+                step_def, inputs, source_list, fe.item_var,
+            )
+
+        # Create sub-jobs for uncached items only
+        sub_job_ids: list[str | None] = [None] * len(source_list)
         for i, item in enumerate(source_list):
+            if i in cached_results:
+                continue  # cache hit — no sub-job needed
             sub_inputs = {
                 **inputs,  # parent inputs passed through
                 fe.item_var: item,  # the iteration variable
@@ -1493,26 +1579,53 @@ class Engine:
                 parent_step_run_id=run.id,
                 workspace_path=sub_workspace,
             )
-            sub_job_ids.append(sub_job.id)
+            sub_job_ids[i] = sub_job.id
 
         # Store sub-job tracking info in executor_state
+        actual_sub_job_ids = [sid for sid in sub_job_ids if sid is not None]
         run.executor_state = {
             "for_each": True,
-            "sub_job_ids": sub_job_ids,
+            "sub_job_ids": actual_sub_job_ids,
+            "sub_job_index_map": {sid: i for i, sid in enumerate(sub_job_ids) if sid is not None},
+            "cached_results": cached_results,
             "item_count": len(source_list),
             "on_error": fe.on_error,
         }
+
+        # If all items were cached, complete immediately
+        if not actual_sub_job_ids:
+            results = [cached_results.get(i, {}) for i in range(len(source_list))]
+            run.status = StepRunStatus.COMPLETED
+            run.completed_at = _now()
+            run.result = HandoffEnvelope(
+                artifact={"results": results},
+                sidecar=Sidecar(),
+                workspace=job.workspace_path,
+                timestamp=_now(),
+            )
+            self.store.save_run(run)
+            self._emit(job.id, STEP_COMPLETED, {
+                "step": step_name,
+                "attempt": attempt,
+                "for_each": True,
+                "item_count": len(source_list),
+                "cached_count": len(cached_results),
+            })
+            self._process_completion(job, run)
+            return run
+
         self.store.save_run(run)
 
         self._emit(job.id, FOR_EACH_STARTED, {
             "step": step_name,
             "attempt": attempt,
             "item_count": len(source_list),
-            "sub_job_ids": sub_job_ids,
+            "sub_job_ids": actual_sub_job_ids,
+            "cached_count": len(cached_results),
         })
 
         # Start all sub-jobs
-        for sub_job_id in sub_job_ids:
+        for sub_job_id in actual_sub_job_ids:
             self.start_job(sub_job_id)
 
         return run
@@ -1525,14 +1638,28 @@ class Engine:
             return False
 
         sub_job_ids = run.executor_state.get("sub_job_ids", [])
+        sub_job_index_map = run.executor_state.get("sub_job_index_map", {})
+        cached_results = run.executor_state.get("cached_results", {})
         on_error = run.executor_state.get("on_error", "fail_fast")
+        item_count = run.executor_state.get("item_count", len(sub_job_ids))
 
-        completed_results: list[dict | None] = [None] * len(sub_job_ids)
+        # Build full results array: start with cached, fill in sub-job results
+        # Convert cached_results keys from str (JSON serialization) to int
+        all_results: dict[int, dict | None] = {}
+        for idx_str, artifact in cached_results.items():
+            all_results[int(idx_str)] = artifact
+
         all_done = True
         any_failed = False
         failed_indices: list[int] = []
 
-        for i, sub_job_id in enumerate(sub_job_ids):
+        for sub_job_id in sub_job_ids:
+            # Map sub_job_id back to original item index
+            original_idx = sub_job_index_map.get(sub_job_id)
+            if original_idx is None:
+                # Fallback for older runs without index map
+                original_idx = sub_job_ids.index(sub_job_id)
+
             try:
                 sub_job = self.store.load_job(sub_job_id)
             except KeyError:
@@ -1541,14 +1668,14 @@ class Engine:
 
             if sub_job.status == JobStatus.COMPLETED:
                 terminal_output = self._terminal_output(sub_job)
-                completed_results[i] = terminal_output.artifact
+                all_results[original_idx] = terminal_output.artifact
             elif sub_job.status == JobStatus.FAILED:
                 any_failed = True
-                failed_indices.append(i)
+                failed_indices.append(original_idx)
                 if on_error == "fail_fast":
                     # Cancel remaining sub-jobs
-                    for j, other_id in enumerate(sub_job_ids):
-                        if j != i:
+                    for other_id in sub_job_ids:
+                        if other_id != sub_job_id:
                             try:
                                 other = self.store.load_job(other_id)
                                 if other.status == JobStatus.RUNNING:
@@ -1557,28 +1684,28 @@ class Engine:
                                 pass
                     # Fail the for_each run
                     run.status = StepRunStatus.FAILED
-                    run.error = f"For-each item {i} failed"
+                    run.error = f"For-each item {original_idx} failed"
                     run.completed_at = _now()
                     self.store.save_run(run)
                     self._halt_job(job, run)
                     return True
                 else:
                     # continue mode: record failure, keep going
-                    completed_results[i] = {"_error": f"Sub-job {sub_job_id} failed"}
+                    all_results[original_idx] = {"_error": f"Sub-job {sub_job_id} failed"}
             elif sub_job.status in (JobStatus.CANCELLED, JobStatus.PAUSED):
                 any_failed = True
-                failed_indices.append(i)
-                completed_results[i] = {"_error": f"Sub-job {sub_job.status.value}"}
+                failed_indices.append(original_idx)
+                all_results[original_idx] = {"_error": f"Sub-job {sub_job.status.value}"}
             else:
                 all_done = False
 
         if not all_done:
             return False
 
-        # All sub-jobs are done — collect results in order
+        # All sub-jobs are done — collect results in original order
         results = []
-        for r in completed_results:
-            results.append(r if r is not None else {})
+        for i in range(item_count):
+            results.append(all_results.get(i, {}))
 
         # If ALL items failed, fail the for-each step regardless of on_error setting.
         # on_error: continue means "tolerate partial failures", not "accept 100% failure".
@@ -1595,7 +1722,7 @@ class Engine:
             self.store.save_run(run)
             self._emit(job.id, FOR_EACH_COMPLETED, {
                 "step": run.step_name,
-                "item_count": len(sub_job_ids),
+                "item_count": item_count,
                 "failed_count": len(failed_indices),
             })
             self._halt_job(job, run)
@@ -1613,7 +1740,7 @@ class Engine:
 
         self._emit(job.id, FOR_EACH_COMPLETED, {
             "step": run.step_name,
-            "item_count": len(sub_job_ids),
+            "item_count": item_count,
             "failed_count": len(failed_indices),
         })
         self._emit(job.id, STEP_COMPLETED, {
