@@ -13,6 +13,7 @@ JOB_COMPLETED = "job.completed"
 JOB_FAILED = "job.failed"
 JOB_PAUSED = "job.paused"
 JOB_RESUMED = "job.resumed"
+JOB_QUEUED = "job.queued"
 
 # Engine actions
 EXIT_RESOLVED = "exit.resolved"
