@@ -3401,6 +3401,19 @@ def build_parser() -> argparse.ArgumentParser:
                               default="compact",
                               help="Output format: compact (default), json, or full")
 
+    # cache
+    p_cache = sub.add_parser("cache", help="Manage step result cache")
+    cache_sub = p_cache.add_subparsers(dest="cache_action")
+    p_cache_clear = cache_sub.add_parser("clear", help="Clear cached results")
+    p_cache_clear.add_argument("--flow", help="Filter by flow name")
+    p_cache_clear.add_argument("--step", help="Filter by step name")
+    cache_sub.add_parser("stats", help="Show cache statistics")
+    p_cache_debug = cache_sub.add_parser("debug", help="Show cache key for a step")
+    p_cache_debug.add_argument("flow", help="Flow file path")
+    p_cache_debug.add_argument("step", help="Step name")
+    p_cache_debug.add_argument("--var", action="append", dest="vars", metavar="KEY=VALUE",
+                               help="Input variable (repeatable)")
+
     # update
     sub.add_parser("update", help="Upgrade stepwise to the latest version")
 
@@ -3419,6 +3432,142 @@ def build_parser() -> argparse.ArgumentParser:
                               help="Also uninstall the stepwise CLI tool")
 
     return parser
+
+
+def cmd_cache(args: argparse.Namespace) -> int:
+    """Manage step result cache."""
+    from stepwise.cache import StepResultCache
+
+    project = _find_project_or_exit(args)
+    cache_path = str(project.dot_dir / "cache" / "results.db")
+    action = getattr(args, "cache_action", None)
+
+    if action == "clear":
+        cache = StepResultCache(cache_path)
+        try:
+            count = cache.clear(
+                flow_name=getattr(args, "flow", None),
+                step_name=getattr(args, "step", None),
+            )
+            print(f"Cleared {count} cache entries.")
+        finally:
+            cache.close()
+        return EXIT_SUCCESS
+
+    elif action == "stats":
+        import os
+        if not os.path.exists(cache_path):
+            print("No cache database found.")
+            return EXIT_SUCCESS
+        cache = StepResultCache(cache_path)
+        try:
+            s = cache.stats()
+            print(f"Total entries: {s['total_entries']}")
+            print(f"Total hits:    {s['total_hits']}")
+            if s['size_bytes'] > 0:
+                size_kb = s['size_bytes'] / 1024
+                print(f"Size on disk:  {size_kb:.1f} KB")
+            if s['by_flow']:
+                print("\nBy flow:")
+                for flow, info in s['by_flow'].items():
+                    print(f"  {flow}: {info['entries']} entries, {info['hits']} hits")
+            if s['by_step']:
+                print("\nBy step:")
+                for step, info in s['by_step'].items():
+                    print(f"  {step}: {info['entries']} entries, {info['hits']} hits")
+        finally:
+            cache.close()
+        return EXIT_SUCCESS
+
+    elif action == "debug":
+        from stepwise.cache import compute_cache_key
+        from stepwise.runner import parse_vars
+        from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+        flow_path = Path(args.flow)
+        if not flow_path.exists():
+            print(f"Error: File not found: {flow_path}", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+
+        try:
+            workflow = load_workflow_yaml(str(flow_path))
+        except YAMLLoadError as e:
+            print(f"Error: {'; '.join(e.errors)}", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+
+        step_name = args.step
+        if step_name not in workflow.steps:
+            print(f"Error: Step '{step_name}' not found in flow", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+
+        step_def = workflow.steps[step_name]
+        if step_def.cache is None:
+            print(f"Step '{step_name}' has no cache config.", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+
+        # Parse inputs
+        try:
+            inputs = parse_vars(getattr(args, "vars", None))
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+
+        # Resolve job inputs for the step
+        resolved_inputs = {}
+        for binding in step_def.inputs:
+            if binding.source_step == "$job":
+                resolved_inputs[binding.local_name] = inputs.get(binding.source_field, "")
+
+        exec_ref = step_def.executor
+        from stepwise.engine import _interpolate_config
+        interpolated = _interpolate_config(exec_ref.config, resolved_inputs)
+        if interpolated != exec_ref.config:
+            from stepwise.models import ExecutorRef
+            exec_ref = ExecutorRef(
+                type=exec_ref.type, config=interpolated,
+                decorators=exec_ref.decorators,
+            )
+
+        try:
+            from importlib.metadata import version
+            engine_version = version("stepwise-run")
+        except Exception:
+            engine_version = "0.0.0"
+
+        key = compute_cache_key(
+            resolved_inputs, exec_ref, engine_version,
+            step_def.cache.key_extra,
+        )
+
+        print(f"Cache key: {key}")
+        print(f"Step:      {step_name}")
+        print(f"Executor:  {step_def.executor.type}")
+        print(f"Version:   {engine_version}")
+        if step_def.cache.key_extra:
+            print(f"Key extra: {step_def.cache.key_extra}")
+        if step_def.cache.ttl:
+            print(f"TTL:       {step_def.cache.ttl}s")
+
+        # Check if key exists in cache
+        import os
+        if os.path.exists(cache_path):
+            cache = StepResultCache(cache_path)
+            try:
+                hit = cache.get(key)
+                if hit:
+                    print(f"Status:    HIT (cached result available)")
+                else:
+                    print(f"Status:    MISS")
+            finally:
+                cache.close()
+        else:
+            print(f"Status:    MISS (no cache database)")
+
+        return EXIT_SUCCESS
+
+    else:
+        print("Usage: stepwise cache {clear|stats|debug}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
 
 
 def cmd_welcome(args: argparse.Namespace) -> int:
@@ -3497,6 +3646,7 @@ def main(argv: list[str] | None = None) -> int:
         "output": cmd_output,
         "fulfill": cmd_fulfill,
         "agent-help": cmd_agent_help,
+        "cache": cmd_cache,
         "update": cmd_self_update,
         "welcome": cmd_welcome,
         "uninstall": cmd_uninstall,

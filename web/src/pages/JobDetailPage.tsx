@@ -113,7 +113,7 @@ export function JobDetailPage() {
     });
   }, []);
 
-  // Auto-select newly suspended human steps
+  // Auto-select newly suspended external steps
   useAutoSelectSuspended(runs, selection, handleSelectStep);
 
   // Auto-expand steps that have sub-jobs (runtime or design-time)

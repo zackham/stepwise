@@ -195,7 +195,7 @@ def _status_icon(status: str) -> str:
 def _executor_icon(executor_type: str) -> str:
     return {
         "script": "&#x25b6;",
-        "human": "&#x1f464;",
+        "external": "&#x1f464;",
         "llm": "&#x2728;",
         "agent": "&#x1f916;",
         "mock_llm": "&#x2728;",

@@ -47,11 +47,6 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
         prompt=cfg.get("prompt", "Awaiting external input"),
     ))
 
-    # Backwards-compatible alias
-    registry.register("human", lambda cfg: ExternalExecutor(
-        prompt=cfg.get("prompt", "Awaiting external input"),
-    ))
-
     registry.register("poll", lambda cfg: PollExecutor(
         check_command=cfg.get("check_command", "echo"),
         interval_seconds=cfg.get("interval_seconds", 60),

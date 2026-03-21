@@ -66,7 +66,7 @@ export function AddStepDialog({
               <SelectContent>
                 <SelectItem value="script">Script</SelectItem>
                 <SelectItem value="llm">LLM</SelectItem>
-                <SelectItem value="human">Human</SelectItem>
+                <SelectItem value="external">External</SelectItem>
                 <SelectItem value="agent">Agent</SelectItem>
               </SelectContent>
             </Select>

@@ -81,12 +81,12 @@ describe("StepDefinitionPanel", () => {
     expect(screen.getByText("curl http://example.com")).toBeInTheDocument();
   });
 
-  it("shows prompt for human executor", () => {
+  it("shows prompt for external executor", () => {
     renderWithQuery(
       <StepDefinitionPanel
         stepDef={makeStepDef({
           name: "review",
-          executor: { type: "human", config: { prompt: "Review the output" }, decorators: [] },
+          executor: { type: "external", config: { prompt: "Review the output" }, decorators: [] },
         })}
         onClose={vi.fn()}
       />

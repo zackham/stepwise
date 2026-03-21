@@ -94,14 +94,14 @@ describe("StepNode", () => {
     expect(screen.getByText("failed")).toBeInTheDocument();
   });
 
-  it("shows 'Awaiting input' indicator for human-suspended steps", () => {
+  it("shows 'Awaiting input' indicator for external-suspended steps", () => {
     render(
       <StepNode
         stepDef={makeStepDef()}
         latestRun={makeRun({
           status: "suspended",
           watch: {
-            mode: "human",
+            mode: "external",
             config: { prompt: "Please confirm" },
             fulfillment_outputs: ["confirmed"],
           },
@@ -112,7 +112,7 @@ describe("StepNode", () => {
     expect(screen.getByText("Awaiting input")).toBeInTheDocument();
   });
 
-  it("does not show 'Awaiting input' for non-human suspended steps", () => {
+  it("does not show 'Awaiting input' for non-external suspended steps", () => {
     render(
       <StepNode
         stepDef={makeStepDef()}
@@ -194,14 +194,14 @@ describe("StepNode", () => {
     // Just verify it renders without crashing with each type
     expect(scriptContainer.firstChild).toBeTruthy();
 
-    const { container: humanContainer } = render(
+    const { container: externalContainer } = render(
       <StepNode
-        stepDef={makeStepDef({ executor: { type: "human", config: {}, decorators: [] } })}
+        stepDef={makeStepDef({ executor: { type: "external", config: {}, decorators: [] } })}
         latestRun={null}
         {...defaultProps}
       />
     );
-    expect(humanContainer.firstChild).toBeTruthy();
+    expect(externalContainer.firstChild).toBeTruthy();
 
     const { container: llmContainer } = render(
       <StepNode

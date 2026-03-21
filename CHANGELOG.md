@@ -3,6 +3,11 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **Rename `executor: human` → `executor: external`** — The "human" executor type is now called "external" across the entire codebase. This is a breaking change: update `executor: human` to `executor: external` in all `.flow.yaml` files. The underlying suspend/fulfill mechanism is unchanged. Class `HumanExecutor` → `ExternalExecutor`, event `human.rerun` → `external.rerun`, schema key `humanSteps` → `externalSteps`, web component `HumanInputPanel` → `ExternalInputPanel`.
+
 ## [0.6.0] — 2026-03-17
 
 **Optional Inputs, Session Continuity, Webhook Notifications** — smarter loops, agent memory, and async event delivery.

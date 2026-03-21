@@ -17,7 +17,7 @@ JOB_RESUMED = "job.resumed"
 # Engine actions
 EXIT_RESOLVED = "exit.resolved"
 WATCH_FULFILLED = "watch.fulfilled"
-HUMAN_RERUN = "human.rerun"
+EXTERNAL_RERUN = "external.rerun"
 LOOP_ITERATION = "loop.iteration"
 LOOP_MAX_REACHED = "loop.max_reached"
 CONTEXT_INJECTED = "context.injected"

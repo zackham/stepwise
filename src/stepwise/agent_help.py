@@ -40,7 +40,7 @@ def _build_flow_entries(
         name = schema["name"] or flow_name or flow_path.stem.replace(".flow", "")
         inputs = schema.get("inputs", [])
         outputs = schema.get("outputs", [])
-        human_steps = schema.get("humanSteps", [])
+        external_steps = schema.get("externalSteps", [])
         desc = schema.get("description", "")
 
         # Build run command — prefer flow name for clean invocation
@@ -82,13 +82,13 @@ def _build_flow_entries(
             entry["config"] = {v.name: v.to_dict() for v in wf.config_vars}
         if wf.requires:
             entry["requires"] = [r.name for r in wf.requires]
-        if human_steps:
-            entry["human_steps"] = []
-            for hs in human_steps:
+        if external_steps:
+            entry["external_steps"] = []
+            for hs in external_steps:
                 hs_entry: dict = {"step": hs["step"], "fields": hs["fields"]}
                 if hs.get("schema"):
                     hs_entry["schema"] = hs["schema"]
-                entry["human_steps"].append(hs_entry)
+                entry["external_steps"].append(hs_entry)
 
         entries.append(entry)
 
@@ -110,7 +110,7 @@ def _build_registry_entries(
         name = rf.ref
         inputs = schema.get("inputs", [])
         outputs = schema.get("outputs", [])
-        human_steps = schema.get("humanSteps", [])
+        external_steps = schema.get("externalSteps", [])
         desc = schema.get("description", "")
 
         var_args = " ".join(f'--var {inp}="..."' for inp in inputs)
@@ -133,13 +133,13 @@ def _build_registry_entries(
         }
         if desc:
             entry["description"] = desc
-        if human_steps:
-            entry["human_steps"] = []
-            for hs in human_steps:
+        if external_steps:
+            entry["external_steps"] = []
+            for hs in external_steps:
                 hs_entry: dict = {"step": hs["step"], "fields": hs["fields"]}
                 if hs.get("schema"):
                     hs_entry["schema"] = hs["schema"]
-                entry["human_steps"].append(hs_entry)
+                entry["external_steps"].append(hs_entry)
 
         entries.append(entry)
 
@@ -208,11 +208,11 @@ def _format_compact(entries: list[dict], registry_entries: list[dict] | None = N
         "**Async** — Fire-and-forget with webhook notifications.",
         "  `stepwise run <flow> --async --notify <url> --notify-context '{\"topic_id\":\"...\"}' --var k=v`",
         "  Returns immediately with job_id. Webhook receives events when the job",
-        "  suspends (human step), completes, or fails. Use this when you're a server",
+        "  suspends (external step), completes, or fails. Use this when you're a server",
         "  or bot and don't want to block — just kick off the flow and respond to",
         "  webhook callbacks asynchronously.",
         "",
-        "**Mediated** — Run a flow with human steps; fulfill them interactively.",
+        "**Mediated** — Run a flow with external steps; fulfill them interactively.",
         "  `stepwise run <flow> --wait` → exit 5 = suspended → read prompt →",
         "  `stepwise fulfill <run-id> '{...}' --wait` → resume until done.",
         "",
@@ -249,9 +249,9 @@ def _format_compact(entries: list[dict], registry_entries: list[dict] | None = N
                 parts.append(f"in: {', '.join(entry['inputs'])}")
             if entry["outputs"]:
                 parts.append(f"out: {', '.join(entry['outputs'])}")
-            if entry.get("human_steps"):
-                step_names = [hs["step"] for hs in entry["human_steps"]]
-                parts.append(f"human: {', '.join(step_names)}")
+            if entry.get("external_steps"):
+                step_names = [hs["step"] for hs in entry["external_steps"]]
+                parts.append(f"external: {', '.join(step_names)}")
             if parts:
                 lines.append(f"  {' | '.join(parts)}")
 
@@ -276,19 +276,19 @@ def _format_compact(entries: list[dict], registry_entries: list[dict] | None = N
                 parts.append(f"in: {', '.join(entry['inputs'])}")
             if entry["outputs"]:
                 parts.append(f"out: {', '.join(entry['outputs'])}")
-            if entry.get("human_steps"):
-                step_names = [hs["step"] for hs in entry["human_steps"]]
-                parts.append(f"human: {', '.join(step_names)}")
+            if entry.get("external_steps"):
+                step_names = [hs["step"] for hs in entry["external_steps"]]
+                parts.append(f"external: {', '.join(step_names)}")
             if parts:
                 lines.append(f"  {' | '.join(parts)}")
 
             lines.append("")
 
-    # Typed human inputs
+    # Typed external inputs
     lines.extend([
-        "## Typed Human Inputs",
+        "## Typed External Inputs",
         "",
-        "Human steps may declare typed output fields. When fulfilling, match the expected types:",
+        "External steps may declare typed output fields. When fulfilling, match the expected types:",
         "",
         "| Type | JSON value | Example |",
         "|------|-----------|---------|",
@@ -317,12 +317,12 @@ def _format_compact(entries: list[dict], registry_entries: list[dict] | None = N
         "`stepwise output <job-id> --step a,b` — per-step outputs.",
         "`stepwise output <job-id> --step a --inputs` — step inputs.",
         "`stepwise output --run <run-id>` — direct run output.",
-        "`stepwise fulfill <run-id> '{...}'` — satisfy a human step.",
+        "`stepwise fulfill <run-id> '{...}'` — satisfy an external step.",
         "`stepwise fulfill <run-id> '{...}' --wait` — fulfill then block on job.",
         "`stepwise list --suspended --output json` — global suspension inbox.",
         "`stepwise wait <job-id>` — block until completion or suspension.",
         "`stepwise cancel <job-id> --output json` — cancel with step details.",
-        "`stepwise schema <flow>` — JSON tool contract (inputs, outputs, humanSteps).",
+        "`stepwise schema <flow>` — JSON tool contract (inputs, outputs, externalSteps).",
         "`stepwise validate <flow>` — syntax check a .flow.yaml file.",
         "",
         "Exit codes: 0=success, 1=failed, 2=input error, 3=timeout, 4=cancelled, 5=suspended.",
@@ -372,14 +372,14 @@ def _format_full(entries: list[dict]) -> str:
         else:
             lines.append("- Inputs: none")
 
-        if entry.get("human_steps"):
+        if entry.get("external_steps"):
             parts = []
-            for hs in entry["human_steps"]:
+            for hs in entry["external_steps"]:
                 fields_str = ", ".join(hs["fields"])
                 parts.append(f"{hs['step']} (→ {fields_str})")
-            lines.append(f"- Human steps: {'; '.join(parts)}")
+            lines.append(f"- External steps: {'; '.join(parts)}")
         else:
-            lines.append("- Human steps: none")
+            lines.append("- External steps: none")
 
         lines.append(f"- Run: `{entry['run']}`")
 
@@ -395,7 +395,7 @@ def _format_full(entries: list[dict]) -> str:
         "stepwise run <flow> --wait --var k=v     # run, block, get JSON",
         "stepwise run <flow> --async               # fire-and-forget",
         "stepwise output <job-id>                  # retrieve outputs",
-        "stepwise fulfill <run-id> '{...}'         # satisfy human step",
+        "stepwise fulfill <run-id> '{...}'         # satisfy external step",
         "stepwise status <job-id>                  # check progress",
         "```",
         "",
@@ -435,7 +435,7 @@ def build_emit_flow_instructions(
     # When to emit vs direct
     lines.append("**When to emit a flow:**")
     lines.append("- The task decomposes into multiple sequential or parallel steps")
-    lines.append("- Different parts need different executors (scripts, LLM calls, human review)")
+    lines.append("- Different parts need different executors (scripts, LLM calls, external review)")
     lines.append("- You want retry, timeout, or fallback on individual steps\n")
     lines.append("**When NOT to emit (just do the work directly):**")
     lines.append("- The task is straightforward and you can complete it in one session")
@@ -446,13 +446,13 @@ def build_emit_flow_instructions(
     executor_docs = {
         "script": ("script", "`run: |` shorthand", "Shell commands, stdout parsed as JSON"),
         "llm": ("llm", "`executor: llm`", "LLM API call"),
-        "human": ("human", "`executor: human`", "Suspends for human input via web UI"),
+        "external": ("external", "`executor: external`", "Suspends for external input via web UI"),
         "agent": ("agent", "`executor: agent`", "Spawns another agent session"),
     }
 
     available_types: list[str] = []
     if registry and hasattr(registry, "_factories"):
-        available_types = [t for t in ("script", "llm", "human", "agent")
+        available_types = [t for t in ("script", "llm", "external", "agent")
                           if t in registry._factories]
     else:
         available_types = list(executor_docs.keys())

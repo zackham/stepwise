@@ -4,7 +4,7 @@ Hook scripts live in `.stepwise/hooks/` and are named `on-{event}`.
 They receive a JSON payload on stdin with event details.
 
 Events:
-  - suspend: A step has been suspended (awaiting human input)
+  - suspend: A step has been suspended (awaiting external input)
   - step-complete: A step has completed successfully
   - complete: A job has completed successfully
   - fail: A job or step has failed
@@ -203,7 +203,7 @@ def _log_hook_failure(
 HOOK_TEMPLATES = {
     "on-suspend": """\
 #!/bin/sh
-# Stepwise hook: fired when a step is suspended (awaiting human input).
+# Stepwise hook: fired when a step is suspended (awaiting external input).
 # Receives JSON payload on stdin with: event, hook, job_id, step, run_id,
 # watch_mode, fulfill_command, timestamp.
 #

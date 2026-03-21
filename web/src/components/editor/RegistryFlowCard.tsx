@@ -6,7 +6,7 @@ function ExecutorBadge({ type }: { type: string }) {
   const icon = {
     script: <Terminal className="w-3 h-3" />,
     llm: <Brain className="w-3 h-3" />,
-    human: <User className="w-3 h-3" />,
+    external: <User className="w-3 h-3" />,
     agent: <Bot className="w-3 h-3" />,
   }[type] ?? <Terminal className="w-3 h-3" />;
 

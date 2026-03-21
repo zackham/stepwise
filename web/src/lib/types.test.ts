@@ -21,7 +21,7 @@ describe("EVENT_TYPES", () => {
   it("contains all engine action events", () => {
     expect(EVENT_TYPES.EXIT_RESOLVED).toBe("exit.resolved");
     expect(EVENT_TYPES.WATCH_FULFILLED).toBe("watch.fulfilled");
-    expect(EVENT_TYPES.HUMAN_RERUN).toBe("human.rerun");
+    expect(EVENT_TYPES.EXTERNAL_RERUN).toBe("external.rerun");
     expect(EVENT_TYPES.LOOP_ITERATION).toBe("loop.iteration");
     expect(EVENT_TYPES.LOOP_MAX_REACHED).toBe("loop.max_reached");
     expect(EVENT_TYPES.CONTEXT_INJECTED).toBe("context.injected");

@@ -36,7 +36,7 @@ function executorIcon(type: string) {
   switch (type) {
     case "script":
       return <Terminal className="w-3.5 h-3.5" />;
-    case "human":
+    case "external":
       return <User className="w-3.5 h-3.5" />;
     case "mock_llm":
     case "llm":
@@ -72,9 +72,9 @@ function executorSubtitle(stepDef: StepDefinition): string {
         ? simple.slice(0, limit - 2) + "..."
         : simple;
     }
-    case "human": {
+    case "external": {
       const prompt = config.prompt as string | undefined;
-      if (!prompt) return "human input";
+      if (!prompt) return "external input";
       return prompt.length > limit
         ? prompt.slice(0, limit - 2) + "..."
         : prompt;
@@ -176,7 +176,7 @@ export function StepNode({
 
   const isSuspended =
     latestRun?.status === "suspended" &&
-    latestRun?.watch?.mode === "human";
+    latestRun?.watch?.mode === "external";
 
   const attempt = latestRun?.attempt ?? 0;
   const showAttemptBadge = attempt > 1 || (maxAttempts != null && attempt >= 1);

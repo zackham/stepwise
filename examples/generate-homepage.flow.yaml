@@ -982,10 +982,10 @@ steps:
         when: "attempt >= 3"
         action: advance
 
-  # ─── Phase 9: Human Review ──────────────────────────────────────────
+  # ─── Phase 9: External Review ───────────────────────────────────────
 
-  human-review:
-    executor: human
+  external-review:
+    executor: external
     prompt: |
       The homepage has been generated and reviewed.
 
@@ -1036,4 +1036,4 @@ steps:
       html: assemble.html
       output_dir: $job.output_dir
       project_name: ingest-repo.project_name
-    sequencing: [human-review]
+    sequencing: [external-review]

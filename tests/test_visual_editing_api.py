@@ -133,10 +133,10 @@ class TestAddStep:
         assert resp.status_code == 200
         assert "summarize" in resp.json()["raw_yaml"]
 
-    def test_add_human_step(self, client):
+    def test_add_external_step(self, client):
         resp = client.post(
             "/api/flows/add-step",
-            json={"flow_path": FLOW_PATH, "name": "review", "executor": "human"},
+            json={"flow_path": FLOW_PATH, "name": "review", "executor": "external"},
         )
         assert resp.status_code == 200
         assert "review" in resp.json()["raw_yaml"]

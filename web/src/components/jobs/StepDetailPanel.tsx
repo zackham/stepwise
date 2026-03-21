@@ -42,7 +42,7 @@ function executorIcon(type: string) {
   switch (type) {
     case "script":
       return <Terminal className="w-4 h-4" />;
-    case "human":
+    case "external":
       return <User className="w-4 h-4" />;
     case "mock_llm":
     case "llm":
@@ -118,7 +118,7 @@ export function StepDetailPanel({
     latestRun.status === "failed";
 
   const isSuspended =
-    latestRun?.status === "suspended" && latestRun?.watch?.mode === "human";
+    latestRun?.status === "suspended" && latestRun?.watch?.mode === "external";
 
   return (
     <div className="flex flex-col h-full">
@@ -174,7 +174,7 @@ export function StepDetailPanel({
                   </pre>
                 </div>
               )}
-            {stepDef.executor.type === "human" &&
+            {stepDef.executor.type === "external" &&
               Boolean(stepDef.executor.config.prompt) && (
                 <div className="mt-2">
                   <div className="text-zinc-500 text-sm mb-1">Prompt</div>

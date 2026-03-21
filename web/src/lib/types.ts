@@ -25,7 +25,7 @@ export interface DecoratorRef {
 }
 
 export interface ExecutorRef {
-  type: string; // "script", "mock_llm", "human", etc.
+  type: string; // "script", "mock_llm", "external", etc.
   config: Record<string, unknown>;
   decorators: DecoratorRef[];
 }
@@ -138,7 +138,7 @@ export type OutputSchema = Record<string, OutputFieldSchema>;
 // ── WatchSpec ──────────────────────────────────────────────────────────
 
 export interface WatchSpec {
-  mode: string; // "poll", "human", "timeout"
+  mode: string; // "poll", "external", "timeout"
   config: Record<string, unknown>;
   fulfillment_outputs: string[];
   output_schema?: OutputSchema;
@@ -366,7 +366,7 @@ export const EVENT_TYPES = {
   // Engine actions
   EXIT_RESOLVED: "exit.resolved",
   WATCH_FULFILLED: "watch.fulfilled",
-  HUMAN_RERUN: "human.rerun",
+  EXTERNAL_RERUN: "external.rerun",
   LOOP_ITERATION: "loop.iteration",
   LOOP_MAX_REACHED: "loop.max_reached",
   CONTEXT_INJECTED: "context.injected",

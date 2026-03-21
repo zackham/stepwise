@@ -37,7 +37,7 @@ function executorIcon(type: string) {
   switch (type) {
     case "script":
       return <Terminal className="w-4 h-4" />;
-    case "human":
+    case "external":
       return <User className="w-4 h-4" />;
     case "mock_llm":
     case "llm":
@@ -58,7 +58,7 @@ const EXEC_TYPE_COLORS: Record<string, string> = {
   llm: "bg-violet-900/50 text-violet-400 border-violet-800",
   mock_llm: "bg-violet-900/50 text-violet-400 border-violet-800",
   agent: "bg-blue-900/50 text-blue-400 border-blue-800",
-  human: "bg-amber-900/50 text-amber-400 border-amber-800",
+  external: "bg-amber-900/50 text-amber-400 border-amber-800",
   poll: "bg-cyan-900/50 text-cyan-400 border-cyan-800",
 };
 
@@ -433,7 +433,7 @@ export function StepDefinitionPanel({
                 </div>
               )}
 
-              {execType === "human" && (
+              {execType === "external" && (
                 <div className="space-y-3">
                   {!!config.prompt && (
                     <div className="space-y-1.5">
@@ -507,7 +507,7 @@ export function StepDefinitionPanel({
                     </div>
                   </div>
                 )}
-                {hasOutputSchema && stepDef.output_schema && execType !== "human" && (
+                {hasOutputSchema && stepDef.output_schema && execType !== "external" && (
                   <div className="space-y-1.5">
                     <span className="text-xs text-zinc-500">Output Schema</span>
                     <OutputSchemaTable schema={stepDef.output_schema} />

@@ -17,7 +17,7 @@ config:
 steps:
   # ─── 1. The "Issue" ──────────────────────────────────────────────
   pick-feature:
-    executor: human
+    executor: external
     description: "GitHub issue"
     prompt: |
       Welcome to Stepwise — workflow orchestration for agents and humans.
@@ -55,7 +55,7 @@ steps:
 
   # ─── 3. Approve Plan ────────────────────────────────────────────
   approve-plan:
-    executor: human
+    executor: external
     description: "Plan review"
     prompt: |
       Feature: $feature — $plan (revision $revision)
@@ -293,7 +293,7 @@ steps:
 
   # ─── 8. Deploy Decision ─────────────────────────────────────────
   ship-it:
-    executor: human
+    executor: external
     description: "Deploy decision"
     prompt: |
       "$pr_title" ($pr) reviewed by $reviewer!

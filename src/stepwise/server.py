@@ -325,7 +325,7 @@ async def _observe_external_jobs() -> None:
 def _cleanup_zombie_jobs(store: ThreadSafeStore) -> None:
     """Fail server-owned jobs stuck in running/pending from a previous crashed server.
 
-    Jobs with suspended human steps are NOT zombies — they're legitimately
+    Jobs with suspended external steps are NOT zombies — they're legitimately
     waiting for input. Skip those and let the engine resume them normally.
     """
     import logging
@@ -333,7 +333,7 @@ def _cleanup_zombie_jobs(store: ThreadSafeStore) -> None:
     for job in store.active_jobs():
         if job.created_by != "server":
             continue
-        # Skip jobs that have suspended steps — they're waiting on humans
+        # Skip jobs that have suspended steps — they're waiting on external input
         if store.suspended_runs(job.id):
             logger.info("Skipping job %s (%s): has suspended steps waiting for input", job.id, job.objective)
             continue
@@ -1886,8 +1886,8 @@ def add_step(req: AddStepRequest):
         new_step = {"run": "echo hello", "outputs": ["result"]}
     elif req.executor in ("llm", "agent"):
         new_step = {"executor": req.executor, "prompt": "TODO", "outputs": ["result"]}
-    elif req.executor == "human":
-        new_step = {"executor": "human", "prompt": "TODO", "outputs": ["result"]}
+    elif req.executor == "external":
+        new_step = {"executor": "external", "prompt": "TODO", "outputs": ["result"]}
     else:
         new_step = {"executor": req.executor, "outputs": ["result"]}
 

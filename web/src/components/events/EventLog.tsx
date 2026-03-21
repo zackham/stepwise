@@ -28,7 +28,7 @@ interface EventLogProps {
 const EVENT_CATEGORIES = {
   job: { label: "Job", color: "text-blue-400 bg-blue-500/10" },
   step: { label: "Step", color: "text-emerald-400 bg-emerald-500/10" },
-  human: { label: "Human", color: "text-amber-400 bg-amber-500/10" },
+  external: { label: "External", color: "text-amber-400 bg-amber-500/10" },
   engine: { label: "Engine", color: "text-purple-400 bg-purple-500/10" },
   effector: { label: "Effector", color: "text-pink-400 bg-pink-500/10" },
 };
@@ -37,8 +37,8 @@ function categorize(evt: StepwiseEvent): keyof typeof EVENT_CATEGORIES {
   if (evt.is_effector) return "effector";
   if (evt.type.startsWith("job.")) return "job";
   if (evt.type.startsWith("step.")) return "step";
-  if (evt.type.startsWith("human.") || evt.type.startsWith("watch.") || evt.type.startsWith("context."))
-    return "human";
+  if (evt.type.startsWith("external.") || evt.type.startsWith("watch.") || evt.type.startsWith("context."))
+    return "external";
   return "engine";
 }
 
@@ -69,7 +69,7 @@ function eventIcon(type: string, isEffector: boolean) {
       return <ArrowRight className="w-3.5 h-3.5" />;
     case "watch.fulfilled":
       return <ArrowDownToLine className="w-3.5 h-3.5" />;
-    case "human.rerun":
+    case "external.rerun":
       return <RotateCcw className="w-3.5 h-3.5" />;
     case "loop.iteration":
       return <Repeat className="w-3.5 h-3.5" />;
@@ -193,7 +193,7 @@ export function EventLog({ jobId }: EventLogProps) {
                         ? "text-emerald-400"
                         : "text-emerald-400/70"),
                     cat === "job" && "text-blue-400",
-                    cat === "human" && "text-amber-400",
+                    cat === "external" && "text-amber-400",
                     cat === "engine" && "text-purple-400",
                     cat === "effector" && "text-pink-400"
                   )}

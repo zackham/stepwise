@@ -3,11 +3,11 @@ import type { StepRun } from "@/lib/types";
 import type { DagSelection } from "@/lib/dag-layout";
 
 /**
- * Auto-select the first newly-suspended human step.
+ * Auto-select the first newly-suspended external step.
  *
  * Tracks the set of suspended step names across renders. When a new step
  * enters suspended state, calls onSelectStep — even if another step is
- * already selected, because a human step waiting for input always takes
+ * already selected, because an external step waiting for input always takes
  * priority.
  */
 export function useAutoSelectSuspended(
@@ -23,7 +23,7 @@ export function useAutoSelectSuspended(
         .filter(
           (r) =>
             r.status === "suspended" &&
-            r.watch?.mode === "human",
+            r.watch?.mode === "external",
         )
         .map((r) => r.step_name),
     );
