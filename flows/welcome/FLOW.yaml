@@ -118,7 +118,7 @@ steps:
             - name: pass
               when: "outputs.status == 'pass'"
               action: advance
-            - name: fix-and-retest
+            - name: fail
               when: "True"
               action: loop
               target: task-fix
