@@ -209,6 +209,7 @@ export function computeDagLayout(workflow: FlowDefinition): DagLayout {
   for (const n of nodes) nodeMap[n.id] = n;
 
   const loopEdges: LoopEdge[] = [];
+  let loopIndex = 0;
   for (const [name, step] of Object.entries(workflow.steps)) {
     for (const rule of step.exit_rules) {
       if (rule.config.action !== "loop") continue;
@@ -217,13 +218,15 @@ export function computeDagLayout(workflow: FlowDefinition): DagLayout {
 
       const fromNode = nodeMap[name];
       const toNode = nodeMap[target];
-      const offset = 50; // how far right the curve extends
+      // Stagger multiple loop edges so they don't overlap each other
+      const offset = 60 + loopIndex * 30;
 
-      // Start from right side of `from` node, curve right and up to right side of `to` node
+      // Connect from right side, offset vertically from center to avoid
+      // overlapping with data edges (which connect top/bottom center)
       const startX = fromNode.x + fromNode.width;
-      const startY = fromNode.y + fromNode.height / 2;
+      const startY = fromNode.y + fromNode.height * 0.35;
       const endX = toNode.x + toNode.width;
-      const endY = toNode.y + toNode.height / 2;
+      const endY = toNode.y + toNode.height * 0.65;
       const midX = Math.max(startX, endX) + offset;
       const midY = (startY + endY) / 2;
 
@@ -236,6 +239,7 @@ export function computeDagLayout(workflow: FlowDefinition): DagLayout {
         path,
         labelPos: { x: midX + 4, y: midY },
       });
+      loopIndex++;
     }
   }
 
@@ -509,7 +513,13 @@ export function computeHierarchicalLayout(
   const referencedAsSource = new Set<string>();
   for (const step of Object.values(workflow.steps)) {
     for (const binding of step.inputs) {
-      if (binding.source_step !== "$job") referencedAsSource.add(binding.source_step);
+      if (binding.any_of_sources) {
+        for (const src of binding.any_of_sources) {
+          if (src.step && src.step !== "$job") referencedAsSource.add(src.step);
+        }
+      } else if (binding.source_step !== "$job") {
+        referencedAsSource.add(binding.source_step);
+      }
     }
     for (const seq of step.sequencing) referencedAsSource.add(seq);
   }
@@ -650,6 +660,7 @@ export function computeHierarchicalLayout(
   for (const n of nodes) nodeMap[n.id] = n;
 
   const loopEdges: LoopEdge[] = [];
+  let loopIdx = 0;
   for (const [name, step] of Object.entries(workflow.steps)) {
     for (const rule of step.exit_rules) {
       if (rule.config.action !== "loop") continue;
@@ -658,12 +669,12 @@ export function computeHierarchicalLayout(
 
       const fromNode = nodeMap[name];
       const toNode = nodeMap[target];
-      const offset = 50;
+      const offset = 60 + loopIdx * 30;
 
       const startX = fromNode.x + fromNode.width;
-      const startY = fromNode.y + fromNode.height / 2;
+      const startY = fromNode.y + fromNode.height * 0.35;
       const endX = toNode.x + toNode.width;
-      const endY = toNode.y + toNode.height / 2;
+      const endY = toNode.y + toNode.height * 0.65;
       const midX = Math.max(startX, endX) + offset;
       const midY = (startY + endY) / 2;
 
@@ -676,6 +687,7 @@ export function computeHierarchicalLayout(
         path,
         labelPos: { x: midX + 4, y: midY },
       });
+      loopIdx++;
     }
   }
 
