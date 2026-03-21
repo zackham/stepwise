@@ -221,18 +221,6 @@ steps:
     inputs:
       pr: open-pr.pr
       reviewer_style: $job.reviewer_style
-    exits:
-      - name: approved
-        when: "outputs.result == 'approved'"
-        action: advance
-      - name: stuck
-        when: "attempt >= 4"
-        action: escalate
-      - name: changes
-        when: "True"
-        action: loop
-        target: revise-code
-        max_iterations: 5
 
   revise-code:
     description: "Revising code"
@@ -241,9 +229,9 @@ steps:
       printf '{"changes": "revised — addressed: %s"}' "$feedback"
     outputs: [changes]
     inputs:
-      feedback:
-        from: await-review.feedback
-        optional: true
+      result: await-review.result
+      feedback: await-review.feedback
+    when: "result == 'changes'"
 
   push-fix:
     description: "Pushing fixes"
@@ -259,6 +247,9 @@ steps:
         action: loop
         target: await-review
         max_iterations: 5
+      - name: stuck
+        when: "attempt >= 4"
+        action: escalate
 
   # ─── 8. Deploy Decision ─────────────────────────────────────────
   ship-it:
@@ -280,6 +271,10 @@ steps:
       pr_title: open-pr.pr_title
       reviewer: await-review.reviewer
       review_result: await-review.result
+      pushed:
+        from: push-fix.pushed
+        optional: true
+    when: "review_result == 'approved'"
 
   # ─── 9. Deploy or Close ──────────────────────────────────────────
   merge:
