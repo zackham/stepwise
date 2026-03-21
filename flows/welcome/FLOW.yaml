@@ -104,83 +104,45 @@ steps:
           inputs:
             task: $job.task
         task-run-tests:
-          description: "Running unit tests"
+          description: "Running tests & fixing"
           run: |
             sleep 2
-            if [ "${fix_round:-0}" -ge 1 ]; then
+            if [ "$STEPWISE_ATTEMPT" -ge 2 ]; then
               printf '{"passed": 6, "failed": 0, "status": "pass"}'
             else
+              sleep 1
               printf '{"passed": 4, "failed": 2, "status": "fail"}'
             fi
           outputs: [passed, failed, status]
           sequencing: [task-implement]
-          inputs:
-            fix_round:
-              from: task-fix.fix_round
-              optional: true
-        task-fix:
-          description: "Fixing tests"
-          run: |
-            sleep 1
-            printf '{"fixes": "applied", "fix_round": %d}' "$STEPWISE_ATTEMPT"
-          outputs: [fixes, fix_round]
-          inputs:
-            status: task-run-tests.status
-          when: "status == 'fail'"
           exits:
-            - name: retest
+            - name: pass
+              when: "outputs.status == 'pass'"
+              action: advance
+            - name: fix-and-retry
               when: "True"
               action: loop
               target: task-run-tests
               max_iterations: 3
 
   # ─── 5. Integration Tests ───────────────────────────────────────
-  #     Loops back to fix-tests on failure
+  #     Self-loop: fails first, passes on retry
   run-tests:
     description: "Running integration tests"
     run: |
       sleep 3
-      if [ "${fix_round:-0}" -ge 1 ]; then
+      if [ "$STEPWISE_ATTEMPT" -ge 2 ]; then
         printf '{"passed": 11, "failed": 0, "status": "pass"}'
       else
         printf '{"passed": 8, "failed": 3, "status": "fail"}'
       fi
     outputs: [passed, failed, status]
     sequencing: [write-code]
-    inputs:
-      fix_round:
-        from: fix-tests.fix_round
-        optional: true
     exits:
       - name: pass
         when: "outputs.status == 'pass'"
         action: advance
-      - name: fail
-        when: "True"
-        action: loop
-        target: fix-tests
-        max_iterations: 5
-
-  tests-ok:
-    description: "Tests passed"
-    run: |
-      printf '{"result": "passed"}'
-    outputs: [result]
-    inputs:
-      status: run-tests.status
-    when: "status == 'pass'"
-
-  fix-tests:
-    description: "Fixing tests"
-    run: |
-      sleep 2
-      printf '{"fixes": "applied", "fix_round": %d}' "$STEPWISE_ATTEMPT"
-    outputs: [fixes, fix_round]
-    inputs:
-      status: run-tests.status
-    when: "status == 'fail'"
-    exits:
-      - name: retest
+      - name: fix-and-retry
         when: "True"
         action: loop
         target: run-tests
@@ -212,7 +174,7 @@ steps:
     inputs:
       feature: pick-feature.feature
       team_name: $job.team_name
-      test_result: tests-ok.result
+      test_status: run-tests.status
 
   # ─── 7. Code Review ─────────────────────────────────────────────
   #     mock_llm simulates an AI reviewer; loops revise→push→review
