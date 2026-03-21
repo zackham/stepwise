@@ -302,6 +302,37 @@ class TestAgentDefaultRetry:
         assert not isinstance(executor, RetryDecorator)
 
 
+class TestClassifyError:
+    """Test AgentExecutor._classify_error() transient patterns."""
+
+    def test_classify_error_overloaded_503_capacity(self):
+        """'overloaded', '503', and 'capacity' errors classify as infra_failure."""
+        from stepwise.agent import AgentExecutor, AgentStatus
+
+        # Create a minimal AgentExecutor — we only need _classify_error
+        class _MockBackend:
+            pass
+
+        executor = AgentExecutor.__new__(AgentExecutor)
+
+        for error_msg, expected in [
+            ("Service overloaded, try again later", "infra_failure"),
+            ("HTTP 503 Service Unavailable", "infra_failure"),
+            ("No capacity available for this request", "infra_failure"),
+            ("API overloaded during peak hours", "infra_failure"),
+            ("Error 503: backend unavailable", "infra_failure"),
+            # Existing patterns still work
+            ("429 rate limit exceeded", "infra_failure"),
+            ("connection refused", "infra_failure"),
+            ("request timed out", "timeout"),
+            ("context length exceeded", "context_length"),
+            ("permission denied", "agent_failure"),
+        ]:
+            status = AgentStatus(state="failed", error=error_msg)
+            result = executor._classify_error(status)
+            assert result == expected, f"Expected {expected} for '{error_msg}', got {result}"
+
+
 class TestTransientRetryIntegration:
     """Integration test: transient retry through the engine."""
 

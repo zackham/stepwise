@@ -965,4 +965,8 @@ class AgentExecutor(Executor):
             return "infra_failure"
         if "network" in error or "connection" in error:
             return "infra_failure"
+        if "overloaded" in error or "503" in error:
+            return "infra_failure"
+        if "capacity" in error:
+            return "infra_failure"
         return "agent_failure"
