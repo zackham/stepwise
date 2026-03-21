@@ -30,7 +30,7 @@ stepwise run @stepwise:welcome --watch
 stepwise run @stepwise:code-review --watch
 ```
 
-`--watch` opens a browser with a real-time DAG visualization. Steps execute automatically — agents stream output live, human steps pause and wait for your input. Drop `--watch` to run headless in the terminal.
+`--watch` opens a browser with a real-time DAG visualization. Steps execute automatically — agents stream output live, external steps pause and wait for your input. Drop `--watch` to run headless in the terminal.
 
 ## Flows your agents can call
 
@@ -56,7 +56,7 @@ This appends tool-calling docs (input schemas, example commands, expected output
 
 ## How it works
 
-You write a `.flow.yaml` describing steps and their dependencies. Stepwise builds a DAG, runs independent steps in parallel, and executes everything in the right order. When a step needs human input, the job pauses until you respond.
+You write a `.flow.yaml` describing steps and their dependencies. Stepwise builds a DAG, runs independent steps in parallel, and executes everything in the right order. When a step needs external input, the job pauses until you respond.
 
 ```yaml
 name: code-review
@@ -109,7 +109,7 @@ steps:
 | **script** | Runs any shell command, parses JSON from stdout | Data processing, API calls, file operations |
 | **llm** | Single LLM call via OpenRouter with structured output | Scoring, classification, text generation |
 | **agent** | Autonomous AI agent via [ACP](https://agentclientprotocol.com) with real-time streaming | Complex tasks requiring tool use, research |
-| **human** | Pauses the job and waits for input (web UI or stdin) | Approvals, creative judgment, decisions |
+| **external** | Pauses the job and waits for input (web UI or stdin) | Approvals, creative judgment, decisions |
 | **poll** | Runs a check command on an interval until it returns JSON | Waiting for CI, deployments, external APIs |
 
 ## Features
@@ -132,7 +132,7 @@ stepwise server start [--detach]               Persistent server with web UI
 stepwise validate <flow>                       Check a flow for errors
 stepwise jobs                                  List all jobs
 stepwise status <job-id>                       Step-by-step detail
-stepwise fulfill <run-id> '{...}'              Satisfy a human step
+stepwise fulfill <run-id> '{...}'              Satisfy an external step
 stepwise schema <flow>                         Input/output schema (JSON)
 stepwise agent-help                            Generate agent instructions
 stepwise update                                Upgrade to latest version
@@ -144,7 +144,7 @@ See [`docs/cli.md`](docs/cli.md) for the full reference with all flags, examples
 
 | Doc | Description |
 |-----|-------------|
-| [Quickstart](docs/quickstart.md) | Install, first flow, loops, human gates — 5 minutes |
+| [Quickstart](docs/quickstart.md) | Install, first flow, loops, external gates — 5 minutes |
 | [Agent Integration](docs/agent-integration.md) | End-to-end guide for agent callers |
 | [Why Stepwise](docs/why-stepwise.md) | Motivation and design philosophy |
 | [Concepts](docs/concepts.md) | Jobs, steps, executors, dependencies, loops, for-each, route steps |
