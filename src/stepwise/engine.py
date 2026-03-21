@@ -2606,7 +2606,7 @@ class AsyncEngine(Engine):
         job = self.store.load_job(job_id)
         if job.status != JobStatus.PENDING:
             raise ValueError(f"Cannot start job in status {job.status.value}")
-        if len(self.store.active_jobs()) >= self.max_concurrent_jobs:
+        if self.max_concurrent_jobs > 0 and len(self.store.active_jobs()) >= self.max_concurrent_jobs:
             self._emit(job_id, JOB_QUEUED)
             _async_logger.info(
                 "Job %s queued: %d concurrent jobs at limit",
@@ -2964,10 +2964,10 @@ class AsyncEngine(Engine):
     def _start_queued_jobs(self) -> None:
         """Start PENDING jobs if slots are available (FIFO order)."""
         active_count = len(self.store.active_jobs())
-        if active_count >= self.max_concurrent_jobs:
+        if self.max_concurrent_jobs > 0 and active_count >= self.max_concurrent_jobs:
             return
         for pending_job in self.store.pending_jobs():
-            if active_count >= self.max_concurrent_jobs:
+            if self.max_concurrent_jobs > 0 and active_count >= self.max_concurrent_jobs:
                 break
             # Only auto-start top-level pending jobs (sub-jobs are managed by parent)
             if pending_job.parent_job_id:
