@@ -2531,6 +2531,14 @@ class AsyncEngine(Engine):
         self._executor_pool = ThreadPoolExecutor(
             max_workers=pool_size, thread_name_prefix="stepwise-exec"
         )
+        # Agent concurrency: semaphore + stagger delay
+        _max_agents = 3
+        if config and hasattr(config, "max_concurrent_agents"):
+            _max_agents = config.max_concurrent_agents
+        self._agent_semaphore = asyncio.Semaphore(_max_agents)
+        self._agent_last_launch: float = 0.0  # monotonic timestamp
+        self._agent_stagger_lock = asyncio.Lock()
+        self._agent_stagger_seconds = 2.0
 
     async def shutdown(self) -> None:
         """Clean up thread pool and cancel pending tasks."""
@@ -2752,6 +2760,15 @@ class AsyncEngine(Engine):
         self._tasks[run.id] = task
         return run
 
+    async def _apply_agent_stagger(self) -> None:
+        """Enforce a minimum delay between consecutive agent launches."""
+        async with self._agent_stagger_lock:
+            now = asyncio.get_event_loop().time()
+            elapsed = now - self._agent_last_launch
+            if elapsed < self._agent_stagger_seconds:
+                await asyncio.sleep(self._agent_stagger_seconds - elapsed)
+            self._agent_last_launch = asyncio.get_event_loop().time()
+
     async def _run_executor(
         self,
         job_id: str,
@@ -2765,7 +2782,13 @@ class AsyncEngine(Engine):
         _async_logger.info(
             f"Executor coroutine started for {step_name} (job {job_id}, type={exec_ref.type})"
         )
+        is_agent = exec_ref.type == "agent"
+        if is_agent:
+            await self._agent_semaphore.acquire()
         try:
+            if is_agent:
+                await self._apply_agent_stagger()
+
             executor = self.registry.create(exec_ref)
 
             # Capture event loop ref — update_state runs in thread pool
@@ -2815,6 +2838,9 @@ class AsyncEngine(Engine):
                 step_name, job_id, run_id, e, exc_info=True,
             )
             await self._queue.put(("step_error", job_id, step_name, run_id, e))
+        finally:
+            if is_agent:
+                self._agent_semaphore.release()
 
     # ── Poll watch scheduling ────────────────────────────────────────────
 
