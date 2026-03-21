@@ -125,7 +125,20 @@ class AcpxBackend:
 
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
-        # acpx auto-creates sessions on first prompt — no need for sessions ensure
+        # Ensure named session exists (acpx requires it before prompting).
+        # Short timeout + non-fatal: if ensure fails, acpx prompt will fail
+        # with a clear error rather than blocking the thread pool for 30s.
+        t_ensure = time.monotonic()
+        logger.info(f"[{step_id}] sessions ensure starting (session={session_name})")
+        try:
+            subprocess.run(
+                [self.acpx_path, "--cwd", working_dir,
+                 agent, "sessions", "ensure", "--name", session_name],
+                capture_output=True, timeout=10, env=env,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            logger.warning(f"[{step_id}] sessions ensure timed out or not found")
+        logger.info(f"[{step_id}] sessions ensure done ({time.monotonic() - t_ensure:.1f}s)")
 
         # Build acpx prompt command
         args = [self.acpx_path, "--format", "json", "--approve-all",
