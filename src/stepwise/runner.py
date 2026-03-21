@@ -1,4 +1,4 @@
-"""Headless flow execution with terminal output and human step stdin interaction.
+"""Headless flow execution with terminal output and external step stdin interaction.
 
 Used by `stepwise run` (without --watch).
 """
@@ -20,7 +20,7 @@ import httpx
 from stepwise.config import StepwiseConfig, load_config
 from stepwise.flow_resolution import flow_display_name
 from stepwise.engine import AsyncEngine, Engine
-from stepwise.io import IOAdapter, LiveFlowHandle, StepNode, HumanInputAborted, create_adapter
+from stepwise.io import IOAdapter, LiveFlowHandle, StepNode, ExternalInputAborted, create_adapter
 from stepwise.models import (
     Job,
     JobStatus,
@@ -256,7 +256,7 @@ async def _delegated_ws_loop(
         shutdown_requested = True
 
     start_time = time.time()
-    seen_completed: set[str] = set()  # human steps already prompted
+    seen_completed: set[str] = set()  # external steps already prompted
     base_url = server_url.rstrip("/")
 
     async with httpx.AsyncClient(base_url=base_url, timeout=10) as client:
@@ -316,19 +316,19 @@ async def _delegated_ws_loop(
                     tree = _build_tree_from_dicts(runs)
                     handle.render_tree(tree)
 
-                    # Handle suspended human steps
+                    # Handle suspended external steps
                     for run in runs:
                         run_id = run["id"]
                         status = run["status"]
                         if status == "suspended" and run_id not in seen_completed:
                             watch = run.get("watch")
-                            if watch and watch.get("mode") == "human":
+                            if watch and watch.get("mode") == "external":
                                 handle.pause_for_input()
                                 fields = watch.get("fulfillment_outputs", [])
                                 prompt = (watch.get("config") or {}).get("prompt", "")
                                 schema = watch.get("output_schema")
                                 payload = await asyncio.to_thread(
-                                    adapter.collect_human_input, prompt, fields, schema,
+                                    adapter.collect_external_input, prompt, fields, schema,
                                 )
                                 handle.resume_after_input()
                                 try:
@@ -393,6 +393,7 @@ def run_flow(
     force_local: bool = False,
     adapter: IOAdapter | None = None,
     name: str | None = None,
+    rerun_steps: list[str] | None = None,
 ) -> int:
     """Run a flow headlessly. Returns exit code.
 
@@ -404,7 +405,7 @@ def run_flow(
         workspace: Override workspace directory.
         quiet: Suppress output.
         config: Optional config (loads from disk if None).
-        input_stream: Override stdin for human steps (testing).
+        input_stream: Override stdin for external steps (testing).
         output_stream: Override output stream (testing).
         force_local: Skip server delegation, always run locally.
     """
@@ -476,7 +477,16 @@ def run_flow(
 
     store = SQLiteStore(str(project.db_path))
     registry = create_default_registry(config)
-    engine = AsyncEngine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir, billing_mode=config.billing, config=config)
+
+    # Create cache if any step has cache enabled
+    cache = None
+    has_cache_steps = any(s.cache is not None for s in workflow.steps.values())
+    if has_cache_steps:
+        from stepwise.cache import StepResultCache
+        cache_path = str(project.dot_dir / "cache" / "results.db")
+        cache = StepResultCache(cache_path)
+
+    engine = AsyncEngine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir, billing_mode=config.billing, config=config, cache=cache)
 
     # 3. Create and start job
     import os
@@ -488,6 +498,9 @@ def run_flow(
         workspace_path=workspace,
         name=name,
     )
+    # Store rerun_steps in job metadata for engine to pick up
+    if rerun_steps:
+        job.config.metadata["rerun_steps"] = rerun_steps
     job.created_by = f"cli:{os.getpid()}"
     job.runner_pid = os.getpid()
     store.save_job(job)
@@ -570,22 +583,22 @@ def _build_step_tree(
     return nodes
 
 
-async def _handle_human_input(
+async def _handle_external_input(
     engine: AsyncEngine,
     adapter: IOAdapter,
     handle: LiveFlowHandle,
     job_id: str,
     seen_prompted: set[str],
 ) -> None:
-    """Check for and handle suspended human steps, recursively through sub-jobs.
+    """Check for and handle suspended external steps, recursively through sub-jobs.
 
-    Raises HumanInputAborted (action="suspend" or "cancel") if the user
+    Raises ExternalInputAborted (action="suspend" or "cancel") if the user
     chooses to leave the step suspended or cancel the job via Ctrl+C menu.
     """
     all_runs = engine.get_runs(job_id)
     for run in all_runs:
         if run.status == StepRunStatus.SUSPENDED and run.watch:
-            if run.watch.mode == "human" and run.id not in seen_prompted:
+            if run.watch.mode == "external" and run.id not in seen_prompted:
                 seen_prompted.add(run.id)
                 handle.pause_for_input()
 
@@ -596,10 +609,10 @@ async def _handle_human_input(
                 while True:
                     try:
                         payload = await asyncio.to_thread(
-                            adapter.collect_human_input,
+                            adapter.collect_external_input,
                             prompt, fields, schema,
                         )
-                    except HumanInputAborted as e:
+                    except ExternalInputAborted as e:
                         if e.action == "retry":
                             continue  # re-prompt
                         handle.resume_after_input()
@@ -621,13 +634,13 @@ async def _handle_human_input(
 
         # Check sub-jobs
         if run.sub_job_id:
-            await _handle_human_input(
+            await _handle_external_input(
                 engine, adapter, handle, run.sub_job_id, seen_prompted,
             )
         es = run.executor_state or {}
         if es.get("for_each"):
             for sub_id in es.get("sub_job_ids", []):
-                await _handle_human_input(
+                await _handle_external_input(
                     engine, adapter, handle, sub_id, seen_prompted,
                 )
 
@@ -657,7 +670,7 @@ async def _async_run_flow(
 
     start_time = time.time()
     last_heartbeat = 0.0
-    seen_prompted: set[str] = set()  # human steps we've already prompted for
+    seen_prompted: set[str] = set()  # external steps we've already prompted for
     step_names = list(job.workflow.steps.keys())
 
     try:
@@ -682,12 +695,12 @@ async def _async_run_flow(
                 tree = _build_step_tree(engine, store, job.id)
                 handle.render_tree(tree)
 
-                # Handle human input (separate from rendering)
+                # Handle external input (separate from rendering)
                 try:
-                    await _handle_human_input(
+                    await _handle_external_input(
                         engine, adapter, handle, job.id, seen_prompted,
                     )
-                except HumanInputAborted as e:
+                except ExternalInputAborted as e:
                     if e.action == "cancel":
                         engine.cancel_job(job.id)
                         _err("Cancelled.", output_stream)
