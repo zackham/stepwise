@@ -339,6 +339,10 @@ def _cleanup_zombie_jobs(store: ThreadSafeStore) -> None:
 
     Jobs with suspended external steps are NOT zombies — they're legitimately
     waiting for input. Skip those and let the engine resume them normally.
+
+    If a job has no running steps but all terminal steps completed (server
+    crashed between step completion and job settlement), mark it COMPLETED
+    instead of FAILED.
     """
     import logging
     logger = logging.getLogger("stepwise.server")
@@ -350,7 +354,8 @@ def _cleanup_zombie_jobs(store: ThreadSafeStore) -> None:
             logger.info("Skipping job %s (%s): has suspended steps waiting for input", job.id, job.objective)
             continue
         # Kill orphaned agent processes and fail running step runs
-        for run in store.running_runs(job.id):
+        running_runs = store.running_runs(job.id)
+        for run in running_runs:
             # Kill the actual OS process if we have its pgid
             if run.executor_state:
                 pgid = run.executor_state.get("pgid")
@@ -364,10 +369,35 @@ def _cleanup_zombie_jobs(store: ThreadSafeStore) -> None:
             run.error = "Server restarted: step was orphaned"
             run.completed_at = _now()
             store.save_run(run)
-        job.status = JobStatus.FAILED
-        job.updated_at = _now()
-        store.save_job(job)
-        logger.info("Failed zombie job %s (%s)", job.id, job.objective)
+
+        # If there were no running steps, check if the job was actually done
+        # (crashed between step completion and job settlement)
+        if not running_runs and _job_looks_complete(store, job):
+            job.status = JobStatus.COMPLETED
+            job.updated_at = _now()
+            store.save_job(job)
+            logger.info("Recovered completed job %s (%s) — settled after restart", job.id, job.objective)
+        else:
+            job.status = JobStatus.FAILED
+            job.updated_at = _now()
+            store.save_job(job)
+            logger.info("Failed zombie job %s (%s)", job.id, job.objective)
+
+
+def _job_looks_complete(store: ThreadSafeStore, job: Job) -> bool:
+    """Check if a RUNNING job actually completed (all terminal steps have completed runs).
+
+    Used during restart cleanup to avoid failing jobs that were done but
+    never settled because the server crashed.
+    """
+    terminal_steps = job.workflow.terminal_steps()
+    if not terminal_steps:
+        return False
+    for step_name in terminal_steps:
+        latest = store.latest_completed_run(job.id, step_name)
+        if not latest:
+            return False
+    return True
 
 
 @asynccontextmanager
@@ -393,6 +423,8 @@ async def lifespan(app: FastAPI):
 
     # Fail zombie jobs: server-owned jobs left in running/pending from a dead process
     _cleanup_zombie_jobs(store)
+    # Re-evaluate surviving RUNNING jobs (settle any that completed pre-crash)
+    _engine.recover_jobs()
 
     _engine.on_broadcast = _schedule_broadcast
     _engine_task = asyncio.create_task(_engine.run())
