@@ -426,6 +426,16 @@ async def lifespan(app: FastAPI):
     # Re-evaluate surviving RUNNING jobs (settle any that completed pre-crash)
     _engine.recover_jobs()
 
+    # Register in global server registry
+    from stepwise.server_detect import register_server, unregister_server
+    _port = int(os.environ.get("STEPWISE_PORT", "8340"))
+    register_server(
+        project_path=str(_project_dir),
+        pid=os.getpid(),
+        port=_port,
+        url=f"http://localhost:{_port}",
+    )
+
     _engine.on_broadcast = _schedule_broadcast
     _engine_task = asyncio.create_task(_engine.run())
     _stream_monitor = asyncio.create_task(_agent_stream_monitor())
@@ -459,6 +469,7 @@ async def lifespan(app: FastAPI):
     if _engine and hasattr(_engine, "shutdown"):
         await _engine.shutdown()
     store.close()
+    unregister_server(str(_project_dir))
 
 
 app = FastAPI(title="Stepwise", lifespan=lifespan)

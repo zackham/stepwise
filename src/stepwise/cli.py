@@ -400,13 +400,19 @@ def _server_start(args: argparse.Namespace) -> int:
     import os
 
     # Check if a server is already running for this project
-    from stepwise.server_detect import detect_server
+    from stepwise.server_detect import detect_server, detect_any_server
     existing_url = detect_server(project.dot_dir)
     if existing_url:
         io.log("info", f"Stepwise is already running at {existing_url}")
         if not args.no_open:
             _open_browser(existing_url)
         return EXIT_SUCCESS
+
+    # Warn about servers running in other project directories
+    others = detect_any_server()
+    for s in others:
+        if str(Path(s["project_path"]).resolve()) != str(project.root.resolve()):
+            io.log("warn", f"Another server active: {s['url']} ({s['project_path']})")
 
     host = args.host or "127.0.0.1"
     port = args.port or 8340
@@ -426,6 +432,7 @@ def _server_start(args: argparse.Namespace) -> int:
     os.environ["STEPWISE_TEMPLATES"] = str(project.templates_dir)
     os.environ["STEPWISE_JOBS_DIR"] = str(project.jobs_dir)
     os.environ["STEPWISE_PROJECT_DIR"] = str(project.root)
+    os.environ["STEPWISE_PORT"] = str(port)
 
     # Resolve web dir now (CLI process can find source tree reliably)
     from stepwise.project import get_web_dir
