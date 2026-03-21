@@ -942,11 +942,12 @@ def list_suspended_jobs(
 
 @app.get("/api/health")
 def health_check():
-    """Health check endpoint for server detection."""
+    """Health check endpoint for server detection and identity verification."""
     engine = _get_engine()
     return {
         "status": "ok",
         "active_jobs": len(engine.store.active_jobs()),
+        "project_path": str(_project_dir) if _project_dir else None,
     }
 
 
