@@ -1,4 +1,4 @@
-"""Tests for ScriptExecutor, HumanExecutor, MockLLMExecutor, and decorators.
+"""Tests for ScriptExecutor, ExternalExecutor, MockLLMExecutor, and decorators.
 
 Covers required test cases 15, 16, 24.
 """
@@ -19,7 +19,7 @@ from stepwise.executors import (
     Executor,
     ExecutorResult,
     ExecutorStatus,
-    HumanExecutor,
+    ExternalExecutor,
     MockLLMExecutor,
     ScriptExecutor,
 )
@@ -103,20 +103,20 @@ class TestScriptExecutor:
         assert result.watch.config["interval_seconds"] == 5
 
 
-# ── HumanExecutor ─────────────────────────────────────────────────────
+# ── ExternalExecutor ─────────────────────────────────────────────────────
 
 
-class TestHumanExecutor:
+class TestExternalExecutor:
     def test_immediately_returns_watch(self):
-        executor = HumanExecutor(prompt="Approve?")
+        executor = ExternalExecutor(prompt="Approve?")
         ctx = _ctx()
         result = executor.start({}, ctx)
         assert result.type == "watch"
-        assert result.watch.mode == "human"
+        assert result.watch.mode == "external"
         assert result.watch.config["prompt"] == "Approve?"
 
     def test_check_status_running(self):
-        executor = HumanExecutor(prompt="test")
+        executor = ExternalExecutor(prompt="test")
         status = executor.check_status({})
         assert status.state == "running"
 

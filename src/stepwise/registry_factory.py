@@ -14,7 +14,7 @@ from pathlib import Path
 from stepwise.config import StepwiseConfig, load_config
 from stepwise.executors import (
     ExecutorRegistry,
-    HumanExecutor,
+    ExternalExecutor,
     MockLLMExecutor,
     PollExecutor,
     ScriptExecutor,
@@ -43,8 +43,13 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
         flow_dir=cfg.get("flow_dir"),
     ))
 
-    registry.register("human", lambda cfg: HumanExecutor(
-        prompt=cfg.get("prompt", "Awaiting human input"),
+    registry.register("external", lambda cfg: ExternalExecutor(
+        prompt=cfg.get("prompt", "Awaiting external input"),
+    ))
+
+    # Backwards-compatible alias
+    registry.register("human", lambda cfg: ExternalExecutor(
+        prompt=cfg.get("prompt", "Awaiting external input"),
     ))
 
     registry.register("poll", lambda cfg: PollExecutor(

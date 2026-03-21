@@ -379,7 +379,7 @@ steps:
         step = wf.steps["analyze"]
         assert step.executor.config["prompt"] == "Be concise and precise."
 
-    def test_prompt_file_with_human_executor(self, tmp_path):
+    def test_prompt_file_with_external_executor(self, tmp_path):
         prompts_dir = tmp_path / "prompts"
         prompts_dir.mkdir()
         prompt_file = prompts_dir / "review.md"
@@ -389,7 +389,7 @@ steps:
         flow.write_text("""\
 steps:
   review:
-    executor: human
+    executor: external
     prompt_file: prompts/review.md
     outputs: [approved]
 """)

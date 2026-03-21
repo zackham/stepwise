@@ -11,7 +11,7 @@ from stepwise.executors import (
     ExecutorRegistry,
     ExecutorResult,
     ExecutorStatus,
-    HumanExecutor,
+    ExternalExecutor,
     MockLLMExecutor,
     PollExecutor,
     ScriptExecutor,
@@ -158,8 +158,8 @@ def registry():
         flow_dir=config.get("flow_dir"),
     ))
 
-    # Human executor factory
-    reg.register("human", lambda config: HumanExecutor(
+    # External executor factory
+    reg.register("external", lambda config: ExternalExecutor(
         prompt=config.get("prompt", ""),
     ))
 

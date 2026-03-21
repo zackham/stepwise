@@ -14,7 +14,7 @@ from stepwise.executors import (
     ExecutorResult,
     ExecutorStatus,
     ScriptExecutor,
-    HumanExecutor,
+    ExternalExecutor,
 )
 from stepwise.models import (
     ExitRule,
@@ -59,8 +59,8 @@ def agent_registry(mock_backend):
         command=config.get("command", "echo '{}'"),
     ))
 
-    # Human executor
-    reg.register("human", lambda config: HumanExecutor(
+    # External executor
+    reg.register("external", lambda config: ExternalExecutor(
         prompt=config.get("prompt", ""),
     ))
 

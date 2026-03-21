@@ -167,16 +167,16 @@ steps:
         assert binding.source_step == "$job"
         assert binding.source_field == "topic"
 
-    def test_human_executor(self):
+    def test_external_executor(self):
         wf = load_workflow_string("""
 steps:
   approve:
-    executor: human
+    executor: external
     prompt: "Approve this?"
     outputs: [approved]
 """)
         step = wf.steps["approve"]
-        assert step.executor.type == "human"
+        assert step.executor.type == "external"
         assert step.executor.config["prompt"] == "Approve this?"
 
     def test_fan_out(self):
@@ -537,7 +537,7 @@ steps:
     outputs: [content]
 
   review:
-    executor: human
+    executor: external
     prompt: "Review this"
     outputs: [decision, feedback]
     inputs:
@@ -572,7 +572,7 @@ steps:
 
         # Executor checks
         assert wf.steps["draft"].executor.type == "script"
-        assert wf.steps["review"].executor.type == "human"
+        assert wf.steps["review"].executor.type == "external"
         assert wf.steps["publish"].executor.type == "script"
 
     def test_workflow_validates_cleanly(self):

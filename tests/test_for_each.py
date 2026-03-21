@@ -8,7 +8,7 @@ import pytest
 
 from tests.conftest import register_step_fn
 from stepwise.engine import Engine
-from stepwise.executors import ExecutorRegistry, ScriptExecutor, HumanExecutor, MockLLMExecutor
+from stepwise.executors import ExecutorRegistry, ScriptExecutor, ExternalExecutor, MockLLMExecutor
 from tests.conftest import CallableExecutor
 from stepwise.models import (
     ExecutorRef,
@@ -28,7 +28,7 @@ def make_engine():
     reg = ExecutorRegistry()
     reg.register("callable", lambda config: CallableExecutor(fn_name=config.get("fn_name", "default")))
     reg.register("script", lambda config: ScriptExecutor(command=config.get("command", "echo '{}'")))
-    reg.register("human", lambda config: HumanExecutor(prompt=config.get("prompt", "")))
+    reg.register("external", lambda config: ExternalExecutor(prompt=config.get("prompt", "")))
     reg.register("mock_llm", lambda config: MockLLMExecutor(
         failure_rate=config.get("failure_rate", 0.0),
         partial_rate=config.get("partial_rate", 0.0),
@@ -505,11 +505,11 @@ class TestForEachCancellation:
 
         _, engine = make_engine()
 
-        # Use human executor in sub-flow so sub-jobs stay running
+        # Use external executor in sub-flow so sub-jobs stay running
         sub_flow = WorkflowDefinition(steps={
             "wait": StepDefinition(
                 name="wait", outputs=["result"],
-                executor=ExecutorRef("human", {"prompt": "provide result"}),
+                executor=ExecutorRef("external", {"prompt": "provide result"}),
             ),
         })
 

@@ -13,6 +13,7 @@ from typing import Any
 import yaml
 
 from stepwise.models import (
+    CacheConfig,
     ChainConfig,
     ConfigVar,
     DecoratorRef,
@@ -27,6 +28,7 @@ from stepwise.models import (
     StepLimits,
     VALID_FIELD_TYPES,
     WorkflowDefinition,
+    parse_duration,
 )
 
 # Safe builtins for exit rule expression evaluation
@@ -238,7 +240,7 @@ def _parse_executor(
     prompt_from_file = _resolve_prompt_file(step_data, step_name, base_dir)
 
     config: dict[str, Any] = {}
-    if executor_type == "human":
+    if executor_type == "external":
         prompt = prompt_from_file or step_data.get("prompt", "")
         if prompt:
             config["prompt"] = prompt
@@ -814,6 +816,29 @@ def _parse_step(
         loop_prompt = str(loop_prompt_raw)
     max_continuous_attempts = step_data.get("max_continuous_attempts")
 
+    # Cache config
+    cache_config = None
+    cache_raw = step_data.get("cache")
+    if cache_raw is True:
+        cache_config = CacheConfig()
+    elif cache_raw is False:
+        cache_config = None
+    elif isinstance(cache_raw, dict):
+        ttl = None
+        ttl_raw = cache_raw.get("ttl")
+        if ttl_raw is not None:
+            if isinstance(ttl_raw, int):
+                ttl = ttl_raw
+            elif isinstance(ttl_raw, str):
+                ttl = parse_duration(ttl_raw)
+                if ttl is None:
+                    errors.append(f"Step '{step_name}': invalid cache ttl '{ttl_raw}'")
+        cache_config = CacheConfig(
+            enabled=cache_raw.get("enabled", True),
+            ttl=ttl,
+            key_extra=cache_raw.get("key_extra"),
+        )
+
     return StepDefinition(
         name=step_name,
         description=step_data.get("description", ""),
@@ -831,6 +856,7 @@ def _parse_step(
         continue_session=continue_session,
         loop_prompt=loop_prompt,
         max_continuous_attempts=max_continuous_attempts,
+        cache=cache_config,
     )
 
 

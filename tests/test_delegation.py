@@ -9,7 +9,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from stepwise.engine import Engine
-from stepwise.executors import ExecutorRegistry, HumanExecutor
+from stepwise.executors import ExecutorRegistry, ExternalExecutor
 from stepwise.models import (
     ExecutorRef,
     JobStatus,
@@ -213,7 +213,7 @@ class TestJobSuspendedEndpoint:
                 "ask": StepDefinition(
                     name="ask",
                     outputs=["response"],
-                    executor=ExecutorRef("human", {"prompt": "Enter value"}),
+                    executor=ExecutorRef("external", {"prompt": "Enter value"}),
                 ),
             })
             job = engine.create_job("test", wf)

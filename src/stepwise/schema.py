@@ -15,7 +15,7 @@ def generate_schema(workflow: WorkflowDefinition) -> dict:
     """Generate a JSON tool contract from a WorkflowDefinition.
 
     Scans steps for $job.* input bindings, terminal step outputs,
-    and human steps to produce a machine-readable schema.
+    and external steps to produce a machine-readable schema.
     """
     # Collect unique $job.* input field names
     job_inputs: set[str] = set()
@@ -35,10 +35,10 @@ def generate_schema(workflow: WorkflowDefinition) -> dict:
                 terminal_outputs.append(out)
                 seen_outputs.add(out)
 
-    # Collect human steps
-    human_steps: list[dict] = []
+    # Collect external steps
+    external_steps: list[dict] = []
     for name, step in workflow.steps.items():
-        if step.executor.type == "human":
+        if step.executor.type in ("external", "human"):
             entry: dict = {
                 "step": name,
                 "prompt": step.executor.config.get("prompt", ""),
@@ -46,7 +46,7 @@ def generate_schema(workflow: WorkflowDefinition) -> dict:
             }
             if step.output_schema:
                 entry["schema"] = {k: v.to_dict() for k, v in step.output_schema.items()}
-            human_steps.append(entry)
+            external_steps.append(entry)
 
     schema: dict = {
         "name": workflow.metadata.name,
@@ -56,7 +56,7 @@ def generate_schema(workflow: WorkflowDefinition) -> dict:
         schema["version"] = workflow.metadata.version
     schema["inputs"] = sorted(job_inputs)
     schema["outputs"] = terminal_outputs
-    schema["humanSteps"] = human_steps
+    schema["externalSteps"] = external_steps
 
     if workflow.config_vars:
         schema["config"] = {v.name: v.to_dict() for v in workflow.config_vars}

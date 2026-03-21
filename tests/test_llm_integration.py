@@ -10,7 +10,7 @@ import pytest
 from stepwise.engine import Engine
 from stepwise.executors import (
     ExecutorRegistry,
-    HumanExecutor,
+    ExternalExecutor,
     LLMExecutor,
     ScriptExecutor,
 )

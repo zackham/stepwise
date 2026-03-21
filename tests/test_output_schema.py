@@ -86,7 +86,7 @@ class TestStepDefinitionSchema:
                 "decision": OutputFieldSpec(type="choice", options=["approve", "reject"]),
                 "notes": OutputFieldSpec(type="text", required=False),
             },
-            executor=ExecutorRef(type="human"),
+            executor=ExecutorRef(type="external"),
         )
         d = step.to_dict()
         assert "output_schema" in d
@@ -114,7 +114,7 @@ class TestStepDefinitionSchema:
 class TestWatchSpecSchema:
     def test_roundtrip_with_schema(self):
         ws = WatchSpec(
-            mode="human",
+            mode="external",
             fulfillment_outputs=["decision"],
             output_schema={"decision": {"type": "choice", "options": ["yes", "no"]}},
         )
@@ -125,7 +125,7 @@ class TestWatchSpecSchema:
         assert restored.output_schema["decision"]["type"] == "choice"
 
     def test_empty_schema_not_serialized(self):
-        ws = WatchSpec(mode="human", fulfillment_outputs=["x"])
+        ws = WatchSpec(mode="external", fulfillment_outputs=["x"])
         d = ws.to_dict()
         assert "output_schema" not in d
 
@@ -138,7 +138,7 @@ class TestYAMLOutputParsing:
         wf = load_workflow_string("""
 steps:
   ask:
-    executor: human
+    executor: external
     prompt: "What?"
     outputs: [answer]
 """)
@@ -149,7 +149,7 @@ steps:
         wf = load_workflow_string("""
 steps:
   review:
-    executor: human
+    executor: external
     prompt: "Review this"
     outputs:
       decision:
@@ -170,7 +170,7 @@ steps:
         wf = load_workflow_string("""
 steps:
   ask:
-    executor: human
+    executor: external
     prompt: "Enter value"
     outputs:
       response:
@@ -183,7 +183,7 @@ steps:
         wf = load_workflow_string("""
 steps:
   rate:
-    executor: human
+    executor: external
     prompt: "Rate 1-10"
     outputs:
       score:
@@ -202,7 +202,7 @@ steps:
         wf = load_workflow_string("""
 steps:
   confirm:
-    executor: human
+    executor: external
     prompt: "Confirm?"
     outputs:
       approved:
@@ -218,7 +218,7 @@ steps:
             load_workflow_string("""
 steps:
   ask:
-    executor: human
+    executor: external
     prompt: "When?"
     outputs:
       date:
@@ -230,7 +230,7 @@ steps:
             load_workflow_string("""
 steps:
   ask:
-    executor: human
+    executor: external
     prompt: "Pick"
     outputs:
       pick:
@@ -242,7 +242,7 @@ steps:
             load_workflow_string("""
 steps:
   ask:
-    executor: human
+    executor: external
     prompt: "Name?"
     outputs:
       name:
@@ -255,7 +255,7 @@ steps:
             load_workflow_string("""
 steps:
   ask:
-    executor: human
+    executor: external
     prompt: "Name?"
     outputs:
       name:
@@ -268,7 +268,7 @@ steps:
             load_workflow_string("""
 steps:
   ask:
-    executor: human
+    executor: external
     prompt: "Name?"
     outputs:
       name:
@@ -407,7 +407,7 @@ class TestFulfillWatchIntegration:
                 output_schema={
                     "decision": OutputFieldSpec(type="choice", options=["yes", "no"]),
                 },
-                executor=ExecutorRef(type="human", config={"prompt": "Approve?"}),
+                executor=ExecutorRef(type="external", config={"prompt": "Approve?"}),
             ),
         })
         job = engine.create_job(objective="test", workflow=wf, inputs={})
@@ -429,7 +429,7 @@ class TestFulfillWatchIntegration:
                 output_schema={
                     "decision": OutputFieldSpec(type="choice", options=["yes", "no"]),
                 },
-                executor=ExecutorRef(type="human", config={"prompt": "Approve?"}),
+                executor=ExecutorRef(type="external", config={"prompt": "Approve?"}),
             ),
         })
         job = engine.create_job(objective="test", workflow=wf, inputs={})
@@ -455,7 +455,7 @@ class TestFulfillWatchIntegration:
                 output_schema={
                     "decision": OutputFieldSpec(type="choice", options=["yes", "no"]),
                 },
-                executor=ExecutorRef(type="human", config={"prompt": "Approve?"}),
+                executor=ExecutorRef(type="external", config={"prompt": "Approve?"}),
             ),
         })
         job = engine.create_job(objective="test", workflow=wf, inputs={})
@@ -478,7 +478,7 @@ class TestFulfillWatchIntegration:
                     "decision": OutputFieldSpec(type="choice", options=["yes", "no"]),
                     "notes": OutputFieldSpec(type="text", required=False),
                 },
-                executor=ExecutorRef(type="human", config={"prompt": "Approve?"}),
+                executor=ExecutorRef(type="external", config={"prompt": "Approve?"}),
             ),
         })
         job = engine.create_job(objective="test", workflow=wf, inputs={})
@@ -543,7 +543,7 @@ class TestValidateArtifact:
                 "a": OutputFieldSpec(required=False),
                 "b": OutputFieldSpec(required=False),
             },
-            executor=ExecutorRef(type="human"),
+            executor=ExecutorRef(type="external"),
         )
         error = async_engine._validate_artifact(step_def, None)
         assert error is None
@@ -561,7 +561,7 @@ class TestSuspendedStepDetails:
                 output_schema={
                     "decision": OutputFieldSpec(type="bool", description="Approve?"),
                 },
-                executor=ExecutorRef(type="human", config={"prompt": "Approve?"}),
+                executor=ExecutorRef(type="external", config={"prompt": "Approve?"}),
             ),
         })
         job = engine.create_job(objective="test", workflow=wf, inputs={})
