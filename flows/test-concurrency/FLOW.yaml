@@ -1,0 +1,69 @@
+name: test-concurrency
+description: >
+  Diagnostic flow to measure concurrent agent/executor capacity.
+  Launches N parallel steps via for-each and logs timing for each.
+  Check stepwise.agent and stepwise.async_engine logs for concurrency data.
+
+inputs:
+  count:
+    description: Number of concurrent agents to launch
+    default: "5"
+  working_dir:
+    description: Working directory for agent steps
+    default: "/tmp/stepwise-concurrency-test"
+
+steps:
+  generate-items:
+    description: Generate a list of N items to fan out
+    run: |
+      python3 -c "
+      import json, sys
+      n = int('$count')
+      print(json.dumps({'items': list(range(n)), 'count': n}))
+      "
+    inputs:
+      count: $job.count
+    outputs: [items, count]
+
+  run-agents:
+    description: "Fan out N agent steps in parallel"
+    for_each: generate-items.items
+    as: index
+    on_error: continue
+    inputs:
+      working_dir: $job.working_dir
+    outputs: [results]
+    flow:
+      steps:
+        work:
+          executor: agent
+          working_dir: $working_dir
+          prompt: |
+            You are a concurrency test agent (index $index).
+            Output ONLY: "Agent $index reporting. Done."
+            Do NOT use any tools. Just output that single line of text.
+          output_mode: stream_result
+          inputs:
+            index: $job.index
+            working_dir: $job.working_dir
+          outputs: [result]
+
+  report:
+    description: Summarize concurrency test results
+    run: |
+      python3 -c "
+      import json
+      results = json.loads('$results_json')
+      total = len(results)
+      succeeded = sum(1 for r in results if not r.get('_error'))
+      failed = total - succeeded
+      print(json.dumps({
+          'total': total,
+          'succeeded': succeeded,
+          'failed': failed,
+          'summary': f'{succeeded}/{total} agents completed successfully',
+      }))
+      "
+    inputs:
+      results_json: run-agents.results
+    outputs: [total, succeeded, failed, summary]
