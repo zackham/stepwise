@@ -138,9 +138,34 @@ export function FlowDagView({
     return map;
   }, [runs]);
 
-  // Estimated screen-pixel height of the ExternalInputPanel popover
-  const EXTERNAL_PANEL_SCREEN_HEIGHT = 280;
+  // Fallback screen-pixel height of the ExternalInputPanel popover
+  const EXTERNAL_PANEL_SCREEN_HEIGHT_FALLBACK = 280;
   const EXTERNAL_PANEL_GAP = 12; // gap between node bottom and panel top
+
+  // Measure the actual input panel height (screen pixels) so follow-flow
+  // can account for the full dialog rather than a static estimate.
+  // Keyed on selectedStep so the observer re-attaches when the panel
+  // appears/disappears (the ref target changes).
+  const [measuredPanelHeight, setMeasuredPanelHeight] = useState(0);
+  useEffect(() => {
+    const el = inputPanelRef.current;
+    if (!el) {
+      setMeasuredPanelHeight(0);
+      return;
+    }
+    const measure = () => {
+      // getBoundingClientRect gives screen-pixel size (post-transform).
+      // The panel is counter-scaled by 1/scale, so its screen size equals
+      // its CSS size regardless of zoom — exactly what we need.
+      const h = el.getBoundingClientRect().height;
+      setMeasuredPanelHeight(h);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedStep]);
 
   // Collect active step IDs (stable identity, independent of layout positions)
   const activeStepInfo = useMemo(() => {
@@ -179,12 +204,15 @@ export function FlowDagView({
   const activeRects = useMemo(() => {
     const { activeNodeIds, suspendedIds } = activeStepInfo;
     const scale = transformRef.current.scale;
+    const panelScreenH = measuredPanelHeight > 0
+      ? measuredPanelHeight
+      : EXTERNAL_PANEL_SCREEN_HEIGHT_FALLBACK;
     const rects: Rect[] = [];
     for (const n of layout.nodes) {
       if (activeNodeIds.includes(n.id)) {
         const hasPopover = selectedStep === n.id && suspendedIds.has(n.id);
         const popoverExtra = hasPopover
-          ? EXTERNAL_PANEL_GAP + EXTERNAL_PANEL_SCREEN_HEIGHT / scale
+          ? EXTERNAL_PANEL_GAP + panelScreenH / scale
           : 0;
         rects.push({
           x: n.x,
@@ -195,7 +223,7 @@ export function FlowDagView({
       }
     }
     return rects;
-  }, [layout, activeStepInfo, selectedStep]);
+  }, [layout, activeStepInfo, selectedStep, measuredPanelHeight]);
 
   // Feed active rects to camera whenever they change
   useEffect(() => {
