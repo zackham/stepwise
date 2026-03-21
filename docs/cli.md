@@ -22,7 +22,7 @@ Stepwise is a CLI-first tool. All commands are available via `stepwise <command>
 | `2` | Usage error (bad arguments, missing file) |
 | `3` | Configuration error |
 | `4` | Project error (no `.stepwise/` found) |
-| `5` | Suspended (flow blocked by human steps) |
+| `5` | Suspended (flow blocked by external steps) |
 
 **`--wait` mode exit codes** (override codes 3-4 for agent callers):
 
@@ -33,7 +33,7 @@ Stepwise is a CLI-first tool. All commands are available via `stepwise <command>
 | `2` | Input validation error |
 | `3` | Timeout (`--timeout` exceeded) |
 | `4` | Cancelled |
-| `5` | Suspended (all progress blocked by human steps) |
+| `5` | Suspended (all progress blocked by external steps) |
 
 ---
 
@@ -95,7 +95,7 @@ The `<flow>` argument accepts flow names (e.g., `my-flow`), file paths (e.g., `f
 stepwise run my-flow.flow.yaml
 ```
 
-Runs the flow in the terminal. Prints step-by-step progress. Exits when the job completes or fails. Human steps prompt via stdin.
+Runs the flow in the terminal. Prints step-by-step progress. Exits when the job completes or fails. External steps prompt via stdin.
 
 ### Watch mode
 
@@ -103,7 +103,7 @@ Runs the flow in the terminal. Prints step-by-step progress. Exits when the job 
 stepwise run my-flow.flow.yaml --watch
 ```
 
-Starts an ephemeral web server on a random port and opens the browser. The DAG executes visually — steps light up, agent output streams in real-time, human steps show a form in the UI. The server stops when you press Ctrl+C.
+Starts an ephemeral web server on a random port and opens the browser. The DAG executes visually — steps light up, agent output streams in real-time, external steps show a form in the UI. The server stops when you press Ctrl+C.
 
 ### With report
 
@@ -151,7 +151,7 @@ stepwise run review.flow.yaml --wait --var-file spec=spec.md
 
 Exit codes for `--wait`: 0=success, 1=failed, 2=input error, 3=timeout, 4=cancelled, 5=suspended.
 
-When a flow has human steps and `--wait` is used, the command returns exit code 5 with a JSON response containing `suspended_steps` — each with `run_id`, `prompt`, and `fields`. Use `stepwise fulfill <run-id> '{...}' --wait` to satisfy the step and continue blocking.
+When a flow has external steps and `--wait` is used, the command returns exit code 5 with a JSON response containing `suspended_steps` — each with `run_id`, `prompt`, and `fields`. Use `stepwise fulfill <run-id> '{...}' --wait` to satisfy the step and continue blocking.
 
 ### Async mode (--async)
 
@@ -286,7 +286,7 @@ stepwise diagram @alice:code-review              # registry flow
 ✓ my-flow.svg
 ```
 
-Renders a dark-themed DAG matching the web UI aesthetic. Node shapes indicate executor type (box for script, parallelogram for human, rounded box for LLM, double octagon for agent, hexagon for poll). Edges are color-coded: blue for data flow, gray dashed for sequencing, amber dotted for loops, green bold for conditional advance, purple bold for for-each.
+Renders a dark-themed DAG matching the web UI aesthetic. Node shapes indicate executor type (box for script, parallelogram for external, rounded box for LLM, double octagon for agent, hexagon for poll). Edges are color-coded: blue for data flow, gray dashed for sequencing, amber dotted for loops, green bold for conditional advance, purple bold for for-each.
 
 Requires the system `graphviz` package (`dot` binary). Install with `brew install graphviz` or `apt install graphviz`.
 
@@ -351,7 +351,7 @@ Steps:
   ✓ deploy           completed    script   (1.4s, $0.000)
 ```
 
-Status icons: `✓` completed, `✗` failed, `⠋` running, `◆` suspended (waiting for human), `↗` delegated (sub-job), `○` pending.
+Status icons: `✓` completed, `✗` failed, `⠋` running, `◆` suspended (waiting for external input), `↗` delegated (sub-job), `○` pending.
 
 **JSON output** provides a full resolved flow status (DAG view) with per-step costs, outputs, suspension details, route decisions, and sub-jobs.
 
@@ -394,7 +394,7 @@ stepwise list --suspended --since 24h
 stepwise list --suspended --flow meeting-ingest
 ```
 
-Returns all suspended steps across all active jobs — the "inbox" of human steps awaiting fulfillment.
+Returns all suspended steps across all active jobs — the "inbox" of external steps awaiting fulfillment.
 
 Each item includes: `job_id`, `flow_name`, `run_id`, `step_name`, `prompt`, `expected_outputs`, `suspended_at`, `age_seconds`, `fulfill_command`.
 
@@ -558,7 +558,7 @@ Shows metadata for a published flow without downloading it (name, author, descri
 
 ## `stepwise schema`
 
-Generate a JSON tool contract from a flow file. Shows what inputs the flow needs, what outputs it produces, and whether it has human steps.
+Generate a JSON tool contract from a flow file. Shows what inputs the flow needs, what outputs it produces, and whether it has external steps.
 
 ```bash
 stepwise schema council
@@ -570,15 +570,15 @@ stepwise schema council
   "description": "Ask multiple frontier models and synthesize responses",
   "inputs": ["question"],
   "outputs": ["synthesis", "model_responses"],
-  "humanSteps": []
+  "externalSteps": []
 }
 ```
 
-For flows with human steps, includes the step name, prompt, and required fields:
+For flows with external steps, includes the step name, prompt, and required fields:
 
 ```json
 {
-  "humanSteps": [
+  "externalSteps": [
     {
       "step": "approve",
       "prompt": "Review this deployment package. Approve or reject.",
@@ -619,7 +619,7 @@ stepwise output --run run-abc12345                     # direct run access by ID
 
 ## `stepwise fulfill`
 
-Satisfy a suspended human step from the command line. Used by agents to complete human-in-the-loop steps programmatically.
+Satisfy a suspended external step from the command line. Used by agents to complete external steps programmatically.
 
 ```bash
 stepwise fulfill run-abc12345 '{"approved": true, "reason": "looks good"}'
@@ -698,7 +698,7 @@ Hook scripts in `.stepwise/hooks/` are fired by the engine on key events. Each h
 
 | Hook | Event | Trigger |
 |------|-------|---------|
-| `on-suspend` | `step.suspended` | A step is suspended (awaiting human input) |
+| `on-suspend` | `step.suspended` | A step is suspended (awaiting external input) |
 | `on-complete` | `job.completed` | A job completes successfully |
 | `on-fail` | `job.failed`, `step.failed` | A job or step fails |
 

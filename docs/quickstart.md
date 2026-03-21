@@ -18,7 +18,7 @@ Run a real-world code-review flow from the Stepwise registry — no setup, no fi
 stepwise run @stepwise:code-review --watch
 ```
 
-This downloads and runs a multi-step code review workflow, opening a browser with real-time DAG visualization. An agent reviews your code, a human step pauses for your decision, and the flow continues based on your input.
+This downloads and runs a multi-step code review workflow, opening a browser with real-time DAG visualization. An agent reviews your code, an external step pauses for your decision, and the flow continues based on your input.
 
 No API keys? Try the welcome tour instead:
 
@@ -52,7 +52,7 @@ steps:
     outputs: [verdict, issues, suggestions]
 
   decide:
-    executor: human
+    executor: external
     prompt: |
       Review found these issues: $issues
 
@@ -74,7 +74,7 @@ Four steps, three executor types:
 
 - **gather-context** — a `script` step (the `run:` shorthand). Runs shell commands, parses JSON from stdout.
 - **review** — an `agent` step. An autonomous AI agent reviews the diff with tool access and streaming output.
-- **decide** — a `human` step. The job pauses and waits for your input via the web UI or terminal.
+- **decide** — an `external` step. The job pauses and waits for your input via the web UI or terminal.
 - **apply-fixes** — another agent step. Only runs after `decide` completes (via `sequencing`).
 
 Dependencies are implicit from `inputs:` — `review` waits for `gather-context` because it needs `diff_summary` and `commits`. Steps with no data dependencies run in parallel automatically.
@@ -95,7 +95,7 @@ Prints step-by-step progress to the terminal. Exits when the job completes or fa
 stepwise run code-review --watch
 ```
 
-Starts an ephemeral web server and opens the browser. You see the DAG execute in real time — steps light up as they run, agents stream output live, and human steps show an inline input form.
+Starts an ephemeral web server and opens the browser. You see the DAG execute in real time — steps light up as they run, agents stream output live, and external steps show an inline input form.
 
 ### Generate a report
 
@@ -111,7 +111,7 @@ Make the review iterative — if the human requests changes, loop back to the re
 
 ```yaml
   decide:
-    executor: human
+    executor: external
     prompt: |
       Review verdict: $verdict
       Issues: $issues
@@ -138,13 +138,13 @@ Make the review iterative — if the human requests changes, loop back to the re
 
 The `exits:` block evaluates rules in order after the step completes. `action: loop` with `target: review` re-runs the review step with fresh context. The `attempt` variable tracks how many times a step has run, so you can set a ceiling.
 
-## Adding a human gate
+## Adding an external gate
 
-Any step can be replaced with a human executor to add an approval gate:
+Any step can be replaced with an external executor to add an approval gate:
 
 ```yaml
   approve-deploy:
-    executor: human
+    executor: external
     prompt: |
       All fixes applied. Deploy to production?
 

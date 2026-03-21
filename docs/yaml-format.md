@@ -54,7 +54,7 @@ steps:
       prior_feedback: review.feedback
 
   review:
-    executor: human
+    executor: external
     prompt: "Review this draft and provide a decision (approve/revise) with feedback"
     outputs: [decision, feedback, score]
     inputs:
@@ -115,7 +115,7 @@ step_name:
   # Executor (one of these is required)
   run: scripts/foo.py              # script executor — runs this file
   # OR
-  executor: human                  # human executor
+  executor: external               # external executor
   prompt: "What should we do?"     # prompt shown in UI
   prompt_file: prompts/review.md   # alternative to prompt — loads file at parse time (mutually exclusive)
   # OR
@@ -223,11 +223,11 @@ when: "len(outputs.errors) == 0"
 
 If no exit rules are defined, the step implicitly advances. When exit rules exist but none match: if the step has explicit `advance` rules, the step **fails** (prevents unhandled output cases from silently progressing); if the step has only loop/escalate/abandon rules, unmatched = implicit advance.
 
-### Human Steps
+### External Steps
 
 ```yaml
 approve:
-  executor: human
+  executor: external
   prompt: "Approve this deployment?"
   outputs: [approved, reason]
   inputs:
@@ -235,7 +235,7 @@ approve:
     version: build.version
 ```
 
-Human steps immediately suspend with a watch. The UI shows the prompt and a "Fulfill Watch" button. The user provides the declared outputs as JSON.
+External steps immediately suspend with a watch. The UI shows the prompt and a "Fulfill Watch" button. The user provides the declared outputs as JSON.
 
 ### `prompt_file`
 
@@ -307,7 +307,7 @@ steps:
             section: $job.section          # access current item via $job.<as_variable>
 
         review:
-          executor: human
+          executor: external
           prompt: "Review this section"
           outputs: [approved]
           inputs:
@@ -522,7 +522,7 @@ steps:
     outputs: [content]
 
   review:
-    executor: human
+    executor: external
     prompt: "Score this: $content"
     inputs: { content: draft.content }
     outputs: [score]
@@ -625,7 +625,7 @@ Requirements are checked by `stepwise validate`, `stepwise info`, and `stepwise 
 | YAML | Data Model |
 |------|-----------|
 | `run: scripts/foo.py` | `ExecutorRef("script", {"command": "python3 scripts/foo.py"})` |
-| `executor: human` + `prompt:` | `ExecutorRef("human", {"prompt": "..."})` |
+| `executor: external` + `prompt:` | `ExecutorRef("external", {"prompt": "..."})` |
 | `executor: mock_llm` | `ExecutorRef("mock_llm", {})` |
 | `inputs: {x: step.field}` | `InputBinding("x", "step", "field")` |
 | `inputs: {x: $job.field}` | `InputBinding("x", "$job", "field")` |

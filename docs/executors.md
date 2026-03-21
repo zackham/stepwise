@@ -161,13 +161,13 @@ When a limit is hit, the step fails with a descriptive error (e.g., `cost_limit_
 
 **Context chains:** Agent steps can participate in context chains. When an agent step completes, its full conversation transcript is automatically captured and saved. Downstream chain members receive the prior conversations as a `<prior_context>` XML block prepended to their prompt. This gives multi-step agent workflows session continuity while maintaining the pure-function step model. See [YAML Format](yaml-format.md#context-chains) for configuration.
 
-## Human Executor
+## External Executor
 
-Suspends the step and waits for human input via the web UI. For decisions that need judgment, approvals, or creative direction.
+Suspends the step and waits for external input via the web UI or API. For decisions that need judgment, approvals, or creative direction.
 
 ```yaml
 approve_deployment:
-  executor: human
+  executor: external
   prompt: |
     Review this deployment package:
 
@@ -189,11 +189,11 @@ approve_deployment:
 - The user provides the declared outputs as JSON via a "Fulfill" form
 - The step completes and the workflow continues
 
-**When to use:** Deployment approvals, content sign-off, budget authorization, creative direction, any decision where you want a human in the loop. Human steps are particularly powerful combined with exit rules:
+**When to use:** Deployment approvals, content sign-off, budget authorization, creative direction, any decision where you want a human in the loop. External steps are particularly powerful combined with exit rules:
 
 ```yaml
 review:
-  executor: human
+  executor: external
   prompt: "Review and score this draft (0-10)"
   outputs: [score, feedback]
   inputs:
@@ -247,8 +247,8 @@ Does it need tool use or iteration?
   → No: LLM executor (single call, structured output)
   → Yes: Agent executor (full agentic session)
 
-Does it need human judgment?
-  → Yes: Human executor
+Does it need external input?
+  → Yes: External executor
 ```
 
-You can mix all four in a single workflow. A typical pipeline might use script steps for data fetching, an LLM step for scoring, an agent step for implementation, and a human step for final approval. The engine doesn't care — every executor produces a handoff envelope with the declared outputs.
+You can mix all four in a single workflow. A typical pipeline might use script steps for data fetching, an LLM step for scoring, an agent step for implementation, and an external step for final approval. The engine doesn't care — every executor produces a handoff envelope with the declared outputs.
