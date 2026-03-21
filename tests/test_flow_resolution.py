@@ -13,6 +13,7 @@ from stepwise.flow_resolution import (
     resolve_registry_flow,
 )
 from stepwise.cli import EXIT_SUCCESS, EXIT_USAGE_ERROR, main
+from stepwise.yaml_loader import load_workflow_yaml
 from stepwise.project import init_project
 
 
@@ -248,10 +249,31 @@ class TestNewCommand:
         assert marker.exists()
         content = marker.read_text()
         assert "name: my-flow" in content
-        assert "gather-info" in content  # 3-step template
+        assert "gather-info:" in content
+        assert "analyze:" in content
+        assert "format-report:" in content
+        assert "executor: llm" in content
+        assert "#" in content  # has inline comments
         captured = capsys.readouterr()
         combined = captured.out + captured.err
         assert "Created" in combined
+
+    def test_new_template_validates(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        main(["--project-dir", str(tmp_path), "new", "test-flow"])
+        marker = tmp_path / "flows" / "test-flow" / "FLOW.yaml"
+        wf = load_workflow_yaml(str(marker))
+        assert wf.validate() == []
+        assert wf.warnings() == []
+        assert len(wf.steps) == 3
+        assert set(wf.steps.keys()) == {"gather-info", "analyze", "format-report"}
+        assert wf.steps["analyze"].executor.type == "llm"
+        # analyze depends on gather-info
+        analyze_sources = {ib.source_step for ib in wf.steps["analyze"].inputs}
+        assert "gather-info" in analyze_sources
+        # format-report depends on analyze
+        report_sources = {ib.source_step for ib in wf.steps["format-report"].inputs}
+        assert "analyze" in report_sources
 
     def test_existing_directory_errors(self, tmp_path, capsys, monkeypatch):
         monkeypatch.chdir(tmp_path)
