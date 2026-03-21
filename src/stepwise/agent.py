@@ -125,15 +125,7 @@ class AcpxBackend:
 
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
-        # Create named session first (acpx requires it before prompting)
-        t_ensure = time.monotonic()
-        logger.info(f"[{step_id}] sessions ensure starting (session={session_name})")
-        subprocess.run(
-            [self.acpx_path, "--cwd", working_dir,
-             agent, "sessions", "ensure", "--name", session_name],
-            capture_output=True, timeout=30, env=env,
-        )
-        logger.info(f"[{step_id}] sessions ensure done ({time.monotonic() - t_ensure:.1f}s)")
+        # acpx auto-creates sessions on first prompt — no need for sessions ensure
 
         # Build acpx prompt command
         args = [self.acpx_path, "--format", "json", "--approve-all",
@@ -145,8 +137,6 @@ class AcpxBackend:
 
         args.extend([agent, "-s", session_name, "--file", str(prompt_file)])
 
-        # Spawn — clear CLAUDECODE to allow nested agent sessions
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
         # Open output file WITHOUT context manager — Popen is non-blocking so
         # `with` would close the fd before the subprocess writes anything.
         # The OS dups the fd into the child process; closing the parent's copy
