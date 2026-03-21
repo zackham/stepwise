@@ -114,6 +114,15 @@ steps:
             fi
           outputs: [passed, failed, status]
           sequencing: [task-implement]
+          exits:
+            - name: pass
+              when: "outputs.status == 'pass'"
+              action: advance
+            - name: fix-and-retest
+              when: "True"
+              action: loop
+              target: task-fix
+              max_iterations: 3
         task-fix:
           description: "Fixing failed tests"
           run: |
@@ -129,6 +138,14 @@ steps:
               action: loop
               target: task-run-tests
               max_iterations: 3
+        task-done:
+          description: "All tests passing"
+          run: |
+            printf '{"result": "passed"}'
+          outputs: [result]
+          inputs:
+            status: task-run-tests.status
+          when: "status == 'pass'"
 
   # ─── 5. Integration Tests ───────────────────────────────────────
   #     test → fix → retest loop
@@ -143,6 +160,15 @@ steps:
       fi
     outputs: [passed, failed, status]
     sequencing: [write-code]
+    exits:
+      - name: pass
+        when: "outputs.status == 'pass'"
+        action: advance
+      - name: fix-and-retest
+        when: "True"
+        action: loop
+        target: fix-tests
+        max_iterations: 5
 
   fix-tests:
     description: "Fixing integration tests"
