@@ -8,11 +8,11 @@ description: Stepwise workflow orchestration — run, create, and manage FLOW.ya
 1. **To find flows, ALWAYS run `stepwise agent-help`.** Never glob/search for flow files — flows live in multiple locations (local, registry cache, global) that only the CLI resolves. This command outputs the full catalog with inputs, outputs, and run commands.
 2. **To create a flow, use `stepwise new <name>`.** This creates `flows/<name>/FLOW.yaml`. Never create `.flow.yaml` files directly.
 3. **To run a flow:** `stepwise run <name> --wait --var k=v`
-4. **After listing flows, be helpful.** Offer to run them. If the flow has human steps, suggest `--watch` mode which opens a browser UI for interactive use. If the flow is fully automated, offer to run it with `--wait` for JSON output. Always mention what inputs (`--var`) are needed.
+4. **After listing flows, be helpful.** Offer to run them. If the flow has external steps, suggest `--watch` mode which opens a browser UI for interactive use. If the flow is fully automated, offer to run it with `--wait` for JSON output. Always mention what inputs (`--var`) are needed.
 
 # Stepwise
 
-Workflow orchestration for agents and humans. Runs multi-step pipelines with LLM, agent, human, poll, and script executors.
+Workflow orchestration for agents and humans. Runs multi-step pipelines with LLM, agent, external, poll, and script executors.
 
 ### Flow locations
 
@@ -50,7 +50,7 @@ stepwise output <job-id>                      # retrieve terminal outputs
 stepwise output <job-id> --step a,b           # per-step outputs
 stepwise output <job-id> --step a --inputs    # step inputs
 stepwise output --run <run-id>                # direct run output
-stepwise fulfill <run-id> '{"field": "val"}'  # satisfy human step
+stepwise fulfill <run-id> '{"field": "val"}'  # satisfy external step
 stepwise fulfill <run-id> '{}' --wait         # fulfill and block on job
 stepwise list --suspended --output json       # global suspension inbox
 stepwise wait <job-id>                        # block on existing job
@@ -73,7 +73,7 @@ stepwise info <name>                          # registry flow details
 | 2 | Input validation error |
 | 3 | Timeout (--wait mode) |
 | 4 | Cancelled (--wait mode) |
-| 5 | Suspended (all progress blocked by human steps) |
+| 5 | Suspended (all progress blocked by external steps) |
 
 ### Output Format (--wait mode)
 
@@ -114,7 +114,7 @@ Flows fetched from the registry (via `stepwise get @author:name`) are cached in 
 ## Creating & Modifying Flows
 
 Read `FLOW_REFERENCE.md` in this skill directory for the complete YAML format specification including:
-- Step definitions, executor types (script, human, poll, llm, agent)
+- Step definitions, executor types (script, external, poll, llm, agent)
 - Input bindings, exit rules, loop patterns
 - For-each (fan-out/fan-in), route steps (conditional dispatch)
 - Decorators, limits, idempotency modes
