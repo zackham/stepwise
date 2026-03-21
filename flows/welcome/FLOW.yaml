@@ -107,19 +107,23 @@ steps:
           description: "Running unit tests"
           run: |
             sleep 2
-            if [ "$STEPWISE_ATTEMPT" -ge 2 ]; then
+            if [ "${fix_round:-0}" -ge 1 ]; then
               printf '{"passed": 6, "failed": 0, "status": "pass"}'
             else
               printf '{"passed": 4, "failed": 2, "status": "fail"}'
             fi
           outputs: [passed, failed, status]
           sequencing: [task-implement]
+          inputs:
+            fix_round:
+              from: task-fix.fix_round
+              optional: true
         task-fix:
           description: "Fixing tests"
           run: |
             sleep 1
-            printf '{"fixes": "applied"}'
-          outputs: [fixes]
+            printf '{"fixes": "applied", "fix_round": %d}' "$STEPWISE_ATTEMPT"
+          outputs: [fixes, fix_round]
           inputs:
             status: task-run-tests.status
           when: "status == 'fail'"
@@ -136,13 +140,17 @@ steps:
     description: "Running integration tests"
     run: |
       sleep 3
-      if [ "$STEPWISE_ATTEMPT" -ge 2 ]; then
+      if [ "${fix_round:-0}" -ge 1 ]; then
         printf '{"passed": 11, "failed": 0, "status": "pass"}'
       else
         printf '{"passed": 8, "failed": 3, "status": "fail"}'
       fi
     outputs: [passed, failed, status]
     sequencing: [write-code]
+    inputs:
+      fix_round:
+        from: fix-tests.fix_round
+        optional: true
     exits:
       - name: pass
         when: "outputs.status == 'pass'"
@@ -166,11 +174,17 @@ steps:
     description: "Fixing tests"
     run: |
       sleep 2
-      printf '{"fixes": "applied"}'
-    outputs: [fixes]
+      printf '{"fixes": "applied", "fix_round": %d}' "$STEPWISE_ATTEMPT"
+    outputs: [fixes, fix_round]
     inputs:
       status: run-tests.status
     when: "status == 'fail'"
+    exits:
+      - name: retest
+        when: "True"
+        action: loop
+        target: run-tests
+        max_iterations: 5
 
   # ─── 6. Open PR (sub-flow: push + create) ────────────────────────
   open-pr:
