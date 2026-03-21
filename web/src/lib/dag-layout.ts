@@ -218,6 +218,12 @@ export function computeDagLayout(workflow: FlowDefinition): DagLayout {
 
       const fromNode = nodeMap[name];
       const toNode = nodeMap[target];
+
+      // Skip forward loops (source above target) — these follow the
+      // existing dagre data edge. Only draw loop edges for backward
+      // loops where the target is above the source in the DAG.
+      if (fromNode.y < toNode.y) continue;
+
       // Stagger multiple loop edges so they don't overlap each other
       const offset = 60 + loopIndex * 30;
 
@@ -669,6 +675,10 @@ export function computeHierarchicalLayout(
 
       const fromNode = nodeMap[name];
       const toNode = nodeMap[target];
+
+      // Skip forward loops — only draw backward (upward) loop edges
+      if (fromNode.y < toNode.y) continue;
+
       const offset = 60 + loopIdx * 30;
 
       const startX = fromNode.x + fromNode.width;
