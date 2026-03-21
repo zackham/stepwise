@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import signal
 import time
 from typing import Any
@@ -13,6 +14,8 @@ from stepwise.executors import (
     ExecutorStatus,
 )
 from stepwise.models import HandoffEnvelope, Sidecar, _now
+
+logger = logging.getLogger("stepwise.decorators")
 
 
 class TimeoutDecorator(Executor):
@@ -61,13 +64,26 @@ class TimeoutDecorator(Executor):
         self._executor.cancel(state)
 
 
+TRANSIENT_ERROR_CATEGORIES = {"infra_failure", "timeout"}
+
+
 class RetryDecorator(Executor):
-    """Retries on failure. Checks context.idempotency before retrying."""
+    """Retries on failure. Checks context.idempotency before retrying.
+
+    Config keys:
+        max_retries: int (default 2) — number of retry attempts after initial failure
+        backoff: "none" | "exponential" — backoff strategy
+        backoff_base: float (default 0.01) — base delay in seconds for exponential backoff
+        transient_only: bool (default False) — when True, only retry if
+            executor_state.error_category is in the transient set (infra_failure, timeout)
+    """
 
     def __init__(self, executor: Executor, config: dict) -> None:
         self._executor = executor
         self._max_retries = config.get("max_retries", 2)
         self._backoff = config.get("backoff", "none")
+        self._backoff_base = config.get("backoff_base", 0.01)
+        self._transient_only = config.get("transient_only", False)
 
     def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
         if context.idempotency == "non_retriable":
@@ -102,12 +118,37 @@ class RetryDecorator(Executor):
             error_msg = ""
             if result.executor_state:
                 error_msg = result.executor_state.get("error", "unknown")
+
+            # Transient-only filtering: if enabled, only retry transient errors
+            if self._transient_only and result.executor_state:
+                category = result.executor_state.get("error_category", "")
+                if category not in TRANSIENT_ERROR_CATEGORIES:
+                    # Non-transient error — fail immediately, no retry
+                    logger.info(
+                        "Non-transient error for step '%s' (category=%s), not retrying: %s",
+                        context.step_name, category, error_msg,
+                    )
+                    retry_meta = {
+                        "retry": {
+                            "attempts": attempt_num + 1,
+                            "reasons": [error_msg],
+                        }
+                    }
+                    if result.envelope:
+                        result.envelope.executor_meta.update(retry_meta)
+                    return result
+
             attempts.append(error_msg)
             last_result = result
 
-            # Backoff
+            # Backoff before next retry (not after final attempt)
             if attempt_num < self._max_retries and self._backoff == "exponential":
-                time.sleep(0.01 * (2 ** attempt_num))  # Very short for testing
+                delay = self._backoff_base * (2 ** attempt_num)
+                logger.info(
+                    "Transient retry %d/%d for step '%s' after %.1fs delay (error: %s)",
+                    attempt_num + 1, self._max_retries, context.step_name, delay, error_msg,
+                )
+                time.sleep(delay)
 
         # All retries exhausted
         retry_meta = {
