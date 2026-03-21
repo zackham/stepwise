@@ -225,7 +225,19 @@ def _get_engine() -> AsyncEngine:
     return _engine
 
 
-def _serialize_job(job: Job) -> dict:
+def _serialize_job(job: Job, summary: bool = False) -> dict:
+    if summary:
+        return {
+            "id": job.id,
+            "name": job.name,
+            "objective": job.objective,
+            "status": job.status.value,
+            "created_at": job.created_at.isoformat(),
+            "updated_at": job.updated_at.isoformat(),
+            "parent_job_id": job.parent_job_id,
+            "created_by": job.created_by,
+            "flow_file": getattr(job.workflow, "source_dir", None),
+        }
     return job.to_dict()
 
 
@@ -447,11 +459,11 @@ async def _crash_on_error(request, exc):
 
 
 @app.get("/api/jobs")
-def list_jobs(status: str | None = None, top_level: bool = False):
+def list_jobs(status: str | None = None, top_level: bool = False, limit: int = 50):
     engine = _get_engine()
     job_status = JobStatus(status) if status else None
-    jobs = engine.store.all_jobs(job_status, top_level_only=top_level)
-    return [_serialize_job(j) for j in jobs]
+    jobs = engine.store.all_jobs(job_status, top_level_only=top_level, limit=limit)
+    return [_serialize_job(j, summary=True) for j in jobs]
 
 
 @app.post("/api/jobs")

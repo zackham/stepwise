@@ -223,17 +223,18 @@ class SQLiteStore:
         self._conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
         self._conn.commit()
 
-    def all_jobs(self, status: JobStatus | None = None, top_level_only: bool = False) -> list[Job]:
+    def all_jobs(self, status: JobStatus | None = None, top_level_only: bool = False, limit: int = 0) -> list[Job]:
         clauses = []
-        params: list[str] = []
+        params: list = []
         if status:
             clauses.append("status = ?")
             params.append(status.value)
         if top_level_only:
             clauses.append("parent_job_id IS NULL")
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        limit_clause = f" LIMIT {int(limit)}" if limit > 0 else ""
         rows = self._conn.execute(
-            f"SELECT * FROM jobs{where} ORDER BY created_at",
+            f"SELECT * FROM jobs{where} ORDER BY created_at DESC{limit_clause}",
             params,
         ).fetchall()
         return [self._row_to_job(r) for r in rows]
