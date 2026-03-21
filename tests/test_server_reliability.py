@@ -204,6 +204,33 @@ class TestH7ZombieJobCleanup:
         reloaded = store.load_job(job.id)
         assert reloaded.status == JobStatus.RUNNING  # preserved
 
+    def test_engine_recover_jobs(self):
+        """recover_jobs settles RUNNING jobs whose steps are all COMPLETED."""
+        store = self._make_store()
+        registry = _make_registry()
+        engine = AsyncEngine(store=store, registry=registry)
+
+        job = _create_running_job(store)
+
+        # Add a COMPLETED step run for the terminal step
+        run = StepRun(
+            id=_gen_id("run"), job_id=job.id, step_name="step-a",
+            attempt=1, status=StepRunStatus.COMPLETED,
+            result=HandoffEnvelope(
+                artifact={"result": "done"},
+                sidecar=Sidecar(),
+                workspace="/tmp/test",
+                timestamp=_now(),
+            ),
+            started_at=_now(), completed_at=_now(),
+        )
+        store.save_run(run)
+
+        engine.recover_jobs()
+
+        reloaded = store.load_job(job.id)
+        assert reloaded.status == JobStatus.COMPLETED
+
 
 # ══════════════════════════════════════════════════════════════════════
 # H8: Concurrent job limit and artifact size guard
@@ -281,6 +308,81 @@ class TestH8ConcurrentJobLimit:
         assert len(failed_runs) >= 1
         assert "too large" in failed_runs[0].error
 
+    def test_queued_job_starts_on_completion(self):
+        """When a running job completes, queued pending jobs are auto-started."""
+        store = SQLiteStore(":memory:")
+        registry = _make_registry()
+
+        register_step_fn("echo", lambda inputs: {"result": "ok"})
+
+        engine = AsyncEngine(store=store, registry=registry, max_concurrent_jobs=1)
+        wf = _simple_workflow(fn_name="echo")
+
+        job1 = engine.create_job(objective="test-1", workflow=wf)
+        job2 = engine.create_job(objective="test-2", workflow=wf)
+
+        async def run_test():
+            engine_task = asyncio.create_task(engine.run())
+            try:
+                engine.start_job(job1.id)
+                engine.start_job(job2.id)
+
+                # job2 should be queued (PENDING)
+                assert store.load_job(job2.id).status == JobStatus.PENDING
+
+                # Wait for both to complete
+                await asyncio.wait_for(engine.wait_for_job(job1.id), timeout=10)
+                await asyncio.wait_for(engine.wait_for_job(job2.id), timeout=10)
+
+                # Both should be completed
+                assert store.load_job(job1.id).status == JobStatus.COMPLETED
+                assert store.load_job(job2.id).status == JobStatus.COMPLETED
+            finally:
+                engine_task.cancel()
+                try:
+                    await engine_task
+                except asyncio.CancelledError:
+                    pass
+
+        asyncio.run(run_test())
+
+    def test_no_concurrent_limit_when_zero(self):
+        """When max_concurrent_jobs=0, no queueing occurs (unlimited)."""
+        store = SQLiteStore(":memory:")
+        registry = _make_registry()
+
+        register_step_fn("echo", lambda inputs: {"result": "ok"})
+
+        engine = AsyncEngine(store=store, registry=registry, max_concurrent_jobs=0)
+        wf = _simple_workflow(fn_name="echo")
+
+        async def run_test():
+            engine_task = asyncio.create_task(engine.run())
+            try:
+                jobs = []
+                for i in range(5):
+                    job = engine.create_job(objective=f"test-{i}", workflow=wf)
+                    jobs.append(job)
+                    engine.start_job(job.id)
+
+                # All should be RUNNING (not queued)
+                await asyncio.sleep(0.05)
+                for job in jobs:
+                    status = store.load_job(job.id).status
+                    assert status != JobStatus.PENDING, f"Job {job.id} should not be PENDING"
+
+                # Wait for all to complete
+                for job in jobs:
+                    await asyncio.wait_for(engine.wait_for_job(job.id), timeout=10)
+            finally:
+                engine_task.cancel()
+                try:
+                    await engine_task
+                except asyncio.CancelledError:
+                    pass
+
+        asyncio.run(run_test())
+
     def test_pending_jobs_query(self):
         """store.pending_jobs() returns PENDING jobs in FIFO order."""
         store = SQLiteStore(":memory:")
@@ -326,8 +428,8 @@ class TestH8ConcurrentJobLimit:
 class TestH10AgentResultPickup:
     """Test that executor results are always delivered to the engine."""
 
-    def test_executor_error_is_queued(self):
-        """When an executor raises, the error is still pushed to the queue."""
+    def test_executor_exception_becomes_step_failure(self):
+        """When an executor raises, the error is pushed to the queue and becomes a step failure."""
         store = SQLiteStore(":memory:")
         registry = _make_registry()
 
@@ -342,6 +444,48 @@ class TestH10AgentResultPickup:
         runs = store.runs_for_job(job.id)
         failed_runs = [r for r in runs if r.status == StepRunStatus.FAILED]
         assert len(failed_runs) >= 1
+        assert "boom" in failed_runs[0].error
+
+    def test_watchdog_detects_stuck_run(self):
+        """Stuck RUNNING steps with no executor task are failed by the watchdog."""
+        from datetime import timedelta
+
+        store = SQLiteStore(":memory:")
+        registry = _make_registry()
+        engine = AsyncEngine(store=store, registry=registry)
+
+        job = _create_running_job(store)
+
+        # Add a RUNNING step run that started >60s ago
+        run = StepRun(
+            id=_gen_id("run"), job_id=job.id, step_name="step-a",
+            attempt=1, status=StepRunStatus.RUNNING,
+            started_at=_now() - timedelta(minutes=5),
+        )
+        store.save_run(run)
+
+        # Ensure no task in engine registry for this run
+        assert run.id not in engine._tasks
+
+        # Run in async context so _dispatch_ready can work after watchdog fires
+        async def run_test():
+            engine_task = asyncio.create_task(engine.run())
+            try:
+                engine._poll_external_changes()
+                # Give engine a moment to settle the job
+                await asyncio.sleep(0.1)
+            finally:
+                engine_task.cancel()
+                try:
+                    await engine_task
+                except asyncio.CancelledError:
+                    pass
+
+        asyncio.run(run_test())
+
+        reloaded = store.load_run(run.id)
+        assert reloaded.status == StepRunStatus.FAILED
+        assert "task lost" in reloaded.error.lower()
 
     def test_done_callback_logs_errors(self):
         """Verify that _run_executor logs errors when executor.start() raises."""
@@ -431,6 +575,20 @@ class TestH12GlobalServerRegistry:
                 # Verify the dead entry was pruned from the file
                 data = json.loads(registry_path.read_text())
                 assert len(data) == 0
+
+    def test_global_registry_upsert_by_project(self):
+        """Registering the same project_path twice updates (upserts), not duplicates."""
+        with tempfile.TemporaryDirectory() as tmp:
+            registry_path = Path(tmp) / "servers.json"
+            with patch("stepwise.server_detect.GLOBAL_REGISTRY", registry_path):
+                from stepwise.server_detect import register_server, list_active_servers
+
+                register_server("/project/a", os.getpid(), 8340, "http://localhost:8340")
+                register_server("/project/a", os.getpid(), 9999, "http://localhost:9999")
+
+                servers = list_active_servers()
+                assert len(servers) == 1
+                assert servers[0]["port"] == 9999
 
     def test_registry_atomic_write(self):
         """Registry file is written atomically (no partial writes)."""
