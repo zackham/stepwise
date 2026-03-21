@@ -104,45 +104,65 @@ steps:
           inputs:
             task: $job.task
         task-run-tests:
-          description: "Running tests & fixing"
+          description: "Running tests"
           run: |
             sleep 2
-            if [ "$STEPWISE_ATTEMPT" -ge 2 ]; then
+            if [ "${fixed:-false}" = "true" ]; then
               printf '{"passed": 6, "failed": 0, "status": "pass"}'
             else
-              sleep 1
               printf '{"passed": 4, "failed": 2, "status": "fail"}'
             fi
           outputs: [passed, failed, status]
           sequencing: [task-implement]
+          inputs:
+            fixed:
+              from: task-fix.fixed
+              optional: true
+        task-fix:
+          description: "Fixing failed tests"
+          run: |
+            sleep 2
+            printf '{"fixed": "true"}'
+          outputs: [fixed]
+          inputs:
+            status: task-run-tests.status
+          when: "status == 'fail'"
           exits:
-            - name: pass
-              when: "outputs.status == 'pass'"
-              action: advance
-            - name: fix-and-retry
+            - name: retest
               when: "True"
               action: loop
               target: task-run-tests
               max_iterations: 3
 
   # ─── 5. Integration Tests ───────────────────────────────────────
-  #     Self-loop: fails first, passes on retry
+  #     test → fix → retest loop
   run-tests:
     description: "Running integration tests"
     run: |
       sleep 3
-      if [ "$STEPWISE_ATTEMPT" -ge 2 ]; then
+      if [ "${fixed:-false}" = "true" ]; then
         printf '{"passed": 11, "failed": 0, "status": "pass"}'
       else
         printf '{"passed": 8, "failed": 3, "status": "fail"}'
       fi
     outputs: [passed, failed, status]
     sequencing: [write-code]
+    inputs:
+      fixed:
+        from: fix-tests.fixed
+        optional: true
+
+  fix-tests:
+    description: "Fixing integration tests"
+    run: |
+      sleep 2
+      printf '{"fixed": "true"}'
+    outputs: [fixed]
+    inputs:
+      status: run-tests.status
+    when: "status == 'fail'"
     exits:
-      - name: pass
-        when: "outputs.status == 'pass'"
-        action: advance
-      - name: fix-and-retry
+      - name: retest
         when: "True"
         action: loop
         target: run-tests
