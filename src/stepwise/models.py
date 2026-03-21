@@ -863,6 +863,25 @@ class WorkflowDefinition:
                     f"\u2139 $job.{name} is used but no config: block is declared"
                 )
 
+        # Cache on uncacheable step types
+        for name, step in self.steps.items():
+            if step.cache is not None and step.cache.enabled:
+                if step.executor.type in ("human", "external"):
+                    warns.append(
+                        f"\u26a0 Step '{name}': cache has no effect on "
+                        f"human/external steps"
+                    )
+                elif step.executor.type == "poll":
+                    warns.append(
+                        f"\u26a0 Step '{name}': cache has no effect on poll steps"
+                    )
+                elif (step.executor.type == "agent"
+                      and step.executor.config.get("emit_flow")):
+                    warns.append(
+                        f"\u26a0 Step '{name}': cache has no effect on "
+                        f"emit_flow agent steps"
+                    )
+
         return warns
 
     def entry_steps(self) -> list[str]:
