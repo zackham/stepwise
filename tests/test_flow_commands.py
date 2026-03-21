@@ -115,6 +115,11 @@ class TestFlowShare:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr("stepwise.registry_client.TOKENS_FILE", tmp_path / "tokens.json")
         monkeypatch.setattr("stepwise.registry_client.CONFIG_DIR", tmp_path)
+        # Set up auth for publish
+        auth_file = tmp_path / "auth.json"
+        import json
+        auth_file.write_text(json.dumps({"auth_token": "tok_test", "github_username": "test", "registry_url": "https://stepwise.run"}))
+        monkeypatch.setattr("stepwise.registry_client.AUTH_FILE", auth_file)
 
         flow = tmp_path / "test.flow.yaml"
         flow.write_text(SIMPLE_FLOW)
