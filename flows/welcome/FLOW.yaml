@@ -22,9 +22,7 @@ steps:
     prompt: |
       Welcome to Stepwise — workflow orchestration for agents and humans.
 
-      We're going to simulate a real dev workflow: plan, implement
-      in parallel, open a PR, loop through AI code review, and deploy.
-      Everything you see is defined in a single YAML file.
+      We're going to simulate a real dev workflow: plan, implement in parallel, open a PR, loop through AI code review, and deploy. Everything you see is defined in a single YAML file.
 
       Pick a feature to "build":
     outputs:
