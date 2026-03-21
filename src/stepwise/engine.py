@@ -2561,6 +2561,18 @@ class AsyncEngine(Engine):
         self._emit(job_id, JOB_STARTED)
         self._dispatch_ready(job_id)
 
+    def recover_jobs(self) -> None:
+        """Re-evaluate all RUNNING server-owned jobs after startup.
+
+        Catches jobs whose steps all completed but the job wasn't settled
+        before the server crashed. Safe to call multiple times —
+        _check_job_terminal is idempotent.
+        """
+        for job in self.store.active_jobs():
+            if job.created_by != "server":
+                continue
+            self._check_job_terminal(job.id)
+
     def resume_job(self, job_id: str) -> None:
         job = self.store.load_job(job_id)
         resumable = {JobStatus.PAUSED, JobStatus.CANCELLED, JobStatus.COMPLETED, JobStatus.FAILED}
