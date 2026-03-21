@@ -278,7 +278,7 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
         );
       })}
 
-      {/* Loop-back edges */}
+      {/* Loop-back edges — always orange (distinct from blue data edges) */}
       {loopEdges.map((le) => {
         const sourceRun = latestRuns?.[le.from];
         const sourceHasRun = sourceRun && (sourceRun.status === "completed" || sourceRun.status === "failed");
@@ -287,13 +287,17 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
         const isSuspended = targetStatus === "suspended";
         const isActive = sourceHasRun && (isRunning || isSuspended);
 
+        // Loop edges stay orange when active (data edges go blue)
+        const activeColor = "oklch(0.7 0.15 55)";
+        const inactiveColor = "oklch(0.55 0.12 55)";
+
         return (
           <g key={`loop-${le.from}-${le.to}`}>
             {isActive && (
               <path
                 d={le.path}
                 fill="none"
-                stroke={isSuspended ? "oklch(0.7 0.15 85)" : "oklch(0.6 0.15 250)"}
+                stroke={activeColor}
                 strokeWidth={6}
                 opacity={0.15}
                 strokeLinecap="round"
@@ -302,22 +306,18 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
             <path
               d={le.path}
               fill="none"
-              stroke={
-                isActive
-                  ? isSuspended ? "oklch(0.7 0.15 85)" : "oklch(0.6 0.15 250)"
-                  : "oklch(0.65 0.15 55)"
-              }
+              stroke={isActive ? activeColor : inactiveColor}
               strokeWidth={isActive ? 2 : 1.5}
               strokeDasharray={isActive ? "8 12" : "6 3"}
-              markerEnd={isActive ? (isSuspended ? "url(#arrowhead-suspended)" : "url(#arrowhead-active)") : "url(#loop-arrow)"}
-              opacity={isActive ? 0.8 : 0.6}
+              markerEnd="url(#loop-arrow)"
+              opacity={isActive ? 0.85 : 0.5}
               className={isActive ? "edge-active" : undefined}
             />
             <text
               x={le.labelPos.x}
               y={le.labelPos.y}
               textAnchor="start"
-              className={isActive ? (isSuspended ? "fill-amber-400 text-[10px] font-medium" : "fill-blue-400 text-[10px] font-medium") : "fill-orange-400/80 text-[10px] font-medium"}
+              className="fill-orange-400/80 text-[10px] font-medium"
               style={{ fontFamily: "monospace" }}
             >
               {le.label}
