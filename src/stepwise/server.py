@@ -412,6 +412,8 @@ async def lifespan(app: FastAPI):
             await _engine_task
         except asyncio.CancelledError:
             pass
+    if _engine and hasattr(_engine, "shutdown"):
+        await _engine.shutdown()
     store.close()
 
 
