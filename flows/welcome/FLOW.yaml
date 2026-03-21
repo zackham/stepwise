@@ -91,6 +91,7 @@ steps:
     as: task
     inputs:
       decision: approve-plan.decision
+    when: "decision == 'approve'"
     outputs: [results]
     flow:
       steps:
@@ -204,6 +205,7 @@ steps:
       feature: pick-feature.feature
       team_name: $job.team_name
       test_status: run-tests.status
+    when: "test_status == 'pass'"
 
   # ─── 7. Code Review ─────────────────────────────────────────────
   #     review → revise → push → loop back to review
