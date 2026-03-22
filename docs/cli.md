@@ -88,10 +88,7 @@ Runs the flow headless and generates a self-contained HTML report on completion.
 #### Passing inputs
 
 ```bash
-# Inline key=value pairs (repeatable)
 stepwise run my-flow.flow.yaml --var topic="distributed caching" --var depth=3
-
-# From a YAML or JSON file
 stepwise run my-flow.flow.yaml --vars-file inputs.yaml
 ```
 
@@ -113,14 +110,11 @@ stepwise run council --wait --var question="Should we use Postgres?"
 Blocks until the flow completes. Prints a single JSON object to stdout — nothing else. All logging goes to stderr. This is the primary integration path for agents calling flows as tools.
 
 ```bash
-# With timeout (returns exit code 3 if exceeded)
 stepwise run deploy.flow.yaml --wait --timeout 300 --var repo=/path --var branch=main
-
-# Read long input from a file instead of shell-escaping
 stepwise run review.flow.yaml --wait --var-file spec=spec.md
 ```
 
-Exit codes for `--wait`: 0=success, 1=failed, 2=input error, 3=timeout, 4=cancelled, 5=suspended.
+Exit codes in wait mode: 0=success, 1=failed, 2=input error, 3=timeout, 4=cancelled, 5=suspended.
 
 When a flow has external steps and `--wait` is used, the command returns exit code 5 with a JSON response containing `suspended_steps` — each with `run_id`, `prompt`, and `fields`. Use `stepwise fulfill <run-id> '{...}' --wait` to satisfy the step and continue blocking.
 
@@ -128,10 +122,11 @@ When a flow has external steps and `--wait` is used, the command returns exit co
 
 ```bash
 stepwise run council --async --var question="..."
-# → {"job_id": "job-a1b2c3d4", "status": "running"}
 ```
 
-Fire-and-forget. Spawns a detached background process (no server required), returns the job ID immediately. Poll with `stepwise status` or retrieve results with `stepwise output`.
+Returns `{"job_id": "job-a1b2c3d4", "status": "running"}`.
+
+Fire-and-forget. Spawns a detached background process (no server required), returns the job ID immediately. Poll with stepwise status or retrieve results with stepwise output.
 
 #### JSON output (--output json)
 
@@ -139,7 +134,7 @@ Fire-and-forget. Spawns a detached background process (no server required), retu
 stepwise run my-flow.flow.yaml --output json --var k=v
 ```
 
-Same as headless mode (shows step progress to stderr) but prints structured JSON result to stdout on completion. Combine with `--wait` for fully silent machine-readable output.
+Same as headless mode (shows step progress to stderr) but prints structured JSON result to stdout on completion. Combine with --wait for fully silent machine-readable output.
 
 | Flag | Description |
 |------|-------------|
@@ -147,16 +142,16 @@ Same as headless mode (shows step progress to stderr) but prints structured JSON
 | `--wait` | Block until completion, JSON output on stdout |
 | `--async` | Fire-and-forget, returns job_id immediately |
 | `--output json` | Print structured JSON result to stdout on completion |
-| `--timeout INT` | Timeout in seconds (for `--wait`) |
+| `--timeout INT` | Timeout in seconds, used with --wait |
 | `--var KEY=VALUE` | Pass input variable (repeatable) |
 | `--var-file KEY=PATH` | Pass input from file contents (repeatable, avoids shell escaping) |
 | `--vars-file PATH` | Load variables from YAML or JSON file |
-| `--port INT` | Override port (for `--watch`, default: random) |
+| `--port INT` | Override port for --watch (default: random) |
 | `--objective STR` | Set job objective (default: flow filename) |
 | `--workspace PATH` | Override workspace directory |
 | `--report` | Generate HTML report after completion |
 | `--report-output PATH` | Custom report file path (default: `<flow>-report.html`) |
-| `--no-open` | Don't auto-open browser (for `--watch`) |
+| `--no-open` | Don't auto-open browser in --watch mode |
 | `--name STR` | Human-friendly job name (optional) |
 | `--local` | Force local execution (skip server delegation) |
 | `--rerun STEP` | Bypass cache for this step (repeatable) |
@@ -185,17 +180,17 @@ Accepts 2+ flow names or paths as positional arguments. Shares all flags with `r
 | `--wait` | Block until completion, JSON output on stdout |
 | `--async` | Fire-and-forget, returns job_id immediately |
 | `--output json` | Print structured JSON result to stdout on completion |
-| `--timeout INT` | Timeout in seconds (for `--wait`) |
+| `--timeout INT` | Timeout in seconds, used with --wait |
 | `--var KEY=VALUE` | Pass input variable (repeatable) |
 | `--var-file KEY=PATH` | Pass input from file contents (repeatable) |
 | `--vars-file PATH` | Load variables from YAML or JSON file |
-| `--port INT` | Override port (for `--watch`) |
+| `--port INT` | Override port for --watch |
 | `--objective STR` | Set job objective (default: chain name) |
 | `--name STR` | Human-friendly job name |
 | `--workspace PATH` | Override workspace directory |
 | `--report` | Generate HTML report after completion |
 | `--report-output PATH` | Report output path |
-| `--no-open` | Don't auto-open browser (for `--watch`) |
+| `--no-open` | Don't auto-open browser in --watch mode |
 | `--local` | Force local execution (skip server delegation) |
 | `--rerun STEP` | Bypass cache for this step (repeatable) |
 | `--notify URL` | Webhook URL for job event notifications |
@@ -203,10 +198,7 @@ Accepts 2+ flow names or paths as positional arguments. Shares all flags with `r
 | `--meta KEY=VALUE` | Set job metadata (dot notation) |
 
 ```bash
-# Chain with watch mode
 stepwise chain research analyze synthesize --watch --var topic="AI safety"
-
-# Chain with wait mode for agent integration
 stepwise chain fetch transform --wait --var url="https://api.example.com/data"
 ```
 
@@ -361,19 +353,19 @@ stepwise output job-a1b2c3d4 --step review --inputs   # step inputs instead of o
 stepwise output --run run-abc12345                     # direct run access by ID
 ```
 
-**Per-step mode** (`--step` or positional `step_name`): Returns a JSON object keyed by step name. Steps not yet completed have `null` values with a `_status` field. Non-existent steps have an `_error` field.
+**Per-step mode** (--step or positional step_name): Returns a JSON object keyed by step name. Steps not yet completed have `null` values with a `_status` field. Non-existent steps have an `_error` field.
 
-**Input mode** (`--inputs`): Returns the inputs that were fed to the step instead of its outputs.
+**Input mode** (--inputs): Returns the inputs that were fed to the step instead of its outputs.
 
-**Direct run mode** (`--run`): Access any run's output by its global run ID, without needing the job ID.
+**Direct run mode** (--run): Access any run's output by its global run ID, without needing the job ID.
 
 | Flag | Description |
 |------|-------------|
 | `job_id` | Job ID (positional) |
-| `step_name` | Step name (positional shorthand for `--step`) |
+| `step_name` | Step name (positional shorthand for --step) |
 | `--scope {default,full}` | Output scope (default: terminal outputs only) |
 | `--step NAMES` | Comma-separated step names for per-step output |
-| `--inputs` | Return step inputs instead of outputs (with `--step`) |
+| `--inputs` | Return step inputs instead of outputs (use with `--step`) |
 | `--run RUN_ID` | Retrieve output for a specific run by ID |
 
 ---
@@ -415,9 +407,9 @@ stepwise wait job-a1b2c3d4
 stepwise wait job-a1b2c3d4 --timeout 300
 ```
 
-Returns the same JSON format as `stepwise run --wait`. Exit code 0 for completion, 1 for failure, 5 for suspension.
+Returns the same JSON format as stepwise run --wait. Exit code 0 for completion, 1 for failure, 5 for suspension.
 
-Useful for attaching to a job started with `--async` or for re-checking a job after fulfilling a step without using `fulfill --wait`.
+Useful for attaching to a job started with --async or for re-checking a job after fulfilling a step without using fulfill --wait.
 
 | Flag | Description |
 |------|-------------|
@@ -452,16 +444,12 @@ Returns an error if the job is already completed, failed, or cancelled.
 
 Satisfy a suspended external step from the command line. Used by agents to complete external steps programmatically.
 
-See [Agent Integration](agent-integration.md) for the full `--wait`/`fulfill` mediation pattern.
+See [Agent Integration](agent-integration.md) for the full wait/fulfill mediation pattern.
 
 ```bash
 stepwise fulfill run-abc12345 '{"approved": true, "reason": "looks good"}'
-
-# Read payload from stdin (useful for large payloads or piping)
 echo '{"approved": true}' | stepwise fulfill run-abc12345 --stdin
 cat payload.json | stepwise fulfill run-abc12345 -
-
-# Fulfill and wait for the job to complete or suspend again
 stepwise fulfill run-abc12345 '{"approved": true}' --wait
 ```
 
@@ -515,7 +503,7 @@ Manage the Stepwise server lifecycle: start, stop, restart, and check status.
 
 #### `stepwise server start`
 
-Start the server in the foreground (default) or background (`--detach`).
+Start the server in the foreground (default) or background with --detach.
 
 ```bash
 stepwise server start                          # foreground (Ctrl+C to stop)
@@ -537,7 +525,7 @@ stepwise server stop
 
 #### `stepwise server restart`
 
-Stop the server (if running) and start it again. Passes through `--detach`, `--port`, `--host`.
+Stop the server (if running) and start it again. Passes through --detach, --port, --host.
 
 ```bash
 stepwise server restart --detach
@@ -600,10 +588,7 @@ Validates the flow, reads metadata from the YAML header, and uploads to the regi
 Download a flow from the registry or a URL.
 
 ```bash
-# By registry name
 stepwise get code-review
-
-# By URL (direct download)
 stepwise get https://example.com/code-review.flow.yaml
 ```
 
@@ -686,8 +671,6 @@ Manage configuration. Config is stored in `~/.config/stepwise/config.json`.
 ```bash
 stepwise config set openrouter_api_key sk-or-v1-abc123
 stepwise config set default_model anthropic/claude-sonnet-4
-
-# Read from stdin (hides input — good for API keys)
 stepwise config set openrouter_api_key --stdin
 ```
 
@@ -868,6 +851,8 @@ The `--update` flag finds `<!-- stepwise-agent-help -->` / `<!-- /stepwise-agent
 
 Manage the step result cache. Cached results are stored in `.stepwise/cache/results.db`.
 
+---
+
 #### `stepwise cache stats`
 
 Show cache entries, hits, size, and per-flow/step breakdown.
@@ -982,9 +967,10 @@ Hooks are fire-and-forget with a 30-second timeout. Failures are logged to `.ste
 
 **Example: Slack notification on suspension**
 
+`.stepwise/hooks/on-suspend`:
+
 ```sh
 #!/bin/sh
-# .stepwise/hooks/on-suspend
 payload=$(cat)
 step=$(echo "$payload" | jq -r '.step')
 cmd=$(echo "$payload" | jq -r '.fulfill_command')
@@ -1009,7 +995,7 @@ The server writes `.stepwise/server.pid` on startup and removes it on clean shut
 
 ## Signal Handling
 
-`Ctrl+C` during `stepwise run` cleanly cancels the active job. Running agent processes are killed, the job is marked as cancelled, and the process exits. In `--watch` mode, Ctrl+C stops the ephemeral server.
+Ctrl+C during stepwise run cleanly cancels the active job. Running agent processes are killed, the job is marked as cancelled, and the process exits. In --watch mode, Ctrl+C stops the ephemeral server.
 
 ## Project Discovery
 
