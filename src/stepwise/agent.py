@@ -136,12 +136,16 @@ def _is_pid_alive(pid: int) -> bool:
         return True  # Alive but can't signal
 
 
-def find_orphaned_queue_owners(active_session_ids: set[str] | None = None) -> list[QueueOwnerInfo]:
+def find_orphaned_queue_owners(
+    active_session_ids: set[str] | None = None,
+    active_pids: set[int] | None = None,
+) -> list[QueueOwnerInfo]:
     """Find acpx queue owner processes not associated with any active session.
 
     Args:
-        active_session_ids: ACP session IDs (UUIDs) currently in use by running steps.
-            If None, all alive queue owners are considered orphaned.
+        active_session_ids: ACP session IDs/names currently in use by running steps.
+        active_pids: PIDs/PGIDs of running agent steps. Queue owners in the same
+            process group as an active step are protected.
 
     Returns:
         List of orphaned QueueOwnerInfo entries (alive PID, not in active set).
@@ -150,26 +154,37 @@ def find_orphaned_queue_owners(active_session_ids: set[str] | None = None) -> li
     for info in _find_queue_owners():
         if not _is_pid_alive(info.pid):
             continue
+        # Protected by session ID match
         if active_session_ids is not None and info.session_id in active_session_ids:
             continue
+        # Protected by PID/PGID match — the queue owner's process group
+        # may contain an active step's PID
+        if active_pids is not None:
+            pgid = _get_process_pgid(info.pid)
+            if pgid is not None and pgid in active_pids:
+                continue
+            if info.pid in active_pids:
+                continue
         orphaned.append(info)
     return orphaned
 
 
 def cleanup_orphaned_queue_owners(
     active_session_ids: set[str] | None = None,
+    active_pids: set[int] | None = None,
     kill: bool = False,
 ) -> list[QueueOwnerInfo]:
     """Detect and optionally terminate orphaned acpx queue owner processes.
 
     Args:
         active_session_ids: ACP session IDs currently in use by running steps.
+        active_pids: PIDs/PGIDs of running agent steps.
         kill: If True, SIGTERM orphaned processes. If False, log only.
 
     Returns:
         List of orphaned queue owner info entries.
     """
-    orphaned = find_orphaned_queue_owners(active_session_ids)
+    orphaned = find_orphaned_queue_owners(active_session_ids, active_pids)
     for info in orphaned:
         if kill:
             try:
@@ -211,31 +226,46 @@ def _scan_queue_owner_pids() -> list[tuple[int, str]]:
     return results
 
 
-def find_zombie_queue_owners(active_session_ids: set[str] | None = None) -> list[tuple[int, str]]:
+def find_zombie_queue_owners(
+    active_session_ids: set[str] | None = None,
+    active_pids: set[int] | None = None,
+) -> list[tuple[int, str]]:
     """Find acpx queue owner processes not associated with any active session.
 
     Uses process-table scanning (/proc) to find __queue-owner processes,
-    then cross-references with lock files to determine which are legitimately active.
+    then cross-references with lock files and active PIDs to determine
+    which are legitimately active.
 
     Args:
-        active_session_ids: Session IDs currently in use by running steps.
-            If None, all queue owner processes are considered zombies.
+        active_session_ids: Session IDs/names currently in use by running steps.
+        active_pids: PIDs/PGIDs of running agent steps.
 
     Returns:
         List of (pid, cmdline_summary) for orphaned queue owner processes.
     """
     # Map session_id → pid from lock files for active sessions
-    active_pids: set[int] = set()
+    protected_pids: set[int] = set()
     if active_session_ids:
         for info in _find_queue_owners():
             if info.session_id in active_session_ids:
-                active_pids.add(info.pid)
+                protected_pids.add(info.pid)
+    if active_pids:
+        protected_pids.update(active_pids)
 
     # Scan process table for all queue owner processes
     all_owners = _scan_queue_owner_pids()
 
-    # Filter out those associated with active sessions
-    return [(pid, cmd) for pid, cmd in all_owners if pid not in active_pids]
+    # Filter out those associated with active sessions or active step PIDs
+    result = []
+    for pid, cmd in all_owners:
+        if pid in protected_pids:
+            continue
+        # Also check process group — queue owner may share PGID with active step
+        pgid = _get_process_pgid(pid)
+        if pgid is not None and active_pids and pgid in active_pids:
+            continue
+        result.append((pid, cmd))
+    return result
 
 
 def _scan_acpx_processes() -> list[tuple[int, str]]:
