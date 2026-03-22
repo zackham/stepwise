@@ -34,6 +34,7 @@ from stepwise.models import HandoffEnvelope, Sidecar, SubJobDefinition, _now
 
 EMIT_FLOW_FILENAME = "emit.flow.yaml"
 EMIT_FLOW_DIR = ".stepwise"
+ACPX_QUEUES_DIR = os.path.expanduser("~/.acpx/queues")
 
 
 # ── Agent Backend Protocol ────────────────────────────────────────────
@@ -81,6 +82,244 @@ class AgentBackend(Protocol):
     @property
     def supports_resume(self) -> bool:
         ...
+
+
+# ── Queue Owner Detection & Cleanup ───────────────────────────────────
+
+
+@dataclass
+class QueueOwnerInfo:
+    """Parsed info from an acpx queue lock file."""
+    pid: int
+    session_id: str
+    lock_path: str
+    created_at: str = ""
+
+
+def _parse_queue_lock(lock_path: str) -> QueueOwnerInfo | None:
+    """Parse an acpx queue lock file."""
+    try:
+        with open(lock_path) as f:
+            data = json.loads(f.read())
+        return QueueOwnerInfo(
+            pid=data["pid"],
+            session_id=data["sessionId"],
+            lock_path=lock_path,
+            created_at=data.get("createdAt", ""),
+        )
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+        return None
+
+
+def _find_queue_owners() -> list[QueueOwnerInfo]:
+    """Scan ~/.acpx/queues/ for queue owner lock files."""
+    results = []
+    if not os.path.isdir(ACPX_QUEUES_DIR):
+        return results
+    for filename in os.listdir(ACPX_QUEUES_DIR):
+        if not filename.endswith(".lock"):
+            continue
+        info = _parse_queue_lock(os.path.join(ACPX_QUEUES_DIR, filename))
+        if info is not None:
+            results.append(info)
+    return results
+
+
+def _is_pid_alive(pid: int) -> bool:
+    """Check if a process is alive."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # Alive but can't signal
+
+
+def find_orphaned_queue_owners(active_session_ids: set[str] | None = None) -> list[QueueOwnerInfo]:
+    """Find acpx queue owner processes not associated with any active session.
+
+    Args:
+        active_session_ids: ACP session IDs (UUIDs) currently in use by running steps.
+            If None, all alive queue owners are considered orphaned.
+
+    Returns:
+        List of orphaned QueueOwnerInfo entries (alive PID, not in active set).
+    """
+    orphaned = []
+    for info in _find_queue_owners():
+        if not _is_pid_alive(info.pid):
+            continue
+        if active_session_ids is not None and info.session_id in active_session_ids:
+            continue
+        orphaned.append(info)
+    return orphaned
+
+
+def cleanup_orphaned_queue_owners(
+    active_session_ids: set[str] | None = None,
+    kill: bool = False,
+) -> list[QueueOwnerInfo]:
+    """Detect and optionally terminate orphaned acpx queue owner processes.
+
+    Args:
+        active_session_ids: ACP session IDs currently in use by running steps.
+        kill: If True, SIGTERM orphaned processes. If False, log only.
+
+    Returns:
+        List of orphaned queue owner info entries.
+    """
+    orphaned = find_orphaned_queue_owners(active_session_ids)
+    for info in orphaned:
+        if kill:
+            try:
+                os.kill(info.pid, signal.SIGTERM)
+                logger.info(
+                    "Terminated orphaned acpx queue owner: pid=%d session=%s created=%s",
+                    info.pid, info.session_id, info.created_at,
+                )
+            except (ProcessLookupError, PermissionError):
+                logger.debug("Could not terminate queue owner pid=%d", info.pid)
+        else:
+            logger.warning(
+                "Orphaned acpx queue owner detected: pid=%d session=%s created=%s",
+                info.pid, info.session_id, info.created_at,
+            )
+    return orphaned
+
+
+def _scan_queue_owner_pids() -> list[tuple[int, str]]:
+    """Scan /proc for acpx queue owner processes.
+
+    Returns list of (pid, cmdline_summary) for processes with __queue-owner in cmdline.
+    Falls back to empty list on non-Linux systems.
+    """
+    results = []
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return results
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            cmdline = (entry / "cmdline").read_bytes().decode("utf-8", errors="replace")
+            if "__queue-owner" in cmdline:
+                summary = cmdline.replace("\x00", " ").strip()
+                results.append((int(entry.name), summary))
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+    return results
+
+
+def find_zombie_queue_owners(active_session_ids: set[str] | None = None) -> list[tuple[int, str]]:
+    """Find acpx queue owner processes not associated with any active session.
+
+    Uses process-table scanning (/proc) to find __queue-owner processes,
+    then cross-references with lock files to determine which are legitimately active.
+
+    Args:
+        active_session_ids: Session IDs currently in use by running steps.
+            If None, all queue owner processes are considered zombies.
+
+    Returns:
+        List of (pid, cmdline_summary) for orphaned queue owner processes.
+    """
+    # Map session_id → pid from lock files for active sessions
+    active_pids: set[int] = set()
+    if active_session_ids:
+        for info in _find_queue_owners():
+            if info.session_id in active_session_ids:
+                active_pids.add(info.pid)
+
+    # Scan process table for all queue owner processes
+    all_owners = _scan_queue_owner_pids()
+
+    # Filter out those associated with active sessions
+    return [(pid, cmd) for pid, cmd in all_owners if pid not in active_pids]
+
+
+def _scan_acpx_processes() -> list[tuple[int, str]]:
+    """Scan /proc for acpx-related processes (queue owners and claude agents).
+
+    Returns list of (pid, cmdline_summary) for processes matching
+    "claude-agent-acp" or "__queue-owner" in cmdline.
+    Falls back to empty list on non-Linux systems.
+    """
+    results = []
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return results
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            cmdline = (entry / "cmdline").read_bytes().decode("utf-8", errors="replace")
+            if "claude-agent-acp" in cmdline or "__queue-owner" in cmdline:
+                summary = cmdline.replace("\x00", " ").strip()
+                results.append((int(entry.name), summary))
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+    return results
+
+
+def _get_process_pgid(pid: int) -> int | None:
+    """Get the process group ID for a given PID via /proc."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        # /proc/<pid>/stat format: pid (comm) state ppid pgrp ...
+        # pgrp is field 5 (0-indexed after splitting)
+        parts = stat.rsplit(")", 1)[-1].split()
+        return int(parts[2])  # state=0, ppid=1, pgrp=2
+    except (FileNotFoundError, PermissionError, IndexError, ValueError):
+        return None
+
+
+def cleanup_orphaned_acpx(active_pids: set[int] | None = None) -> list[tuple[int, str]]:
+    """Detect and terminate orphaned acpx/claude processes.
+
+    Scans for processes matching "claude-agent-acp" or "acpx.*__queue-owner",
+    cross-references their process group IDs with PIDs from running steps,
+    and kills any that are orphaned.
+
+    Args:
+        active_pids: PIDs from currently running step_runs (executor_state.pid).
+            Processes whose pgid matches any active PID are considered active.
+            If None, all matched processes are considered orphaned.
+
+    Returns:
+        List of (pid, cmdline_summary) for orphaned processes that were killed.
+    """
+    all_procs = _scan_acpx_processes()
+    if not all_procs:
+        return []
+
+    active_pids = active_pids or set()
+    killed = []
+
+    for pid, cmdline in all_procs:
+        # A process belongs to a running step if its pgid matches any active step PID
+        # (acpx spawns with start_new_session=True, so children share pgid = acpx pid)
+        pgid = _get_process_pgid(pid)
+        if pgid is not None and pgid in active_pids:
+            continue
+        # Also check if the process itself is an active step PID
+        if pid in active_pids:
+            continue
+
+        try:
+            os.kill(pid, signal.SIGTERM)
+            logger.info(
+                "Terminated orphaned acpx process: pid=%d pgid=%s cmd=%s",
+                pid, pgid, cmdline[:120],
+            )
+            killed.append((pid, cmdline))
+        except (ProcessLookupError, PermissionError):
+            logger.debug("Could not terminate orphaned process pid=%d", pid)
+
+    if killed:
+        logger.info("Cleaned up %d orphaned acpx process(es)", len(killed))
+
+    return killed
 
 
 # ── ACP Backend (via acpx) ──────────────────────────────────────────
@@ -156,20 +395,22 @@ class AcpxBackend:
 
         args.extend([agent, "-s", session_name, "--file", str(prompt_file)])
 
-        # Open output file WITHOUT context manager — Popen is non-blocking so
-        # `with` would close the fd before the subprocess writes anything.
-        # The OS dups the fd into the child process; closing the parent's copy
-        # after Popen returns is safe — the child retains its own copy.
+        # Open output + stderr files. NOT context managers — Popen is non-blocking
+        # so `with` would close fds before the subprocess writes anything.
+        # The OS dups fds into the child; closing parent copies after Popen is safe.
         out_f = open(output_file, "w")
+        err_file = str(output_file) + ".stderr"
+        err_f = open(err_file, "w")
         proc = subprocess.Popen(
             args,
             cwd=working_dir,
             stdout=out_f,
-            stderr=subprocess.PIPE,
+            stderr=err_f,  # File, not PIPE — avoids deadlock on large stderr
             start_new_session=True,
             env=env,
         )
-        out_f.close()  # Child has its own fd copy; safe to close parent's
+        out_f.close()
+        err_f.close()
 
         logger.info(f"[{step_id}] process spawned pid={proc.pid} ({time.monotonic() - t0:.1f}s total)")
 
@@ -245,6 +486,52 @@ class AcpxBackend:
     @property
     def supports_resume(self) -> bool:
         return True
+
+    def cleanup_session_queue_owner(
+        self, session_id: str | None, session_name: str | None = None,
+    ) -> None:
+        """Cleanly shut down the queue owner for a completed session.
+
+        First tries `acpx claude sessions close --name <session>` for a cooperative
+        shutdown. Falls back to SIGTERM on the queue owner process via lock file.
+        """
+        # Try cooperative close via acpx first
+        if session_name:
+            try:
+                env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+                result = subprocess.run(
+                    [self.acpx_path, self.default_agent, "sessions", "close",
+                     "--name", session_name],
+                    capture_output=True, timeout=10, env=env,
+                )
+                if result.returncode == 0:
+                    logger.info(
+                        "Closed session %s via acpx sessions close", session_name,
+                    )
+                    return
+                else:
+                    logger.debug(
+                        "acpx sessions close failed (rc=%d) for %s, falling back to kill",
+                        result.returncode, session_name,
+                    )
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                logger.debug("acpx sessions close timed out for %s", session_name)
+
+        # Fall back to killing queue owner process via lock file
+        if not session_id:
+            return
+        for info in _find_queue_owners():
+            if info.session_id == session_id:
+                if _is_pid_alive(info.pid):
+                    try:
+                        os.kill(info.pid, signal.SIGTERM)
+                        logger.info(
+                            "Cleaned up queue owner pid=%d for completed session %s",
+                            info.pid, session_id,
+                        )
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                break
 
     @staticmethod
     def _is_process_alive(pid: int) -> bool:
@@ -672,6 +959,12 @@ class AgentExecutor(Executor):
         # Block until agent exits (safe — AsyncEngine runs this in thread pool)
         agent_status = self.backend.wait(process)
         logger.info(f"[{step_id}] executor done ({time.monotonic() - t0:.1f}s total, status={agent_status.state})")
+
+        # Clean up lingering queue owner process for this completed session
+        if hasattr(self.backend, 'cleanup_session_queue_owner'):
+            self.backend.cleanup_session_queue_owner(
+                agent_status.session_id, session_name=process.session_name,
+            )
 
         state = {
             "pid": process.pid,
