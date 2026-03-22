@@ -34,6 +34,7 @@ from stepwise.models import (
     _now,
 )
 from stepwise.store import SQLiteStore
+from stepwise.hooks import build_event_envelope
 
 
 
@@ -2364,7 +2365,11 @@ async def event_stream(ws: WebSocket):
             since_rowid=since_rowid,
             job_ids=replay_job_ids if replay_job_ids else None,
         )
-        for rowid, envelope in replay_results:
+        for rowid, event, metadata in replay_results:
+            envelope = build_event_envelope(
+                event.type, event.data, event.job_id, rowid,
+                metadata, event.timestamp.isoformat(),
+            )
             try:
                 await ws.send_json(envelope)
             except Exception:
@@ -2397,7 +2402,11 @@ async def event_stream(ws: WebSocket):
                 since_rowid=last_replayed_rowid,
                 job_ids=replay_job_ids if replay_job_ids else None,
             )
-            for rowid, envelope in catchup:
+            for rowid, event, metadata in catchup:
+                envelope = build_event_envelope(
+                    event.type, event.data, event.job_id, rowid,
+                    metadata, event.timestamp.isoformat(),
+                )
                 await ws.send_json(envelope)
 
         # Live send loop

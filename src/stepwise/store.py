@@ -570,14 +570,13 @@ class SQLiteStore:
         self,
         since_rowid: int = 0,
         job_ids: set[str] | None = None,
-    ) -> list[tuple[int, dict]]:
-        """Load event envelopes with rowid > since_rowid.
+    ) -> list[tuple[int, Event, dict]]:
+        """Load events with rowid > since_rowid.
 
-        Returns list of (rowid, envelope_dict) tuples ordered by rowid.
+        Returns list of (rowid, Event, job_metadata_dict) tuples ordered by rowid.
         If job_ids is provided, only events for those jobs are returned.
+        The caller is responsible for building envelopes from the raw data.
         """
-        from stepwise.hooks import build_event_envelope
-
         if job_ids:
             placeholders = ",".join("?" for _ in job_ids)
             sql = f"""
@@ -601,12 +600,8 @@ class SQLiteStore:
         for row in rows:
             meta_raw = row["job_metadata"]
             metadata = json.loads(meta_raw) if meta_raw else {"sys": {}, "app": {}}
-            event_data = json.loads(row["data"]) if row["data"] else {}
-            envelope = build_event_envelope(
-                row["type"], event_data, row["job_id"], row["rowid"],
-                metadata, row["timestamp"],
-            )
-            results.append((row["rowid"], envelope))
+            event = self._row_to_event(row)
+            results.append((row["rowid"], event, metadata))
         return results
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
