@@ -508,14 +508,9 @@ def _cleanup_stale_queue_owners(store: ThreadSafeStore) -> None:
 
     from stepwise.agent import cleanup_orphaned_queue_owners
 
-    # Collect session IDs from all running steps across active jobs
-    active_session_ids: set[str] = set()
-    for job in store.active_jobs():
-        for run in store.running_runs(job.id):
-            if run.executor_state and run.executor_state.get("session_id"):
-                active_session_ids.add(run.executor_state["session_id"])
+    active_ids, active_pids = _collect_active_agent_info(store)
 
-    orphaned = cleanup_orphaned_queue_owners(active_session_ids, kill=True)
+    orphaned = cleanup_orphaned_queue_owners(active_ids, active_pids, kill=True)
     if orphaned:
         logger.info(
             "Cleaned up %d orphaned acpx queue owner(s) on startup", len(orphaned),
@@ -523,7 +518,7 @@ def _cleanup_stale_queue_owners(store: ThreadSafeStore) -> None:
 
     # Also scan process table for zombie queue owners without lock files
     from stepwise.agent import find_zombie_queue_owners
-    zombies = find_zombie_queue_owners(active_session_ids)
+    zombies = find_zombie_queue_owners(active_ids, active_pids)
     for pid, cmdline in zombies:
         logger.info("Zombie acpx queue owner (no lock file): pid=%d cmd=%s", pid, cmdline[:120])
         try:
@@ -561,25 +556,29 @@ def _cleanup_orphaned_acpx_processes(store: ThreadSafeStore) -> None:
         )
 
 
-def _collect_active_session_ids(store: ThreadSafeStore) -> set[str]:
-    """Collect ACP session IDs and names from ALL currently running step runs.
+def _collect_active_agent_info(store: ThreadSafeStore) -> tuple[set[str], set[int]]:
+    """Collect ACP session IDs/names AND PIDs from ALL currently running step runs.
+
+    Returns (active_session_ids, active_pids) — both are used to protect
+    running agents from the periodic cleanup. Session IDs protect queue owners
+    via lock file matching; PIDs protect via process-table matching.
 
     Scans all jobs (not just active ones) because a job can be "failed" while
-    still having running agent steps — e.g., when one step in a parallel group
-    fails, the job fails but other steps may still be executing. Those steps
-    must be protected from cleanup.
-
-    Checks both session_id (ACP UUID) and session_name (human-readable name).
+    still having running agent steps.
     """
-    active: set[str] = set()
-    # Query running step_runs directly, regardless of parent job status
+    active_ids: set[str] = set()
+    active_pids: set[int] = set()
     for run in store.all_running_runs():
         if run.executor_state:
             if run.executor_state.get("session_id"):
-                active.add(run.executor_state["session_id"])
+                active_ids.add(run.executor_state["session_id"])
             if run.executor_state.get("session_name"):
-                active.add(run.executor_state["session_name"])
-    return active
+                active_ids.add(run.executor_state["session_name"])
+            if run.executor_state.get("pid"):
+                active_pids.add(run.executor_state["pid"])
+            if run.executor_state.get("pgid"):
+                active_pids.add(run.executor_state["pgid"])
+    return active_ids, active_pids
 
 
 async def _periodic_queue_owner_cleanup() -> None:
@@ -596,17 +595,18 @@ async def _periodic_queue_owner_cleanup() -> None:
         try:
             await asyncio.sleep(60)
 
-            active_session_ids = _collect_active_session_ids(engine.store)
+            active_ids, active_pids = _collect_active_agent_info(engine.store)
 
-            # Lock-file based cleanup
+            # Lock-file based cleanup — skip queue owners whose session ID
+            # OR PID matches a running step
             from stepwise.agent import cleanup_orphaned_queue_owners
-            lock_orphans = cleanup_orphaned_queue_owners(active_session_ids, kill=True)
+            lock_orphans = cleanup_orphaned_queue_owners(active_ids, active_pids, kill=True)
             if lock_orphans:
                 logger.info("Periodic cleanup: terminated %d orphaned queue owner(s) via lock files", len(lock_orphans))
 
             # Process-table based cleanup
             from stepwise.agent import find_zombie_queue_owners
-            zombies = find_zombie_queue_owners(active_session_ids)
+            zombies = find_zombie_queue_owners(active_ids, active_pids)
             for pid, cmdline in zombies:
                 logger.info("Periodic cleanup: zombie queue owner pid=%d cmd=%s", pid, cmdline[:120])
                 try:
