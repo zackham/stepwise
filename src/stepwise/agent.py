@@ -945,8 +945,18 @@ class AgentExecutor(Executor):
         logger.info(f"[{step_id}] spawn complete ({time.monotonic() - t0:.1f}s elapsed)")
         process.capture_transcript = bool(context.chain)
 
+        # Extract ACP session ID early (from first lines of output) so the
+        # periodic cleanup can identify this as an active session and not kill it.
+        early_session_id = None
+        if hasattr(self.backend, '_extract_session_id') and process.output_path:
+            for _ in range(10):  # retry a few times while output file populates
+                early_session_id = self.backend._extract_session_id(process.output_path)
+                if early_session_id:
+                    break
+                time.sleep(0.5)
+
         if context.state_update_fn:
-            context.state_update_fn({
+            state = {
                 "pid": process.pid,
                 "pgid": process.pgid,
                 "output_path": process.output_path,
@@ -954,7 +964,10 @@ class AgentExecutor(Executor):
                 "session_name": process.session_name,
                 "output_mode": self.output_mode,
                 "output_file": output_file,
-            })
+            }
+            if early_session_id:
+                state["session_id"] = early_session_id
+            context.state_update_fn(state)
 
         # Block until agent exits (safe — AsyncEngine runs this in thread pool)
         agent_status = self.backend.wait(process)

@@ -562,12 +562,21 @@ def _cleanup_orphaned_acpx_processes(store: ThreadSafeStore) -> None:
 
 
 def _collect_active_session_ids(store: ThreadSafeStore) -> set[str]:
-    """Collect ACP session IDs from all currently running step runs."""
+    """Collect ACP session IDs and names from all currently running step runs.
+
+    Checks both session_id (ACP UUID, set after completion) and session_name
+    (human-readable name like 'step-xxx-plan-1', set at spawn time). Both are
+    needed because session_id is only available after the agent completes, but
+    the periodic cleanup runs during execution when only session_name exists.
+    """
     active: set[str] = set()
     for job in store.active_jobs():
         for run in store.running_runs(job.id):
-            if run.executor_state and run.executor_state.get("session_id"):
-                active.add(run.executor_state["session_id"])
+            if run.executor_state:
+                if run.executor_state.get("session_id"):
+                    active.add(run.executor_state["session_id"])
+                if run.executor_state.get("session_name"):
+                    active.add(run.executor_state["session_name"])
     return active
 
 

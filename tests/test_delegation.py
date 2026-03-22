@@ -219,11 +219,14 @@ class TestJobSuspendedEndpoint:
             job = engine.create_job("test", wf)
             engine.start_job(job.id)
             import time
-            for _ in range(50):
+            suspended = False
+            for _ in range(100):
                 runs = engine.get_runs(job.id)
                 if any(r.status == StepRunStatus.SUSPENDED for r in runs):
+                    suspended = True
                     break
-                time.sleep(0.05)
+                time.sleep(0.1)
+            assert suspended, "Step never reached SUSPENDED status"
 
             resp = c.get(f"/api/jobs/{job.id}/suspended")
             assert resp.status_code == 200

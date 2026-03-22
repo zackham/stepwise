@@ -97,10 +97,10 @@ export function FulfillWatchDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="sm:max-w-[500px] max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Fulfill Watch</DialogTitle>
-          <DialogDescription className="whitespace-pre-wrap">{prompt.trim()}</DialogDescription>
+          <DialogDescription className="whitespace-pre-wrap max-h-[40vh] overflow-y-auto">{prompt.trim()}</DialogDescription>
         </DialogHeader>
 
         <div className="flex justify-end mb-2">

@@ -1,0 +1,6 @@
+name: rapid-test
+steps:
+  step1:
+    run: |
+      echo '{"val": 1}'
+    outputs: [val]

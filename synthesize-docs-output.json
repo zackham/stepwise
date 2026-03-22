@@ -1,0 +1,41 @@
+{
+  "rubric_results": [
+    {
+      "id": "D1",
+      "requirement": "Getting Started Guide exists and is complete",
+      "result": "pass",
+      "evidence": "docs/quickstart.md is a comprehensive getting-started guide that takes users from install (curl one-liner, line 7-8) through trying a registry flow instantly (lines 13-27), creating their own flow from scratch with full YAML walkthrough (lines 29-80), running it in three modes — headless, --watch UI, and --report (lines 82-106), adding loops with exit rules (lines 108-139), adding human gates (lines 141-157), and calling flows from agents via --wait (lines 159-173). The guide closes with navigation links to deeper docs (lines 175-181). All six new-user rubric items (NU1-NU6) passed, confirming the guide is sufficient for a new user to create, validate, and run a flow.",
+      "file": "docs/quickstart.md"
+    },
+    {
+      "id": "D5",
+      "requirement": "REST API endpoints are documented (at least /api/jobs, /api/flows, /api/health)",
+      "result": "pass",
+      "evidence": "docs/api.md (508 lines) is a thorough API reference. Jobs section (lines 11-183): list, create, get, start, pause/resume, cancel, delete, tree, runs, rerun, events, context injection — all with HTTP method, path, query params, request/response examples. Runs section (lines 187-280): fulfill, step-events, cost, cancel, agent-output with event type table. Engine section (lines 282-322): tick, status (GET /api/status serves as health check, returns active_jobs/total_jobs/registered_executors), executors. Templates CRUD (lines 324-357). Configuration (lines 361-416): get, models, update models, set API key. WebSocket protocol (lines 418-473) with tick and agent_output message formats plus JS connection example. Error responses (lines 477-492) with status code table. Environment variables (lines 494-507). Also notes Swagger UI at /docs (line 7) for interactive exploration.",
+      "file": "docs/api.md"
+    },
+    {
+      "id": "D6",
+      "requirement": "Complete reference for flow YAML syntax (steps, inputs, outputs, exits, config, for-each)",
+      "result": "pass",
+      "evidence": "docs/flow-reference.md (879 lines) is an exhaustive YAML reference covering: flow directory format (lines 1-18), complete structure with all top-level fields (lines 20-97), all 5 executor types with config tables and examples — script (101-136), human (137-155), poll (156-183), llm (185-226), agent (227-286) — session continuity (287-349), inputs including optional and any_of syntax (350-399), exit rules with expression namespace and examples (400-436), loop patterns — self-loop and multi-step (437-493), for-each fan-out/fan-in (495-536), flow steps / sub-flow composition (538-573), conditional branching with when + any_of merge (574-614), prompt templating (616-633), step limits (635-653), idempotency modes (654-668), decorators — timeout, retry, notification, fallback (670-711), common patterns including post-loop gating (713-763), 18 documented gotchas (765-784), config variables with resolution priority (786-829), requirements (831-861), and validation checklist (862-878). Additionally, docs/yaml-format.md (649 lines) provides a complementary reference with data model mapping table (lines 623-648).",
+      "file": "docs/flow-reference.md"
+    },
+    {
+      "id": "D7",
+      "requirement": "Common error messages are documented with resolution steps",
+      "result": "fail",
+      "evidence": "No dedicated error messages reference exists. Partial coverage is scattered across multiple files: docs/agent-integration.md has a 4-item troubleshooting section (lines 350-358) covering 'Missing required input', 'Timeout on human step', 'Empty outputs array', and 'Job not found' with brief resolutions. docs/cli.md documents exit codes (lines 16-36) for both standard and --wait modes. docs/api.md covers HTTP error response format with status codes 400/404/500 (lines 477-492). docs/flow-reference.md has 18 gotchas (lines 765-784) describing common authoring mistakes. The validate command output is shown in docs/cli.md (lines 252-270) but doesn't enumerate the specific errors and warnings the validator can produce. Missing entirely: a systematic reference for common engine runtime errors (cycle detection failures, artifact validation mismatches, exit rule evaluation errors, cost/duration limit exceeded, session health failures), YAML parse errors, and validator warnings with causes and resolution steps.",
+      "file": null
+    },
+    {
+      "id": "D8",
+      "requirement": "High-level architecture (engine, executors, store, server) is documented",
+      "result": "pass",
+      "evidence": "docs/concepts.md (369 lines) provides a complete conceptual architecture: quick reference table (lines 6-17), Jobs with lifecycle and sub-job spawning (lines 18-29), Steps as pure-function typed nodes (lines 31-58), all 5 Executor types with comparison table and decision flowchart (lines 60-100), Dependencies — input bindings for data flow and sequencing for ordering (lines 102-158), Exit Rules & Loops with action table and supersession mechanism (lines 160-191), For-Each with sub-job model (lines 193-227), Conditional Branching with when/any_of/settlement (lines 229-267), Context Chains for session continuity (lines 269-306), Handoff Envelopes as step contract (lines 307-315), Observability — web UI, reports, SQLite access (lines 317-325), and Flows as Tools with 5 interaction modes (lines 327-368). docs/why-stepwise.md complements with design philosophy, comparison to CrewAI/AutoGen/Temporal/LangGraph, and 6 design principles (lines 75-86).",
+      "file": "docs/concepts.md"
+    }
+  ],
+  "qualitative_summary": "Stepwise's documentation is strong for 1.0 readiness across four of five evaluated dimensions. The quickstart (docs/quickstart.md) takes users from install to a running flow in under 5 minutes, progressively introducing executors, loops, human gates, and agent integration. The API reference (docs/api.md) is thorough with request/response examples for every endpoint group plus WebSocket protocol documentation. The YAML reference (docs/flow-reference.md at 879 lines) is exceptionally complete — covering all executor types, input binding variants, exit rules, for-each, conditional branching, decorators, config variables, requirements, and 18 documented gotchas. The conceptual architecture (docs/concepts.md) gives users a solid mental model of jobs, steps, executors, and the DAG execution model, with docs/why-stepwise.md providing design rationale. The primary gap is the absence of an error messages reference — users encountering engine errors, validator warnings, or executor failures have no centralized guide for diagnosis and resolution. The scattered troubleshooting in agent-integration.md covers only 4 agent-caller scenarios. A dedicated errors/troubleshooting page documenting common validate warnings, engine error categories (cycle detection, artifact validation, exit rule evaluation), and executor failure modes with resolution steps would close this gap and improve the new-user experience when things go wrong.",
+  "score_pct": 80
+}

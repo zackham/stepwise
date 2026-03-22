@@ -40,7 +40,9 @@ Create temporary `.flow.yaml` files and run `uv run stepwise validate` on each:
 
 ## Output Format
 
-After running all tests, output a JSON object to stdout with this structure:
+IMPORTANT: You MUST write your output as a JSON file to `output.json` in the current working directory. Use the Write tool or equivalent to create this file. The stepwise engine reads this file to extract your outputs.
+
+After running all tests, write the following JSON structure to `output.json`:
 
 ```json
 {
