@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -60,8 +61,9 @@ from stepwise.models import (
     WorkflowDefinition,
     _gen_id,
     _now,
+    validate_job_metadata,
 )
-from stepwise.hooks import fire_hook_for_event, fire_notify_webhook
+from stepwise.hooks import build_event_envelope, fire_hook_for_event, fire_notify_webhook
 from stepwise.store import SQLiteStore
 
 _engine_logger = logging.getLogger("stepwise.engine")
@@ -130,6 +132,7 @@ class Engine:
         parent_step_run_id: str | None = None,
         workspace_path: str | None = None,
         name: str | None = None,
+        metadata: dict | None = None,
     ) -> Job:
         errors = workflow.validate()
         if errors:
@@ -137,6 +140,34 @@ class Engine:
 
         job_id = _gen_id("job")
         ws = workspace_path or os.path.join(self.jobs_dir, job_id, "workspace")
+
+        # Metadata: validate, then auto-populate sys fields
+        metadata = copy.deepcopy(metadata) if metadata else {"sys": {}, "app": {}}
+        metadata.setdefault("sys", {})
+        metadata.setdefault("app", {})
+        validate_job_metadata(metadata)
+
+        # Auto-populate sys.depth and sys.root_job_id
+        parent_meta_job_id = metadata["sys"].get("parent_job_id") or parent_job_id
+        if parent_meta_job_id:
+            try:
+                parent_job = self.store.load_job(parent_meta_job_id)
+                parent_depth = parent_job.metadata["sys"].get("depth", 0)
+                metadata["sys"]["depth"] = parent_depth + 1
+                metadata["sys"]["root_job_id"] = parent_job.metadata["sys"].get(
+                    "root_job_id", parent_job.id
+                )
+            except KeyError:
+                metadata["sys"]["depth"] = 0
+                metadata["sys"]["root_job_id"] = job_id
+        else:
+            metadata["sys"]["depth"] = 0
+            metadata["sys"]["root_job_id"] = job_id
+
+        if metadata["sys"]["depth"] > 10:
+            raise ValueError(
+                f"Job depth {metadata['sys']['depth']} exceeds maximum of 10"
+            )
 
         job = Job(
             id=job_id,
@@ -149,6 +180,7 @@ class Engine:
             parent_step_run_id=parent_step_run_id,
             workspace_path=ws,
             config=config or JobConfig(),
+            metadata=metadata,
         )
         self.store.save_job(job)
         return job
@@ -1586,6 +1618,8 @@ class Engine:
             sub_workspace = os.path.join(
                 job.workspace_path, "for_each", step_name, str(i),
             )
+            fe_meta = copy.deepcopy(job.metadata)
+            fe_meta["sys"]["parent_job_id"] = job.id
             sub_job = self.create_job(
                 objective=f"{job.objective} > {step_name}[{i}]",
                 workflow=step_def.sub_flow,
@@ -1594,6 +1628,7 @@ class Engine:
                 parent_job_id=job.id,
                 parent_step_run_id=run.id,
                 workspace_path=sub_workspace,
+                metadata=fe_meta,
             )
             sub_job_ids[i] = sub_job.id
 
@@ -2251,6 +2286,8 @@ class Engine:
             )
 
         sub_workspace = os.path.join(parent_job.workspace_path, "jobs", _gen_id("job"))
+        sub_meta = copy.deepcopy(parent_job.metadata)
+        sub_meta["sys"]["parent_job_id"] = parent_job.id
         sub_job = self.create_job(
             objective=sub_def.objective,
             workflow=sub_def.workflow,
@@ -2259,6 +2296,7 @@ class Engine:
             parent_job_id=parent_job.id,
             parent_step_run_id=parent_run.id,
             workspace_path=sub_workspace,
+            metadata=sub_meta,
         )
         self.start_job(sub_job.id)
         return self.store.load_job(sub_job.id)
@@ -2437,20 +2475,29 @@ class Engine:
             data=data or {},
             is_effector=is_effector,
         )
-        self.store.save_event(event)
-        # Fire project hooks for relevant events
-        fire_hook_for_event(event_type, event.data, job_id, self.project_dir)
-        # Fire webhook notification if configured on the job
-        self._fire_notify(job_id, event_type, event.data)
+        rowid = self.store.save_event(event)
 
-    def _fire_notify(self, job_id: str, event_type: str, event_data: dict) -> None:
-        """Fire webhook notification if the job has a notify_url configured."""
+        # Load job once for metadata and notify_url
         try:
             job = self.store.load_job(job_id)
+            job_metadata = job.metadata
         except KeyError:
-            return
-        if job.notify_url:
-            fire_notify_webhook(event_type, event_data, job_id, job.notify_url, job.notify_context)
+            job_metadata = {"sys": {}, "app": {}}
+            job = None
+
+        envelope = build_event_envelope(
+            event_type, event.data, job_id, rowid,
+            job_metadata, event.timestamp.isoformat(),
+        )
+
+        # Fire project hooks for relevant events
+        fire_hook_for_event(event_type, event.data, job_id, self.project_dir, envelope=envelope)
+        # Fire webhook notification if configured on the job
+        if job and job.notify_url:
+            fire_notify_webhook(
+                event_type, event.data, job_id, job.notify_url,
+                job.notify_context, envelope=envelope,
+            )
 
     def _emit_effector_events(self, job_id: str, envelope: HandoffEnvelope | None) -> None:
         """Check executor_meta for effector_events and emit them."""
