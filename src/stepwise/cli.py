@@ -3804,6 +3804,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_chain.add_argument("--report-output", help="Report output path")
     p_chain.add_argument("--no-open", action="store_true", help="Don't auto-open browser (for --watch)")
     p_chain.add_argument("--local", action="store_true", help="Force local execution (skip server delegation)")
+    p_chain.add_argument("--rerun", action="append", dest="rerun_steps", metavar="STEP",
+                         help="Bypass cache for this step (repeatable)")
     p_chain.add_argument("--notify", metavar="URL", help="Webhook URL for job event notifications")
     p_chain.add_argument("--notify-context", metavar="JSON", dest="notify_context",
                          help="JSON context to include in webhook payloads")

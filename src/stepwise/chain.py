@@ -44,11 +44,15 @@ def compile_chain(flow_paths: list[Path], var_names: list[str]) -> str:
         # Collect outputs from terminal steps
         terminal_outputs = _get_terminal_outputs(wf, terminals, display_name)
 
+        # Scan $job.* refs from step input bindings
+        job_refs = _scan_job_refs(wf)
+
         stages.append(_StageInfo(
             index=i + 1,
             flow_path=fpath.resolve(),
             display_name=display_name,
             config_vars=wf.config_vars,
+            job_refs=job_refs,
             terminal_outputs=terminal_outputs,
         ))
 
@@ -89,18 +93,19 @@ def compile_chain(flow_paths: list[Path], var_names: list[str]) -> str:
                 )
 
             # Determine which config var to bind the result to
-            binding_name = _determine_result_binding(stage.config_vars)
+            binding_name = _determine_result_binding(stage.config_vars, stage.job_refs)
             inputs[binding_name] = f"{prev_step}.{source_field}"
 
-        # Passthrough job-level vars that match this flow's config vars
+        # Passthrough job-level vars that match this flow's expected inputs
         config_var_names = {v.name for v in stage.config_vars}
+        expected_inputs = config_var_names | stage.job_refs
         for var_name in var_names:
-            if var_name in config_var_names:
+            if var_name in expected_inputs:
                 # Don't override the result binding
                 if var_name not in inputs:
                     inputs[var_name] = f"$job.{var_name}"
-            elif not config_var_names:
-                # Flow has no config vars — pass all vars through
+            elif not expected_inputs:
+                # Flow has no config vars or job refs — pass all vars through
                 if var_name not in inputs:
                     inputs[var_name] = f"$job.{var_name}"
 
@@ -124,22 +129,45 @@ def compile_chain(flow_paths: list[Path], var_names: list[str]) -> str:
     return yaml.dump(workflow, default_flow_style=False, sort_keys=False)
 
 
-def _determine_result_binding(config_vars: list[ConfigVar]) -> str:
+def _scan_job_refs(wf: WorkflowDefinition) -> set[str]:
+    """Scan a workflow's step input bindings for $job.* references.
+
+    Returns the set of field names that the flow expects from $job.
+    Same pattern as models.py validate_warnings job_fields extraction.
+    """
+    return {
+        b.source_field
+        for step in wf.steps.values()
+        for b in step.inputs
+        if b.source_step == "$job"
+    }
+
+
+def _determine_result_binding(
+    config_vars: list[ConfigVar], job_refs: set[str] | None = None,
+) -> str:
     """Determine which config var name to wire upstream `result` into.
 
     Priority order:
-    1. spec, topic, prompt, question (common conventions)
-    2. First required config var (by declaration order)
-    3. Fallback: 'result'
+    1. Check config_vars names against priority list (spec, topic, prompt, question)
+    2. Check job_refs against same priority list
+    3. First required config var (by declaration order)
+    4. First job ref from priority list
+    5. Fallback: 'result'
     """
-    if not config_vars:
-        return "result"
+    if job_refs is None:
+        job_refs = set()
 
     cv_names = {v.name for v in config_vars}
 
-    # Check priority list
+    # Check config vars against priority list first
     for name in RESULT_BINDING_PRIORITY:
         if name in cv_names:
+            return name
+
+    # Check job refs against priority list
+    for name in RESULT_BINDING_PRIORITY:
+        if name in job_refs:
             return name
 
     # First required config var
@@ -148,7 +176,10 @@ def _determine_result_binding(config_vars: list[ConfigVar]) -> str:
             return v.name
 
     # First config var (even if optional)
-    return config_vars[0].name
+    if config_vars:
+        return config_vars[0].name
+
+    return "result"
 
 
 def _get_terminal_outputs(
@@ -185,7 +216,7 @@ def _get_terminal_outputs(
 class _StageInfo:
     """Internal: metadata about one stage in the chain."""
 
-    __slots__ = ("index", "flow_path", "display_name", "config_vars", "terminal_outputs")
+    __slots__ = ("index", "flow_path", "display_name", "config_vars", "job_refs", "terminal_outputs")
 
     def __init__(
         self,
@@ -193,10 +224,12 @@ class _StageInfo:
         flow_path: Path,
         display_name: str,
         config_vars: list[ConfigVar],
+        job_refs: set[str],
         terminal_outputs: list[str],
     ):
         self.index = index
         self.flow_path = flow_path
         self.display_name = display_name
         self.config_vars = config_vars
+        self.job_refs = job_refs
         self.terminal_outputs = terminal_outputs

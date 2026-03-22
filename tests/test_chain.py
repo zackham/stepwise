@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from stepwise.chain import compile_chain, _determine_result_binding
+from stepwise.chain import compile_chain, _determine_result_binding, _scan_job_refs
 from stepwise.models import ConfigVar
 
 
@@ -82,6 +82,23 @@ class TestDetermineResultBinding:
     def test_no_config_vars(self):
         """No config vars → 'result'."""
         assert _determine_result_binding([]) == "result"
+
+    def test_job_refs_spec(self):
+        """Job refs with 'spec' bind to 'spec' when no config vars."""
+        assert _determine_result_binding([], job_refs={"spec", "other"}) == "spec"
+
+    def test_job_refs_topic(self):
+        """Job refs with 'topic' but no 'spec'."""
+        assert _determine_result_binding([], job_refs={"topic", "other"}) == "topic"
+
+    def test_config_vars_beat_job_refs(self):
+        """Config vars take priority over job refs."""
+        cvs = [ConfigVar(name="topic")]
+        assert _determine_result_binding(cvs, job_refs={"spec"}) == "topic"
+
+    def test_no_config_no_job_refs(self):
+        """No config vars and no job refs → 'result'."""
+        assert _determine_result_binding([], job_refs=set()) == "result"
 
 
 # ── Unit: compile_chain ──────────────────────────────────────────────
@@ -265,6 +282,61 @@ class TestCompileChain:
         assert "project" not in s2_inputs
         assert "unrelated" not in s2_inputs
 
+    def test_no_config_vars_with_job_refs(self, tmp_path):
+        """Flow with no config: but steps using $job.spec gets result wired to spec."""
+        flow_a = write_flow(tmp_path, "flow-a",
+                            simple_echo_flow("flow-a", ["result"]))
+        # Flow-b has no config block but uses $job.spec directly
+        flow_b = write_flow(tmp_path, "flow-b", yaml.dump({
+            "name": "flow-b",
+            "steps": {
+                "step1": {
+                    "run": "echo '{\"result\": \"done\"}'",
+                    "inputs": {"spec": "$job.spec"},
+                    "outputs": ["result"],
+                }
+            }
+        }, default_flow_style=False, sort_keys=False))
+
+        result = compile_chain([flow_a, flow_b], [])
+        parsed = yaml.safe_load(result)
+
+        # Should wire result → spec via job ref scanning
+        s2_inputs = parsed["steps"]["stage-2"]["inputs"]
+        assert s2_inputs["spec"] == "stage-1.result"
+
+    def test_non_result_output_forward(self, tmp_path):
+        """Terminal outputs [summary, score] (no result) — uses summary as forward field."""
+        flow_a = write_flow(tmp_path, "flow-a",
+                            simple_echo_flow("flow-a", ["summary", "score"]))
+        flow_b = write_flow(tmp_path, "flow-b",
+                            simple_echo_flow("flow-b", ["result"]))
+
+        result = compile_chain([flow_a, flow_b], [])
+        parsed = yaml.safe_load(result)
+
+        # stage-2 should wire from summary (first output of stage-1)
+        s2_inputs = parsed["steps"]["stage-2"]["inputs"]
+        assert s2_inputs["result"] == "stage-1.summary"
+
+    def test_compile_roundtrip(self, tmp_path):
+        """Compiled chain YAML round-trips through load_workflow_yaml + validate."""
+        from stepwise.yaml_loader import load_workflow_yaml
+
+        flow_a = write_flow(tmp_path, "flow-a",
+                            simple_echo_flow("flow-a", ["result"]))
+        flow_b = write_flow(tmp_path, "flow-b",
+                            simple_echo_flow("flow-b", ["result"],
+                                             config={"spec": "The spec"}))
+
+        chain_yaml = compile_chain([flow_a, flow_b], [])
+        chain_path = tmp_path / "chain.flow.yaml"
+        chain_path.write_text(chain_yaml)
+
+        wf = load_workflow_yaml(str(chain_path))
+        errors = wf.validate()
+        assert errors == [], f"Validation errors: {errors}"
+
 
 # ── Integration: compile + load ──────────────────────────────────────
 
@@ -305,3 +377,33 @@ class TestChainIntegration:
 
         # flows/ directory should still be empty
         assert list(flows_dir.iterdir()) == []
+
+    def test_chain_with_no_config_flow(self, tmp_path):
+        """Flow without config: block but using $job.spec gets wired correctly."""
+        from stepwise.yaml_loader import load_workflow_yaml
+
+        flow_a = write_flow(tmp_path, "flow-a",
+                            simple_echo_flow("flow-a", ["result"]))
+        # Flow with $job.spec but no config block
+        flow_b = write_flow(tmp_path, "flow-b", yaml.dump({
+            "name": "flow-b",
+            "steps": {
+                "process": {
+                    "run": "echo '{\"result\": \"done\"}'",
+                    "inputs": {"spec": "$job.spec"},
+                    "outputs": ["result"],
+                }
+            }
+        }, default_flow_style=False, sort_keys=False))
+
+        chain_yaml = compile_chain([flow_a, flow_b], [])
+        chain_path = tmp_path / "chain.flow.yaml"
+        chain_path.write_text(chain_yaml)
+
+        wf = load_workflow_yaml(str(chain_path))
+        assert wf.steps["stage-2"].executor.type == "sub_flow"
+        # Verify the input binding wires spec from stage-1
+        bindings = {b.local_name: b for b in wf.steps["stage-2"].inputs}
+        assert "spec" in bindings
+        assert bindings["spec"].source_step == "stage-1"
+        assert bindings["spec"].source_field == "result"
