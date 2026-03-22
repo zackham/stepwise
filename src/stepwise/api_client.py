@@ -113,6 +113,10 @@ class StepwiseClient:
             params["inputs"] = "true"
         return self._request("GET", f"/api/jobs/{job_id}/output", params=params)
 
+    def events(self, job_id: str) -> list[dict]:
+        """Get all events for a job."""
+        return self._request("GET", f"/api/jobs/{job_id}/events")
+
     def cancel(self, job_id: str) -> dict:
         """Cancel a job."""
         return self._request("POST", f"/api/jobs/{job_id}/cancel")
