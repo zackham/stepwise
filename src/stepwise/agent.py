@@ -365,6 +365,13 @@ class AcpxBackend:
         output_file = step_io / f"{context.step_name}-{context.attempt}.output.jsonl"
 
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        # Increase Node.js heap limit for acpx queue owner processes.
+        # Default V8 heap is ~2GB which is insufficient for agent sessions that
+        # accumulate large conversation state (file reads, tool call results).
+        if "NODE_OPTIONS" not in env:
+            env["NODE_OPTIONS"] = "--max-old-space-size=8192"
+        elif "--max-old-space-size" not in env.get("NODE_OPTIONS", ""):
+            env["NODE_OPTIONS"] = env["NODE_OPTIONS"] + " --max-old-space-size=8192"
 
         # Ensure named session exists (acpx requires it before prompting).
         # Short timeout + non-fatal: if ensure fails, acpx prompt will fail
