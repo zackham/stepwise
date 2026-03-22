@@ -150,7 +150,7 @@ class _StreamClient:
     session_job_ids: set[str] = field(default_factory=set)  # resolved job_ids for session_id
 
 
-_event_stream_clients: set[_StreamClient] = set()
+_event_stream_clients: list[_StreamClient] = []
 
 
 def _matches_stream_filter(client: _StreamClient, envelope: dict) -> bool:
@@ -192,7 +192,10 @@ async def _dispatch_to_event_stream(envelope: dict) -> None:
             except asyncio.QueueFull:
                 dead.append(client)
     for client in dead:
-        _event_stream_clients.discard(client)
+        try:
+            _event_stream_clients.remove(client)
+        except ValueError:
+            pass
         try:
             await client.ws.close(code=1008, reason="backpressure")
         except Exception:
@@ -2385,7 +2388,7 @@ async def event_stream(ws: WebSocket):
         session_id=session_id,
         session_job_ids=session_job_ids,
     )
-    _event_stream_clients.add(client)
+    _event_stream_clients.append(client)
 
     try:
         # Catch-up: query events between replay and registration to close the gap
@@ -2404,7 +2407,10 @@ async def event_stream(ws: WebSocket):
     except (WebSocketDisconnect, Exception):
         pass
     finally:
-        _event_stream_clients.discard(client)
+        try:
+            _event_stream_clients.remove(client)
+        except ValueError:
+            pass
 
 
 # ── WebSocket ─────────────────────────────────────────────────────────
