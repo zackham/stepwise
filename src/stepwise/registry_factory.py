@@ -71,6 +71,7 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
     acpx_backend = AcpxBackend(
         acpx_path=acpx_path,
         default_agent=default_agent,
+        default_permissions=config.agent_permissions,
     )
     registry.register("agent", lambda cfg: AgentExecutor(
         backend=acpx_backend,
