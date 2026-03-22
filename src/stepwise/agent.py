@@ -93,9 +93,11 @@ class AcpxBackend:
     Supports any ACP-compatible agent (claude, codex, gemini, etc.).
     """
 
-    def __init__(self, acpx_path: str = "acpx", default_agent: str = "claude") -> None:
+    def __init__(self, acpx_path: str = "acpx", default_agent: str = "claude",
+                 default_permissions: str = "approve_all") -> None:
         self.acpx_path = acpx_path
         self.default_agent = default_agent
+        self.default_permissions = default_permissions
 
     def spawn(self, prompt: str, config: dict, context: ExecutionContext) -> AgentProcess:
         t0 = time.monotonic()
@@ -141,8 +143,12 @@ class AcpxBackend:
         logger.info(f"[{step_id}] sessions ensure done ({time.monotonic() - t_ensure:.1f}s)")
 
         # Build acpx prompt command
-        args = [self.acpx_path, "--format", "json", "--approve-all",
-                "--cwd", working_dir]
+        permissions = config.get("permissions") or self.default_permissions
+        args = [self.acpx_path, "--format", "json", "--cwd", working_dir]
+        if permissions == "approve_all":
+            args.append("--approve-all")
+        elif permissions == "deny":
+            args.append("--deny-all")
 
         timeout_sec = config.get("timeout")
         if timeout_sec:
