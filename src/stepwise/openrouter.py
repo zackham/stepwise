@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import Any
 
@@ -10,7 +11,21 @@ import httpx
 
 from stepwise.llm_client import LLMResponse
 
+logger = logging.getLogger("stepwise.openrouter")
+
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+
+
+class OpenRouterError(Exception):
+    """Error from OpenRouter API with response details."""
+
+    def __init__(
+        self, message: str, status_code: int, response_body: str, model: str,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.response_body = response_body
+        self.model = model
 
 
 class OpenRouterClient:
@@ -54,7 +69,24 @@ class OpenRouterClient:
             headers=headers,
             timeout=900.0,
         )
-        resp.raise_for_status()
+
+        if resp.status_code >= 400:
+            # Log the full error response body — OpenRouter includes specific
+            # error messages (invalid model, context length exceeded, etc.)
+            # that raise_for_status() doesn't surface in the exception message.
+            error_body = resp.text
+            prompt_len = sum(len(m.get("content", "")) for m in messages)
+            logger.error(
+                "OpenRouter %d for model=%s prompt_len=%d tools=%s: %s",
+                resp.status_code, model, prompt_len,
+                "yes" if tools else "no", error_body,
+            )
+            raise OpenRouterError(
+                f"OpenRouter {resp.status_code} for model={model}: {error_body}",
+                status_code=resp.status_code,
+                response_body=error_body,
+                model=model,
+            )
 
         data = resp.json()
         elapsed_ms = int((time.monotonic() - start) * 1000)
