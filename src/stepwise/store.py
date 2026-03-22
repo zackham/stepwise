@@ -354,6 +354,19 @@ class SQLiteStore:
         ).fetchall()
         return [self._row_to_run(r) for r in rows]
 
+    def all_running_runs(self) -> list[StepRun]:
+        """Return ALL running step runs across ALL jobs (regardless of job status).
+
+        Used by the periodic cleanup to protect active agent sessions even when
+        the parent job has failed (e.g., one step in a parallel group failed but
+        others are still executing).
+        """
+        rows = self._conn.execute(
+            "SELECT * FROM step_runs WHERE status = ?",
+            (StepRunStatus.RUNNING.value,),
+        ).fetchall()
+        return [self._row_to_run(r) for r in rows]
+
     def suspended_runs(self, job_id: str) -> list[StepRun]:
         rows = self._conn.execute(
             "SELECT * FROM step_runs WHERE job_id = ? AND status = ?",
