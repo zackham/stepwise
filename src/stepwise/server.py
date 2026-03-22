@@ -497,6 +497,121 @@ def _job_looks_complete(store: ThreadSafeStore, job: Job) -> bool:
     return True
 
 
+def _cleanup_stale_queue_owners(store: ThreadSafeStore) -> None:
+    """Terminate acpx queue owner processes not associated with any running step.
+
+    Collects ACP session IDs from all currently running step runs, then kills
+    any queue owner process whose session is not in that active set.
+    """
+    import logging
+    logger = logging.getLogger("stepwise.server")
+
+    from stepwise.agent import cleanup_orphaned_queue_owners
+
+    # Collect session IDs from all running steps across active jobs
+    active_session_ids: set[str] = set()
+    for job in store.active_jobs():
+        for run in store.running_runs(job.id):
+            if run.executor_state and run.executor_state.get("session_id"):
+                active_session_ids.add(run.executor_state["session_id"])
+
+    orphaned = cleanup_orphaned_queue_owners(active_session_ids, kill=True)
+    if orphaned:
+        logger.info(
+            "Cleaned up %d orphaned acpx queue owner(s) on startup", len(orphaned),
+        )
+
+    # Also scan process table for zombie queue owners without lock files
+    from stepwise.agent import find_zombie_queue_owners
+    zombies = find_zombie_queue_owners(active_session_ids)
+    for pid, cmdline in zombies:
+        logger.info("Zombie acpx queue owner (no lock file): pid=%d cmd=%s", pid, cmdline[:120])
+        try:
+            os.kill(pid, signal.SIGTERM)
+            logger.info("Terminated zombie queue owner pid=%d", pid)
+        except (ProcessLookupError, PermissionError):
+            pass
+    if zombies:
+        logger.info("Cleaned up %d zombie acpx queue owner(s) via process scan on startup", len(zombies))
+
+
+def _cleanup_orphaned_acpx_processes(store: ThreadSafeStore) -> None:
+    """Kill acpx/claude processes not belonging to any running step.
+
+    Collects PIDs from all currently running step runs, then scans the process
+    table for claude-agent-acp and acpx __queue-owner processes. Any process
+    not in the process group of a running step is terminated.
+    """
+    import logging
+    logger = logging.getLogger("stepwise.server")
+
+    from stepwise.agent import cleanup_orphaned_acpx
+
+    # Collect PIDs from running steps (executor_state.pid)
+    active_pids: set[int] = set()
+    for job in store.active_jobs():
+        for run in store.running_runs(job.id):
+            if run.executor_state and run.executor_state.get("pid"):
+                active_pids.add(run.executor_state["pid"])
+
+    killed = cleanup_orphaned_acpx(active_pids)
+    if killed:
+        logger.info(
+            "Cleaned up %d orphaned acpx/claude process(es) on startup", len(killed),
+        )
+
+
+def _collect_active_session_ids(store: ThreadSafeStore) -> set[str]:
+    """Collect ACP session IDs from all currently running step runs."""
+    active: set[str] = set()
+    for job in store.active_jobs():
+        for run in store.running_runs(job.id):
+            if run.executor_state and run.executor_state.get("session_id"):
+                active.add(run.executor_state["session_id"])
+    return active
+
+
+async def _periodic_queue_owner_cleanup() -> None:
+    """Periodically scan for and clean up orphaned acpx queue owner processes.
+
+    Runs every 60 seconds. Uses both lock-file and process-table scanning
+    to detect zombie queue owners not associated with any running step.
+    """
+    import logging
+    logger = logging.getLogger("stepwise.server")
+    engine = _get_engine()
+
+    while True:
+        try:
+            await asyncio.sleep(60)
+
+            active_session_ids = _collect_active_session_ids(engine.store)
+
+            # Lock-file based cleanup
+            from stepwise.agent import cleanup_orphaned_queue_owners
+            lock_orphans = cleanup_orphaned_queue_owners(active_session_ids, kill=True)
+            if lock_orphans:
+                logger.info("Periodic cleanup: terminated %d orphaned queue owner(s) via lock files", len(lock_orphans))
+
+            # Process-table based cleanup
+            from stepwise.agent import find_zombie_queue_owners
+            zombies = find_zombie_queue_owners(active_session_ids)
+            for pid, cmdline in zombies:
+                logger.info("Periodic cleanup: zombie queue owner pid=%d cmd=%s", pid, cmdline[:120])
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    pass
+            if zombies:
+                logger.info("Periodic cleanup: terminated %d zombie queue owner(s) via process scan", len(zombies))
+
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logger.debug("Periodic queue owner cleanup error", exc_info=True)
+            await asyncio.sleep(60)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _engine, _engine_task, _event_loop, _templates_dir, _project_dir
@@ -523,6 +638,12 @@ async def lifespan(app: FastAPI):
     # Re-evaluate surviving RUNNING jobs (settle any that completed pre-crash)
     _engine.recover_jobs()
 
+    # Clean up orphaned acpx queue owner processes from previous server
+    _cleanup_stale_queue_owners(store)
+
+    # Broad scan: kill any acpx/claude processes not belonging to a running step
+    _cleanup_orphaned_acpx_processes(store)
+
     # Register in global server registry
     from stepwise.server_detect import register_server, unregister_server
     _port = int(os.environ.get("STEPWISE_PORT", "8340"))
@@ -538,6 +659,7 @@ async def lifespan(app: FastAPI):
     _engine_task = asyncio.create_task(_engine.run())
     _stream_monitor = asyncio.create_task(_agent_stream_monitor())
     _observer = asyncio.create_task(_observe_external_jobs())
+    _queue_cleanup = asyncio.create_task(_periodic_queue_owner_cleanup())
 
     yield
 
@@ -545,6 +667,12 @@ async def lifespan(app: FastAPI):
     for task in _stream_tasks.values():
         task.cancel()
     _stream_tasks.clear()
+
+    _queue_cleanup.cancel()
+    try:
+        await _queue_cleanup
+    except asyncio.CancelledError:
+        pass
 
     _observer.cancel()
     try:
