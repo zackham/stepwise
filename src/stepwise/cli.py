@@ -1918,6 +1918,109 @@ def cmd_run(args: argparse.Namespace) -> int:
     )
 
 
+def cmd_chain(args: argparse.Namespace) -> int:
+    """Chain multiple flows into a linear pipeline."""
+    import os
+    import tempfile
+    from stepwise.chain import compile_chain
+    from stepwise.flow_resolution import (
+        FlowResolutionError, parse_registry_ref, resolve_flow, resolve_registry_flow,
+    )
+    from stepwise.runner import parse_vars, load_vars_file
+
+    io = _io(args)
+    project = _find_project_or_exit(args, auto_init=True)
+    project_dir = _project_dir(args) or Path.cwd()
+
+    flows = args.flows
+    if len(flows) < 2:
+        print("Error: chain requires at least 2 flows", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    # Resolve each flow
+    flow_paths: list[Path] = []
+    for flow_ref in flows:
+        parsed_ref = parse_registry_ref(flow_ref)
+        if parsed_ref:
+            author, slug = parsed_ref
+            try:
+                flow_path = resolve_registry_flow(author, slug, project_dir)
+            except FlowResolutionError:
+                flow_path = _try_registry_fetch(flow_ref, project_dir, io)
+                if not flow_path:
+                    print(f"Error: Flow '{flow_ref}' not found in registry", file=sys.stderr)
+                    return EXIT_USAGE_ERROR
+        else:
+            try:
+                flow_path = resolve_flow(flow_ref, project_dir)
+            except FlowResolutionError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                return EXIT_USAGE_ERROR
+        flow_paths.append(flow_path)
+
+    # Parse input variables
+    inputs: dict = {}
+    if args.vars_file:
+        try:
+            inputs.update(load_vars_file(args.vars_file))
+        except (FileNotFoundError, Exception) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+
+    try:
+        inputs.update(parse_vars(args.vars))
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    if args.var_files:
+        for item in args.var_files:
+            if "=" not in item:
+                print(f"Error: Invalid --var-file format: '{item}' (expected KEY=PATH)", file=sys.stderr)
+                return EXIT_USAGE_ERROR
+            key, fpath = item.split("=", 1)
+            try:
+                inputs[key] = Path(fpath).read_text()
+            except FileNotFoundError:
+                print(f"Error: --var-file path not found: {fpath}", file=sys.stderr)
+                return EXIT_USAGE_ERROR
+
+    # Compile the chain
+    var_names = list(inputs.keys())
+    try:
+        chain_yaml = compile_chain(flow_paths, var_names)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    # Write to temp file — use .stepwise/tmp/ for --async (needs to outlive this process)
+    is_async = getattr(args, "async_mode", False)
+    if is_async:
+        tmp_dir = project_dir / ".stepwise" / "tmp"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path_str = tempfile.mkstemp(suffix=".flow.yaml", dir=str(tmp_dir))
+        os.write(fd, chain_yaml.encode())
+        os.close(fd)
+    else:
+        fd, tmp_path_str = tempfile.mkstemp(suffix=".flow.yaml")
+        os.write(fd, chain_yaml.encode())
+        os.close(fd)
+
+    tmp_path = Path(tmp_path_str)
+
+    # Delegate to cmd_run by setting args.flow
+    args.flow = str(tmp_path)
+
+    try:
+        return cmd_run(args)
+    finally:
+        if not is_async:
+            try:
+                os.unlink(tmp_path_str)
+            except OSError:
+                pass
+
+
 def _run_watch(
     args: argparse.Namespace,
     project,
@@ -3678,6 +3781,36 @@ def build_parser() -> argparse.ArgumentParser:
                        metavar="KEY=VALUE",
                        help="Set job metadata (dot notation: sys.origin=cli, app.project=foo)")
 
+    # chain
+    p_chain = sub.add_parser("chain", help="Chain multiple flows into a linear pipeline")
+    p_chain.add_argument("flows", nargs="+", help="Flow names or paths (2+ required)")
+    p_chain.add_argument("--watch", action="store_true", help="Ephemeral server + browser UI")
+    p_chain.add_argument("--wait", action="store_true", help="Block until completion, JSON output on stdout")
+    p_chain.add_argument("--async", action="store_true", dest="async_mode",
+                         help="Fire-and-forget, returns job_id immediately")
+    p_chain.add_argument("--output", choices=["json"], dest="output_format",
+                         help="Output format (currently only json)")
+    p_chain.add_argument("--timeout", type=int, help="Timeout in seconds (for --wait)")
+    p_chain.add_argument("--var", action="append", dest="vars", metavar="KEY=VALUE",
+                         help="Pass input variable (repeatable)")
+    p_chain.add_argument("--var-file", action="append", dest="var_files", metavar="KEY=PATH",
+                         help="Pass input variable from file contents (repeatable)")
+    p_chain.add_argument("--vars-file", help="Load variables from YAML/JSON file")
+    p_chain.add_argument("--port", type=int, help="Override port (for --watch)")
+    p_chain.add_argument("--objective", help="Set job objective (defaults to chain name)")
+    p_chain.add_argument("--name", dest="job_name", help="Human-friendly job name")
+    p_chain.add_argument("--workspace", help="Override workspace directory")
+    p_chain.add_argument("--report", action="store_true", help="Generate HTML report after completion")
+    p_chain.add_argument("--report-output", help="Report output path")
+    p_chain.add_argument("--no-open", action="store_true", help="Don't auto-open browser (for --watch)")
+    p_chain.add_argument("--local", action="store_true", help="Force local execution (skip server delegation)")
+    p_chain.add_argument("--notify", metavar="URL", help="Webhook URL for job event notifications")
+    p_chain.add_argument("--notify-context", metavar="JSON", dest="notify_context",
+                         help="JSON context to include in webhook payloads")
+    p_chain.add_argument("--meta", action="append", default=[], dest="meta",
+                         metavar="KEY=VALUE",
+                         help="Set job metadata (dot notation: sys.origin=cli, app.project=foo)")
+
     # check
     p_check = sub.add_parser("check", help="Verify model resolution for a flow")
     p_check.add_argument("flow", help="Flow name or path to .flow.yaml file")
@@ -4045,6 +4178,7 @@ def main(argv: list[str] | None = None) -> int:
         "init": cmd_init,
         "server": cmd_server,
         "run": cmd_run,
+        "chain": cmd_chain,
         "new": cmd_new,
         "validate": cmd_validate,
         "preflight": cmd_preflight,
