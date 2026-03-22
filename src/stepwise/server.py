@@ -434,7 +434,21 @@ def _cleanup_zombie_jobs(store: ThreadSafeStore) -> None:
         # Kill orphaned agent processes and fail running step runs
         running_runs = store.running_runs(job.id)
         for run in running_runs:
-            # Kill the actual OS process if we have its pgid
+            # Check if the agent process is still alive via PID
+            if run.pid:
+                try:
+                    os.kill(run.pid, 0)
+                    # Process is alive — leave it alone
+                    logger.info("Step run %s (job %s step %s) PID %d still alive, skipping", run.id, job.id, run.step_name, run.pid)
+                    continue
+                except ProcessLookupError:
+                    logger.info("Step run %s (job %s step %s) PID %d not found, marking failed", run.id, job.id, run.step_name, run.pid)
+                except PermissionError:
+                    # Process exists but we can't signal it — leave it alone
+                    logger.info("Step run %s (job %s step %s) PID %d permission denied, skipping", run.id, job.id, run.step_name, run.pid)
+                    continue
+
+            # Kill the actual OS process group if we have its pgid
             if run.executor_state:
                 pgid = run.executor_state.get("pgid")
                 if pgid:
@@ -444,13 +458,18 @@ def _cleanup_zombie_jobs(store: ThreadSafeStore) -> None:
                     except (ProcessLookupError, PermissionError):
                         pass  # already dead
             run.status = StepRunStatus.FAILED
-            run.error = "Server restarted: step was orphaned"
+            run.error = f"Agent process died (PID {run.pid} not found on restart)" if run.pid else "Server restarted: step was orphaned"
+            run.pid = None
             run.completed_at = _now()
             store.save_run(run)
 
-        # If there were no running steps, check if the job was actually done
-        # (crashed between step completion and job settlement)
-        if not running_runs and _job_looks_complete(store, job):
+        # Check if any runs are still alive (skipped above)
+        still_running = store.running_runs(job.id)
+        if still_running:
+            # Some agent processes survived — leave job running for engine to manage
+            logger.info("Job %s (%s) has %d surviving step(s), leaving running", job.id, job.objective, len(still_running))
+        elif not running_runs and _job_looks_complete(store, job):
+            # No running steps and all terminal steps completed — settle as COMPLETED
             job.status = JobStatus.COMPLETED
             job.updated_at = _now()
             store.save_job(job)

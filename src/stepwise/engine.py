@@ -73,13 +73,29 @@ MAX_ARTIFACT_BYTES = 5 * 1024 * 1024
 
 
 def _interpolate_config(config: dict, inputs: dict) -> dict:
-    """Substitute $variable references in executor config string values."""
+    """Substitute $variable references in executor config string values.
+
+    Supports dotted access for dict inputs: if inputs has reviewer={model: "x"},
+    then $reviewer.model resolves to "x" in config values.
+    """
     str_inputs = {}
     for k, v in inputs.items():
         if isinstance(v, str):
             str_inputs[k] = v
         elif isinstance(v, (dict, list)):
             str_inputs[k] = json.dumps(v, indent=2)
+            # Flatten dict fields for dotted access: $var.field
+            if isinstance(v, dict):
+                for fk, fv in v.items():
+                    flat_key = f"{k}.{fk}"
+                    if isinstance(fv, str):
+                        str_inputs[flat_key] = fv
+                    elif fv is None:
+                        str_inputs[flat_key] = ""
+                    elif isinstance(fv, (dict, list)):
+                        str_inputs[flat_key] = json.dumps(fv, indent=2)
+                    else:
+                        str_inputs[flat_key] = str(fv)
         else:
             str_inputs[k] = str(v)
     if not str_inputs:
@@ -88,7 +104,13 @@ def _interpolate_config(config: dict, inputs: dict) -> dict:
     changed = False
     for k, v in config.items():
         if isinstance(v, str) and "$" in v:
-            new_v = Template(v).safe_substitute(str_inputs)
+            # First pass: replace dotted vars ($var.field) before Template,
+            # since Template only handles simple $var names.
+            new_v = v
+            for sk in sorted(str_inputs, key=len, reverse=True):
+                if "." in sk and ("$" + sk) in new_v:
+                    new_v = new_v.replace("$" + sk, str_inputs[sk])
+            new_v = Template(new_v).safe_substitute(str_inputs)
             if new_v != v:
                 changed = True
             result[k] = new_v
@@ -1325,6 +1347,7 @@ class Engine:
         )
         run.status = StepRunStatus.FAILED
         run.error = f"Executor crash: {type(error).__name__}: {error}"
+        run.pid = None
         run.completed_at = _now()
         self.store.save_run(run)
         self._emit(job.id, STEP_FAILED, {
@@ -1370,6 +1393,7 @@ class Engine:
                         run.status = StepRunStatus.FAILED
                         run.error = validation_error
                         run.result = result.envelope
+                        run.pid = None
                         run.completed_at = _now()
                         self.store.save_run(run)
                         self._emit(job.id, STEP_FAILED, {
@@ -1382,6 +1406,7 @@ class Engine:
                         run.result = result.envelope
                         run.executor_state = result.executor_state
                         run.status = StepRunStatus.COMPLETED
+                        run.pid = None
                         run.completed_at = _now()
                         self.store.save_run(run)
                         self._emit(job.id, STEP_COMPLETED, {
@@ -2378,6 +2403,7 @@ class Engine:
         run.status = StepRunStatus.FAILED
         run.error = error
         run.error_category = error_category
+        run.pid = None
         if run.result is None:
             run.result = HandoffEnvelope(
                 artifact={"error_category": error_category} if error_category else {},
@@ -2858,6 +2884,8 @@ class AsyncEngine(Engine):
                 def _do_update():
                     run = self.store.load_run(run_id)
                     run.executor_state = state
+                    if "pid" in state:
+                        run.pid = state["pid"]
                     self.store.save_run(run)
                 if _loop and _loop.is_running():
                     _loop.call_soon_threadsafe(_do_update)
