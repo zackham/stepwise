@@ -136,6 +136,78 @@ _project_dir: Path = Path(".")
 _stream_tasks: dict[str, asyncio.Task] = {}
 
 
+# ── Event stream client registry ─────────────────────────────────────
+
+from dataclasses import dataclass, field
+
+
+@dataclass
+class _StreamClient:
+    ws: WebSocket
+    queue: asyncio.Queue  # Queue[dict]
+    job_ids: set[str] | None = None       # None = no job_id filter
+    session_id: str | None = None         # None = no session_id filter
+    session_job_ids: set[str] = field(default_factory=set)  # resolved job_ids for session_id
+
+
+_event_stream_clients: set[_StreamClient] = set()
+
+
+def _matches_stream_filter(client: _StreamClient, envelope: dict) -> bool:
+    """Check if an event envelope matches a stream client's filters."""
+    job_id = envelope.get("job_id", "")
+
+    # No filters = admin mode, receives everything
+    if client.job_ids is None and client.session_id is None:
+        return True
+
+    # Check explicit job_id filter
+    if client.job_ids is not None and job_id in client.job_ids:
+        return True
+
+    # Check session_id filter (resolved to job_ids)
+    if client.session_id is not None and job_id in client.session_job_ids:
+        return True
+
+    return False
+
+
+async def _dispatch_to_event_stream(envelope: dict) -> None:
+    """Dispatch an event envelope to all matching stream clients."""
+    dead: list[_StreamClient] = []
+    for client in _event_stream_clients:
+        # Dynamic session_id discovery: when a new job starts, check if
+        # it belongs to a session-filtered client
+        if (
+            client.session_id is not None
+            and envelope.get("event") == "job.started"
+        ):
+            meta = envelope.get("metadata", {})
+            if meta.get("sys", {}).get("session_id") == client.session_id:
+                client.session_job_ids.add(envelope.get("job_id", ""))
+
+        if _matches_stream_filter(client, envelope):
+            try:
+                client.queue.put_nowait(envelope)
+            except asyncio.QueueFull:
+                dead.append(client)
+    for client in dead:
+        _event_stream_clients.discard(client)
+        try:
+            await client.ws.close(code=1008, reason="backpressure")
+        except Exception:
+            pass
+
+
+def _schedule_event_stream(envelope: dict) -> None:
+    """Schedule event stream dispatch from sync context (engine callback). Thread-safe."""
+    if _event_loop is not None:
+        _event_loop.call_soon_threadsafe(
+            _event_loop.create_task,
+            _dispatch_to_event_stream(envelope),
+        )
+
+
 def _schedule_broadcast(event: dict) -> None:
     """Schedule a WebSocket broadcast from sync context (engine callback). Thread-safe."""
     if _event_loop is not None:
@@ -439,6 +511,7 @@ async def lifespan(app: FastAPI):
     )
 
     _engine.on_broadcast = _schedule_broadcast
+    _engine.on_event = _schedule_event_stream
     _engine_task = asyncio.create_task(_engine.run())
     _stream_monitor = asyncio.create_task(_agent_stream_monitor())
     _observer = asyncio.create_task(_observe_external_jobs())
@@ -2222,6 +2295,116 @@ async def editor_clear_session(data: dict):
     if sid:
         clear_session(sid)
     return {"status": "ok"}
+
+
+# ── Event Stream WebSocket ────────────────────────────────────────────
+
+
+@app.websocket("/api/v1/events/stream")
+async def event_stream(ws: WebSocket):
+    """General-purpose event stream with filtering and replay.
+
+    Query params:
+      job_id     — filter by job ID (repeatable, OR semantics)
+      session_id — filter by metadata.sys.session_id
+      since_event_id — replay events with rowid > N, then switch to live
+      since_job_start — replay all events for filtered jobs from creation
+    """
+    engine = _get_engine()
+
+    # Parse filters from query params
+    raw_job_ids = ws.query_params.getlist("job_id")
+    job_ids: set[str] | None = set(raw_job_ids) if raw_job_ids else None
+    session_id: str | None = ws.query_params.get("session_id")
+    since_event_id_raw = ws.query_params.get("since_event_id")
+    since_job_start = ws.query_params.get("since_job_start", "").lower() in ("true", "1", "yes")
+
+    # Validate: since_job_start requires job_id or session_id
+    if since_job_start and job_ids is None and session_id is None:
+        await ws.accept()
+        await ws.close(code=1008, reason="since_job_start requires job_id or session_id")
+        return
+
+    await ws.accept()
+
+    # Resolve session_id → job_ids
+    session_job_ids: set[str] = set()
+    if session_id is not None:
+        matching_jobs = engine.store.all_jobs(meta_filters={"sys.session_id": session_id})
+        session_job_ids = {j.id for j in matching_jobs}
+
+    # Build the combined set of job_ids for replay queries
+    replay_job_ids: set[str] | None = None
+    if job_ids is not None or session_id is not None:
+        replay_job_ids = set()
+        if job_ids:
+            replay_job_ids.update(job_ids)
+        if session_job_ids:
+            replay_job_ids.update(session_job_ids)
+
+    # Determine replay start rowid
+    since_rowid = 0
+    if since_event_id_raw is not None:
+        try:
+            since_rowid = int(since_event_id_raw)
+        except ValueError:
+            await ws.close(code=1008, reason="since_event_id must be an integer")
+            return
+    elif not since_job_start:
+        # No replay requested — skip replay phase
+        since_rowid = -1  # sentinel: no replay
+
+    # Replay phase
+    last_replayed_rowid = since_rowid if since_rowid >= 0 else 0
+    if since_rowid >= 0:
+        replay_results = engine.store.load_events_since(
+            since_rowid=since_rowid,
+            job_ids=replay_job_ids if replay_job_ids else None,
+        )
+        for rowid, envelope in replay_results:
+            try:
+                await ws.send_json(envelope)
+            except Exception:
+                return
+            last_replayed_rowid = rowid
+
+        # Send replay boundary frame
+        try:
+            await ws.send_json({
+                "type": "sys.replay.complete",
+                "last_event_id": last_replayed_rowid,
+            })
+        except Exception:
+            return
+
+    # Register for live events
+    client = _StreamClient(
+        ws=ws,
+        queue=asyncio.Queue(maxsize=1000),
+        job_ids=job_ids,
+        session_id=session_id,
+        session_job_ids=session_job_ids,
+    )
+    _event_stream_clients.add(client)
+
+    try:
+        # Catch-up: query events between replay and registration to close the gap
+        if since_rowid >= 0:
+            catchup = engine.store.load_events_since(
+                since_rowid=last_replayed_rowid,
+                job_ids=replay_job_ids if replay_job_ids else None,
+            )
+            for rowid, envelope in catchup:
+                await ws.send_json(envelope)
+
+        # Live send loop
+        while True:
+            envelope = await client.queue.get()
+            await ws.send_json(envelope)
+    except (WebSocketDisconnect, Exception):
+        pass
+    finally:
+        _event_stream_clients.discard(client)
 
 
 # ── WebSocket ─────────────────────────────────────────────────────────
