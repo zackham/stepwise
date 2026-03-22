@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -23,6 +25,29 @@ logger = logging.getLogger(__name__)
 HOOKS_DIR_NAME = "hooks"
 LOGS_DIR_NAME = "logs"
 HOOK_LOG_FILE = "hooks.log"
+
+
+def build_event_envelope(
+    event_type: str,
+    event_data: dict,
+    job_id: str,
+    event_id: int,
+    metadata: dict,
+    timestamp: str,
+) -> dict:
+    """Build a standardized event envelope for dispatch to hooks and webhooks."""
+    envelope = {
+        "event": event_type,
+        "job_id": job_id,
+        "timestamp": timestamp,
+        "event_id": event_id,
+        "metadata": metadata,
+        "data": event_data,
+    }
+    # Promote step to top-level if present in data
+    if "step" in event_data:
+        envelope["step"] = event_data["step"]
+    return envelope
 
 # Map engine event types to hook event names
 EVENT_MAP = {
@@ -38,6 +63,7 @@ def fire_hook(
     event_name: str,
     payload: dict,
     project_dir: Path,
+    envelope: dict | None = None,
 ) -> bool:
     """Fire a project hook script if it exists.
 
@@ -45,6 +71,7 @@ def fire_hook(
         event_name: Hook event name (suspend, complete, fail).
         payload: JSON-serializable dict piped to stdin.
         project_dir: The .stepwise/ directory.
+        envelope: Optional event envelope dict written to temp file with env vars.
 
     Returns:
         True if hook was found and launched, False if no hook exists.
@@ -61,17 +88,33 @@ def fire_hook(
 
     payload_json = json.dumps(payload, default=str)
 
+    # Write envelope to temp file and build env vars
+    tmp_path = None
+    env = None
+    if envelope:
+        tmp_dir = project_dir / "tmp"
+        tmp_dir.mkdir(exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=str(tmp_dir), suffix=".json")
+        os.write(fd, json.dumps(envelope, default=str).encode())
+        os.close(fd)
+
+        env = os.environ.copy()
+        env["STEPWISE_JOB_ID"] = envelope.get("job_id", "")
+        env["STEPWISE_EVENT"] = envelope.get("event", "")
+        env["STEPWISE_SESSION_ID"] = (
+            envelope.get("metadata", {}).get("sys", {}).get("session_id", "")
+        )
+        env["STEPWISE_EVENT_FILE"] = tmp_path
+
     try:
-        # Fire-and-forget: don't block the engine
         proc = subprocess.Popen(
             [str(script)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             cwd=str(project_dir.parent),  # project root
+            env=env,
         )
-        # Send payload and close stdin, but don't wait
-        # Use communicate with a short timeout to avoid blocking
         try:
             stdout, stderr = proc.communicate(
                 input=payload_json.encode(), timeout=30
@@ -93,6 +136,12 @@ def fire_hook(
     except OSError as e:
         _log_hook_failure(project_dir, event_name, -1, str(e))
         return False
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 def fire_hook_for_event(
@@ -100,6 +149,7 @@ def fire_hook_for_event(
     event_data: dict,
     job_id: str,
     project_dir: Path | None,
+    envelope: dict | None = None,
 ) -> bool:
     """Map an engine event type to a hook and fire it.
 
@@ -108,6 +158,7 @@ def fire_hook_for_event(
         event_data: The event's data dict from the engine.
         job_id: The job ID associated with the event.
         project_dir: The .stepwise/ directory. If None, no-op.
+        envelope: Optional standardized event envelope for temp file dispatch.
 
     Returns:
         True if a hook was fired.
@@ -133,7 +184,7 @@ def fire_hook_for_event(
             f"stepwise fulfill {event_data['run_id']} '<json>'"
         )
 
-    return fire_hook(hook_name, payload, project_dir)
+    return fire_hook(hook_name, payload, project_dir, envelope=envelope)
 
 
 def fire_notify_webhook(
@@ -142,6 +193,7 @@ def fire_notify_webhook(
     job_id: str,
     notify_url: str,
     notify_context: dict | None = None,
+    envelope: dict | None = None,
 ) -> None:
     """Fire-and-forget HTTP POST to a webhook URL with event data.
 
@@ -151,15 +203,25 @@ def fire_notify_webhook(
         job_id: The job ID associated with the event.
         notify_url: HTTP(S) URL to POST to.
         notify_context: Optional context dict merged into payload.
+        envelope: Optional standardized event envelope (includes metadata, event_id).
     """
     import threading
 
-    payload = {
-        "event": event_type,
-        "job_id": job_id,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        **event_data,
-    }
+    if envelope:
+        # Use envelope as base, merge backward-compat flat keys from event_data
+        payload = dict(envelope)
+        payload.update(event_data)
+        # Restore envelope keys that event_data might have clobbered
+        payload["data"] = envelope["data"]
+        payload["metadata"] = envelope["metadata"]
+        payload["event_id"] = envelope["event_id"]
+    else:
+        payload = {
+            "event": event_type,
+            "job_id": job_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            **event_data,
+        }
     if notify_context:
         payload["context"] = notify_context
 
