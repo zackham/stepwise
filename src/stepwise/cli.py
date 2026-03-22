@@ -1546,6 +1546,24 @@ def _run_flow_error(args, io, msg):
     return EXIT_USAGE_ERROR
 
 
+def parse_meta_flags(meta_args: list[str]) -> dict:
+    """Parse --meta KEY=VALUE flags into metadata dict with sys/app namespaces."""
+    result: dict = {"sys": {}, "app": {}}
+    for arg in meta_args:
+        if "=" not in arg:
+            print(f"Error: Invalid --meta format: '{arg}' (expected KEY=VALUE)", file=sys.stderr)
+            raise SystemExit(EXIT_USAGE_ERROR)
+        key, value = arg.split("=", 1)
+        parts = key.split(".")
+        if len(parts) < 2 or parts[0] not in ("sys", "app"):
+            print(f"Error: --meta key must start with 'sys.' or 'app.': '{key}'", file=sys.stderr)
+            raise SystemExit(EXIT_USAGE_ERROR)
+        namespace = parts[0]
+        leaf_key = ".".join(parts[1:])
+        result[namespace][leaf_key] = value
+    return result
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     from stepwise.flow_resolution import (
         FlowResolutionError, parse_registry_ref, resolve_flow, resolve_registry_flow,
@@ -1629,6 +1647,9 @@ def cmd_run(args: argparse.Namespace) -> int:
                 print(f"Error: {msg}", file=sys.stderr)
                 return EXIT_USAGE_ERROR
 
+    # Parse metadata flags
+    metadata = parse_meta_flags(args.meta) if args.meta else None
+
     # --async mode: fire-and-forget (handles own errors as JSON)
     if getattr(args, "async_mode", False):
         from stepwise.runner import run_async
@@ -1651,6 +1672,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             notify_url=getattr(args, "notify", None),
             notify_context=notify_context,
             name=getattr(args, "job_name", None),
+            metadata=metadata,
         )
 
     # --wait mode: blocking JSON output (handles own errors as JSON)
@@ -1676,6 +1698,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             notify_url=getattr(args, "notify", None),
             notify_context=wait_notify_context,
             name=getattr(args, "job_name", None),
+            metadata=metadata,
         )
 
     # Everything below uses stderr for errors
@@ -1701,6 +1724,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         adapter=_io(args),
         name=getattr(args, "job_name", None),
         rerun_steps=getattr(args, "rerun_steps", None),
+        metadata=metadata,
     )
 
 
@@ -1953,7 +1977,17 @@ def cmd_jobs(args: argparse.Namespace) -> int:
                 print(f"Error: Invalid status '{args.status}'. Valid: {valid}", file=sys.stderr)
                 return EXIT_USAGE_ERROR
 
-        jobs = store.all_jobs(status=status_filter, top_level_only=True)
+        meta_filters = None
+        if getattr(args, "meta", None):
+            meta_filters = {}
+            for item in args.meta:
+                if "=" not in item:
+                    print(f"Error: Invalid --meta filter: '{item}' (expected KEY=VALUE)", file=sys.stderr)
+                    return EXIT_USAGE_ERROR
+                key, value = item.split("=", 1)
+                meta_filters[key] = value
+
+        jobs = store.all_jobs(status=status_filter, top_level_only=True, meta_filters=meta_filters)
 
         if getattr(args, "filter_name", None):
             pattern = args.filter_name.lower()
@@ -2027,6 +2061,10 @@ def cmd_status(args: argparse.Namespace) -> int:
         if job.created_at:
             info += f"\nCreated: {_relative_time(job.created_at)}"
         io.note(info, title="Job Details")
+
+        # Show metadata if non-default
+        if job.metadata != {"sys": {}, "app": {}}:
+            io.note(json.dumps(job.metadata, indent=2), title="Metadata")
 
         # Group runs by step, show latest
         step_runs: dict[str, list] = {}
@@ -3428,6 +3466,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--notify", metavar="URL", help="Webhook URL for job event notifications")
     p_run.add_argument("--notify-context", metavar="JSON", dest="notify_context",
                        help="JSON context to include in webhook payloads")
+    p_run.add_argument("--meta", action="append", default=[], dest="meta",
+                       metavar="KEY=VALUE",
+                       help="Set job metadata (dot notation: sys.origin=cli, app.project=foo)")
 
     # check
     p_check = sub.add_parser("check", help="Verify model resolution for a flow")
@@ -3493,6 +3534,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_jobs.add_argument("--all", action="store_true")
     p_jobs.add_argument("--status", help="Filter by status")
     p_jobs.add_argument("--name", dest="filter_name", help="Filter by name (substring match)")
+    p_jobs.add_argument("--meta", action="append", default=[], dest="meta",
+                       metavar="KEY=VALUE",
+                       help="Filter by metadata (e.g. sys.origin=cli)")
 
     # status
     p_status = sub.add_parser("status", help="Show job detail")
