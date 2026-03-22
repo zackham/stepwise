@@ -21,7 +21,9 @@ Usage:
     stepwise templates                     List templates
     stepwise config get|set [key] [value]  Manage configuration
     stepwise schema <flow>                 Generate JSON tool contract
-    stepwise output <job-id> [--step] [--run] Retrieve job/step outputs
+    stepwise tail <job-id>                 Stream live events for a job
+    stepwise logs <job-id>                 Show full event history
+    stepwise output <job-id> [step] [--step] [--run] Retrieve job/step outputs
     stepwise fulfill <run-id> '<json>'     Satisfy a suspended external step (or --stdin, --wait)
     stepwise agent-help [--update <file>]  Generate agent instructions
     stepwise login                          Log in to the Stepwise registry
@@ -238,7 +240,195 @@ def _try_server(args: argparse.Namespace, fn):
         return {"status": "error", "error": e.detail}, EXIT_JOB_FAILED
 
 
+# ── Event formatting (shared by tail + logs) ─────────────────────────
+
+
+def _format_event_line(envelope: dict) -> str:
+    """Format a single event envelope (WS or REST format) as a human-readable line."""
+    from datetime import datetime
+
+    ts_raw = envelope.get("timestamp", "")
+    try:
+        ts = datetime.fromisoformat(ts_raw).strftime("%H:%M:%S")
+    except (ValueError, TypeError):
+        ts = "??:??:??"
+
+    event_type = envelope.get("event") or envelope.get("type", "unknown")
+    step = envelope.get("step") or envelope.get("data", {}).get("step", "")
+    data = envelope.get("data", {})
+
+    # Build detail string based on event type
+    if event_type == "step.completed":
+        detail = f"(attempt {data.get('attempt', 1)})"
+        if data.get("from_cache"):
+            detail += ", from_cache"
+    elif event_type == "step.suspended":
+        detail = data.get("prompt", "Awaiting external input")
+    elif event_type == "step.failed":
+        detail = data.get("error", "")[:80]
+    elif event_type == "step.delegated":
+        detail = "delegated to sub-flow"
+    elif event_type == "exit.resolved":
+        action = data.get("action", "")
+        target = data.get("target", "")
+        detail = f"{action} → {target}" if target else action
+    elif event_type == "loop.iteration":
+        detail = f"attempt {data.get('attempt', '?')}"
+    elif event_type == "job.failed":
+        detail = data.get("reason", "")
+    else:
+        detail = ""
+
+    return f"[{ts}] {event_type:<18s} {step:<16s} {detail}".rstrip()
+
+
+def _format_job_header(job_data: dict) -> str:
+    """Format a job summary header for the logs command."""
+    from datetime import datetime
+
+    job_id = job_data.get("id", "unknown")
+    status = job_data.get("status", "unknown")
+    name = job_data.get("name") or job_data.get("objective", "")
+
+    created_raw = job_data.get("created_at", "")
+    completed_raw = job_data.get("completed_at", "")
+
+    try:
+        created = datetime.fromisoformat(created_raw)
+    except (ValueError, TypeError):
+        created = None
+
+    try:
+        completed = datetime.fromisoformat(completed_raw)
+    except (ValueError, TypeError):
+        completed = None
+
+    if created and completed:
+        dur_secs = (completed - created).total_seconds()
+    elif created:
+        from datetime import datetime as dt, timezone
+        dur_secs = (dt.now(timezone.utc) - created).total_seconds()
+    else:
+        dur_secs = 0
+
+    mins = int(dur_secs) // 60
+    secs = int(dur_secs) % 60
+    dur_str = f"{mins}m {secs}s" if mins else f"{secs}s"
+
+    lines = [
+        f"Job: {job_id} ({name})" if name else f"Job: {job_id}",
+        f"Status: {status}",
+        f"Duration: {dur_str}",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 # ── Command handlers ─────────────────────────────────────────────────
+
+
+async def _tail_ws(ws_url: str) -> int:
+    """Connect to the event stream WebSocket and print events until job terminates."""
+    import websockets
+
+    try:
+        async with websockets.connect(ws_url) as ws:
+            async for raw in ws:
+                envelope = json.loads(raw)
+
+                # Boundary frame after replay
+                if envelope.get("type") == "sys.replay.complete":
+                    print("--- replay complete ---", flush=True)
+                    continue
+
+                print(_format_event_line(envelope), flush=True)
+
+                event_type = envelope.get("event", "")
+                if event_type in ("job.completed", "job.failed", "job.paused"):
+                    return EXIT_JOB_FAILED if event_type == "job.failed" else EXIT_SUCCESS
+    except websockets.exceptions.ConnectionClosed:
+        return EXIT_JOB_FAILED
+    except (ConnectionRefusedError, OSError) as e:
+        print(f"Error: Could not connect to server: {e}", file=sys.stderr)
+        return EXIT_JOB_FAILED
+
+    return EXIT_SUCCESS
+
+
+def cmd_tail(args: argparse.Namespace) -> int:
+    """Stream live events for a job via WebSocket."""
+    import asyncio
+
+    server_url = _detect_server_url(args)
+    if not server_url:
+        print(
+            "stepwise tail requires a running server. Start one with: stepwise server start",
+            file=sys.stderr,
+        )
+        return EXIT_CONFIG_ERROR
+
+    # Build WebSocket URL for event stream
+    ws_url = server_url.replace("https://", "wss://").replace("http://", "ws://")
+    ws_url = f"{ws_url}/api/v1/events/stream?job_id={args.job_id}&since_job_start=true"
+
+    try:
+        return asyncio.run(_tail_ws(ws_url))
+    except KeyboardInterrupt:
+        return 130
+
+
+def cmd_logs(args: argparse.Namespace) -> int:
+    """Show full event history for a job."""
+    # Server path
+    data, code = _try_server(args, lambda c: {
+        "job": c.status(args.job_id),
+        "events": c.events(args.job_id),
+    })
+    if code is not None:
+        if code != EXIT_SUCCESS:
+            print(json.dumps(data, indent=2, default=str))
+            return code
+        job_data = data["job"]
+        events = data["events"]
+        print(_format_job_header(job_data))
+        for ev in events:
+            print(_format_event_line(ev))
+        return EXIT_SUCCESS
+
+    # Direct SQLite fallback
+    project = _find_project_or_exit(args)
+
+    from stepwise.store import SQLiteStore
+
+    store = SQLiteStore(str(project.db_path))
+    try:
+        try:
+            job = store.load_job(args.job_id)
+        except KeyError:
+            print(f"Error: Job not found: {args.job_id}", file=sys.stderr)
+            return EXIT_JOB_FAILED
+
+        events = store.load_events(args.job_id)
+
+        # Compute completed_at from last event timestamp (Job has no completed_at)
+        completed_at = ""
+        if events and job.status.value in ("completed", "failed", "cancelled"):
+            completed_at = events[-1].timestamp.isoformat()
+
+        # Build header dict from Job fields
+        header = {
+            "id": job.id,
+            "status": job.status.value,
+            "name": job.name or job.objective,
+            "created_at": job.created_at.isoformat() if job.created_at else "",
+            "completed_at": completed_at,
+        }
+        print(_format_job_header(header))
+        for ev in events:
+            print(_format_event_line(ev.to_dict()))
+        return EXIT_SUCCESS
+    finally:
+        store.close()
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -2842,6 +3032,12 @@ def cmd_schema(args: argparse.Namespace) -> int:
 
 def cmd_output(args: argparse.Namespace) -> int:
     """Retrieve job outputs after completion."""
+    # Positional step_name → --step (if --step not already set)
+    raw_output = False
+    if getattr(args, "step_name", None) and not getattr(args, "step", None):
+        args.step = args.step_name
+        raw_output = True
+
     # Server routing (always JSON — route all modes)
     if not getattr(args, "run_id", None):
         # --run mode uses run_id, not job_id — skip server routing for it
@@ -2854,6 +3050,9 @@ def cmd_output(args: argparse.Namespace) -> int:
             ),
         )
         if code is not None:
+            # For positional step access via server, unwrap to raw artifact
+            if raw_output and isinstance(data, dict) and args.step in data:
+                data = data[args.step]
             print(json.dumps(data, indent=2, default=str))
             return code
 
@@ -2910,6 +3109,15 @@ def cmd_output(args: argparse.Namespace) -> int:
                         result[step_name] = None
                         latest = store.latest_run(job.id, step_name)
                         result[f"{step_name}_status"] = latest.status.value if latest else "pending"
+
+            # Positional step: unwrap to raw artifact
+            if raw_output:
+                step_val = result.get(args.step)
+                if isinstance(step_val, dict) and "_error" in step_val:
+                    print(json.dumps(step_val, indent=2, default=str))
+                    return EXIT_JOB_FAILED
+                print(json.dumps(step_val, indent=2, default=str))
+                return EXIT_SUCCESS
 
             print(json.dumps(result, indent=2, default=str))
             return EXIT_SUCCESS
@@ -3553,9 +3761,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_schema = sub.add_parser("schema", help="Generate JSON tool contract from a flow file")
     p_schema.add_argument("flow", help="Flow name or path to .flow.yaml file")
 
+    # tail
+    p_tail = sub.add_parser("tail", help="Stream live events for a job")
+    p_tail.add_argument("job_id", help="Job ID to tail")
+
+    # logs
+    p_logs = sub.add_parser("logs", help="Show full event history for a job")
+    p_logs.add_argument("job_id", help="Job ID")
+
     # output
     p_output = sub.add_parser("output", help="Retrieve job outputs")
     p_output.add_argument("job_id", nargs="?", default=None, help="Job ID")
+    p_output.add_argument("step_name", nargs="?", default=None,
+                          help="Step name (positional shorthand for --step)")
     p_output.add_argument("--scope", choices=["default", "full"], default="default",
                           help="Output scope (default: terminal outputs only)")
     p_output.add_argument("--step", help="Comma-separated step names to retrieve")
@@ -3846,6 +4064,8 @@ def main(argv: list[str] | None = None) -> int:
         "list": cmd_list,
         "wait": cmd_wait,
         "schema": cmd_schema,
+        "tail": cmd_tail,
+        "logs": cmd_logs,
         "output": cmd_output,
         "fulfill": cmd_fulfill,
         "agent-help": cmd_agent_help,
