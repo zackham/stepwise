@@ -566,6 +566,49 @@ class SQLiteStore:
             is_effector=bool(row["is_effector"]),
         )
 
+    def load_events_since(
+        self,
+        since_rowid: int = 0,
+        job_ids: set[str] | None = None,
+    ) -> list[tuple[int, dict]]:
+        """Load event envelopes with rowid > since_rowid.
+
+        Returns list of (rowid, envelope_dict) tuples ordered by rowid.
+        If job_ids is provided, only events for those jobs are returned.
+        """
+        from stepwise.hooks import build_event_envelope
+
+        if job_ids:
+            placeholders = ",".join("?" for _ in job_ids)
+            sql = f"""
+                SELECT e.rowid, e.*, j.metadata AS job_metadata
+                FROM events e LEFT JOIN jobs j ON e.job_id = j.id
+                WHERE e.rowid > ? AND e.job_id IN ({placeholders})
+                ORDER BY e.rowid
+            """
+            params: list = [since_rowid, *job_ids]
+        else:
+            sql = """
+                SELECT e.rowid, e.*, j.metadata AS job_metadata
+                FROM events e LEFT JOIN jobs j ON e.job_id = j.id
+                WHERE e.rowid > ?
+                ORDER BY e.rowid
+            """
+            params = [since_rowid]
+
+        rows = self._conn.execute(sql, params).fetchall()
+        results = []
+        for row in rows:
+            meta_raw = row["job_metadata"]
+            metadata = json.loads(meta_raw) if meta_raw else {"sys": {}, "app": {}}
+            event_data = json.loads(row["data"]) if row["data"] else {}
+            envelope = build_event_envelope(
+                row["type"], event_data, row["job_id"], row["rowid"],
+                metadata, row["timestamp"],
+            )
+            results.append((row["rowid"], envelope))
+        return results
+
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
     def close(self) -> None:
