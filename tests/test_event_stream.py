@@ -407,10 +407,11 @@ class TestLoadEventsSince:
 
         results = store.load_events_since(since_rowid=0, job_ids={"j1"})
         assert len(results) == 2
-        assert all(r[1]["job_id"] == "j1" for r in results)
+        assert all(r[1].job_id == "j1" for r in results)
         store.close()
 
-    def test_envelope_format(self):
+    def test_raw_return_format(self):
+        """Verify (rowid, Event, metadata) tuple format."""
         store = SQLiteStore(":memory:")
         meta = {"sys": {"session_id": "s1"}, "app": {}}
         _make_job(store, "j1", metadata=meta)
@@ -418,14 +419,12 @@ class TestLoadEventsSince:
 
         results = store.load_events_since(since_rowid=0)
         assert len(results) == 1
-        rowid, envelope = results[0]
-        assert envelope["event"] == "step.completed"
-        assert envelope["job_id"] == "j1"
-        assert envelope["event_id"] == rowid
-        assert envelope["metadata"] == meta
-        assert envelope["data"]["step"] == "fetch"
-        assert envelope["data"]["count"] == 42
-        assert envelope["step"] == "fetch"  # promoted
+        rowid, event, metadata = results[0]
+        assert event.type == "step.completed"
+        assert event.job_id == "j1"
+        assert metadata == meta
+        assert event.data["step"] == "fetch"
+        assert event.data["count"] == 42
         store.close()
 
     def test_empty_result(self):
