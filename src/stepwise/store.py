@@ -126,6 +126,7 @@ class SQLiteStore:
             ("notify_url", "TEXT", None),
             ("notify_context", "TEXT", None),
             ("name", "TEXT", None),
+            ("metadata", "TEXT", "'{}'"),
         ]:
             if col not in job_columns:
                 default_clause = f" DEFAULT {default}" if default else ""
@@ -139,8 +140,9 @@ class SQLiteStore:
             """INSERT INTO jobs
                 (id, objective, workflow, status, inputs, parent_job_id,
                  parent_step_run_id, workspace_path, config, created_at, updated_at,
-                 created_by, runner_pid, heartbeat_at, notify_url, notify_context, name)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 created_by, runner_pid, heartbeat_at, notify_url, notify_context, name,
+                 metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 objective = excluded.objective,
                 workflow = excluded.workflow,
@@ -156,7 +158,8 @@ class SQLiteStore:
                 heartbeat_at = excluded.heartbeat_at,
                 notify_url = excluded.notify_url,
                 notify_context = excluded.notify_context,
-                name = excluded.name
+                name = excluded.name,
+                metadata = excluded.metadata
             """,
             (
                 job.id,
@@ -176,6 +179,7 @@ class SQLiteStore:
                 job.notify_url,
                 _dumps(job.notify_context) if job.notify_context else None,
                 job.name,
+                _dumps(job.metadata),
             ),
         )
         self._conn.commit()
@@ -207,6 +211,7 @@ class SQLiteStore:
             heartbeat_at=_parse_dt(row["heartbeat_at"]) if row["heartbeat_at"] else None,
             notify_url=row["notify_url"] if "notify_url" in row.keys() else None,
             notify_context=json.loads(row["notify_context"]) if "notify_context" in row.keys() and row["notify_context"] else {},
+            metadata=json.loads(row["metadata"]) if "metadata" in row.keys() and row["metadata"] else {"sys": {}, "app": {}},
         )
 
     def active_jobs(self) -> list[Job]:
@@ -231,7 +236,7 @@ class SQLiteStore:
         self._conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
         self._conn.commit()
 
-    def all_jobs(self, status: JobStatus | None = None, top_level_only: bool = False, limit: int = 0) -> list[Job]:
+    def all_jobs(self, status: JobStatus | None = None, top_level_only: bool = False, limit: int = 0, meta_filters: dict[str, str] | None = None) -> list[Job]:
         clauses = []
         params: list = []
         if status:
@@ -239,6 +244,10 @@ class SQLiteStore:
             params.append(status.value)
         if top_level_only:
             clauses.append("parent_job_id IS NULL")
+        if meta_filters:
+            for key, value in meta_filters.items():
+                clauses.append("json_extract(metadata, ?) = ?")
+                params.extend([f"$.{key}", value])
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         limit_clause = f" LIMIT {int(limit)}" if limit > 0 else ""
         rows = self._conn.execute(
@@ -517,8 +526,8 @@ class SQLiteStore:
 
     # ── Events ────────────────────────────────────────────────────────────
 
-    def save_event(self, event: Event) -> None:
-        self._conn.execute(
+    def save_event(self, event: Event) -> int:
+        cursor = self._conn.execute(
             """INSERT INTO events (id, job_id, timestamp, type, data, is_effector)
             VALUES (?, ?, ?, ?, ?, ?)""",
             (
@@ -530,7 +539,9 @@ class SQLiteStore:
                 1 if event.is_effector else 0,
             ),
         )
+        rowid = cursor.lastrowid
         self._conn.commit()
+        return rowid
 
     def load_events(self, job_id: str, since: datetime | None = None) -> list[Event]:
         if since:
