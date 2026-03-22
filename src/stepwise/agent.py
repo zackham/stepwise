@@ -403,22 +403,26 @@ class AcpxBackend:
         elif "--max-old-space-size" not in env.get("NODE_OPTIONS", ""):
             env["NODE_OPTIONS"] = env["NODE_OPTIONS"] + " --max-old-space-size=8192"
 
-        # Ensure named session exists (acpx requires it before prompting).
-        # Short timeout + non-fatal: if ensure fails, acpx prompt will fail
-        # with a clear error rather than blocking the thread pool for 30s.
-        t_ensure = time.monotonic()
-        logger.info(f"[{step_id}] sessions ensure starting (session={session_name})")
-        try:
-            subprocess.run(
-                [self.acpx_path, "--cwd", working_dir,
-                 agent, "sessions", "ensure", "--name", session_name],
-                capture_output=True, timeout=10, env=env,
-            )
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            logger.warning(f"[{step_id}] sessions ensure timed out or not found")
-        logger.info(f"[{step_id}] sessions ensure done ({time.monotonic() - t_ensure:.1f}s)")
+        # Determine execution mode: exec (one-shot, no queue owner) vs session (persistent)
+        # Use exec mode for one-shot steps — avoids queue owner memory issues on heavy tasks.
+        # Use session mode only when continue_session needs conversation history across turns.
+        use_exec_mode = not config.get("_session_name")  # No session name = one-shot step
 
-        # Build acpx prompt command
+        if not use_exec_mode:
+            # Session mode: ensure named session exists
+            t_ensure = time.monotonic()
+            logger.info(f"[{step_id}] sessions ensure starting (session={session_name})")
+            try:
+                subprocess.run(
+                    [self.acpx_path, "--cwd", working_dir,
+                     agent, "sessions", "ensure", "--name", session_name],
+                    capture_output=True, timeout=10, env=env,
+                )
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                logger.warning(f"[{step_id}] sessions ensure timed out or not found")
+            logger.info(f"[{step_id}] sessions ensure done ({time.monotonic() - t_ensure:.1f}s)")
+
+        # Build acpx command
         permissions = config.get("permissions") or self.default_permissions
         args = [self.acpx_path, "--format", "json", "--cwd", working_dir]
         if permissions == "approve_all":
@@ -430,7 +434,14 @@ class AcpxBackend:
         if timeout_sec:
             args.extend(["--timeout", str(timeout_sec)])
 
-        args.extend([agent, "-s", session_name, "--file", str(prompt_file)])
+        if use_exec_mode:
+            # One-shot: acpx <agent> exec --file <prompt>
+            # No queue owner process — runs directly and exits
+            args.extend([agent, "exec", "--file", str(prompt_file)])
+            logger.info(f"[{step_id}] using exec mode (one-shot, no queue owner)")
+        else:
+            # Session mode: acpx <agent> -s <session> --file <prompt>
+            args.extend([agent, "-s", session_name, "--file", str(prompt_file)])
 
         # Open output + stderr files. NOT context managers — Popen is non-blocking
         # so `with` would close fds before the subprocess writes anything.
