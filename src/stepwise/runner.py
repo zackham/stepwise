@@ -175,6 +175,7 @@ def _delegated_create_and_start(
     notify_url: str | None = None,
     notify_context: dict | None = None,
     name: str | None = None,
+    metadata: dict | None = None,
 ) -> tuple[str | None, str | None]:
     """Create and start a job on the server. Returns (job_id, error_message)."""
     base = server_url.rstrip("/")
@@ -190,6 +191,8 @@ def _delegated_create_and_start(
             payload["notify_context"] = notify_context or {}
         if name:
             payload["name"] = name
+        if metadata:
+            payload["metadata"] = metadata
         resp = httpx.post(f"{base}/api/jobs", json=payload, timeout=10)
         resp.raise_for_status()
         job_id = resp.json()["id"]
@@ -218,9 +221,10 @@ def _delegated_run_flow(
     report_output: str | None,
     flow_path: Path,
     name: str | None = None,
+    metadata: dict | None = None,
 ) -> int:
     """Delegate flow execution to a running server. Returns exit code."""
-    job_id, err = _delegated_create_and_start(server_url, workflow, objective, inputs, workspace, name=name)
+    job_id, err = _delegated_create_and_start(server_url, workflow, objective, inputs, workspace, name=name, metadata=metadata)
     if err:
         _err(err, output_stream)
         return EXIT_JOB_FAILED
@@ -394,6 +398,7 @@ def run_flow(
     adapter: IOAdapter | None = None,
     name: str | None = None,
     rerun_steps: list[str] | None = None,
+    metadata: dict | None = None,
 ) -> int:
     """Run a flow headlessly. Returns exit code.
 
@@ -471,6 +476,7 @@ def run_flow(
                 report_output=report_output,
                 flow_path=flow_path,
                 name=name,
+                metadata=metadata,
             )
 
     # 2. Create engine with project paths + default registry
@@ -501,8 +507,9 @@ def run_flow(
         inputs=inputs or {},
         workspace_path=workspace,
         name=name,
+        metadata=metadata,
     )
-    # Store rerun_steps in job metadata for engine to pick up
+    # Store rerun_steps in job config metadata for engine to pick up
     if rerun_steps:
         job.config.metadata["rerun_steps"] = rerun_steps
     job.created_by = f"cli:{os.getpid()}"
@@ -805,6 +812,7 @@ def run_wait(
     notify_url: str | None = None,
     notify_context: dict | None = None,
     name: str | None = None,
+    metadata: dict | None = None,
 ) -> int:
     """Run a flow in blocking mode with JSON output on stdout.
 
@@ -909,6 +917,7 @@ def run_wait(
                 notify_url=notify_url,
                 notify_context=notify_context,
                 name=name,
+                metadata=metadata,
             )
 
     # Create engine
@@ -929,6 +938,7 @@ def run_wait(
         inputs=inputs or {},
         workspace_path=workspace,
         name=name,
+        metadata=metadata,
     )
     if notify_url:
         job.notify_url = notify_url
@@ -951,9 +961,10 @@ def _delegated_run_wait(
     notify_url: str | None = None,
     notify_context: dict | None = None,
     name: str | None = None,
+    metadata: dict | None = None,
 ) -> int:
     """Delegate --wait mode to a running server. Returns exit code."""
-    job_id, err = _delegated_create_and_start(server_url, workflow, objective, inputs, workspace, notify_url=notify_url, notify_context=notify_context, name=name)
+    job_id, err = _delegated_create_and_start(server_url, workflow, objective, inputs, workspace, notify_url=notify_url, notify_context=notify_context, name=name, metadata=metadata)
     if err:
         _json_stdout({"status": "error", "exit_code": EXIT_JOB_FAILED, "error": err})
         return EXIT_JOB_FAILED
@@ -1435,6 +1446,7 @@ def run_async(
     notify_url: str | None = None,
     notify_context: dict | None = None,
     name: str | None = None,
+    metadata: dict | None = None,
 ) -> int:
     """Fire-and-forget flow execution. Spawns a detached background process.
 
@@ -1477,7 +1489,7 @@ def run_async(
                     "Server at %s belongs to a different project", server_url
                 )
                 return EXIT_JOB_FAILED
-            return _delegated_run_async(server_url, workflow, objective or flow_display_name(flow_path), inputs, workspace, notify_url, notify_context, name=name)
+            return _delegated_run_async(server_url, workflow, objective or flow_display_name(flow_path), inputs, workspace, notify_url, notify_context, name=name, metadata=metadata)
 
     # Create the job in the store so we have a job_id
     if config is None:
@@ -1497,6 +1509,7 @@ def run_async(
             inputs=inputs or {},
             workspace_path=workspace,
             name=name,
+            metadata=metadata,
         )
         if notify_url:
             job.notify_url = notify_url
@@ -1537,9 +1550,10 @@ def _delegated_run_async(
     notify_url: str | None = None,
     notify_context: dict | None = None,
     name: str | None = None,
+    metadata: dict | None = None,
 ) -> int:
     """Delegate --async mode to a running server. No polling, exits immediately."""
-    job_id, err = _delegated_create_and_start(server_url, workflow, objective, inputs, workspace, notify_url, notify_context, name=name)
+    job_id, err = _delegated_create_and_start(server_url, workflow, objective, inputs, workspace, notify_url, notify_context, name=name, metadata=metadata)
     if err:
         _json_stdout({"status": "error", "exit_code": EXIT_JOB_FAILED, "error": err})
         return EXIT_JOB_FAILED

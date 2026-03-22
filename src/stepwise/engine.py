@@ -644,7 +644,7 @@ class Engine:
 
             steps.append(step_info)
 
-        return {
+        result = {
             "job_id": job.id,
             "status": job.status.value,
             "flow": job.objective,
@@ -653,6 +653,9 @@ class Engine:
             "steps": steps,
             "sub_jobs": sub_jobs,
         }
+        if job.metadata != {"sys": {}, "app": {}}:
+            result["metadata"] = job.metadata
+        return result
 
     # ── Tick Loop ─────────────────────────────────────────────────────────
 
