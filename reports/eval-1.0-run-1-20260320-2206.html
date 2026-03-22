@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stepwise 1.0 Evaluation — Run 1</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background: #0f172a; color: #e2e8f0; line-height: 1.6; padding: 2rem; }
+  .container { max-width: 900px; margin: 0 auto; }
+  h1 { color: #f8fafc; margin-bottom: 0.5rem; font-size: 1.75rem; }
+  h2 { color: #94a3b8; margin: 2rem 0 1rem; font-size: 1.25rem;
+        border-bottom: 1px solid #334155; padding-bottom: 0.5rem; }
+  h3 { color: #cbd5e1; margin: 1.5rem 0 0.5rem; font-size: 1.1rem; }
+  .meta { color: #64748b; margin-bottom: 2rem; font-size: 0.875rem; }
+  .badge { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 9999px;
+            font-size: 0.75rem; font-weight: 600; text-transform: uppercase; }
+  .badge-go { background: #065f46; color: #6ee7b7; }
+  .badge-nogo { background: #7f1d1d; color: #fca5a5; }
+  .badge-rejected { background: #78350f; color: #fcd34d; }
+  .badge-overridden { background: #312e81; color: #a5b4fc; }
+  .score-box { display: inline-flex; align-items: center; gap: 1rem;
+                background: #1e293b; border: 1px solid #334155; border-radius: 0.5rem;
+                padding: 1rem 1.5rem; margin: 1rem 0; }
+  .score-number { font-size: 2.5rem; font-weight: 700; }
+  .score-label { color: #94a3b8; font-size: 0.875rem; }
+  .score-green { color: #6ee7b7; }
+  .score-yellow { color: #fcd34d; }
+  .score-red { color: #fca5a5; }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+  th, td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid #1e293b; }
+  th { color: #94a3b8; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;
+        background: #1e293b; }
+  td { font-size: 0.875rem; }
+  .pass { color: #6ee7b7; }
+  .fail { color: #fca5a5; }
+  .warn { color: #fcd34d; }
+  .gate-pass { color: #6ee7b7; font-weight: 600; }
+  .gate-fail { color: #fca5a5; font-weight: 600; }
+  pre { background: #1e293b; border: 1px solid #334155; border-radius: 0.5rem;
+         padding: 1rem; overflow-x: auto; font-size: 0.875rem; white-space: pre-wrap; }
+  .report-content { background: #1e293b; border: 1px solid #334155; border-radius: 0.5rem;
+                     padding: 1.5rem; margin: 1rem 0; white-space: pre-wrap;
+                     font-size: 0.875rem; line-height: 1.8; }
+  .human-notes { background: #1e293b; border-left: 3px solid #6366f1;
+                  padding: 1rem; margin: 1rem 0; font-style: italic; }
+  .footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #334155;
+             color: #475569; font-size: 0.75rem; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Stepwise 1.0 Readiness Evaluation</h1>
+  <div class="meta">
+    Run #1 &middot; 2026-03-20 22:06 UTC &middot;
+    <span class="badge badge-go">GO</span>
+     <span class="badge badge-overridden">OVERRIDDEN</span>
+  </div>
+
+  <div class="score-box">
+    <div>
+      <div class="score-number score-green">89%</div>
+      <div class="score-label">Overall Score</div>
+    </div>
+  </div>
+
+  <h2>Hard Gates</h2>
+  <table>
+    <thead>
+      <tr><th>Gate</th><th>Score</th><th>Threshold</th><th>Status</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>core_execution</td><td>67.0%</td><td>≥80%</td><td class="gate-fail">FAIL</td></tr>
+<tr><td>security</td><td>88.0%</td><td>≥80%</td><td class="gate-pass">PASS</td></tr>
+<tr><td>migration</td><td>100.0%</td><td>≥80%</td><td class="gate-pass">PASS</td></tr>
+<tr><td>data_integrity</td><td>83.0%</td><td>≥80%</td><td class="gate-pass">PASS</td></tr>
+
+    </tbody>
+  </table>
+
+  <h2>Scorecard</h2>
+  <table>
+    <thead>
+      <tr><th>Dimension</th><th>Pass</th><th>Fail</th><th>Insuff.</th><th>Score</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>core_execution</td><td class="pass">12</td><td class="fail">6</td><td class="warn">6</td><td class="warn">67.0%</td></tr>
+<tr><td>security</td><td class="pass">7</td><td class="fail">1</td><td class="warn">0</td><td class="pass">88.0%</td></tr>
+<tr><td>migration</td><td class="pass">4</td><td class="fail">0</td><td class="warn">1</td><td class="pass">100.0%</td></tr>
+<tr><td>data_integrity</td><td class="pass">5</td><td class="fail">1</td><td class="warn">0</td><td class="pass">83.0%</td></tr>
+<tr><td>quality</td><td class="pass">23</td><td class="fail">2</td><td class="warn">1</td><td class="pass">92.0%</td></tr>
+<tr><td>adversarial</td><td class="pass">0</td><td class="fail">0</td><td class="warn">0</td><td class="warn">79.0%</td></tr>
+<tr><td>new_user</td><td class="pass">0</td><td class="fail">0</td><td class="warn">0</td><td class="pass">100.0%</td></tr>
+<tr><td>docs</td><td class="pass">4</td><td class="fail">0</td><td class="warn">1</td><td class="pass">100.0%</td></tr>
+<tr><td>code_quality</td><td class="pass">5</td><td class="fail">1</td><td class="warn">0</td><td class="pass">83.0%</td></tr>
+<tr><td>ux</td><td class="pass">8</td><td class="fail">0</td><td class="warn">0</td><td class="pass">100.0%</td></tr>
+
+    </tbody>
+  </table>
+
+  <h2>Full Report</h2>
+  <div class="report-content"># Stepwise 1.0 Readiness Evaluation Report
+
+## 1. Executive Summary
+
+This report evaluates the readiness of **Stepwise 0.6.0** for its 1.0 release. The evaluation covered 10 dimensions across core execution, security, migration, data integrity, quality, and user experience. With a total of 35,090 lines of code (18,213 Python / 16,877 TypeScript), the system was subjected to rigorous automated testing, manual rubric assessment, and adversarial probing.
+
+The overall evaluation score is **89%**, but the final recommendation is **NO-GO**. While the system demonstrates high maturity in several areas, it failed the **Core Execution** hard gate (67% vs 80% threshold) and contains two **Security Blockers** related to shell injection. These critical vulnerabilities and execution gaps must be remediated before a 1.0 production release can be sanctioned.
+
+**Key Strengths:**
+*   **Migration &amp; UX (100%):** The system handles version transitions perfectly and provides a seamless user interface for flow management.
+*   **Quality (92%):** High pass rate across functional requirements and edge-case handling.
+*   **Documentation (100%):** Comprehensive guides and examples are available, facilitating a successful new-user onboarding experience.
+
+**Key Gaps:**
+*   **Core Execution (67%):** Failed to meet the hard gate threshold due to 6 failed and 6 insufficient test cases.
+*   **Security (88% - Blocker Found):** Despite a high percentage, the presence of shell injection vulnerabilities constitutes a veto-level risk.
+*   **Adversarial Resilience (79%):** Vulnerabilities in input sanitization allow for arbitrary command execution.
+
+## 2. Hard Gate Results
+
+| Gate | Dimension | Score | Threshold | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **FAILED** | Core Execution | 67.0% | 80% | FAIL |
+| PASSED | Security | 88.0% | 80% | PASS* |
+| PASSED | Migration | 100.0% | 80% | PASS |
+| PASSED | Data Integrity | 83.0% | 80% | PASS |
+
+\* *Note: While the Security score exceeded the threshold, two **Blocker** findings were identified during adversarial probing that require immediate remediation.*
+
+### Security Blocker Details
+*   **Test #6 (Injection):** Shell injection via semicolons in `$job` input values. The `ScriptExecutor` uses `shell=True`, allowing input values like `; rm -rf ...` to execute arbitrary commands.
+*   **Test #8 (Injection):** Command substitution injection via `$()` and backticks. Similar to Test 6, the shell interprets these sequences within environment variable expansion during execution.
+
+## 3. Full Scorecard
+
+| Dimension | Pass | Fail | Insufficient | Score% | Status |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Hard Gates** | | | | | |
+| Core Execution | 12 | 6 | 6 | 67.0% | FAILED |
+| Security | 7 | 1 | 0 | 88.0% | PASSED |
+| Migration | 4 | 0 | 1 | 100.0% | PASSED |
+| Data Integrity | 5 | 1 | 0 | 83.0% | PASSED |
+| **Non-Gate Dimensions** | | | | | |
+| Quality | 23 | 2 | 1 | 92.0% | EXCELLENT |
+| Adversarial | 0 | 0 | 0 | 79.0% | MARGINAL |
+| Docs | 4 | 0 | 1 | 100.0% | EXCELLENT |
+| Code Quality | 5 | 1 | 0 | 83.0% | GOOD |
+| UX | 8 | 0 | 0 | 100.0% | EXCELLENT |
+| **Synthesis** | | | | | |
+| New User | 0 | 0 | 0 | 100.0% | PASSED |
+
+## 4. Adversarial Probe Findings
+
+**Summary:** 12/14 tests handled gracefully. 
+
+The system shows strong resilience against malformed YAML, deeply nested structures, and resource exhaustion (large JSON payloads and concurrent job creation). However, the execution model is fundamentally vulnerable to injection via shell metacharacters.
+
+### Critical Findings
+1.  **Shell Injection (Blocker):** `executors.py` (lines 214-234) passes inputs as environment variables to a shell-enabled subprocess. Maliciously crafted inputs can break out of the intended command context.
+2.  **Unicode Control Characters (Major):** RTL override characters (U+202E) pass validation. These can be used to visually disguise malicious step names in terminal outputs, leading to social engineering risks.
+
+### Patterns
+*   **Strong:** YAML parsing and schema validation; concurrency management (SQLite WAL/ThreadSafeStore).
+*   **Weak:** Input sanitization before shell execution; lack of output size limits (though 10MB was handled, no ceiling exists).
+
+## 5. New User Experience
+
+**Simulated User Success: YES**
+
+The simulated user successfully created, validated, and ran a flow. Documentation (README and `docs/`) provided sufficient context for input/output binding and CLI usage.
+
+### Confusion Points
+*   **Moderate:** The Quickstart example requires API keys (Agent/Human executors). A script-only example is needed in the primary guide to lower the barrier to entry.
+*   **Minor:** The mechanism for passing inputs to scripts (env vars) is only documented in `docs/executors.md`, not the main README.
+*   **Minor:** The `examples/` directory is highly useful but not linked from the main documentation.
+
+## 6. Remediation Roadmap
+
+| Priority | Dimension | Action | Reason |
+| :--- | :--- | :--- | :--- |
+| **P0** | **Core Execution** | Fix core logic to reach ≥80% | Failed hard gate; critical for 1.0 |
+| **P0** | **Security** | Patch `executors.py` to prevent shell injection | Blocker findings; arbitrary code execution risk |
+| **P1** | **Adversarial** | Sanitize Unicode control characters | Prevent visual spoofing in logs/UI |
+| **P2** | **Adversarial** | Improve score from 79% to ≥80% | General hardening for production readiness |
+| **P2** | **Docs** | Update Quickstart with script-only examples | Improve first-hour UX for users without API keys |
+
+## 7. Insufficient Evidence
+
+No dimensions exceeded the 30% threshold for insufficient evidence. However, **Core Execution** had 6 items marked insufficient. To fully assess these, more granular unit tests for the engine's internal state machine and error-recovery paths are required.
+
+## 8. Path to 1.0
+
+To achieve 1.0 readiness, Stepwise must transition from a **NO-GO** to a **GO** status by addressing the following:
+
+1.  **Executor Refactor:** Replace `shell=True` in `executors.py` with direct subprocess execution or implement rigorous shell-escaping for all environment variables derived from user input.
+2.  **Core Logic Stabilization:** Address the 6 failing cases in Core Execution. This likely involves fixing edge cases in step dependency resolution and engine-level error handling.
+3.  **Estimated Effort:** 3-4 developer weeks. The security fix is high-priority but localized; the core execution improvements require broader regression testing.
+
+**Suggested Order of Attack:**
+1. Security Patch (Injection) -&gt; 2. Core Execution Bug Fixes -&gt; 3. Documentation Polish (Quickstart).</div>
+
+  <h2>Human Review Notes</h2>
+<div class="human-notes">NO-GO accepted. Core execution failures are test calibration issues, not stepwise bugs. Fixing and rerunning.</div>
+
+  <div class="footer">
+    Generated by Stepwise eval-1.0 &middot; 2026-03-20 22:06 UTC
+  </div>
+</div>
+</body>
+</html>

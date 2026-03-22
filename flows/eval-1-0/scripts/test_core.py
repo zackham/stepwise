@@ -96,8 +96,8 @@ def test_cli(project_path):
         results.append(rubric_item("C4", "stepwise validate rejects invalid flow",
             "insufficient_evidence", "known-bad.flow.yaml not found"))
 
-    # C5: info command
-    rc, out, err = run_cmd(["uv", "run", "stepwise", "info"], cwd=project_path)
+    # C5: info command (requires a flow name argument)
+    rc, out, err = run_cmd(["uv", "run", "stepwise", "info", "welcome"], cwd=project_path)
     results.append(rubric_item("C5", "stepwise info exits 0",
         "pass" if rc == 0 else "fail",
         f"Exit {rc}: {out[:200] if out else err[:200]}"))
@@ -124,8 +124,8 @@ def test_cli(project_path):
         "pass" if rc == 0 else "fail",
         f"Exit {rc}: {out[:200] if out else err[:200]}"))
 
-    # C8: config get
-    rc, out, err = run_cmd(["uv", "run", "stepwise", "config", "get"], cwd=project_path)
+    # C8: config get (requires a key argument)
+    rc, out, err = run_cmd(["uv", "run", "stepwise", "config", "get", "default_model"], cwd=project_path)
     results.append(rubric_item("C8", "stepwise config get exits 0",
         "pass" if rc == 0 else "fail",
         f"Exit {rc}: {out[:200] if out else err[:200]}"))
@@ -172,10 +172,12 @@ def test_server(server_port):
             "fail", f"Request failed: {e}"))
 
     # SV3: Create job (using welcome flow)
+    # API requires 'objective' (str) and either 'workflow' (dict) or 'flow_path' (str)
     test_job_id = None
     try:
         status, body = api_post(server_port, "/api/jobs", {
-            "flow": "welcome",
+            "objective": "eval test run",
+            "flow_path": "flows/welcome/FLOW.yaml",
             "inputs": {"team_name": "eval-test"},
         })
         data = json.loads(body)
@@ -216,29 +218,41 @@ def test_server(server_port):
         results.append(rubric_item("SV5", "POST /api/jobs/:id/cancel works",
             "insufficient_evidence", "No test job to cancel"))
 
-    # SV6: WebSocket connect
+    # SV6: WebSocket connect (use stdlib http.client to verify upgrade handshake)
     try:
-        import websocket
-        ws = websocket.create_connection(f"ws://localhost:{server_port}/ws", timeout=5)
-        ws.close()
-        results.append(rubric_item("SV6", "WebSocket connection succeeds",
-            "pass", f"Connected to ws://localhost:{server_port}/ws"))
-    except ImportError:
-        results.append(rubric_item("SV6", "WebSocket connection succeeds",
-            "insufficient_evidence", "websocket-client library not installed"))
+        import http.client
+        import base64
+        conn = http.client.HTTPConnection("localhost", int(server_port), timeout=5)
+        # WebSocket upgrade key per RFC 6455
+        ws_key = base64.b64encode(os.urandom(16)).decode()
+        conn.request("GET", "/ws", headers={
+            "Upgrade": "websocket",
+            "Connection": "Upgrade",
+            "Sec-WebSocket-Key": ws_key,
+            "Sec-WebSocket-Version": "13",
+        })
+        resp = conn.getresponse()
+        # 101 Switching Protocols = successful WebSocket upgrade
+        if resp.status == 101:
+            results.append(rubric_item("SV6", "WebSocket connection succeeds",
+                "pass", f"WebSocket upgrade accepted (101) at ws://localhost:{server_port}/ws"))
+        else:
+            results.append(rubric_item("SV6", "WebSocket connection succeeds",
+                "fail", f"WebSocket upgrade returned {resp.status} instead of 101"))
+        conn.close()
     except Exception as e:
         results.append(rubric_item("SV6", "WebSocket connection succeeds",
             "fail", f"Connection failed: {e}"))
 
-    # SV7: List flows
+    # SV7: List flows (endpoint is /api/local-flows)
     try:
-        status, body = api_get(server_port, "/api/flows")
+        status, body = api_get(server_port, "/api/local-flows")
         data = json.loads(body)
-        results.append(rubric_item("SV7", "GET /api/flows returns flow list",
+        results.append(rubric_item("SV7", "GET /api/local-flows returns flow list",
             "pass" if status == 200 and isinstance(data, list) else "fail",
             f"Status {status}, returned {len(data)} flows"))
     except Exception as e:
-        results.append(rubric_item("SV7", "GET /api/flows returns flow list",
+        results.append(rubric_item("SV7", "GET /api/local-flows returns flow list",
             "fail", f"Request failed: {e}"))
 
     # SV8: Config models
@@ -265,7 +279,8 @@ def test_lifecycle(project_path, server_port):
         # Use a flow that can complete without human input
         # Check if there's a purely scripted flow available
         status, body = api_post(server_port, "/api/jobs", {
-            "flow": "welcome",
+            "objective": "lifecycle test run",
+            "flow_path": "flows/welcome/FLOW.yaml",
             "inputs": {"team_name": "lifecycle-test"},
         })
         data = json.loads(body)
@@ -337,16 +352,23 @@ def test_lifecycle(project_path, server_port):
         "Cannot safely restart server during evaluation run"))
 
     # L6: Rerun of failed step
+    # Rerun endpoint is POST /api/jobs/{job_id}/steps/{step_name}/rerun
     try:
         status, body = api_get(server_port, "/api/jobs")
         jobs = json.loads(body)
-        # Check if rerun endpoint exists by inspecting any job
         if jobs:
             job_id = jobs[0]["id"]
-            # Try the rerun endpoint — it may 404 or 400 if no failed runs
+            # Get the job's runs to find a step name
+            try:
+                rs, rbody = api_get(server_port, f"/api/jobs/{job_id}/runs")
+                runs = json.loads(rbody)
+                step_name = runs[0]["step_name"] if runs else "pick-feature"
+            except Exception:
+                step_name = "pick-feature"
+            # Try the rerun endpoint — may 400 if step hasn't failed
             try:
                 from urllib.error import HTTPError
-                status, body = api_post(server_port, f"/api/jobs/{job_id}/rerun")
+                status, body = api_post(server_port, f"/api/jobs/{job_id}/steps/{step_name}/rerun")
                 results.append(rubric_item("L6", "Rerun endpoint exists and responds",
                     "pass", f"Rerun endpoint returned status {status}"))
             except HTTPError as e:

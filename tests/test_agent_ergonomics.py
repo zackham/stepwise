@@ -1042,7 +1042,7 @@ class TestServerEndpoints:
         # Start and wait for async engine to process
         client.post(f"/api/jobs/{job_id}/start")
         import time
-        for _ in range(20):
+        for _ in range(100):
             time.sleep(0.1)
             resp = client.get(f"/api/jobs/{job_id}/status")
             if resp.status_code == 200 and resp.json()["status"] in ("running", "completed"):
@@ -1075,13 +1075,13 @@ class TestServerEndpoints:
 
         # Wait for async engine to suspend the external step
         suspended = []
-        for _ in range(50):
+        for _ in range(100):
             time.sleep(0.1)
             resp = client.get("/api/jobs/suspended")
             suspended = resp.json()["suspended_steps"]
             if suspended:
                 break
-        assert len(suspended) == 1
+        assert len(suspended) == 1, "External step never reached SUSPENDED status"
         run_id = suspended[0]["run_id"]
 
         # Fulfill

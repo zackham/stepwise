@@ -27,7 +27,9 @@ Build a flow called `my-first-flow` with two steps:
 
 ## Output Format
 
-Output a JSON object to stdout:
+IMPORTANT: You MUST write your output as a JSON file to `output.json` in the current working directory. Use the Write tool or equivalent to create this file. The stepwise engine reads this file to extract your outputs.
+
+Write the following JSON structure to `output.json`:
 
 ```json
 {

@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stepwise 1.0 Evaluation — Run 1</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background: #0f172a; color: #e2e8f0; line-height: 1.6; padding: 2rem; }
+  .container { max-width: 900px; margin: 0 auto; }
+  h1 { color: #f8fafc; margin-bottom: 0.5rem; font-size: 1.75rem; }
+  h2 { color: #94a3b8; margin: 2rem 0 1rem; font-size: 1.25rem;
+        border-bottom: 1px solid #334155; padding-bottom: 0.5rem; }
+  h3 { color: #cbd5e1; margin: 1.5rem 0 0.5rem; font-size: 1.1rem; }
+  .meta { color: #64748b; margin-bottom: 2rem; font-size: 0.875rem; }
+  .badge { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 9999px;
+            font-size: 0.75rem; font-weight: 600; text-transform: uppercase; }
+  .badge-go { background: #065f46; color: #6ee7b7; }
+  .badge-nogo { background: #7f1d1d; color: #fca5a5; }
+  .badge-rejected { background: #78350f; color: #fcd34d; }
+  .badge-overridden { background: #312e81; color: #a5b4fc; }
+  .score-box { display: inline-flex; align-items: center; gap: 1rem;
+                background: #1e293b; border: 1px solid #334155; border-radius: 0.5rem;
+                padding: 1rem 1.5rem; margin: 1rem 0; }
+  .score-number { font-size: 2.5rem; font-weight: 700; }
+  .score-label { color: #94a3b8; font-size: 0.875rem; }
+  .score-green { color: #6ee7b7; }
+  .score-yellow { color: #fcd34d; }
+  .score-red { color: #fca5a5; }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+  th, td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid #1e293b; }
+  th { color: #94a3b8; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;
+        background: #1e293b; }
+  td { font-size: 0.875rem; }
+  .pass { color: #6ee7b7; }
+  .fail { color: #fca5a5; }
+  .warn { color: #fcd34d; }
+  .gate-pass { color: #6ee7b7; font-weight: 600; }
+  .gate-fail { color: #fca5a5; font-weight: 600; }
+  pre { background: #1e293b; border: 1px solid #334155; border-radius: 0.5rem;
+         padding: 1rem; overflow-x: auto; font-size: 0.875rem; white-space: pre-wrap; }
+  .report-content { background: #1e293b; border: 1px solid #334155; border-radius: 0.5rem;
+                     padding: 1.5rem; margin: 1rem 0; white-space: pre-wrap;
+                     font-size: 0.875rem; line-height: 1.8; }
+  .human-notes { background: #1e293b; border-left: 3px solid #6366f1;
+                  padding: 1rem; margin: 1rem 0; font-style: italic; }
+  .footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #334155;
+             color: #475569; font-size: 0.75rem; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Stepwise 1.0 Readiness Evaluation</h1>
+  <div class="meta">
+    Run #1 &middot; 2026-03-21 01:54 UTC &middot;
+    <span class="badge badge-nogo">NO-GO</span>
+    
+  </div>
+
+  <div class="score-box">
+    <div>
+      <div class="score-number score-green">88%</div>
+      <div class="score-label">Overall Score</div>
+    </div>
+  </div>
+
+  <h2>Hard Gates</h2>
+  <table>
+    <thead>
+      <tr><th>Gate</th><th>Score</th><th>Threshold</th><th>Status</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>core_execution</td><td>89.0%</td><td>≥80%</td><td class="gate-pass">PASS</td></tr>
+<tr><td>security</td><td>75.0%</td><td>≥80%</td><td class="gate-fail">FAIL</td></tr>
+<tr><td>migration</td><td>100.0%</td><td>≥80%</td><td class="gate-pass">PASS</td></tr>
+<tr><td>data_integrity</td><td>83.0%</td><td>≥80%</td><td class="gate-pass">PASS</td></tr>
+
+    </tbody>
+  </table>
+
+  <h2>Scorecard</h2>
+  <table>
+    <thead>
+      <tr><th>Dimension</th><th>Pass</th><th>Fail</th><th>Insuff.</th><th>Score</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>core_execution</td><td class="pass">17</td><td class="fail">2</td><td class="warn">5</td><td class="pass">89.0%</td></tr>
+<tr><td>security</td><td class="pass">6</td><td class="fail">2</td><td class="warn">0</td><td class="warn">75.0%</td></tr>
+<tr><td>migration</td><td class="pass">4</td><td class="fail">0</td><td class="warn">1</td><td class="pass">100.0%</td></tr>
+<tr><td>data_integrity</td><td class="pass">5</td><td class="fail">1</td><td class="warn">0</td><td class="pass">83.0%</td></tr>
+<tr><td>quality</td><td class="pass">24</td><td class="fail">1</td><td class="warn">1</td><td class="pass">96.0%</td></tr>
+<tr><td>adversarial</td><td class="pass">0</td><td class="fail">0</td><td class="warn">0</td><td class="warn">71.0%</td></tr>
+<tr><td>new_user</td><td class="pass">0</td><td class="fail">0</td><td class="warn">0</td><td class="pass">100.0%</td></tr>
+<tr><td>docs</td><td class="pass">4</td><td class="fail">1</td><td class="warn">0</td><td class="pass">80.0%</td></tr>
+<tr><td>code_quality</td><td class="pass">5</td><td class="fail">1</td><td class="warn">0</td><td class="pass">83.0%</td></tr>
+<tr><td>ux</td><td class="pass">8</td><td class="fail">0</td><td class="warn">0</td><td class="pass">100.0%</td></tr>
+
+    </tbody>
+  </table>
+
+  <h2>Full Report</h2>
+  <div class="report-content"># Stepwise 1.0 Readiness Evaluation Report
+
+## 1. Executive Summary
+
+This report evaluates Stepwise version 0.6.0 for 1.0 release readiness. The evaluation covered 18,345 lines of Python and 16,877 lines of TypeScript across ten functional and non-functional dimensions. The overall evaluation score is **88%**, but the final recommendation is **NO-GO** due to failures in critical hard gates. While the system demonstrates high maturity in core logic and user experience, significant security and stability vulnerabilities must be addressed before a production-ready 1.0 release.
+
+**Key Strengths:**
+*   **Migration &amp; UX (100%):** The system handles state transitions and user interactions perfectly, with comprehensive documentation and example flows that ensure a smooth onboarding experience.
+*   **Quality (96%):** With 24 passes out of 26 items, the core logic and edge-case handling are robust across the majority of standard operating procedures.
+*   **Core Execution (89%):** The engine demonstrates reliable performance and linear scaling, successfully validating 1,000-step chains in under 0.2 seconds.
+
+**Key Gaps:**
+*   **Security (75%):** Failed the 80% hard gate. A critical shell injection vulnerability was confirmed in the engine's interpolation logic.
+*   **Adversarial Robustness (71%):** The system is vulnerable to race conditions under high concurrency, leading to full server crashes.
+*   **Documentation (80%):** While functional, there are minor gaps in the Quickstart guide regarding the `validate` command and explicit environment variable mapping.
+
+## 2. Hard Gate Results
+
+| Gate | Dimension | Score | Threshold | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| Hard | Core Execution | 89.0% | 80% | **PASS** |
+| Hard | Security | 75.0% | 80% | **FAIL** |
+| Hard | Migration | 100.0% | 80% | **PASS** |
+| Hard | Data Integrity | 83.0% | 80% | **PASS** |
+
+### Critical Security Findings
+*   **Shell Injection (Blocker):** `engine.py` uses `Template.safe_substitute()` to inject raw input values into the `command` field before calling `subprocess.run(shell=True)`. This allows arbitrary command execution via unsanitized input variables (e.g., using `;` or `&amp;&amp;` in a variable string).
+*   **Concurrency Crash (Blocker):** A race condition in `ThreadSafeStore` allows concurrent `load_job` calls to read partially-written rows. This triggers a `TypeError` in the datetime parser, which is caught by a critical handler that terminates the server process.
+
+## 3. Full Scorecard
+
+| Dimension | Pass | Fail | Insufficient | Score% | Status |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Hard Gates** | | | | | |
+| Core Execution | 17 | 2 | 5 | 89.0% | PASS |
+| Security | 6 | 2 | 0 | 75.0% | **FAIL** |
+| Migration | 4 | 0 | 1 | 100.0% | PASS |
+| Data Integrity | 5 | 1 | 0 | 83.0% | PASS |
+| **Non-Gate Dimensions** | | | | | |
+| Quality | 24 | 1 | 1 | 96.0% | N/A |
+| Adversarial | 0 | 0 | 0 | 71.0% | N/A |
+| New User | 0 | 0 | 0 | 100.0% | N/A |
+| Docs | 4 | 1 | 0 | 80.0% | N/A |
+| Code Quality | 5 | 1 | 0 | 83.0% | N/A |
+| UX | 8 | 0 | 0 | 100.0% | N/A |
+
+## 4. Adversarial Probe Findings
+
+**Summary:** 11/14 tests handled gracefully. While the system is resilient against YAML bombs and large data payloads (100MB), it lacks protection against active injection and high-concurrency race conditions.
+
+### Critical Findings
+1.  **Test #6: Shell Injection:** Confirmed that `$user_input` in a `run:` block can execute arbitrary shell commands if the input contains metacharacters. This is a high-severity blocker.
+2.  **Test #11: ThreadSafeStore Race Condition:** 50 concurrent API calls consistently crash the server. The lock granularity is per-call rather than per-transaction, leading to data corruption during reads.
+
+### Patterns
+*   **Input Validation:** Strong on structural YAML integrity and circular dependency detection, but weak on content-level sanitization (e.g., allowing emojis/RTL in step names which may break shell interpolation).
+*   **Resource Management:** Handles large artifacts well, but lacks guardrails to prevent database bloat from repeated large outputs.
+
+## 5. New User Experience
+
+**Simulated User Success:** **YES**. The user was able to successfully create, validate, and run a flow using the provided documentation.
+
+### Confusion Points &amp; Gaps
+*   **Minor:** The Quickstart guide lacks a minimal &quot;Hello World&quot; (2-step) example, jumping immediately to complex agent/human executors.
+*   **Minor:** The mechanism for passing inputs as environment variables is shown by example but not explicitly documented as a standard behavior.
+*   **Minor:** `stepwise validate` is missing from the Quickstart, though it is present in the README CLI reference.
+
+## 6. Remediation Roadmap
+
+### P0: Failed Hard Gates (Must fix for 1.0)
+*   **Security:** Refactor `engine.py` to use `shlex.quote()` for all interpolated values in the `command` field, or move exclusively to environment variable passing for script execution.
+*   **Stability:** Update `ThreadSafeStore` to ensure lock granularity covers the entire transaction (from `execute` through `commit`) to prevent partial-row reads.
+
+### P1: Dimensions Below 60%
+*   *None. All dimensions scored above 70%.*
+
+### P2: Dimensions Below 80% (Nice to fix)
+*   **Adversarial (71%):** Implement step-name pattern enforcement (kebab-case) to prevent shell interpolation issues with Unicode/RTL characters.
+*   **Docs (80%):** Add a &quot;Minimal Example&quot; section to `quickstart.md` and explicitly document the `validate` command as a best practice before running flows.
+
+## 7. Insufficient Evidence
+
+No dimensions exceeded the 30% threshold for insufficient evidence. The evaluation is considered comprehensive and representative of the current system state.
+
+## 8. Path to 1.0
+
+To reach 1.0 readiness, Stepwise must resolve the two identified **Blocker** issues. 
+
+**Estimated Effort:**
+*   **Security Fix:** 2-3 days (Refactoring interpolation logic and adding regression tests).
+*   **Concurrency Fix:** 3-5 days (Database locking logic overhaul and stress testing).
+
+**Suggested Order of Attack:**
+1.  **Fix the Race Condition:** This is a fundamental architectural stability issue.
+2.  **Sanitize Shell Interpolation:** Critical for multi-user or untrusted input environments.
+3.  **Update Documentation:** Final polish to align Quickstart with CLI capabilities.
+
+Once P0 items are resolved, a re-evaluation of the Security and Adversarial dimensions is required to confirm the score exceeds the 80% threshold.</div>
+
+  <h2>Human Review Notes</h2>
+<div class="human-notes">Calibrated eval run. Core execution improved from 67% to 89% after test fixes. Security at 75% needs investigation - likely shell=True and outdated deps. Will review specific failures and update 1.0 roadmap.</div>
+
+  <div class="footer">
+    Generated by Stepwise eval-1.0 &middot; 2026-03-21 01:54 UTC
+  </div>
+</div>
+</body>
+</html>

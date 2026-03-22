@@ -1,0 +1,62 @@
+{
+  "rubric_results": [
+    {
+      "id": "UX1",
+      "requirement": "Job status visible with real-time updates",
+      "result": "pass",
+      "evidence": "JobList uses useJobs() + JobStatusBadge with status filter pills (running/paused/completed/failed/pending/cancelled). status-colors.ts provides distinct color schemes (bg/text/ring/dot) for all 6 job statuses and 7 step statuses. AppLayout.tsx initializes useStepwiseWebSocket() for live updates, shows active/total job count with animated ping indicator. Stale CLI-owned jobs detected via heartbeat age > 60s and flagged with AlertTriangle icon. timeAgo() provides relative timestamps.",
+      "file": "web/src/components/jobs/JobList.tsx, web/src/lib/status-colors.ts, web/src/components/layout/AppLayout.tsx"
+    },
+    {
+      "id": "UX2",
+      "requirement": "DAG renders with status colors, edges, and step details on click",
+      "result": "pass",
+      "evidence": "FlowDagView provides full pan/zoom (mouse wheel + drag + pinch-to-zoom on touch), spring-based camera animation via DagCamera, 'Follow flow' mode that auto-tracks active steps, zoom controls (+/-/reset/percentage). StepNode renders status-colored nodes using STEP_STATUS_COLORS with executor icons (Terminal/User/Brain/Bot/Cog/Layers), step name, StepStatusBadge, duration, attempt counter (n/max), exit rule tooltips on hover, sub-flow expand buttons, description display. DagEdges renders animated edges with field labels, loop edges, and hover tooltips showing actual data values via formatPreviewValue. Sub-flow expansion via ExpandedStepContainer and ForEachExpandedContainer.",
+      "file": "web/src/components/dag/FlowDagView.tsx, web/src/components/dag/StepNode.tsx, web/src/components/dag/DagEdges.tsx"
+    },
+    {
+      "id": "UX3",
+      "requirement": "Human steps present clear input forms with field types and validation",
+      "result": "pass",
+      "evidence": "HumanInputPanel renders inline on the DAG below suspended nodes with schema-driven fields via TypedField component, client-side validation (validateAll), auto-focus, Enter-to-submit, loading spinner, and error display. TypedField supports 6 field types: str (text input), text (textarea), number (with min/max/step), bool (toggle button), choice-single (radio), choice-multiple (checkbox) — each with labels, descriptions, optional indicators, and error messages. FulfillWatchDialog provides a dialog variant with JSON mode toggle for advanced users. CLI side: io.py TerminalAdapter uses questionary for interactive prompts with Ctrl+C abort menu (retry/suspend/cancel).",
+      "file": "web/src/components/dag/HumanInputPanel.tsx, web/src/components/dag/TypedField.tsx, web/src/components/jobs/FulfillWatchDialog.tsx"
+    },
+    {
+      "id": "UX4",
+      "requirement": "Errors shown clearly with context (step name, error message, timestamp)",
+      "result": "pass",
+      "evidence": "StepDetailPanel (lines 388-403) displays errors in a red-tinted panel (bg-red-500/10 border-red-500/20) with AlertTriangle icon, 'Error' header, error_category badge (font-mono px-1.5 py-0.5 rounded bg-red-500/20), and full error text in monospace pre-wrap with break-words. Run history accordion shows per-attempt status badges, duration, timestamps (started/completed), exit rule resolution with color-coded action badges (advance=emerald, loop=amber, escalate=red, abandon=red). JobList flags stale CLI-owned jobs with AlertTriangle. Step nodes show error text inline in the DAG via StepNode.",
+      "file": "web/src/components/jobs/StepDetailPanel.tsx"
+    },
+    {
+      "id": "UX5",
+      "requirement": "Every CLI command has helpful --help text",
+      "result": "pass",
+      "evidence": "cli.py argparse setup registers 20+ subcommands (init, server, run, check, validate, preflight, diagram, templates, config, new, share, get, search, info, jobs, status, cancel, list, wait, fulfill, output, schema, agent-help, update) each with descriptive help= strings. Every argument has help text (e.g., '--watch: Ephemeral server + browser UI', '--var KEY=VALUE: Pass input variables', '--async: Fire-and-forget'). Module docstring (lines 1-28) provides a complete usage reference. Global flags (--verbose, --quiet, --project-dir, --standalone, --server) all documented. Missing: in-help examples (argparse limitation), but the help text is descriptive enough to be usable.",
+      "file": "src/stepwise/cli.py"
+    },
+    {
+      "id": "UX6",
+      "requirement": "Editor has YAML editing, live validation, step management, and agent chat",
+      "result": "pass",
+      "evidence": "EditorPage provides: (1) Flow/Source tab switching with DAG preview and CodeMirror YAML editor, (2) debounced parse + autosave on YAML change, (3) visual step inspector panel (StepDefinitionPanel) with patch/delete mutations, (4) PromptEditor for inline prompt editing with auto-save, (5) ChatSidebar with 3 AI modes (Claude/Codex/Simple) supporting YAML block generation, tool activity display, session continuity, quick actions, and permission disclosure, (6) FlowFileTree for directory flows, (7) FlowFileViewer for workspace files, (8) Run button to launch job from editor, (9) responsive layout with Sheet overlays on compact screens. YamlEditor uses CodeMirror with YAML syntax highlighting, oneDark theme, and JetBrains Mono font.",
+      "file": "web/src/pages/EditorPage.tsx, web/src/components/editor/YamlEditor.tsx, web/src/components/editor/ChatPanel.tsx"
+    },
+    {
+      "id": "UX7",
+      "requirement": "Agent output streams in real-time to UI during execution",
+      "result": "pass",
+      "evidence": "AgentStreamView supports both live streaming (useAgentStream hook for NDJSON WebSocket events) and historical replay (useAgentOutput for completed runs). Renders text segments in monospace with tool cards showing categorized icons (Search/Read/Write/Execute), running spinners (Loader2 animate-spin), and completion checks. Features: auto-scroll with smart user-scroll detection (pauses auto-scroll when user scrolls up, resumes near bottom), blinking cursor indicator during streaming, token usage bar (used/size with percentage progress), cost display, 'Agent starting...' loading state with timestamp.",
+      "file": "web/src/components/jobs/AgentStreamView.tsx"
+    },
+    {
+      "id": "UX8",
+      "requirement": "Clear navigation between jobs, editor, settings",
+      "result": "pass",
+      "evidence": "AppLayout provides persistent top nav with 3 sections (Jobs/Flows/Settings) using icon+label links with active state highlighting (bg-zinc-800 for active, hover effects for inactive). Mobile-responsive: icons only on small screens, labels appear on md+. Engine status in header shows active/total jobs with animated ping indicator. router.tsx defines clean URL hierarchy: /jobs → /jobs/$jobId → /jobs/$jobId/events|tree, /flows → /flows/$flowName, /settings. Legacy /editor routes redirect to /flows. Root / redirects to /jobs. Working directory displayed in header. Back navigation in EditorToolbar.",
+      "file": "web/src/components/layout/AppLayout.tsx, web/src/router.tsx"
+    }
+  ],
+  "qualitative_summary": "The web UI is production-quality with a feature-rich DAG visualization (pan/zoom/follow-flow/touch), comprehensive human input system (6 field types with validation), real-time agent streaming with tool visualization, and a full flow editor with AI chat assistance. The CLI is equally polished with rich terminal rendering (questionary + Rich), graceful degradation to plain text, and thorough --help coverage across 20+ commands. Navigation is clear and consistent with responsive mobile support.\n\nNew-user friction is primarily in documentation, not the tool itself: the quickstart doesn't surface a script-only example (though one exists in examples/), script input/output mechanics require reading docs/executors.md, and examples/ isn't linked from README. These are minor documentation gaps rather than UX deficiencies. The user successfully built a flow despite these gaps, confirming the tool's learnability is adequate.\n\nAreas for potential improvement: CLI --help could include usage examples (not just flag descriptions), and the new-user onboarding path could be smoother with a script-only quickstart tutorial front-and-center.",
+  "score_pct": 100
+}

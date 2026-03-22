@@ -17,6 +17,7 @@ from stepwise.executors import (
     ExternalExecutor,
 )
 from stepwise.models import (
+    DecoratorRef,
     ExitRule,
     ExecutorRef,
     HandoffEnvelope,
@@ -33,6 +34,10 @@ from stepwise.models import (
     _gen_id,
     _now,
 )
+
+# Disable the auto-applied transient retry decorator for agent executors
+# so tests with infra_failure errors don't hang waiting for exponential backoff.
+NO_RETRY = [DecoratorRef("retry", {"max_retries": 0})]
 from stepwise.store import SQLiteStore
 from tests.conftest import CallableExecutor, register_step_fn
 
@@ -444,7 +449,7 @@ class TestErrorCategories:
             "agent_step": StepDefinition(
                 name="agent_step",
                 outputs=["status"],
-                executor=ExecutorRef("agent", {"prompt": "Fail"}),
+                executor=ExecutorRef("agent", {"prompt": "Fail"}, decorators=NO_RETRY),
             ),
         })
         job = engine.create_job("Test error cat", wf)
@@ -461,7 +466,7 @@ class TestErrorCategories:
             "agent_step": StepDefinition(
                 name="agent_step",
                 outputs=["status"],
-                executor=ExecutorRef("agent", {"prompt": "Try this"}),
+                executor=ExecutorRef("agent", {"prompt": "Try this"}, decorators=NO_RETRY),
                 exit_rules=[
                     ExitRule("retry_on_infra", "field_match", {
                         "field": "error_category",

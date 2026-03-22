@@ -659,12 +659,31 @@ class LLMExecutor(Executor):
                 str_inputs[k] = ""
             elif isinstance(v, (dict, list)):
                 str_inputs[k] = json.dumps(v, indent=2)
+                # Flatten dict fields for dotted access: $var.field
+                # e.g., reviewer: {model: "x", lens: "y"} → reviewer.model: "x", reviewer.lens: "y"
+                if isinstance(v, dict):
+                    for fk, fv in v.items():
+                        flat_key = f"{k}.{fk}"
+                        if isinstance(fv, str):
+                            str_inputs[flat_key] = fv
+                        elif fv is None:
+                            str_inputs[flat_key] = ""
+                        elif isinstance(fv, (dict, list)):
+                            str_inputs[flat_key] = json.dumps(fv, indent=2)
+                        else:
+                            str_inputs[flat_key] = str(fv)
             else:
                 str_inputs[k] = str(v)
         # Use loop_prompt on attempt > 1 if configured
         template = self.prompt_template
         if context.attempt > 1 and self.loop_prompt:
             template = self.loop_prompt
+        # First pass: replace dotted vars ($var.field) before Template processing,
+        # since Python's Template only handles simple $var names.
+        # Sort by key length descending so $reviewer.prompt_focus matches before $reviewer.prompt
+        for k in sorted(str_inputs, key=len, reverse=True):
+            if "." in k:
+                template = template.replace("$" + k, str_inputs[k])
         prompt = Template(template).safe_substitute(str_inputs)
         # Also support {{var}} (Jinja/Mustache-style) templates
         for k, v in str_inputs.items():
