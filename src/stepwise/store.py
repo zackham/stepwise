@@ -116,6 +116,9 @@ class SQLiteStore:
         if "error_category" not in run_columns:
             self._conn.execute("ALTER TABLE step_runs ADD COLUMN error_category TEXT")
             self._conn.commit()
+        if "pid" not in run_columns:
+            self._conn.execute("ALTER TABLE step_runs ADD COLUMN pid INTEGER")
+            self._conn.commit()
 
         cursor = self._conn.execute("PRAGMA table_info(jobs)")
         job_columns = {row[1] for row in cursor.fetchall()}
@@ -263,8 +266,8 @@ class SQLiteStore:
             """INSERT INTO step_runs
                 (id, job_id, step_name, attempt, status, inputs, dep_run_ids,
                  result, error, error_category, executor_state, watch, sub_job_id,
-                 started_at, completed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 pid, started_at, completed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 status = excluded.status,
                 inputs = excluded.inputs,
@@ -275,6 +278,7 @@ class SQLiteStore:
                 executor_state = excluded.executor_state,
                 watch = excluded.watch,
                 sub_job_id = excluded.sub_job_id,
+                pid = excluded.pid,
                 started_at = excluded.started_at,
                 completed_at = excluded.completed_at
             """,
@@ -292,6 +296,7 @@ class SQLiteStore:
                 _dumps(run.executor_state) if run.executor_state is not None else None,
                 _dumps(run.watch.to_dict()) if run.watch else None,
                 run.sub_job_id,
+                run.pid,
                 run.started_at.isoformat() if run.started_at else None,
                 run.completed_at.isoformat() if run.completed_at else None,
             ),
@@ -323,6 +328,7 @@ class SQLiteStore:
             executor_state=json.loads(row["executor_state"]) if row["executor_state"] else None,
             watch=WatchSpec.from_dict(watch_data) if watch_data else None,
             sub_job_id=row["sub_job_id"],
+            pid=row["pid"] if "pid" in row.keys() else None,
             started_at=_parse_dt(row["started_at"]) if row["started_at"] else None,
             completed_at=_parse_dt(row["completed_at"]) if row["completed_at"] else None,
         )

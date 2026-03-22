@@ -920,6 +920,8 @@ class WorkflowDefinition:
 
         Excludes loop-internal steps: steps that loop back to one of their
         own dependencies are intermediate loop participants, not terminals.
+        Also excludes steps that are targeted by exit rules (escalation targets,
+        loop targets) — these are control flow participants, not outputs.
         Self-deps and optional deps are excluded from the "depended on" set.
         """
         depended_on: set[str] = set()
@@ -939,9 +941,21 @@ class WorkflowDefinition:
             if step.for_each:
                 depended_on.add(step.for_each.source_step)
 
+        # Steps targeted by exit rules (loop, escalate) from *other* steps are
+        # control flow participants, not terminals. Self-loops don't disqualify
+        # a step from being terminal.
+        targeted_by_exits: set[str] = set()
+        for step in self.steps.values():
+            for rule in step.exit_rules:
+                target = rule.config.get("target")
+                if target and target != step.name and rule.config.get("action") in ("loop", "escalate"):
+                    targeted_by_exits.add(target)
+
         terminals = []
         for name in self.steps:
             if name in depended_on:
+                continue
+            if name in targeted_by_exits:
                 continue
             # Exclude loop-internal steps (loop back to own dep)
             step_def = self.steps[name]
@@ -1199,6 +1213,7 @@ class StepRun:
     executor_state: dict | None = None
     watch: WatchSpec | None = None
     sub_job_id: str | None = None
+    pid: int | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
 
@@ -1217,6 +1232,7 @@ class StepRun:
             "executor_state": self.executor_state,
             "watch": self.watch.to_dict() if self.watch else None,
             "sub_job_id": self.sub_job_id,
+            "pid": self.pid,
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
         }
@@ -1237,6 +1253,7 @@ class StepRun:
             executor_state=d.get("executor_state"),
             watch=WatchSpec.from_dict(d["watch"]) if d.get("watch") else None,
             sub_job_id=d.get("sub_job_id"),
+            pid=d.get("pid"),
             started_at=datetime.fromisoformat(d["started_at"]) if d.get("started_at") else None,
             completed_at=datetime.fromisoformat(d["completed_at"]) if d.get("completed_at") else None,
         )
