@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -108,6 +108,7 @@ class CreateJobRequest(BaseModel):
     notify_url: str | None = None
     notify_context: dict | None = None
     name: str | None = None
+    metadata: dict | None = None
 
 
 class FulfillWatchRequest(BaseModel):
@@ -237,6 +238,7 @@ def _serialize_job(job: Job, summary: bool = False) -> dict:
             "parent_job_id": job.parent_job_id,
             "created_by": job.created_by,
             "flow_file": getattr(job.workflow, "source_dir", None),
+            "metadata": job.metadata,
         }
     return job.to_dict()
 
@@ -502,10 +504,16 @@ async def _crash_on_error(request, exc):
 
 
 @app.get("/api/jobs")
-def list_jobs(status: str | None = None, top_level: bool = False, limit: int = 50):
+def list_jobs(request: Request, status: str | None = None, top_level: bool = False, limit: int = 50):
     engine = _get_engine()
     job_status = JobStatus(status) if status else None
-    jobs = engine.store.all_jobs(job_status, top_level_only=top_level, limit=limit)
+    meta_filters = {
+        k[5:]: v for k, v in request.query_params.items() if k.startswith("meta.")
+    }
+    jobs = engine.store.all_jobs(
+        job_status, top_level_only=top_level, limit=limit,
+        meta_filters=meta_filters or None,
+    )
     return [_serialize_job(j, summary=True) for j in jobs]
 
 
@@ -536,6 +544,7 @@ def create_job(req: CreateJobRequest):
             config=config,
             workspace_path=req.workspace_path,
             name=req.name,
+            metadata=req.metadata,
         )
         if req.notify_url:
             job.notify_url = req.notify_url
