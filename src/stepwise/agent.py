@@ -50,6 +50,7 @@ class AgentProcess:
     session_id: str | None = None
     session_name: str | None = None
     capture_transcript: bool = True
+    exec_mode: bool = False
 
 
 @dataclass
@@ -468,6 +469,7 @@ class AcpxBackend:
             output_path=str(output_file),
             working_dir=working_dir,
             session_name=session_name,
+            exec_mode=use_exec_mode,
         )
 
     def wait(self, process: AgentProcess) -> AgentStatus:
@@ -1021,8 +1023,9 @@ class AgentExecutor(Executor):
         agent_status = self.backend.wait(process)
         logger.info(f"[{step_id}] executor done ({time.monotonic() - t0:.1f}s total, status={agent_status.state})")
 
-        # Clean up lingering queue owner process for this completed session
-        if hasattr(self.backend, 'cleanup_session_queue_owner'):
+        # Clean up lingering queue owner process for this completed session.
+        # Skip in exec mode — no queue owner to clean up.
+        if hasattr(self.backend, 'cleanup_session_queue_owner') and not process.exec_mode:
             self.backend.cleanup_session_queue_owner(
                 agent_status.session_id, session_name=process.session_name,
             )
