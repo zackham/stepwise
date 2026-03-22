@@ -1242,6 +1242,56 @@ class StepRun:
         )
 
 
+# ── Job Metadata ───────────────────────────────────────────────────────
+
+VALID_SYS_KEYS: dict[str, type] = {
+    "origin": str,
+    "session_id": str,
+    "parent_job_id": str,
+    "root_job_id": str,
+    "depth": int,
+    "notify_url": str,
+    "created_by": str,
+}
+
+METADATA_MAX_BYTES = 8192
+
+
+def validate_job_metadata(metadata: dict) -> None:
+    """Validate job metadata structure: sys/app namespaces, key whitelist, types, size."""
+    if not isinstance(metadata, dict):
+        raise ValueError(f"metadata must be a dict, got {type(metadata).__name__}")
+
+    metadata.setdefault("sys", {})
+    metadata.setdefault("app", {})
+
+    if not isinstance(metadata["sys"], dict):
+        raise ValueError("metadata.sys must be a dict")
+    if not isinstance(metadata["app"], dict):
+        raise ValueError("metadata.app must be a dict")
+
+    import json
+    serialized = json.dumps(metadata)
+    if len(serialized) > METADATA_MAX_BYTES:
+        raise ValueError(
+            f"metadata exceeds {METADATA_MAX_BYTES} bytes "
+            f"({len(serialized)} bytes serialized)"
+        )
+
+    for key, value in metadata["sys"].items():
+        if key not in VALID_SYS_KEYS:
+            raise ValueError(
+                f"unknown sys key: {key!r} "
+                f"(valid: {', '.join(sorted(VALID_SYS_KEYS))})"
+            )
+        expected_type = VALID_SYS_KEYS[key]
+        if not isinstance(value, expected_type):
+            raise ValueError(
+                f"sys.{key} must be {expected_type.__name__}, "
+                f"got {type(value).__name__}"
+            )
+
+
 # ── Job Config ─────────────────────────────────────────────────────────
 
 
@@ -1289,6 +1339,7 @@ class Job:
     heartbeat_at: datetime | None = None
     notify_url: str | None = None
     notify_context: dict = field(default_factory=dict)
+    metadata: dict = field(default_factory=lambda: {"sys": {}, "app": {}})
 
     def to_dict(self) -> dict:
         d = {
@@ -1307,6 +1358,7 @@ class Job:
             "created_by": self.created_by,
             "runner_pid": self.runner_pid,
             "heartbeat_at": self.heartbeat_at.isoformat() if self.heartbeat_at else None,
+            "metadata": self.metadata,
         }
         if self.notify_url:
             d["notify_url"] = self.notify_url
@@ -1333,6 +1385,7 @@ class Job:
             heartbeat_at=datetime.fromisoformat(d["heartbeat_at"]) if d.get("heartbeat_at") else None,
             notify_url=d.get("notify_url"),
             notify_context=d.get("notify_context", {}),
+            metadata=d.get("metadata", {"sys": {}, "app": {}}),
         )
 
 
