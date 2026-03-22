@@ -117,6 +117,7 @@ class Engine:
         self.billing_mode = billing_mode  # "subscription" | "api_key"
         self.config = config  # StepwiseConfig — used for emit_flow instructions
         self.cache = cache  # step result cache (optional)
+        self.on_event: Callable[[dict], None] | None = None
         self._injected_contexts: dict[str, list[str]] = {}  # job_id -> contexts
         self._rerun_steps: dict[str, set[str]] = {}  # job_id -> step names to bypass cache
 
@@ -2492,6 +2493,10 @@ class Engine:
             event_type, event.data, job_id, rowid,
             job_metadata, event.timestamp.isoformat(),
         )
+
+        # Dispatch to event stream subscribers
+        if self.on_event is not None:
+            self.on_event(envelope)
 
         # Fire project hooks for relevant events
         fire_hook_for_event(event_type, event.data, job_id, self.project_dir, envelope=envelope)
