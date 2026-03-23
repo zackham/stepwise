@@ -386,7 +386,7 @@ class AcpxBackend:
 
         # Write prompt to file for acpx --file
         # Use per-job subdirectory to prevent file collisions across concurrent jobs
-        step_io = Path(working_dir) / ".step-io" / (context.job_id or "local")
+        step_io = Path(working_dir) / ".stepwise" / "step-io" / (context.job_id or "local")
         step_io.mkdir(parents=True, exist_ok=True)
         prompt_file = step_io / f"{context.step_name}-{context.attempt}.prompt.md"
         prompt_file.write_text(prompt)
@@ -1247,7 +1247,7 @@ class AgentExecutor(Executor):
                     if output_file:
                         file_path = Path(working_dir) / output_file
                     else:
-                        # Look in workspace dir first (where agent writes), then .step-io
+                        # Look in workspace dir first (where agent writes), then .stepwise/step-io
                         file_path = Path(working_dir) / "output.json"
                         if not file_path.exists():
                             file_path = Path(state["output_path"]).parent / "output.json"

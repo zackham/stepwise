@@ -198,8 +198,8 @@ class ScriptExecutor(Executor):
     def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
         workspace = context.workspace_path or "."
 
-        # Write inputs to .step-io directory
-        step_io_dir = Path(workspace) / ".step-io"
+        # Write inputs to .stepwise/step-io directory
+        step_io_dir = Path(workspace) / ".stepwise" / "step-io"
         step_io_dir.mkdir(parents=True, exist_ok=True)
         input_file = step_io_dir / f"{context.step_name}-{context.attempt}.input.json"
         input_file.write_text(json.dumps(inputs, default=str))
