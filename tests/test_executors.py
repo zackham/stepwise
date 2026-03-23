@@ -22,6 +22,7 @@ from stepwise.executors import (
     ExternalExecutor,
     MockLLMExecutor,
     ScriptExecutor,
+    _is_simple_command,
 )
 from stepwise.models import (
     HandoffEnvelope,
@@ -101,6 +102,136 @@ class TestScriptExecutor:
         assert result.type == "watch"
         assert result.watch.mode == "poll"
         assert result.watch.config["interval_seconds"] == 5
+
+
+# ── N20: Auto-detect command vs shell script ──────────────────────────
+
+
+class TestIsSimpleCommand:
+    """Unit tests for _is_simple_command detection helper."""
+
+    # Commands that should be detected as simple (direct execution)
+    def test_simple_bare_command(self):
+        assert _is_simple_command("true") is True
+
+    def test_simple_command_with_args(self):
+        assert _is_simple_command("python script.py --flag value") is True
+
+    def test_simple_python_command(self):
+        assert _is_simple_command("python3 /abs/path/to/script.py --verbose") is True
+
+    def test_simple_command_with_equals_arg(self):
+        # = is not a shell metachar — used in --key=value style args
+        assert _is_simple_command("mybin --output=file.txt") is True
+
+    # Commands that must use the shell
+    def test_pipe_requires_shell(self):
+        assert _is_simple_command("echo hello | cat") is False
+
+    def test_redirect_out_requires_shell(self):
+        assert _is_simple_command("echo hello > /tmp/out.txt") is False
+
+    def test_redirect_in_requires_shell(self):
+        assert _is_simple_command("cat < /tmp/in.txt") is False
+
+    def test_logical_and_requires_shell(self):
+        assert _is_simple_command("true && echo yes") is False
+
+    def test_logical_or_requires_shell(self):
+        assert _is_simple_command("false || echo no") is False
+
+    def test_semicolon_requires_shell(self):
+        assert _is_simple_command("echo a; echo b") is False
+
+    def test_dollar_var_requires_shell(self):
+        assert _is_simple_command("echo $HOME") is False
+
+    def test_command_substitution_requires_shell(self):
+        assert _is_simple_command("echo $(date)") is False
+
+    def test_backtick_requires_shell(self):
+        assert _is_simple_command("echo `date`") is False
+
+    def test_glob_star_requires_shell(self):
+        assert _is_simple_command("ls *.py") is False
+
+    def test_glob_question_requires_shell(self):
+        assert _is_simple_command("ls file?.txt") is False
+
+    def test_multiline_requires_shell(self):
+        assert _is_simple_command("echo hello\necho world") is False
+
+    def test_multiline_script_requires_shell(self):
+        script = "#!/bin/bash\necho hello\necho world"
+        assert _is_simple_command(script) is False
+
+
+class TestScriptExecutorAutoDetect:
+    """Integration tests: ScriptExecutor runs simple commands directly and
+    shell scripts through the shell, with shell_mode recorded in executor_meta."""
+
+    def test_simple_command_runs_directly(self):
+        """A command with no metacharacters uses direct execution (shell_mode=direct)."""
+        ctx = _ctx()
+        # 'true' is a simple command — no metacharacters, single line
+        executor = ScriptExecutor(command="true")
+        result = executor.start({}, ctx)
+        assert result.type == "data"
+        assert result.envelope.executor_meta.get("shell_mode") == "direct"
+
+    def test_shell_command_uses_shell(self):
+        """A command with a pipe uses shell execution (shell_mode=shell)."""
+        ctx = _ctx()
+        executor = ScriptExecutor(command="echo hello | cat")
+        result = executor.start({}, ctx)
+        assert result.type == "data"
+        assert result.envelope.executor_meta.get("shell_mode") == "shell"
+
+    def test_simple_command_produces_correct_output(self):
+        """Direct-mode execution produces the same output as shell mode."""
+        ctx = _ctx()
+        # 'printf' with a plain string — no metacharacters
+        executor = ScriptExecutor(command="printf hello")
+        result = executor.start({}, ctx)
+        assert result.type == "data"
+        assert result.envelope.artifact.get("stdout") == "hello"
+        assert result.envelope.executor_meta.get("shell_mode") == "direct"
+
+    def test_multiline_script_uses_shell(self):
+        """A multiline run: block is always sent through the shell."""
+        ctx = _ctx()
+        script = "printf foo\nprintf bar"
+        executor = ScriptExecutor(command=script)
+        result = executor.start({}, ctx)
+        assert result.type == "data"
+        assert result.envelope.executor_meta.get("shell_mode") == "shell"
+
+    def test_simple_command_failure_records_shell_mode(self):
+        """shell_mode is recorded even when the command exits non-zero."""
+        ctx = _ctx()
+        # A non-existent but simple command — no metacharacters so direct mode
+        executor = ScriptExecutor(command="false")
+        result = executor.start({}, ctx)
+        assert result.executor_state["failed"] is True
+        assert result.envelope.executor_meta.get("shell_mode") == "direct"
+
+    def test_env_var_in_command_uses_shell(self):
+        """A command referencing $VAR must go through the shell."""
+        ctx = _ctx()
+        executor = ScriptExecutor(command="echo $HOME")
+        result = executor.start({}, ctx)
+        assert result.type == "data"
+        assert result.envelope.executor_meta.get("shell_mode") == "shell"
+
+    def test_redirect_uses_shell(self):
+        """A command with output redirect uses shell mode."""
+        ctx = _ctx()
+        import tempfile
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.close()
+        executor = ScriptExecutor(command=f"echo hi > {tmp.name}")
+        result = executor.start({}, ctx)
+        assert result.envelope.executor_meta.get("shell_mode") == "shell"
 
 
 # ── ExternalExecutor ─────────────────────────────────────────────────────

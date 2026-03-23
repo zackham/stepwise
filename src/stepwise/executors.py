@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shlex
 import subprocess
 import time
 from abc import ABC, abstractmethod
@@ -134,11 +136,59 @@ class ExecutorRegistry:
         return executor
 
 
+# ── Shell metacharacter detection ──────────────────────────────────────
+
+# Pattern matching characters that require shell interpretation.
+# Any command containing these must go through shell=True.
+_SHELL_METACHAR_RE = re.compile(r'[|><&;$(){}*?\[\]`\\!#~]')
+
+
+def _is_simple_command(cmd: str) -> bool:
+    """Return True if *cmd* can be executed directly without a shell.
+
+    A command is considered "simple" when:
+      - it is a single line (no embedded newlines), AND
+      - it contains no shell metacharacters: pipes ``|``, redirects ``>``/``<``,
+        logical operators ``&&``/``||``, statement separators ``;``, command
+        substitution ``$()``/backticks, glob wildcards ``*``/``?``/``[``,
+        brace expansion ``{}``, variable expansion ``$``, escape ``\\``,
+        or other shell special characters ``!``, ``#``, ``~``.
+
+    When True, the caller should use ``shlex.split(cmd)`` and pass the resulting
+    list to ``subprocess.run(..., shell=False)``.  This avoids spawning a shell
+    process for every simple step and makes the execution environment more
+    predictable (the command runs directly, not through ``/bin/sh -c``).
+
+    When False (multiline script or any metacharacter present), the caller must
+    use ``shell=True`` so the shell can interpret the syntax correctly.
+    """
+    if "\n" in cmd:
+        return False
+    return not bool(_SHELL_METACHAR_RE.search(cmd))
+
+
 # ── ScriptExecutor ─────────────────────────────────────────────────────
 
 
 class ScriptExecutor(Executor):
-    """Run a shell command. Synchronous in M1."""
+    """Run a shell command or inline script. Synchronous in M1.
+
+    Execution mode is chosen automatically based on the ``run:`` value:
+
+    * **Direct execution** (``shell=False``) — used when the command is a single
+      line with no shell metacharacters.  The command is split with
+      ``shlex.split()`` and passed directly to the OS, which is slightly faster
+      and avoids shell-injection surprises.
+
+    * **Shell execution** (``shell=True``) — used for multiline scripts or any
+      command that contains shell metacharacters (pipes, redirects, ``&&``,
+      globs, variable expansion, etc.).  This preserves full backward
+      compatibility with existing flows.
+
+    Detection is performed by :func:`_is_simple_command`.  The choice is
+    recorded in ``executor_meta["shell_mode"]`` as ``"direct"`` or ``"shell"``
+    for observability.
+    """
 
     def __init__(
         self,
@@ -232,15 +282,51 @@ class ScriptExecutor(Executor):
         # M10: Resolve script path relative to flow_dir
         command = self._resolve_command(self.command)
 
+        # Auto-detect execution mode: run simple commands directly (no shell)
+        # and fall back to shell=True for multiline scripts or any command that
+        # uses shell metacharacters (pipes, redirects, globs, etc.).
+        #
+        # If direct execution fails with FileNotFoundError (e.g. the first
+        # token is a shell builtin like "exit" rather than a real executable),
+        # we transparently retry through the shell so existing flows never break.
+        use_shell = not _is_simple_command(command)
+        shell_mode = "shell" if use_shell else "direct"
+        run_arg: str | list[str] = command if use_shell else shlex.split(command)
+
         try:
             result = subprocess.run(
-                command,
-                shell=True,
+                run_arg,
+                shell=use_shell,
                 capture_output=True,
                 text=True,
                 env=env,
                 cwd=cwd,
             )
+        except FileNotFoundError:
+            # The first token looked like a simple command but is not a real
+            # binary (e.g. a shell builtin).  Fall back to shell execution.
+            use_shell = True
+            shell_mode = "shell"
+            try:
+                result = subprocess.run(
+                    command,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    cwd=cwd,
+                )
+            except Exception as e:
+                return ExecutorResult(
+                    type="data",
+                    envelope=HandoffEnvelope(
+                        artifact={"stdout": ""},
+                        sidecar=Sidecar(),
+                        workspace=workspace,
+                        timestamp=_now(),
+                        executor_meta={"error": str(e), "shell_mode": shell_mode},
+                    ),
+                )
         except Exception as e:
             return ExecutorResult(
                 type="data",
@@ -249,7 +335,7 @@ class ScriptExecutor(Executor):
                     sidecar=Sidecar(),
                     workspace=workspace,
                     timestamp=_now(),
-                    executor_meta={"error": str(e)},
+                    executor_meta={"error": str(e), "shell_mode": shell_mode},
                 ),
             )
 
@@ -265,7 +351,11 @@ class ScriptExecutor(Executor):
                     sidecar=Sidecar(),
                     workspace=workspace,
                     timestamp=_now(),
-                    executor_meta={"return_code": result.returncode, "failed": True},
+                    executor_meta={
+                        "return_code": result.returncode,
+                        "failed": True,
+                        "shell_mode": shell_mode,
+                    },
                 ),
                 executor_state={"failed": True, "error": stderr or f"Exit code {result.returncode}"},
             )
@@ -301,6 +391,7 @@ class ScriptExecutor(Executor):
                 sidecar=Sidecar(),
                 workspace=workspace,
                 timestamp=_now(),
+                executor_meta={"shell_mode": shell_mode},
             ),
         )
 
