@@ -17,7 +17,6 @@ venv/
 *.db-wal
 
 # Runtime / ephemeral
-.step-io/
 .pids/
 /jobs/
 

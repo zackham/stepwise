@@ -2168,7 +2168,7 @@ class Engine:
 
         # Write step input file for the check command
         workspace = job.workspace_path or "."
-        step_io_dir = Path(workspace) / ".step-io"
+        step_io_dir = Path(workspace) / ".stepwise" / "step-io"
         step_io_dir.mkdir(parents=True, exist_ok=True)
         input_file = step_io_dir / f"{run.step_name}-{run.attempt}.input.json"
         if run.inputs:

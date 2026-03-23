@@ -260,7 +260,7 @@ class TestTranscriptIO:
     def test_creates_step_io_dir(self, workspace):
         t = make_transcript("s", 1, "text")
         save_transcript(workspace, t)
-        assert (Path(workspace) / ".step-io").is_dir()
+        assert (Path(workspace) / ".stepwise" / "step-io").is_dir()
 
     def test_multiple_attempts(self, workspace):
         for attempt in range(1, 4):
@@ -961,7 +961,7 @@ class TestEngineChainContext:
         assert draft_run.status == StepRunStatus.COMPLETED
 
         # Verify the prompt file was written with chain context prepended
-        prompt_path = Path(workspace) / ".step-io" / "draft-1.prompt.md"
+        prompt_path = Path(workspace) / ".stepwise" / "step-io" / "draft-1.prompt.md"
         if prompt_path.exists():
             prompt_content = prompt_path.read_text()
             assert '<prior_context chain="review">' in prompt_content

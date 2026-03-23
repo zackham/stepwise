@@ -98,7 +98,7 @@ def topological_chain_order(
 
 def load_transcript(workspace_path: str, step_name: str, attempt: int) -> Transcript | None:
     """Load a transcript file from the step-io directory."""
-    path = Path(workspace_path) / ".step-io" / f"{step_name}-{attempt}.transcript.json"
+    path = Path(workspace_path) / ".stepwise" / "step-io" / f"{step_name}-{attempt}.transcript.json"
     if not path.exists():
         return None
     try:
@@ -110,7 +110,7 @@ def load_transcript(workspace_path: str, step_name: str, attempt: int) -> Transc
 
 def save_transcript(workspace_path: str, transcript: Transcript) -> Path:
     """Save a transcript to the step-io directory. Returns the file path."""
-    step_io = Path(workspace_path) / ".step-io"
+    step_io = Path(workspace_path) / ".stepwise" / "step-io"
     step_io.mkdir(parents=True, exist_ok=True)
     path = step_io / f"{transcript.step}-{transcript.attempt}.transcript.json"
     path.write_text(json.dumps(transcript.to_dict(), indent=2))
