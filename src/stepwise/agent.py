@@ -609,8 +609,17 @@ class AcpxBackend:
                 cost_usd=cost,
             )
 
-        # M7a: Capture session transcript for chain context
-        self._capture_transcript(process)
+        # M7a: Capture session transcript for chain context (non-blocking)
+        # P7 fix: transcript capture was blocking the thread pool worker,
+        # preventing result delivery. Fire on a daemon thread instead.
+        if process.capture_transcript:
+            t = threading.Thread(
+                target=self._capture_transcript,
+                args=(process,),
+                daemon=True,
+                name=f"transcript-{process.session_name}",
+            )
+            t.start()
 
         return AgentStatus(
             state="completed",
