@@ -120,7 +120,7 @@ def _interpolate_config(config: dict, inputs: dict) -> dict:
 
 
 class Engine:
-    """Tick-based workflow engine."""
+    """Workflow engine base class. Business logic for readiness, exit rules, input resolution, and currentness. AsyncEngine subclass adds event-driven async execution."""
 
     def __init__(
         self,
