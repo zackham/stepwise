@@ -613,10 +613,8 @@ def _server_start(args: argparse.Namespace) -> int:
         port = _find_free_port()
         io.log("warn", f"Port 8340 in use, using {port}")
 
-    # Default to detached mode unless --no-detach is explicitly passed.
-    # Detached mode spawns the server in a clean session (via start_new_session),
-    # which is required for acpx queue owners to work correctly when started
-    # from Claude Code or other tools that create sessions per command.
+    # Default to detached mode — spawns server in its own session, required
+    # for acpx agent sessions when started from Claude Code.
     if not getattr(args, 'no_detach', False):
         return _server_start_detached(project, host, port, io, args)
 
@@ -692,30 +690,14 @@ def _server_start_detached(
         "--web-dir", web_dir,
     ]
 
-    # Spawn the server via `setsid` command to create a CLEAN session.
-    # This is critical when running from Claude Code (or other tools that
-    # create sessions per command via setsid). Without this, the server
-    # inherits the parent's session, and acpx's queue owner setsid() creates
-    # a conflicting double-session that breaks IPC.
-    # Using the `setsid` command (not Python's start_new_session) ensures
-    # the server starts in a fresh session independent of the parent chain.
-    # Create a clean session for the server process so that acpx queue owners
-    # (which use setsid internally) don't conflict with the parent's session.
-    # This is critical when running from Claude Code or other tools that create
-    # sessions per command via setsid.
-    #
-    # We use start_new_session=True here — yes, this calls setsid(). The key
-    # insight: the PROBLEM was never start_new_session on the server itself.
-    # The problem was the queue owner's setsid() creating a SECOND session
-    # in the chain. By giving the server its OWN clean session, the queue
-    # owner's setsid() creates session #2 from a clean base (not session #3
-    # from Claude Code's session). Two levels of setsid works; three doesn't.
+    # start_new_session gives the server its own clean session. Required for
+    # acpx agent sessions to work when started from Claude Code or similar
+    # tools that create sessions per command.
     subprocess.Popen(
         cmd,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        close_fds=True,
         start_new_session=True,
     )
 

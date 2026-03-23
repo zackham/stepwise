@@ -50,7 +50,6 @@ class AgentProcess:
     session_id: str | None = None
     session_name: str | None = None
     capture_transcript: bool = True
-    exec_mode: bool = False
 
 
 @dataclass
@@ -396,76 +395,23 @@ class AcpxBackend:
         output_file = step_io / f"{context.step_name}-{context.attempt}.output.jsonl"
 
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-        # Clean stale acpx sessions before spawning — accumulated sessions from
-        # failed jobs cause performance issues in the session lookup (scans all records).
-        # Only clean once per engine lifetime to avoid repeated filesystem operations.
-        if not getattr(self, '_sessions_cleaned', False):
-            import shutil
-            sessions_dir = os.path.expanduser("~/.acpx/sessions")
-            queues_dir = os.path.expanduser("~/.acpx/queues")
-            if os.path.isdir(sessions_dir):
-                count = len(os.listdir(sessions_dir))
-                if count > 50:
-                    logger.info(f"Cleaning {count} stale acpx sessions (threshold: 50)")
-                    shutil.rmtree(sessions_dir, ignore_errors=True)
-                    os.makedirs(sessions_dir, exist_ok=True)
-                    # Also clean stale queue lock files
-                    if os.path.isdir(queues_dir):
-                        for f in os.listdir(queues_dir):
-                            fp = os.path.join(queues_dir, f)
-                            if f.endswith(".lock"):
-                                try:
-                                    data = json.load(open(fp))
-                                    if not _is_pid_alive(data.get("pid", 0)):
-                                        os.remove(fp)
-                                        sock = fp.replace(".lock", ".sock")
-                                        if os.path.exists(sock):
-                                            os.remove(sock)
-                                except Exception:
-                                    pass
-                    logger.info("Stale acpx sessions cleaned")
-            self.__class__._sessions_cleaned = True
 
-        # Determine execution mode: exec (one-shot, no queue owner) vs session (persistent).
-        # Use exec mode only for truly one-shot steps — no continue_session, no _session_name.
-        # Steps with continue_session=True must use session mode even on first attempt,
-        # because downstream steps will try to continue the session.
-        use_exec_mode = (
-            not config.get("_session_name")     # No explicit session to continue
-            and not config.get("continue_session")  # Not part of a continuation chain
-        )
-        logger.info(f"[{step_id}] exec_mode={use_exec_mode} continue_session={config.get('continue_session')} _session_name={config.get('_session_name')} session_name={session_name}")
+        # Ensure named session exists (acpx requires it before prompting).
+        # Short timeout + non-fatal: if ensure fails, acpx prompt will fail
+        # with a clear error rather than blocking the thread pool for 30s.
+        t_ensure = time.monotonic()
+        logger.info(f"[{step_id}] sessions ensure starting (session={session_name})")
+        try:
+            subprocess.run(
+                [self.acpx_path, "--cwd", working_dir,
+                 agent, "sessions", "ensure", "--name", session_name],
+                capture_output=True, timeout=10, env=env,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            logger.warning(f"[{step_id}] sessions ensure timed out or not found")
+        logger.info(f"[{step_id}] sessions ensure done ({time.monotonic() - t_ensure:.1f}s)")
 
-        if not use_exec_mode:
-            # Session mode: create or ensure named session.
-            # Use "sessions new" for first attempt (clean start, no stale references).
-            # Use "sessions ensure" for subsequent attempts (continue existing session).
-            is_continuing = bool(config.get("_session_name"))  # Has existing session to continue
-            t_ensure = time.monotonic()
-            if is_continuing:
-                logger.info(f"[{step_id}] sessions ensure starting (session={session_name})")
-                try:
-                    subprocess.run(
-                        [self.acpx_path, "--cwd", working_dir,
-                         agent, "sessions", "ensure", "--name", session_name],
-                        capture_output=True, timeout=10, env=env,
-                    )
-                except (subprocess.TimeoutExpired, FileNotFoundError):
-                    logger.warning(f"[{step_id}] sessions ensure timed out or not found")
-            else:
-                # First attempt: clean session, no stale references
-                logger.info(f"[{step_id}] sessions new starting (session={session_name})")
-                try:
-                    subprocess.run(
-                        [self.acpx_path, "--cwd", working_dir,
-                         agent, "sessions", "new", "--name", session_name],
-                        capture_output=True, timeout=10, env=env,
-                    )
-                except (subprocess.TimeoutExpired, FileNotFoundError):
-                    logger.warning(f"[{step_id}] sessions new timed out or not found")
-            logger.info(f"[{step_id}] session setup done ({time.monotonic() - t_ensure:.1f}s)")
-
-        # Build acpx command
+        # Build acpx prompt command
         permissions = config.get("permissions") or self.default_permissions
         args = [self.acpx_path, "--format", "json", "--cwd", working_dir]
         if permissions == "approve_all":
@@ -477,14 +423,7 @@ class AcpxBackend:
         if timeout_sec:
             args.extend(["--timeout", str(timeout_sec)])
 
-        if use_exec_mode:
-            # One-shot: acpx <agent> exec --file <prompt>
-            # No queue owner process — runs directly and exits
-            args.extend([agent, "exec", "--file", str(prompt_file)])
-            logger.info(f"[{step_id}] using exec mode (one-shot, no queue owner)")
-        else:
-            # Session mode: acpx <agent> -s <session> --file <prompt>
-            args.extend([agent, "-s", session_name, "--file", str(prompt_file)])
+        args.extend([agent, "-s", session_name, "--file", str(prompt_file)])
 
         # Open output + stderr files. NOT context managers — Popen is non-blocking
         # so `with` would close fds before the subprocess writes anything.
@@ -497,12 +436,7 @@ class AcpxBackend:
             cwd=working_dir,
             stdout=out_f,
             stderr=err_f,  # File, not PIPE — avoids deadlock on large stderr
-            # Do NOT set start_new_session or process_group here.
-            # The acpx queue owner uses setsid() internally. Setting either of these
-            # on the parent process creates a session/group conflict that breaks the
-            # Unix socket IPC between the acpx CLI and its queue owner, causing
-            # "Queue owner disconnected before prompt completion."
-            # For process cleanup, we track PIDs explicitly (H9) instead of killpg.
+            start_new_session=True,
             env=env,
         )
         out_f.close()
@@ -516,7 +450,6 @@ class AcpxBackend:
             output_path=str(output_file),
             working_dir=working_dir,
             session_name=session_name,
-            exec_mode=use_exec_mode,
         )
 
     def wait(self, process: AgentProcess) -> AgentStatus:
@@ -1051,18 +984,8 @@ class AgentExecutor(Executor):
         logger.info(f"[{step_id}] spawn complete ({time.monotonic() - t0:.1f}s elapsed)")
         process.capture_transcript = bool(context.chain)
 
-        # Extract ACP session ID early (from first lines of output) so the
-        # periodic cleanup can identify this as an active session and not kill it.
-        early_session_id = None
-        if hasattr(self.backend, '_extract_session_id') and process.output_path:
-            for _ in range(10):  # retry a few times while output file populates
-                early_session_id = self.backend._extract_session_id(process.output_path)
-                if early_session_id:
-                    break
-                time.sleep(0.5)
-
         if context.state_update_fn:
-            state = {
+            context.state_update_fn({
                 "pid": process.pid,
                 "pgid": process.pgid,
                 "output_path": process.output_path,
@@ -1070,46 +993,14 @@ class AgentExecutor(Executor):
                 "session_name": process.session_name,
                 "output_mode": self.output_mode,
                 "output_file": output_file,
-            }
-            if early_session_id:
-                state["session_id"] = early_session_id
-            context.state_update_fn(state)
+            })
 
         # Block until agent exits (safe — AsyncEngine runs this in thread pool)
-        try:
-            agent_status = self.backend.wait(process)
-        except Exception as e:
-            logger.error(f"[{step_id}] backend.wait() CRASHED: {type(e).__name__}: {e}", exc_info=True)
-            raise
-
-        # Queue owner warm-up retry: when spawned from a daemon context (systemd,
-        # start_new_session, etc.), the first prompt to a new session often fails
-        # because the queue owner's setsid() races with the parent's session setup.
-        # The failed attempt warms the queue owner; a retry succeeds.
-        # Known upstream issue: https://github.com/openclaw/openclaw/issues/29979
-        if (agent_status.state == "failed"
-                and not process.exec_mode
-                and not getattr(process, '_retry_attempted', False)
-                and agent_status.error
-                and any(s in (agent_status.error or "") for s in
-                        ["Queue owner disconnected", "Interrupted", "QUEUE_RUNTIME_PROMPT_FAILED"])):
-            logger.info(f"[{step_id}] queue owner warm-up retry (first-prompt failure, retrying once)")
-            time.sleep(2)  # Give queue owner time to stabilize
-            process._retry_attempted = True
-            # Re-spawn with the same session (queue owner should be warm now)
-            retry_process = self.backend.spawn(prompt, spawn_config, context)
-            retry_process.capture_transcript = process.capture_transcript
-            retry_process.exec_mode = process.exec_mode
-            retry_process._retry_attempted = True
-            agent_status = self.backend.wait(retry_process)
-            process = retry_process  # Use the retry's process for downstream
-            logger.info(f"[{step_id}] warm-up retry result: {agent_status.state}")
-
+        agent_status = self.backend.wait(process)
         logger.info(f"[{step_id}] executor done ({time.monotonic() - t0:.1f}s total, status={agent_status.state})")
 
-        # Clean up lingering queue owner process for this completed session.
-        # Skip in exec mode — no queue owner to clean up.
-        if hasattr(self.backend, 'cleanup_session_queue_owner') and not process.exec_mode:
+        # Clean up lingering queue owner process for this completed session
+        if hasattr(self.backend, 'cleanup_session_queue_owner'):
             try:
                 self.backend.cleanup_session_queue_owner(
                     agent_status.session_id, session_name=process.session_name,
