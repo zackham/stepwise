@@ -359,6 +359,54 @@ class TestCheckStatusCancel:
         ex.cancel({})  # should not raise
 
 
+# ── OpenRouter Model Name Handling ──────────────────────────────────
+
+
+class TestModelNameHandling:
+    """Model names with slashes (provider/model format) are handled correctly."""
+
+    def test_slash_model_name_passed_to_client(self):
+        """Model name with slash is passed verbatim to the LLM client."""
+        client = MockLLMClient(content='{"result": "ok"}')
+        ex = _executor(client, output_fields=["result"], model="google/gemini-2.5-pro")
+        ex.start({}, _ctx())
+
+        assert client.calls[0].model == "google/gemini-2.5-pro"
+
+    def test_various_slash_model_names(self):
+        """All common provider/model formats with slashes work without modification."""
+        models = [
+            "anthropic/claude-sonnet-4",
+            "google/gemini-2.5-flash-preview-05-20",
+            "openai/gpt-4.1-mini",
+            "deepseek/deepseek-r1",
+            "meta-llama/llama-4-maverick",
+            "moonshotai/kimi-k2.5",
+        ]
+        for model in models:
+            client = MockLLMClient(content='{"r": "ok"}')
+            ex = _executor(client, output_fields=["r"], model=model)
+            ex.start({}, _ctx())
+            assert client.calls[0].model == model, f"model name changed for {model}"
+
+    def test_openrouter_error_surfaces_model_and_body(self):
+        """OpenRouterError (400) includes model name and response body in error message."""
+        from stepwise.openrouter import OpenRouterError
+        err = OpenRouterError(
+            "OpenRouter 400 for model=google/gemini-2.5-pro: Invalid model",
+            status_code=400,
+            response_body="Invalid model",
+            model="google/gemini-2.5-pro",
+        )
+        client = MockLLMClient(error=err)
+        ex = _executor(client, output_fields=["x"], model="google/gemini-2.5-pro")
+        result = ex.start({}, _ctx())
+
+        assert result.executor_state["failed"] is True
+        assert "400" in result.executor_state["error"]
+        assert "google/gemini-2.5-pro" in result.executor_state["error"]
+
+
 # ── MockLLMClient Behavior ───────────────────────────────────────────
 
 

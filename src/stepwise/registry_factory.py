@@ -105,6 +105,18 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
         def _create_llm_executor(cfg: dict, _client=llm_client):
             from stepwise.executors import LLMExecutor
             model_ref = cfg.get("model") or config.default_model or "anthropic/claude-sonnet-4-20250514"
+            # Strip whitespace — can appear after $variable interpolation leaves
+            # leading/trailing spaces when the YAML value was e.g. "  $model_id  ".
+            model_ref = model_ref.strip()
+            # Detect unresolved $variable references — interpolation should have
+            # run before the factory is called, so a bare $var here means the
+            # variable name was misspelled or the input binding is missing.
+            if model_ref.startswith("$"):
+                raise ValueError(
+                    f"LLM step model '{model_ref}' looks like an unresolved variable. "
+                    "Check that the input binding for this variable is defined and the "
+                    "source step has completed."
+                )
             model_id = config.resolve_model(model_ref)
             kwargs: dict = {}
             if cfg.get("system"):
