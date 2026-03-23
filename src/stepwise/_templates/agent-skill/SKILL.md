@@ -8,5 +8,5 @@ description: Stepwise workflow orchestration — run, create, and manage FLOW.ya
 1. **Run `stepwise agent-help`** to discover available flows and how to use them. This is always current.
 2. **Run a flow:** `stepwise run <name> --wait --var k=v` — blocks until done, returns JSON.
 3. **Handle suspensions:** When a flow pauses for input (exit code 5), use `stepwise fulfill <run-id> '{"field": "value"}'` to continue.
-4. **Create flows:** `stepwise new <name>`, then read `FLOW_REFERENCE.md` in this directory for the YAML format.
+4. **Create or modify flows:** Read `FLOW_REFERENCE.md` in this directory — it's the complete YAML spec for understanding, creating, and modifying flows. New flows: `stepwise new <name>`.
 5. **Do NOT modify this file.** It gets overwritten on upgrades. Add project-specific guidance to your CLAUDE.md.
