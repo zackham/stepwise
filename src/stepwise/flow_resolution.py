@@ -8,7 +8,7 @@ from pathlib import Path
 
 FLOW_DIR_MARKER = "FLOW.yaml"
 FLOW_FILE_SUFFIX = ".flow.yaml"
-FLOW_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+FLOW_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_.+-]+$")
 
 
 @dataclass
@@ -50,7 +50,7 @@ def resolve_flow(name_or_path: str, project_dir: Path | None = None) -> Path:
     if not FLOW_NAME_PATTERN.match(name_or_path):
         raise FlowResolutionError(
             f"Invalid flow name: '{name_or_path}'. "
-            f"Flow names must match [a-zA-Z0-9_-]+"
+            f"Flow names must match [a-zA-Z0-9_.+-]+"
         )
 
     # 2. Search discovery directories

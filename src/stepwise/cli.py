@@ -584,6 +584,8 @@ def cmd_server(args: argparse.Namespace) -> int:
         return _server_restart(args)
     elif action == "status":
         return _server_status(args)
+    elif action == "log":
+        return _server_log(args)
     return EXIT_USAGE_ERROR
 
 
@@ -818,6 +820,52 @@ def _server_status(args: argparse.Namespace) -> int:
     io.log("info", f"Server running at {url} ({', '.join(parts)})")
     if log_file:
         io.log("info", f"Log: {log_file}")
+    return EXIT_SUCCESS
+
+
+def _server_log(args: argparse.Namespace) -> int:
+    """Print or stream the server log file."""
+    import time
+
+    io = _io(args)
+    project = _find_project_or_exit(args)
+
+    log_file = project.logs_dir / "server.log"
+
+    if not log_file.exists():
+        io.log("info", f"No server log found at {log_file}")
+        io.log("info", "Start the server with `stepwise server start` to create a log")
+        return EXIT_SUCCESS
+
+    lines = getattr(args, "lines", 50)
+    follow = getattr(args, "follow", False)
+
+    # Read the last N lines from the file
+    def _tail(path: Path, n: int) -> list[str]:
+        with path.open("r", errors="replace") as fh:
+            all_lines = fh.readlines()
+        return all_lines[-n:] if n > 0 else all_lines
+
+    tail_lines = _tail(log_file, lines)
+    for line in tail_lines:
+        print(line, end="")
+
+    if not follow:
+        return EXIT_SUCCESS
+
+    # Follow mode: poll for new content
+    try:
+        with log_file.open("r", errors="replace") as fh:
+            fh.seek(0, 2)  # Seek to end
+            while True:
+                chunk = fh.read()
+                if chunk:
+                    print(chunk, end="", flush=True)
+                else:
+                    time.sleep(0.2)
+    except KeyboardInterrupt:
+        pass
+
     return EXIT_SUCCESS
 
 
@@ -1178,7 +1226,7 @@ def cmd_new(args: argparse.Namespace) -> int:
 
     name = args.name
     if not FLOW_NAME_PATTERN.match(name):
-        io.log("error", f"Invalid flow name: '{name}'. Flow names must match [a-zA-Z0-9_-]+")
+        io.log("error", f"Invalid flow name: '{name}'. Flow names must match [a-zA-Z0-9_.+-]+")
         return EXIT_USAGE_ERROR
 
     project_dir = Path(args.project_dir).resolve() if args.project_dir else Path.cwd().resolve()
@@ -3900,12 +3948,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     # server
     p_server = sub.add_parser("server", help="Manage the Stepwise server")
-    p_server.add_argument("action", choices=["start", "stop", "restart", "status"])
+    p_server.add_argument("action", choices=["start", "stop", "restart", "status", "log"])
     p_server.add_argument("--port", type=int, help="Port (default: 8340)")
     p_server.add_argument("--host", help="Bind address (default: 127.0.0.1)")
     p_server.add_argument("--detach", "-d", action="store_true", help="Run in background (default)")
     p_server.add_argument("--no-detach", action="store_true", help="Run in foreground")
     p_server.add_argument("--no-open", action="store_true", help="Don't auto-open browser")
+    p_server.add_argument("--lines", "-n", type=int, default=50,
+                          help="Number of lines to show (default: 50; log action only)")
+    p_server.add_argument("--follow", "-f", action="store_true",
+                          help="Stream new log lines as they are written (log action only)")
 
     # run
     p_run = sub.add_parser("run", help="Run a flow")
