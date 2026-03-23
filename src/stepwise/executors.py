@@ -67,6 +67,54 @@ class ExecutorStatus:
     cost_so_far: float | None = None  # M4: accumulated cost for limit enforcement
 
 
+# ── Error classification ──────────────────────────────────────────────
+
+# Patterns that indicate non-transient errors (should NOT be retried)
+_AUTH_PATTERNS = ("401", "unauthorized", "403", "forbidden")
+_QUOTA_PATTERNS = ("usage limit", "quota exceeded", "billing")
+
+
+def classify_api_error(error_msg: str) -> str:
+    """Classify an API/executor error message for retry decisions.
+
+    Returns one of: "auth_error", "quota_error", "timeout", "context_length",
+    "infra_failure", or "unknown".
+    """
+    lower = error_msg.lower()
+
+    # Auth errors — non-transient, fail immediately
+    for pat in _AUTH_PATTERNS:
+        if pat in lower:
+            return "auth_error"
+
+    # Quota/billing errors — non-transient, fail immediately
+    for pat in _QUOTA_PATTERNS:
+        if pat in lower:
+            return "quota_error"
+
+    # Timeout — transient
+    if "timeout" in lower or "timed out" in lower:
+        return "timeout"
+
+    # Context length — non-transient
+    if "context" in lower and "length" in lower:
+        return "context_length"
+
+    # Rate limit / HTTP errors — transient (quota cases already caught above)
+    if "rate limit" in lower or "429" in lower:
+        return "infra_failure"
+    if "network" in lower or "connection" in lower:
+        return "infra_failure"
+    if "overloaded" in lower or "503" in lower:
+        return "infra_failure"
+    if "502" in lower or "504" in lower:
+        return "infra_failure"
+    if "capacity" in lower:
+        return "infra_failure"
+
+    return "unknown"
+
+
 # ── Executor ABC ───────────────────────────────────────────────────────
 
 
@@ -127,7 +175,7 @@ class ExecutorRegistry:
         # Auto-apply transient retry for agent executors if no retry decorator specified
         if ref.type == "agent" and not any(d.type == "retry" for d in ref.decorators):
             executor = RetryDecorator(executor, {
-                "max_retries": 3,
+                "max_retries": 5,
                 "backoff": "exponential",
                 "backoff_base": 30,
                 "transient_only": True,
@@ -657,7 +705,11 @@ class LLMExecutor(Executor):
                         "prompt": prompt,
                     },
                 ),
-                executor_state={"failed": True, "error": str(e)},
+                executor_state={
+                    "failed": True,
+                    "error": str(e),
+                    "error_category": classify_api_error(str(e)),
+                },
             )
 
         # Parse output

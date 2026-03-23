@@ -28,6 +28,7 @@ from stepwise.executors import (
     Executor,
     ExecutorResult,
     ExecutorStatus,
+    classify_api_error,
 )
 from stepwise.models import HandoffEnvelope, Sidecar, SubJobDefinition, _now
 
@@ -1301,17 +1302,6 @@ class AgentExecutor(Executor):
 
     def _classify_error(self, status: AgentStatus) -> str:
         """Classify error type for exit rule routing."""
-        error = (status.error or "").lower()
-        if "timeout" in error or "timed out" in error:
-            return "timeout"
-        if "context" in error and "length" in error:
-            return "context_length"
-        if "rate limit" in error or "429" in error:
-            return "infra_failure"
-        if "network" in error or "connection" in error:
-            return "infra_failure"
-        if "overloaded" in error or "503" in error:
-            return "infra_failure"
-        if "capacity" in error:
-            return "infra_failure"
-        return "agent_failure"
+        result = classify_api_error(status.error or "")
+        # Map "unknown" back to "agent_failure" for agent-specific default
+        return "agent_failure" if result == "unknown" else result

@@ -11,6 +11,7 @@ from stepwise.executors import (
     ExecutorRegistry,
     ExecutorResult,
     ExecutorStatus,
+    classify_api_error,
 )
 from stepwise.models import (
     DecoratorRef,
@@ -270,7 +271,7 @@ class TestAgentDefaultRetry:
         # Should be a RetryDecorator wrapping the inner executor
         assert isinstance(executor, RetryDecorator)
         assert executor._transient_only is True
-        assert executor._max_retries == 3
+        assert executor._max_retries == 5
         assert executor._backoff_base == 30
 
     def test_agent_user_retry_overrides_default(self, registry):
@@ -280,13 +281,13 @@ class TestAgentDefaultRetry:
         ref = ExecutorRef(
             type="agent",
             config={},
-            decorators=[DecoratorRef(type="retry", config={"max_retries": 5})],
+            decorators=[DecoratorRef(type="retry", config={"max_retries": 10})],
         )
         executor = registry.create(ref)
 
-        # Should be a RetryDecorator but with user's config (max_retries=5)
+        # Should be a RetryDecorator but with user's config (max_retries=10)
         assert isinstance(executor, RetryDecorator)
-        assert executor._max_retries == 5
+        assert executor._max_retries == 10
         # Should NOT be double-wrapped
         assert not isinstance(executor._executor, RetryDecorator)
 
@@ -327,6 +328,14 @@ class TestClassifyError:
             ("request timed out", "timeout"),
             ("context length exceeded", "context_length"),
             ("permission denied", "agent_failure"),
+            # Auth errors — non-transient
+            ("HTTP 401 Unauthorized", "auth_error"),
+            ("403 Forbidden", "auth_error"),
+            ("unauthorized access to API", "auth_error"),
+            # Quota/billing errors — non-transient
+            ("usage limit exceeded for this account", "quota_error"),
+            ("quota exceeded", "quota_error"),
+            ("billing account suspended", "quota_error"),
         ]:
             status = AgentStatus(state="failed", error=error_msg)
             result = executor._classify_error(status)
@@ -387,3 +396,153 @@ class TestTransientRetryIntegration:
         runs = async_engine.store.runs_for_job(job.id)
         assert runs[0].result.artifact["result"] == "done"
         assert runs[0].result.executor_meta["retry"]["attempts"] == 3
+
+
+class TestMaxRetryCap:
+    """Test that max_retries cap is enforced."""
+
+    def test_max_retry_cap_hit(self):
+        """Transient errors stop retrying after max_retries is reached."""
+        inner = _AlwaysFail(error_category="infra_failure")
+        wrapped = RetryDecorator(inner, {
+            "max_retries": 5,
+            "backoff": "none",
+            "transient_only": True,
+        })
+        ctx = ExecutionContext(
+            job_id="j1", step_name="step-a", attempt=1,
+            workspace_path="", idempotency="retriable",
+        )
+        result = wrapped.start({}, ctx)
+
+        # 1 initial + 5 retries = 6 total calls, then fails
+        assert inner._calls == 6
+        assert result.executor_state["failed"] is True
+        assert result.envelope.executor_meta["retry"]["attempts"] == 6
+
+    def test_default_max_retries_is_five(self):
+        """RetryDecorator defaults to max_retries=5 when not specified."""
+        inner = _AlwaysFail(error_category="infra_failure")
+        wrapped = RetryDecorator(inner, {
+            "backoff": "none",
+            "transient_only": True,
+        })
+        assert wrapped._max_retries == 5
+
+        ctx = ExecutionContext(
+            job_id="j1", step_name="step-a", attempt=1,
+            workspace_path="", idempotency="retriable",
+        )
+        result = wrapped.start({}, ctx)
+        assert inner._calls == 6  # 1 + 5 retries
+
+
+class TestAuthErrorSkipsRetry:
+    """Test that auth errors (401, 403) skip retry entirely."""
+
+    def test_auth_401_no_retry(self):
+        """401 error classified as auth_error skips retry."""
+        inner = _AlwaysFail(error_category="auth_error")
+        wrapped = RetryDecorator(inner, {
+            "max_retries": 5,
+            "backoff": "none",
+            "transient_only": True,
+        })
+        ctx = ExecutionContext(
+            job_id="j1", step_name="step-a", attempt=1,
+            workspace_path="", idempotency="retriable",
+        )
+        result = wrapped.start({}, ctx)
+
+        assert inner._calls == 1  # no retries
+        assert result.executor_state["failed"] is True
+
+    def test_auth_error_classification(self):
+        """Auth-related error messages classify as auth_error."""
+        assert classify_api_error("HTTP 401 Unauthorized") == "auth_error"
+        assert classify_api_error("403 Forbidden") == "auth_error"
+        assert classify_api_error("unauthorized access") == "auth_error"
+        assert classify_api_error("forbidden resource") == "auth_error"
+
+
+class TestQuotaErrorSkipsRetry:
+    """Test that quota/billing errors skip retry entirely."""
+
+    def test_quota_error_no_retry(self):
+        """Quota error classified as quota_error skips retry."""
+        inner = _AlwaysFail(error_category="quota_error")
+        wrapped = RetryDecorator(inner, {
+            "max_retries": 5,
+            "backoff": "none",
+            "transient_only": True,
+        })
+        ctx = ExecutionContext(
+            job_id="j1", step_name="step-a", attempt=1,
+            workspace_path="", idempotency="retriable",
+        )
+        result = wrapped.start({}, ctx)
+
+        assert inner._calls == 1  # no retries
+        assert result.executor_state["failed"] is True
+
+    def test_quota_error_classification(self):
+        """Quota/billing error messages classify as quota_error."""
+        assert classify_api_error("usage limit exceeded") == "quota_error"
+        assert classify_api_error("quota exceeded for this account") == "quota_error"
+        assert classify_api_error("billing account suspended") == "quota_error"
+
+    def test_billing_429_classified_as_quota(self):
+        """A 429 with billing context is quota_error, not infra_failure."""
+        # "billing" pattern matches before "429" pattern
+        assert classify_api_error("429 billing limit reached") == "quota_error"
+        assert classify_api_error("usage limit exceeded (429)") == "quota_error"
+
+
+class TestTransientRetryStillWorks:
+    """Test that genuinely transient errors still retry up to the cap."""
+
+    def test_transient_503_retries(self):
+        """503 errors retry up to max_retries."""
+        inner = _FailNTimesThenSucceed(fail_count=3, error_category="infra_failure")
+        wrapped = RetryDecorator(inner, {
+            "max_retries": 5,
+            "backoff": "none",
+            "transient_only": True,
+        })
+        ctx = ExecutionContext(
+            job_id="j1", step_name="step-a", attempt=1,
+            workspace_path="", idempotency="retriable",
+        )
+        result = wrapped.start({}, ctx)
+
+        assert inner._calls == 4  # 3 failures + 1 success
+        assert result.envelope.executor_meta.get("failed") is None
+        assert result.envelope.executor_meta["retry"]["attempts"] == 4
+
+    def test_transient_timeout_retries(self):
+        """Timeout errors retry up to max_retries."""
+        inner = _FailNTimesThenSucceed(fail_count=2, error_category="timeout")
+        wrapped = RetryDecorator(inner, {
+            "max_retries": 5,
+            "backoff": "none",
+            "transient_only": True,
+        })
+        ctx = ExecutionContext(
+            job_id="j1", step_name="step-a", attempt=1,
+            workspace_path="", idempotency="retriable",
+        )
+        result = wrapped.start({}, ctx)
+
+        assert inner._calls == 3  # 2 failures + 1 success
+
+    def test_transient_classification(self):
+        """Genuinely transient error messages classify as transient categories."""
+        assert classify_api_error("connection refused") == "infra_failure"
+        assert classify_api_error("HTTP 502 Bad Gateway") == "infra_failure"
+        assert classify_api_error("503 Service Unavailable") == "infra_failure"
+        assert classify_api_error("504 Gateway Timeout") == "timeout"  # "timeout" in msg matches first
+        assert classify_api_error("network error") == "infra_failure"
+        assert classify_api_error("request timed out") == "timeout"
+        assert classify_api_error("overloaded") == "infra_failure"
+        # Plain rate limit (no quota keywords) is transient
+        assert classify_api_error("429 rate limit exceeded") == "infra_failure"
