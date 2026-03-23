@@ -396,13 +396,35 @@ class AcpxBackend:
         output_file = step_io / f"{context.step_name}-{context.attempt}.output.jsonl"
 
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-        # Increase Node.js heap limit for acpx queue owner processes.
-        # Default V8 heap is ~2GB which is insufficient for agent sessions that
-        # accumulate large conversation state (file reads, tool call results).
-        if "NODE_OPTIONS" not in env:
-            env["NODE_OPTIONS"] = "--max-old-space-size=8192"
-        elif "--max-old-space-size" not in env.get("NODE_OPTIONS", ""):
-            env["NODE_OPTIONS"] = env["NODE_OPTIONS"] + " --max-old-space-size=8192"
+        # Clean stale acpx sessions before spawning — accumulated sessions from
+        # failed jobs cause performance issues in the session lookup (scans all records).
+        # Only clean once per engine lifetime to avoid repeated filesystem operations.
+        if not getattr(self, '_sessions_cleaned', False):
+            import shutil
+            sessions_dir = os.path.expanduser("~/.acpx/sessions")
+            queues_dir = os.path.expanduser("~/.acpx/queues")
+            if os.path.isdir(sessions_dir):
+                count = len(os.listdir(sessions_dir))
+                if count > 50:
+                    logger.info(f"Cleaning {count} stale acpx sessions (threshold: 50)")
+                    shutil.rmtree(sessions_dir, ignore_errors=True)
+                    os.makedirs(sessions_dir, exist_ok=True)
+                    # Also clean stale queue lock files
+                    if os.path.isdir(queues_dir):
+                        for f in os.listdir(queues_dir):
+                            fp = os.path.join(queues_dir, f)
+                            if f.endswith(".lock"):
+                                try:
+                                    data = json.load(open(fp))
+                                    if not _is_pid_alive(data.get("pid", 0)):
+                                        os.remove(fp)
+                                        sock = fp.replace(".lock", ".sock")
+                                        if os.path.exists(sock):
+                                            os.remove(sock)
+                                except Exception:
+                                    pass
+                    logger.info("Stale acpx sessions cleaned")
+            self.__class__._sessions_cleaned = True
 
         # Determine execution mode: exec (one-shot, no queue owner) vs session (persistent).
         # Use exec mode only for truly one-shot steps — no continue_session, no _session_name.
@@ -1034,15 +1056,22 @@ class AgentExecutor(Executor):
             context.state_update_fn(state)
 
         # Block until agent exits (safe — AsyncEngine runs this in thread pool)
-        agent_status = self.backend.wait(process)
+        try:
+            agent_status = self.backend.wait(process)
+        except Exception as e:
+            logger.error(f"[{step_id}] backend.wait() CRASHED: {type(e).__name__}: {e}", exc_info=True)
+            raise
         logger.info(f"[{step_id}] executor done ({time.monotonic() - t0:.1f}s total, status={agent_status.state})")
 
         # Clean up lingering queue owner process for this completed session.
         # Skip in exec mode — no queue owner to clean up.
         if hasattr(self.backend, 'cleanup_session_queue_owner') and not process.exec_mode:
-            self.backend.cleanup_session_queue_owner(
-                agent_status.session_id, session_name=process.session_name,
-            )
+            try:
+                self.backend.cleanup_session_queue_owner(
+                    agent_status.session_id, session_name=process.session_name,
+                )
+            except Exception as e:
+                logger.warning(f"[{step_id}] cleanup_session_queue_owner failed: {e}")
 
         state = {
             "pid": process.pid,
@@ -1090,7 +1119,11 @@ class AgentExecutor(Executor):
                 return result
 
         # Completed — extract outputs based on mode
-        envelope = self._extract_output(state, self.output_mode, agent_status)
+        try:
+            envelope = self._extract_output(state, self.output_mode, agent_status)
+        except Exception as e:
+            logger.error(f"[{step_id}] _extract_output CRASHED: {type(e).__name__}: {e}", exc_info=True)
+            raise
 
         # Auto-inject _session_id into artifact for cross-step session sharing
         if self.continue_session and process.session_name:
