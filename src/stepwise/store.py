@@ -367,6 +367,13 @@ class SQLiteStore:
         ).fetchall()
         return [self._row_to_run(r) for r in rows]
 
+    def completed_runs(self, job_id: str) -> list[StepRun]:
+        rows = self._conn.execute(
+            "SELECT * FROM step_runs WHERE job_id = ? AND status = ?",
+            (job_id, StepRunStatus.COMPLETED.value),
+        ).fetchall()
+        return [self._row_to_run(r) for r in rows]
+
     def suspended_runs(self, job_id: str) -> list[StepRun]:
         rows = self._conn.execute(
             "SELECT * FROM step_runs WHERE job_id = ? AND status = ?",
