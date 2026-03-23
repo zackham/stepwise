@@ -5,14 +5,23 @@ description: Stepwise workflow orchestration — run, create, and manage FLOW.ya
 
 # Stepwise — Rules
 
-1. **To find flows, ALWAYS run `stepwise agent-help`.** Never glob/search for flow files — flows live in multiple locations (local, registry cache, global) that only the CLI resolves. This command outputs the full catalog with inputs, outputs, and run commands.
-2. **To create a flow, use `stepwise new <name>`.** This creates `flows/<name>/FLOW.yaml`. Never create `.flow.yaml` files directly.
-3. **To run a flow:** `stepwise run <name> --wait --var k=v`
-4. **After listing flows, be helpful.** Offer to run them. If the flow has external steps, suggest `--watch` mode which opens a browser UI for interactive use. If the flow is fully automated, offer to run it with `--wait` for JSON output. Always mention what inputs (`--var`) are needed.
+1. **To find flows, ALWAYS run `stepwise agent-help`.** Never glob/search for flow files — flows live in multiple locations (local, registry cache, global) that only the CLI resolves.
+2. **To create a flow, use `stepwise new <name>`.** This creates `flows/<name>/FLOW.yaml`.
+3. **To run a flow:** `stepwise run <name> --wait --var k=v` — blocks until done, returns JSON. No server needed.
+   For concurrent jobs, use `--async` and poll with `stepwise status <job-id>`.
+4. **After listing flows, be helpful.** Offer to run them. Always mention what inputs (`--var`) are needed.
+5. **Handle suspended steps.** When a job suspends (external step waiting for input):
+   ```bash
+   stepwise status <job-id>                          # see suspended step
+   stepwise fulfill <run-id> '{"field": "value"}'    # provide input
+   ```
+6. **Do NOT modify this file.** It gets overwritten on `stepwise init` and upgrades. For project-specific flow guidance, add it to your project's CLAUDE.md or equivalent.
 
 # Stepwise
 
-Workflow orchestration for agents and humans. Runs multi-step pipelines with LLM, agent, external, poll, and script executors.
+Workflow orchestration for agents and humans. Runs multi-step pipelines with LLM, agent, external, poll, and script executors. Works out of the box — no server, no setup.
+
+For the web DAG viewer, webhook notifications, or HTTP API access, see `stepwise server start --help`.
 
 ### Flow locations
 
@@ -30,38 +39,39 @@ The CLI resolves bare flow names across: project root → `flows/` → `.stepwis
 
 Registry flows (downloaded via `stepwise get @author:name`) are cached in `.stepwise/registry/@author/slug/FLOW.yaml`. Run them with `stepwise run @author:flow-name`.
 
-### Interaction Modes
-
-1. **Automated** — `stepwise run <flow> --wait --var k=v` → JSON result on stdout
-2. **Mediated** — `--wait` returns exit 5 on suspension → `fulfill <run-id> '{}' --wait` → resumes
-3. **Monitoring** — `status <job-id> --output json` (DAG view), `list --suspended --output json` (inbox)
-4. **Data Grab** — `output <job-id> --step a,b` (per-step), `--inputs` (step inputs), `--run <run-id>`
-5. **Takeover** — `cancel <job-id> --output json`, `wait <job-id>`
-
 ### CLI Quick Reference
 
 ```
+# Running flows
 stepwise run <flow> --wait --var k=v          # run, block, get JSON result
+stepwise run <flow> --async                   # background, returns job_id
 stepwise run <flow> --watch                   # run with live web UI
-stepwise run <flow> --async                   # fire-and-forget, returns job_id
-stepwise new <name>                           # create flows/<name>/FLOW.yaml scaffold
-stepwise status <job-id> --output json        # resolved flow status (DAG view)
-stepwise output <job-id>                      # retrieve terminal outputs
-stepwise output <job-id> --step a,b           # per-step outputs
-stepwise output <job-id> --step a --inputs    # step inputs
-stepwise output --run <run-id>                # direct run output
+stepwise chain <flow1> <flow2> --var k=v      # compose flows into pipeline
+
+# Monitoring
+stepwise status <job-id> --output json        # job status (DAG view)
+stepwise output <job-id>                      # terminal outputs
+stepwise output <job-id> <step-name>          # single step output
+stepwise tail <job-id>                        # stream live events
+stepwise logs <job-id>                        # full event history
+
+# Interaction
 stepwise fulfill <run-id> '{"field": "val"}'  # satisfy external step
-stepwise fulfill <run-id> '{}' --wait         # fulfill and block on job
 stepwise list --suspended --output json       # global suspension inbox
 stepwise wait <job-id>                        # block on existing job
-stepwise cancel <job-id> --output json        # cancel with step details
-stepwise schema <flow>                        # input/output schema as JSON
+stepwise cancel <job-id>                      # cancel a running job
+
+# Flow management
+stepwise new <name>                           # create flow scaffold
 stepwise validate <flow>                      # syntax check
-stepwise run @author:flow-name                # run a registry flow (auto-fetches)
+stepwise schema <flow>                        # input/output schema
+
+# Registry
+stepwise run @author:flow-name                # run registry flow
 stepwise share <flow>                         # publish to registry
+stepwise login                                # authenticate with GitHub
 stepwise get @author:flow-name                # download from registry
 stepwise search "query"                       # search registry
-stepwise info <name>                          # registry flow details
 ```
 
 ### Exit Codes
@@ -92,24 +102,13 @@ Suspended (exit 5):
 {"status": "suspended", "job_id": "...", "suspended_steps": [{"step": "...", "run_id": "...", "prompt": "...", "fields": [...]}]}
 ```
 
-Timeout (exit 3):
-```json
-{"status": "timeout", "job_id": "...", "timeout_seconds": 300, "suspended_at_step": "..."}
-```
-
 ## Registry Flows
 
 Flows fetched from the registry (via `stepwise get @author:name`) are cached in `.stepwise/registry/@author/slug/`. These are **read-only** — never modify them in place.
 
-**To run a registry flow:** `stepwise run @author:flow-name`
-
-**To fork a registry flow for modification:**
-1. Copy the directory from `.stepwise/registry/@author/slug/` to `flows/your-name/`
-2. Set `author:` to the current user
-3. Add `forked_from: "@author:original-name"` to the YAML metadata
-4. Modify freely — it's now a local flow
-
-**Important:** Bare flow names (e.g. `stepwise run my-flow`) only resolve to local flows. Registry flows always require the `@author:name` format.
+**To fork a registry flow:**
+1. Copy from `.stepwise/registry/@author/slug/` to `flows/your-name/`
+2. Modify freely — it's now a local flow
 
 ## Creating & Modifying Flows
 
