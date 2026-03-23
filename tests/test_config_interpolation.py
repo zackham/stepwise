@@ -74,6 +74,28 @@ class TestInterpolateConfig:
         result = _interpolate_config(config, inputs)
         assert result["prompt"] == "Model: gpt-4, Task: summarize"
 
+    def test_model_with_slash_preserved(self):
+        """Model names with slashes (provider/model) are passed through unchanged."""
+        config = {"model": "$model_id"}
+        inputs = {"model_id": "google/gemini-2.5-pro"}
+        result = _interpolate_config(config, inputs)
+        assert result["model"] == "google/gemini-2.5-pro"
+
+    def test_dotted_access_for_model_field(self):
+        """$reviewer.model dotted access works for the model config field."""
+        config = {"model": "$reviewer.model"}
+        inputs = {"reviewer": {"model": "anthropic/claude-sonnet-4", "lens": "code"}}
+        result = _interpolate_config(config, inputs)
+        assert result["model"] == "anthropic/claude-sonnet-4"
+
+    def test_model_slash_not_confused_with_dotted_access(self):
+        """Slashes in resolved model names are NOT treated as dotted access."""
+        config = {"model": "$m"}
+        inputs = {"m": "google/gemini-2.5-flash-preview-05-20"}
+        result = _interpolate_config(config, inputs)
+        # The slash in the model ID must not be consumed as field separator
+        assert result["model"] == "google/gemini-2.5-flash-preview-05-20"
+
 
 # ── Integration tests ─────────────────────────────────────────────────
 

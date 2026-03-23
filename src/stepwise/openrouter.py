@@ -46,6 +46,13 @@ class OpenRouterClient:
         """Send a chat completion request to OpenRouter."""
         start = time.monotonic()
 
+        # Normalize model name: strip whitespace that can appear after $variable
+        # interpolation (e.g. "  google/gemini-2.5-pro  " → "google/gemini-2.5-pro").
+        # Slashes in model IDs (provider/model) are valid and must be preserved.
+        model = model.strip()
+        if not model:
+            raise ValueError("model name is empty — check that $variable references resolved correctly")
+
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -54,7 +61,13 @@ class OpenRouterClient:
         }
         if tools:
             payload["tools"] = tools
-            payload["tool_choice"] = {"type": "function", "function": {"name": "step_output"}}
+            # Use tool_choice "required" rather than the named-function form
+            # {"type": "function", "function": {"name": "..."}} — the named form
+            # causes 400 errors from some providers (e.g. Gemini) via OpenRouter
+            # because they don't support pinning a specific function.  "required"
+            # forces the model to call *some* tool, which is sufficient since we
+            # only ever expose the single step_output function.
+            payload["tool_choice"] = "required"
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
