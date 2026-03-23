@@ -437,18 +437,33 @@ class AcpxBackend:
         logger.info(f"[{step_id}] exec_mode={use_exec_mode} continue_session={config.get('continue_session')} _session_name={config.get('_session_name')} session_name={session_name}")
 
         if not use_exec_mode:
-            # Session mode: ensure named session exists
+            # Session mode: create or ensure named session.
+            # Use "sessions new" for first attempt (clean start, no stale references).
+            # Use "sessions ensure" for subsequent attempts (continue existing session).
+            is_continuing = bool(config.get("_session_name"))  # Has existing session to continue
             t_ensure = time.monotonic()
-            logger.info(f"[{step_id}] sessions ensure starting (session={session_name})")
-            try:
-                subprocess.run(
-                    [self.acpx_path, "--cwd", working_dir,
-                     agent, "sessions", "ensure", "--name", session_name],
-                    capture_output=True, timeout=10, env=env,
-                )
-            except (subprocess.TimeoutExpired, FileNotFoundError):
-                logger.warning(f"[{step_id}] sessions ensure timed out or not found")
-            logger.info(f"[{step_id}] sessions ensure done ({time.monotonic() - t_ensure:.1f}s)")
+            if is_continuing:
+                logger.info(f"[{step_id}] sessions ensure starting (session={session_name})")
+                try:
+                    subprocess.run(
+                        [self.acpx_path, "--cwd", working_dir,
+                         agent, "sessions", "ensure", "--name", session_name],
+                        capture_output=True, timeout=10, env=env,
+                    )
+                except (subprocess.TimeoutExpired, FileNotFoundError):
+                    logger.warning(f"[{step_id}] sessions ensure timed out or not found")
+            else:
+                # First attempt: clean session, no stale references
+                logger.info(f"[{step_id}] sessions new starting (session={session_name})")
+                try:
+                    subprocess.run(
+                        [self.acpx_path, "--cwd", working_dir,
+                         agent, "sessions", "new", "--name", session_name],
+                        capture_output=True, timeout=10, env=env,
+                    )
+                except (subprocess.TimeoutExpired, FileNotFoundError):
+                    logger.warning(f"[{step_id}] sessions new timed out or not found")
+            logger.info(f"[{step_id}] session setup done ({time.monotonic() - t_ensure:.1f}s)")
 
         # Build acpx command
         permissions = config.get("permissions") or self.default_permissions
