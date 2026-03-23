@@ -1888,7 +1888,6 @@ def cmd_run(args: argparse.Namespace) -> int:
             objective=args.objective,
             inputs=inputs if inputs else None,
             workspace=args.workspace,
-            timeout=args.timeout,
             force_local=getattr(args, "local", False),
             notify_url=getattr(args, "notify", None),
             notify_context=wait_notify_context,
@@ -3390,14 +3389,11 @@ def cmd_wait(args: argparse.Namespace) -> int:
 
         client = StepwiseClient(server_url)
         try:
-            timeout = getattr(args, "timeout", None)
-            result = client.wait(args.job_id, timeout=timeout)
+            result = client.wait(args.job_id)
             print(json.dumps(result, indent=2, default=str))
             status = result.get("status", "")
             if status == "failed":
                 return EXIT_JOB_FAILED
-            if result.get("timeout"):
-                return EXIT_CONFIG_ERROR  # exit 3 for timeout in --wait mode
             return EXIT_SUCCESS
         except StepwiseAPIError as e:
             if e.status == 0:
@@ -3426,8 +3422,7 @@ def cmd_wait(args: argparse.Namespace) -> int:
             return EXIT_JOB_FAILED
 
         engine = Engine(store, create_default_registry(), jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir)
-        timeout = getattr(args, "timeout", None)
-        return wait_for_job(engine, store, args.job_id, timeout=timeout)
+        return wait_for_job(engine, store, args.job_id)
     finally:
         store.close()
 
@@ -3850,7 +3845,6 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Fire-and-forget, returns job_id immediately")
     p_run.add_argument("--output", choices=["json"], dest="output_format",
                        help="Output format (currently only json)")
-    p_run.add_argument("--timeout", type=int, help="Timeout in seconds (for --wait)")
     p_run.add_argument("--var", action="append", dest="vars", metavar="KEY=VALUE",
                        help="Pass input variable (repeatable)")
     p_run.add_argument("--var-file", action="append", dest="var_files", metavar="KEY=PATH",
@@ -3882,7 +3876,6 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Fire-and-forget, returns job_id immediately")
     p_chain.add_argument("--output", choices=["json"], dest="output_format",
                          help="Output format (currently only json)")
-    p_chain.add_argument("--timeout", type=int, help="Timeout in seconds (for --wait)")
     p_chain.add_argument("--var", action="append", dest="vars", metavar="KEY=VALUE",
                          help="Pass input variable (repeatable)")
     p_chain.add_argument("--var-file", action="append", dest="var_files", metavar="KEY=PATH",
@@ -4019,7 +4012,6 @@ def build_parser() -> argparse.ArgumentParser:
     # wait
     p_wait = sub.add_parser("wait", help="Block until job completes or suspends")
     p_wait.add_argument("job_id", help="Job ID to wait on")
-    p_wait.add_argument("--timeout", type=int, help="Timeout in seconds")
 
     # fulfill
     p_fulfill = sub.add_parser("fulfill", help="Satisfy a suspended external step")

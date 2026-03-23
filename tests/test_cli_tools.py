@@ -647,16 +647,15 @@ steps:
         assert result["failed_step"] == "boom"
 
 
-class TestWaitTimeout:
-    """Test --wait --timeout behavior."""
+class TestWaitSuspension:
+    """Test --wait suspension behavior."""
 
-    def test_timeout_on_external_step(self, external_flow, tmp_project):
-        """--wait returns suspended status when external step blocks (before timeout)."""
+    def test_suspend_on_external_step(self, external_flow, tmp_project):
+        """--wait returns suspended status when external step blocks."""
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
             "run", str(external_flow),
             "--wait",
-            "--timeout", "5",  # generous timeout — suspension detected first
             "--var", "repo=/tmp/test",
         ])
 

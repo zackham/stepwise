@@ -806,7 +806,6 @@ def run_wait(
     objective: str | None = None,
     inputs: dict | None = None,
     workspace: str | None = None,
-    timeout: int | None = None,
     config: StepwiseConfig | None = None,
     force_local: bool = False,
     notify_url: str | None = None,
@@ -817,7 +816,7 @@ def run_wait(
     """Run a flow in blocking mode with JSON output on stdout.
 
     All logging goes to stderr. Stdout contains ONLY the JSON payload.
-    Returns exit codes: 0=success, 1=failed, 2=input error, 3=timeout, 4=cancelled, 5=suspended.
+    Returns exit codes: 0=success, 1=failed, 2=input error, 4=cancelled, 5=suspended.
     """
     import json as json_mod
     import logging
@@ -913,7 +912,6 @@ def run_wait(
                 objective=objective or flow_display_name(flow_path),
                 inputs=inputs,
                 workspace=workspace,
-                timeout=timeout,
                 notify_url=notify_url,
                 notify_context=notify_context,
                 name=name,
@@ -946,7 +944,7 @@ def run_wait(
         store.save_job(job)
 
     try:
-        return asyncio.run(_async_wait_for_job(engine, store, job.id, timeout=timeout))
+        return asyncio.run(_async_wait_for_job(engine, store, job.id))
     finally:
         store.close()
 
@@ -957,7 +955,6 @@ def _delegated_run_wait(
     objective: str,
     inputs: dict | None,
     workspace: str | None,
-    timeout: int | None,
     notify_url: str | None = None,
     notify_context: dict | None = None,
     name: str | None = None,
@@ -969,13 +966,12 @@ def _delegated_run_wait(
         _json_stdout({"status": "error", "exit_code": EXIT_JOB_FAILED, "error": err})
         return EXIT_JOB_FAILED
 
-    return asyncio.run(_delegated_wait_ws_loop(server_url, job_id, timeout))
+    return asyncio.run(_delegated_wait_ws_loop(server_url, job_id))
 
 
 async def _delegated_wait_ws_loop(
     server_url: str,
     job_id: str,
-    timeout: int | None,
 ) -> int:
     """WebSocket-driven wait loop for delegated --wait mode."""
     import json as json_mod
@@ -1019,16 +1015,6 @@ async def _delegated_wait_ws_loop(
                         "duration_seconds": round(time.time() - start_time, 1),
                     })
                     return 4  # EXIT_CANCELLED
-
-                # Check timeout
-                if timeout and (time.time() - start_time) > timeout:
-                    _json_stdout({
-                        "status": "timeout",
-                        "job_id": job_id,
-                        "timeout_seconds": timeout,
-                        "duration_seconds": round(time.time() - start_time, 1),
-                    })
-                    return 3  # EXIT_TIMEOUT
 
                 # Wait for WS notification or poll
                 if use_ws and ws_conn:
@@ -1140,7 +1126,6 @@ async def _async_wait_for_job(
     engine: AsyncEngine,
     store: SQLiteStore,
     job_id: str,
-    timeout: int | None = None,
 ) -> int:
     """Async inner loop for wait_for_job: engine runs autonomously."""
     engine_task = asyncio.create_task(engine.run())
@@ -1169,26 +1154,6 @@ async def _async_wait_for_job(
                 }
                 _json_stdout(result)
                 return 4  # EXIT_CANCELLED
-
-            # Check timeout
-            if timeout and (time.time() - start_time) > timeout:
-                job = engine.get_job(job_id)
-                suspended = engine.suspended_step_details(job_id)
-                result = {
-                    "status": "timeout",
-                    "job_id": job_id,
-                    "timeout_seconds": timeout,
-                    "completed_outputs": engine.completed_outputs(job_id),
-                    "duration_seconds": round(time.time() - start_time, 1),
-                }
-                if suspended:
-                    result["suspended_at_step"] = suspended[0]["step"]
-                    result["resume_hint"] = (
-                        f"Job is still running. Resume with: "
-                        f"stepwise fulfill {suspended[0]['run_id']} '{{...}}'"
-                    )
-                _json_stdout(result)
-                return 3  # EXIT_TIMEOUT
 
             job = engine.get_job(job_id)
 
@@ -1268,11 +1233,10 @@ def wait_for_job(
     engine: Engine,
     store: SQLiteStore,
     job_id: str,
-    timeout: int | None = None,
 ) -> int:
     """Block until a job reaches terminal state or suspension (legacy sync API).
 
-    Returns exit code: 0=completed, 1=failed, 3=timeout, 4=cancelled, 5=suspended.
+    Returns exit code: 0=completed, 1=failed, 4=cancelled, 5=suspended.
     Outputs JSON to stdout.
     """
     # Signal handling
@@ -1301,26 +1265,6 @@ def wait_for_job(
                 }
                 _json_stdout(result)
                 return 4  # EXIT_CANCELLED
-
-            # Check timeout
-            if timeout and (time.time() - start_time) > timeout:
-                job = engine.get_job(job_id)
-                suspended = engine.suspended_step_details(job_id)
-                result = {
-                    "status": "timeout",
-                    "job_id": job_id,
-                    "timeout_seconds": timeout,
-                    "completed_outputs": engine.completed_outputs(job_id),
-                    "duration_seconds": round(time.time() - start_time, 1),
-                }
-                if suspended:
-                    result["suspended_at_step"] = suspended[0]["step"]
-                    result["resume_hint"] = (
-                        f"Job is still running. Resume with: "
-                        f"stepwise fulfill {suspended[0]['run_id']} '{{...}}'"
-                    )
-                _json_stdout(result)
-                return 3  # EXIT_TIMEOUT
 
             job = engine.get_job(job_id)
 
