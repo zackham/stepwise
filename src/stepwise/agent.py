@@ -437,7 +437,6 @@ class AcpxBackend:
             cwd=working_dir,
             stdout=out_f,
             stderr=err_f,  # File, not PIPE — avoids deadlock on large stderr
-            start_new_session=True,
             env=env,
         )
         out_f.close()
@@ -1231,7 +1230,10 @@ class AgentExecutor(Executor):
         # the step-specific filename to prevent collisions in shared workspace.
         if self.output_mode == "file":
             step_output_file = self.output_path or f"{context.step_name}-output.json"
-            prompt = prompt.replace("output.json", step_output_file)
+            import re
+            # Only replace standalone "output.json", not when part of a longer filename
+            # like "explore-output.json". Match when preceded by whitespace, backtick, or quote.
+            prompt = re.sub(r'(?<=[\s`"\'])output\.json(?=[\s`"\',)])', step_output_file, prompt)
 
         return prompt
 
