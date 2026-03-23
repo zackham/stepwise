@@ -18,6 +18,7 @@ Usage:
     stepwise list --suspended [--output]   List suspended steps across jobs
     stepwise wait <job-id>                 Block until job completes or suspends
     stepwise validate <flow>               Validate flow syntax
+    stepwise flows                         List flows in this project
     stepwise templates                     List templates
     stepwise config get|set [key] [value]  Manage configuration
     stepwise schema <flow>                 Generate JSON tool contract
@@ -26,6 +27,7 @@ Usage:
     stepwise output <job-id> [step] [--step] [--run] Retrieve job/step outputs
     stepwise fulfill <run-id> '<json>'     Satisfy a suspended external step (or --stdin, --wait)
     stepwise agent-help [--update <file>]  Generate agent instructions
+    stepwise extensions [list] [--refresh] List discovered extensions
     stepwise login                          Log in to the Stepwise registry
     stepwise logout                         Log out of the Stepwise registry
     stepwise update                        Upgrade to the latest version
@@ -1275,6 +1277,75 @@ def cmd_templates(args: argparse.Namespace) -> int:
         io.log("info", "PROJECT:")
         io.log("info", "  (no project — run 'stepwise init' first)")
 
+    return EXIT_SUCCESS
+
+
+def cmd_flows(args: argparse.Namespace) -> int:
+    """List available flows in the current project."""
+    import yaml as _yaml
+
+    io = _io(args)
+
+    # Determine the project root (for flows/ directory lookup)
+    project_dir = Path(args.project_dir).resolve() if args.project_dir else Path.cwd().resolve()
+
+    found: list[dict] = []
+
+    # 1. Scan flows/<name>/FLOW.yaml
+    flows_dir = project_dir / "flows"
+    if flows_dir.is_dir():
+        for entry in sorted(flows_dir.iterdir()):
+            if entry.is_dir():
+                flow_yaml = entry / "FLOW.yaml"
+                if not flow_yaml.exists():
+                    flow_yaml = entry / "FLOW.yml"
+                if flow_yaml.exists():
+                    try:
+                        raw = _yaml.safe_load(flow_yaml.read_text()) or {}
+                    except Exception:
+                        raw = {}
+                    name = raw.get("name") or entry.name
+                    desc = raw.get("description", "")
+                    tags = raw.get("tags") or []
+                    steps = raw.get("steps") or {}
+                    found.append({
+                        "name": name,
+                        "description": desc,
+                        "steps": len(steps),
+                        "tags": tags,
+                    })
+
+    # 2. Scan *.flow.yaml in the project root
+    for flow_file in sorted(project_dir.glob("*.flow.yaml")):
+        try:
+            raw = _yaml.safe_load(flow_file.read_text()) or {}
+        except Exception:
+            raw = {}
+        name = raw.get("name") or flow_file.stem.replace(".flow", "")
+        desc = raw.get("description", "")
+        tags = raw.get("tags") or []
+        steps = raw.get("steps") or {}
+        found.append({
+            "name": name,
+            "description": desc,
+            "steps": len(steps),
+            "tags": tags,
+        })
+
+    # Sort alphabetically by name
+    found.sort(key=lambda f: f["name"].lower())
+
+    if not found:
+        io.log("info", "No flows found. Create one with: stepwise new <name>")
+        return EXIT_SUCCESS
+
+    rows = []
+    for f in found:
+        tags_str = ", ".join(f["tags"]) if f["tags"] else ""
+        desc = (f["description"] or "")[:50]
+        rows.append([f["name"], desc, str(f["steps"]), tags_str])
+
+    io.table(["NAME", "DESCRIPTION", "STEPS", "TAGS"], rows)
     return EXIT_SUCCESS
 
 
@@ -3921,6 +3992,9 @@ def build_parser() -> argparse.ArgumentParser:
     # templates
     sub.add_parser("templates", help="List available templates")
 
+    # flows
+    sub.add_parser("flows", help="List flows in this project")
+
     # config
     p_config = sub.add_parser("config", help="Manage configuration")
     p_config.add_argument("config_action", choices=["get", "set", "init"], help="Action")
@@ -4033,6 +4107,20 @@ def build_parser() -> argparse.ArgumentParser:
                               default="compact",
                               help="Output format: compact (default), json, or full")
 
+    # extensions
+    p_extensions = sub.add_parser(
+        "extensions",
+        aliases=["extension"],
+        help="List discovered extensions (stepwise-* executables on PATH)",
+    )
+    ext_sub = p_extensions.add_subparsers(dest="ext_action")
+    p_ext_list = ext_sub.add_parser("list", help="List discovered extensions")
+    p_ext_list.add_argument("--refresh", action="store_true",
+                            help="Bypass cache and force a fresh scan")
+    # Default action for bare `stepwise extensions` is also list
+    p_extensions.add_argument("--refresh", action="store_true",
+                              help="Bypass cache and force a fresh scan")
+
     # docs
     p_docs = sub.add_parser("docs", help="Print reference documentation")
     p_docs.add_argument("topic", nargs="?", help="Documentation topic (e.g., patterns, cli, executors)")
@@ -4074,6 +4162,49 @@ def build_parser() -> argparse.ArgumentParser:
                               help="Also uninstall the stepwise CLI tool")
 
     return parser
+
+
+def cmd_extensions(args: argparse.Namespace) -> int:
+    """List discovered stepwise extensions."""
+    from stepwise.extensions import scan_extensions
+
+    # Determine dot_dir for caching (optional — non-fatal if no project found)
+    dot_dir = None
+    try:
+        project = _find_project_or_exit(args)
+        dot_dir = project.dot_dir
+    except SystemExit:
+        pass
+
+    # --refresh can come from bare `stepwise extensions` or `stepwise extensions list`
+    refresh = getattr(args, "refresh", False)
+
+    extensions = scan_extensions(dot_dir=dot_dir, refresh=refresh)
+
+    if not extensions:
+        print("No extensions found.")
+        print()
+        print("Extensions are executables named 'stepwise-<name>' on your PATH.")
+        print("Example: create a script called 'stepwise-telegram' to add 'stepwise telegram'.")
+        return EXIT_SUCCESS
+
+    # Column widths
+    name_w = max(len("NAME"), max(len(e.name) for e in extensions))
+    ver_w = max(len("VERSION"), max(len(e.version or "-") for e in extensions))
+    desc_w = max(len("DESCRIPTION"), max(len(e.description or "-") for e in extensions))
+
+    header = (
+        f"{'NAME':<{name_w}}  {'VERSION':<{ver_w}}  {'DESCRIPTION':<{desc_w}}  PATH"
+    )
+    separator = "-" * len(header)
+    print(header)
+    print(separator)
+    for ext in extensions:
+        ver = ext.version or "-"
+        desc = ext.description or "-"
+        print(f"{ext.name:<{name_w}}  {ver:<{ver_w}}  {desc:<{desc_w}}  {ext.path}")
+
+    return EXIT_SUCCESS
 
 
 def cmd_cache(args: argparse.Namespace) -> int:
@@ -4274,6 +4405,7 @@ def main(argv: list[str] | None = None) -> int:
         "preflight": cmd_preflight,
         "diagram": cmd_diagram,
         "templates": cmd_templates,
+        "flows": cmd_flows,
         "config": cmd_config,
         "check": cmd_check,
         "login": cmd_login,
@@ -4298,6 +4430,8 @@ def main(argv: list[str] | None = None) -> int:
         "update": cmd_self_update,
         "welcome": cmd_welcome,
         "uninstall": cmd_uninstall,
+        "extensions": cmd_extensions,
+        "extension": cmd_extensions,
     }
 
     handler = handlers.get(args.command)
