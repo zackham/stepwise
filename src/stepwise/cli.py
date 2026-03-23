@@ -693,7 +693,9 @@ def _server_start_detached(
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        start_new_session=True,
+        process_group=0,  # New process group (detach from terminal) without new session.
+                          # start_new_session creates a session that conflicts with acpx's
+                          # queue owner setsid(), causing "Queue owner disconnected."
     )
 
     # Wait for server to become healthy

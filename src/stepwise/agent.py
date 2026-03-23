@@ -1081,6 +1081,30 @@ class AgentExecutor(Executor):
         except Exception as e:
             logger.error(f"[{step_id}] backend.wait() CRASHED: {type(e).__name__}: {e}", exc_info=True)
             raise
+
+        # Queue owner warm-up retry: when spawned from a daemon context (systemd,
+        # start_new_session, etc.), the first prompt to a new session often fails
+        # because the queue owner's setsid() races with the parent's session setup.
+        # The failed attempt warms the queue owner; a retry succeeds.
+        # Known upstream issue: https://github.com/openclaw/openclaw/issues/29979
+        if (agent_status.state == "failed"
+                and not process.exec_mode
+                and not getattr(process, '_retry_attempted', False)
+                and agent_status.error
+                and any(s in (agent_status.error or "") for s in
+                        ["Queue owner disconnected", "Interrupted", "QUEUE_RUNTIME_PROMPT_FAILED"])):
+            logger.info(f"[{step_id}] queue owner warm-up retry (first-prompt failure, retrying once)")
+            time.sleep(2)  # Give queue owner time to stabilize
+            process._retry_attempted = True
+            # Re-spawn with the same session (queue owner should be warm now)
+            retry_process = self.backend.spawn(prompt, spawn_config, context)
+            retry_process.capture_transcript = process.capture_transcript
+            retry_process.exec_mode = process.exec_mode
+            retry_process._retry_attempted = True
+            agent_status = self.backend.wait(retry_process)
+            process = retry_process  # Use the retry's process for downstream
+            logger.info(f"[{step_id}] warm-up retry result: {agent_status.state}")
+
         logger.info(f"[{step_id}] executor done ({time.monotonic() - t0:.1f}s total, status={agent_status.state})")
 
         # Clean up lingering queue owner process for this completed session.
