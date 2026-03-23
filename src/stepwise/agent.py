@@ -497,10 +497,12 @@ class AcpxBackend:
             cwd=working_dir,
             stdout=out_f,
             stderr=err_f,  # File, not PIPE — avoids deadlock on large stderr
-            process_group=0,  # New process group (for killpg cleanup) without new session.
-                              # start_new_session=True breaks acpx queue owner IPC — the
-                              # setsid() call conflicts with acpx's own setsid() for the
-                              # detached queue owner, causing "Queue owner disconnected."
+            # Do NOT set start_new_session or process_group here.
+            # The acpx queue owner uses setsid() internally. Setting either of these
+            # on the parent process creates a session/group conflict that breaks the
+            # Unix socket IPC between the acpx CLI and its queue owner, causing
+            # "Queue owner disconnected before prompt completion."
+            # For process cleanup, we track PIDs explicitly (H9) instead of killpg.
             env=env,
         )
         out_f.close()
