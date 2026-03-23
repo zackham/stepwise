@@ -188,6 +188,53 @@ def generate_agent_help(
     return _format_compact(entries, registry_entries)
 
 
+def _get_doc_description(path: Path) -> str:
+    """Extract one-line description from a markdown file."""
+    try:
+        text = path.read_text()
+    except OSError:
+        return ""
+    lines = text.split("\n")
+    past_heading = False
+    for line in lines:
+        stripped = line.strip()
+        if not past_heading:
+            if stripped.startswith("# "):
+                past_heading = True
+            continue
+        if not stripped:
+            continue
+        if stripped.startswith(">") or stripped.startswith("#") or stripped.startswith("**") or stripped.startswith("---"):
+            continue
+        if len(stripped) > 80:
+            return stripped[:77] + "..."
+        return stripped
+    return ""
+
+
+def _append_docs_section(lines: list[str]) -> None:
+    """Append a Documentation section listing available docs."""
+    from stepwise.project import get_docs_dir
+
+    docs_dir = get_docs_dir()
+    if not docs_dir:
+        return
+
+    md_files = sorted(docs_dir.rglob("*.md"))
+    if not md_files:
+        return
+
+    lines.extend(["## Documentation", ""])
+    for md_file in md_files:
+        stem = md_file.stem
+        desc = _get_doc_description(md_file)
+        entry = f"`stepwise docs {stem}`"
+        if desc:
+            entry += f" — {desc}"
+        lines.append(entry)
+    lines.append("")
+
+
 def _format_compact(entries: list[dict], registry_entries: list[dict] | None = None) -> str:
     """Tight, self-sufficient output for agent consumption.
 
@@ -304,6 +351,9 @@ def _format_compact(entries: list[dict], registry_entries: list[dict] | None = N
         "The engine validates types and returns errors — fix and retry.",
         "",
     ])
+
+    # Documentation
+    _append_docs_section(lines)
 
     # CLI reference
     lines.extend([
