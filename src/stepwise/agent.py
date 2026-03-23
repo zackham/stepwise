@@ -497,7 +497,10 @@ class AcpxBackend:
             cwd=working_dir,
             stdout=out_f,
             stderr=err_f,  # File, not PIPE — avoids deadlock on large stderr
-            start_new_session=True,
+            process_group=0,  # New process group (for killpg cleanup) without new session.
+                              # start_new_session=True breaks acpx queue owner IPC — the
+                              # setsid() call conflicts with acpx's own setsid() for the
+                              # detached queue owner, causing "Queue owner disconnected."
             env=env,
         )
         out_f.close()
