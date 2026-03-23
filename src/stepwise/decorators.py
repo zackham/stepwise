@@ -71,7 +71,7 @@ class RetryDecorator(Executor):
     """Retries on failure. Checks context.idempotency before retrying.
 
     Config keys:
-        max_retries: int (default 2) — number of retry attempts after initial failure
+        max_retries: int (default 5) — number of retry attempts after initial failure
         backoff: "none" | "exponential" — backoff strategy
         backoff_base: float (default 0.01) — base delay in seconds for exponential backoff
         transient_only: bool (default False) — when True, only retry if
@@ -80,7 +80,7 @@ class RetryDecorator(Executor):
 
     def __init__(self, executor: Executor, config: dict) -> None:
         self._executor = executor
-        self._max_retries = config.get("max_retries", 2)
+        self._max_retries = config.get("max_retries", 5)
         self._backoff = config.get("backoff", "none")
         self._backoff_base = config.get("backoff_base", 0.01)
         self._transient_only = config.get("transient_only", False)
