@@ -44,7 +44,6 @@ See [Quickstart](quickstart.md) for installation and first-run instructions.
 | `0` | Completed successfully |
 | `1` | Flow execution failed |
 | `2` | Input validation error |
-| `3` | Timeout (`--timeout` exceeded) |
 | `4` | Cancelled |
 | `5` | Suspended (all progress blocked by external steps) |
 
@@ -110,11 +109,11 @@ stepwise run council --wait --var question="Should we use Postgres?"
 Blocks until the flow completes. Prints a single JSON object to stdout — nothing else. All logging goes to stderr. This is the primary integration path for agents calling flows as tools.
 
 ```bash
-stepwise run deploy.flow.yaml --wait --timeout 300 --var repo=/path --var branch=main
+stepwise run deploy.flow.yaml --wait --var repo=/path --var branch=main
 stepwise run review.flow.yaml --wait --var-file spec=spec.md
 ```
 
-Exit codes in wait mode: 0=success, 1=failed, 2=input error, 3=timeout, 4=cancelled, 5=suspended.
+Exit codes in wait mode: 0=success, 1=failed, 2=input error, 4=cancelled, 5=suspended.
 
 When a flow has external steps and `--wait` is used, the command returns exit code 5 with a JSON response containing `suspended_steps` — each with `run_id`, `prompt`, and `fields`. Use `stepwise fulfill <run-id> '{...}' --wait` to satisfy the step and continue blocking.
 
@@ -142,7 +141,6 @@ Same as headless mode (shows step progress to stderr) but prints structured JSON
 | `--wait` | Block until completion, JSON output on stdout |
 | `--async` | Fire-and-forget, returns job_id immediately |
 | `--output json` | Print structured JSON result to stdout on completion |
-| `--timeout INT` | Timeout in seconds, used with --wait |
 | `--var KEY=VALUE` | Pass input variable (repeatable) |
 | `--var-file KEY=PATH` | Pass input from file contents (repeatable, avoids shell escaping) |
 | `--vars-file PATH` | Load variables from YAML or JSON file |
@@ -180,7 +178,6 @@ Accepts 2+ flow names or paths as positional arguments. Shares all flags with `r
 | `--wait` | Block until completion, JSON output on stdout |
 | `--async` | Fire-and-forget, returns job_id immediately |
 | `--output json` | Print structured JSON result to stdout on completion |
-| `--timeout INT` | Timeout in seconds, used with --wait |
 | `--var KEY=VALUE` | Pass input variable (repeatable) |
 | `--var-file KEY=PATH` | Pass input from file contents (repeatable) |
 | `--vars-file PATH` | Load variables from YAML or JSON file |
@@ -404,16 +401,11 @@ Block until an existing job reaches a terminal state or all progress is blocked 
 
 ```bash
 stepwise wait job-a1b2c3d4
-stepwise wait job-a1b2c3d4 --timeout 300
 ```
 
-Returns the same JSON format as stepwise run --wait. Exit code 0 for completion, 1 for failure, 5 for suspension.
+Returns the same JSON format as stepwise run --wait. Blocks indefinitely until the job reaches a terminal state. Exit code 0 for completion, 1 for failure, 5 for suspension.
 
 Useful for attaching to a job started with --async or for re-checking a job after fulfilling a step without using fulfill --wait.
-
-| Flag | Description |
-|------|-------------|
-| `--timeout INT` | Timeout in seconds |
 
 ---
 

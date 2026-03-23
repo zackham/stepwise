@@ -325,7 +325,7 @@ class TestStatusJsonCLI:
         # Run to get a job
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
-            "run", str(external_flow), "--wait", "--timeout", "5",
+            "run", str(external_flow), "--wait",
             "--var", "repo=test",
         ])
         data = json.loads(output)
@@ -358,7 +358,7 @@ class TestOutputStepCLI:
         # Run until suspended (prepare completes, approve suspends)
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
-            "run", str(external_flow), "--wait", "--timeout", "5",
+            "run", str(external_flow), "--wait",
         ])
         data = json.loads(output)
         job_id = data["job_id"]
@@ -377,7 +377,7 @@ class TestOutputStepCLI:
         """output --step for incomplete step returns null + status."""
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
-            "run", str(external_flow), "--wait", "--timeout", "5",
+            "run", str(external_flow), "--wait",
         ])
         data = json.loads(output)
         job_id = data["job_id"]
@@ -395,7 +395,7 @@ class TestOutputStepCLI:
         """output --step for nonexistent step shows error."""
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
-            "run", str(external_flow), "--wait", "--timeout", "5",
+            "run", str(external_flow), "--wait",
         ])
         data = json.loads(output)
         job_id = data["job_id"]
@@ -412,7 +412,7 @@ class TestOutputStepCLI:
         """output --step --inputs retrieves step inputs."""
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
-            "run", str(external_flow), "--wait", "--timeout", "5",
+            "run", str(external_flow), "--wait",
         ])
         data = json.loads(output)
         job_id = data["job_id"]
@@ -431,7 +431,7 @@ class TestOutputStepCLI:
         """output --run retrieves by run ID."""
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
-            "run", str(external_flow), "--wait", "--timeout", "5",
+            "run", str(external_flow), "--wait",
         ])
         data = json.loads(output)
         job_id = data["job_id"]
@@ -469,7 +469,7 @@ class TestCancelJsonCLI:
         """cancel --output json returns completed/cancelled/remaining steps."""
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
-            "run", str(external_flow), "--wait", "--timeout", "5",
+            "run", str(external_flow), "--wait",
         ])
         data = json.loads(output)
         job_id = data["job_id"]
@@ -495,10 +495,10 @@ class TestListSuspendedCLI:
         """list --suspended --output json shows pending external steps."""
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
-            "run", str(external_flow), "--wait", "--timeout", "5",
+            "run", str(external_flow), "--wait",
         ])
         data = json.loads(output)
-        assert data["status"] in ("suspended", "timeout")
+        assert data["status"] == "suspended"
 
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),

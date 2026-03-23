@@ -144,14 +144,13 @@ class StepwiseClient:
         """Check server health."""
         return self._request("GET", "/api/health")
 
-    def wait(self, job_id: str, timeout: float | None = None) -> dict:
+    def wait(self, job_id: str) -> dict:
         """Long-poll until job reaches terminal state or suspension.
 
         Note: The server doesn't have a native wait endpoint yet,
         so this polls status until terminal/suspended.
         """
         import time
-        deadline = time.time() + timeout if timeout else None
 
         while True:
             status = self.status(job_id)
@@ -166,8 +165,5 @@ class StepwiseClient:
             has_active = any(s["status"] in ("running", "delegated") for s in steps)
             if has_suspended and not has_active:
                 return status
-
-            if deadline and time.time() >= deadline:
-                return {**status, "timeout": True}
 
             time.sleep(0.5)
