@@ -861,3 +861,168 @@ steps:
         ])
 
         assert code == EXIT_SUCCESS
+
+
+# ── Wait Command (stepwise wait <job-id>) Tests ─────────────────────────
+
+
+class TestWaitCommand:
+    """Tests for N34: `stepwise wait <job-id>` re-attach and SIGTSTP detach."""
+
+    def test_wait_completed_job(self, simple_flow, tmp_project):
+        """stepwise wait on an already-completed job returns its result."""
+        # Run a flow to completion first
+        code, run_output = _capture_stdout([
+            "--project-dir", str(tmp_project),
+            "run", str(simple_flow),
+            "--wait",
+            "--var", "question=hello",
+        ])
+        assert code == EXIT_SUCCESS
+        job_id = json.loads(run_output)["job_id"]
+
+        # Now re-attach via stepwise wait
+        code, output = _capture_stdout([
+            "--project-dir", str(tmp_project),
+            "wait", job_id,
+        ])
+
+        assert code == EXIT_SUCCESS
+        result = json.loads(output)
+        assert result["status"] == "completed"
+        assert result["job_id"] == job_id
+
+    def test_wait_nonexistent_job(self, tmp_project):
+        """stepwise wait on a nonexistent job returns error."""
+        code, output = _capture_stdout([
+            "--project-dir", str(tmp_project),
+            "wait", "job-doesnotexist",
+        ])
+
+        assert code == EXIT_JOB_FAILED
+        result = json.loads(output)
+        assert "error" in result
+
+    def test_wait_failed_job(self, tmp_project):
+        """stepwise wait on a failed job returns failed status."""
+        fail_flow = tmp_project / "fail.flow.yaml"
+        fail_flow.write_text("""\
+name: fail
+steps:
+  boom:
+    run: |
+      python3 -c "import sys; sys.exit(1)"
+    outputs: [result]
+""")
+        code, run_output = _capture_stdout([
+            "--project-dir", str(tmp_project),
+            "run", str(fail_flow),
+            "--wait",
+        ])
+        assert code == EXIT_JOB_FAILED
+        job_id = json.loads(run_output)["job_id"]
+
+        # Re-attach after failure — should report failure
+        code, output = _capture_stdout([
+            "--project-dir", str(tmp_project),
+            "wait", job_id,
+        ])
+
+        assert code == EXIT_JOB_FAILED
+        result = json.loads(output)
+        assert result["status"] == "failed"
+        assert result["job_id"] == job_id
+
+    def test_wait_suspended_job(self, external_flow, tmp_project):
+        """stepwise wait on a suspended job returns suspended status."""
+        code, run_output = _capture_stdout([
+            "--project-dir", str(tmp_project),
+            "run", str(external_flow),
+            "--wait",
+            "--var", "repo=/tmp/test",
+        ])
+        assert code == 5  # EXIT_SUSPENDED
+        job_id = json.loads(run_output)["job_id"]
+
+        # Re-attach — should see suspension
+        code, output = _capture_stdout([
+            "--project-dir", str(tmp_project),
+            "wait", job_id,
+        ])
+
+        assert code == 5  # EXIT_SUSPENDED
+        result = json.loads(output)
+        assert result["status"] == "suspended"
+        assert result["job_id"] == job_id
+
+    def test_sigtstp_detach_prints_message(self, tmp_path):
+        """SIGTSTP in async wait loop writes detach message to stderr and exits 0."""
+        import signal as _signal
+        import os
+        import threading
+        import asyncio as _asyncio
+        import sys as _sys
+        import io
+
+        from stepwise.project import init_project
+        from stepwise.runner import _async_wait_for_job
+        from stepwise.engine import AsyncEngine
+        from stepwise.store import SQLiteStore
+        from stepwise.config import StepwiseConfig
+        from stepwise.registry_factory import create_default_registry
+        from stepwise.yaml_loader import load_workflow_yaml
+
+        project = init_project(tmp_path)
+        config = StepwiseConfig()
+        store = SQLiteStore(str(project.db_path))
+        registry = create_default_registry(config)
+        engine = AsyncEngine(
+            store, registry,
+            jobs_dir=str(project.jobs_dir),
+            project_dir=project.dot_dir,
+            config=config,
+        )
+
+        # A slow flow that won't finish before we send SIGTSTP
+        slow_flow = tmp_path / "slow.flow.yaml"
+        slow_flow.write_text("""\
+name: slow
+steps:
+  waiting:
+    run: |
+      python3 -c "import time; time.sleep(30)"
+    outputs: [done]
+""")
+        workflow = load_workflow_yaml(str(slow_flow))
+        job = engine.create_job(
+            objective="slow",
+            workflow=workflow,
+            inputs={},
+        )
+        store.save_job(job)
+
+        old_stderr = _sys.stderr
+        _sys.stderr = io.StringIO()
+
+        exit_code = None
+        try:
+            async def _run():
+                # Fire SIGTSTP after 150ms so the engine loop starts
+                def _fire():
+                    import time
+                    time.sleep(0.15)
+                    os.kill(os.getpid(), _signal.SIGTSTP)
+
+                threading.Thread(target=_fire, daemon=True).start()
+                return await _async_wait_for_job(engine, store, job.id)
+
+            exit_code = _asyncio.run(_run())
+            stderr_out = _sys.stderr.getvalue()
+        finally:
+            _sys.stderr = old_stderr
+            store.close()
+
+        assert exit_code == 0  # EXIT_SUCCESS — detach, not cancel
+        assert job.id in stderr_out
+        assert "stepwise wait" in stderr_out
+        assert "Detached" in stderr_out

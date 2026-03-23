@@ -977,6 +977,7 @@ async def _delegated_wait_ws_loop(
     import json as json_mod
 
     shutdown_requested = False
+    detach_requested = False
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(signal.SIGINT, lambda: _set_flag())
     loop.add_signal_handler(signal.SIGTERM, lambda: _set_flag())
@@ -984,6 +985,16 @@ async def _delegated_wait_ws_loop(
     def _set_flag():
         nonlocal shutdown_requested
         shutdown_requested = True
+
+    def _set_detach():
+        nonlocal detach_requested
+        detach_requested = True
+
+    # SIGTSTP (ctrl-z) detaches cleanly without cancelling the job
+    try:
+        loop.add_signal_handler(signal.SIGTSTP, lambda: _set_detach())
+    except (OSError, NotImplementedError):
+        pass  # SIGTSTP not available on all platforms
 
     start_time = time.time()
     base_url = server_url.rstrip("/")
@@ -1015,6 +1026,14 @@ async def _delegated_wait_ws_loop(
                         "duration_seconds": round(time.time() - start_time, 1),
                     })
                     return 4  # EXIT_CANCELLED
+
+                if detach_requested:
+                    sys.stderr.write(
+                        f"\nDetached. Job {job_id} still running."
+                        f" Re-attach with: stepwise wait {job_id}\n"
+                    )
+                    sys.stderr.flush()
+                    return EXIT_SUCCESS
 
                 # Wait for WS notification or poll
                 if use_ws and ws_conn:
@@ -1130,6 +1149,7 @@ async def _async_wait_for_job(
     """Async inner loop for wait_for_job: engine runs autonomously."""
     engine_task = asyncio.create_task(engine.run())
     shutdown_requested = False
+    detach_requested = False
 
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(signal.SIGINT, lambda: _set_flag())
@@ -1138,6 +1158,16 @@ async def _async_wait_for_job(
     def _set_flag():
         nonlocal shutdown_requested
         shutdown_requested = True
+
+    def _set_detach():
+        nonlocal detach_requested
+        detach_requested = True
+
+    # SIGTSTP (ctrl-z) detaches cleanly without cancelling the job
+    try:
+        loop.add_signal_handler(signal.SIGTSTP, lambda: _set_detach())
+    except (OSError, NotImplementedError):
+        pass  # SIGTSTP not available on all platforms
 
     engine.start_job(job_id)
     start_time = time.time()
@@ -1154,6 +1184,14 @@ async def _async_wait_for_job(
                 }
                 _json_stdout(result)
                 return 4  # EXIT_CANCELLED
+
+            if detach_requested:
+                sys.stderr.write(
+                    f"\nDetached. Job {job_id} still running."
+                    f" Re-attach with: stepwise wait {job_id}\n"
+                )
+                sys.stderr.flush()
+                return EXIT_SUCCESS
 
             job = engine.get_job(job_id)
 
@@ -1377,6 +1415,20 @@ def _is_blocked_by_suspension_from_runs(runs: list[dict]) -> bool:
         elif status in ("running", "delegated"):
             has_active = True
     return has_suspended and not has_active
+
+
+def wait_for_job_id(
+    server_url: str,
+    job_id: str,
+) -> int:
+    """Re-attach to a running job on the server and block until completion.
+
+    Uses the same WebSocket-driven wait loop as --wait mode.
+    Supports SIGTSTP (ctrl-z) to detach without cancelling the job.
+    Outputs JSON to stdout on completion/failure/suspension.
+    Returns exit code: 0=completed, 1=failed, 4=cancelled, 5=suspended.
+    """
+    return asyncio.run(_delegated_wait_ws_loop(server_url, job_id))
 
 
 def run_async(

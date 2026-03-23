@@ -3500,31 +3500,18 @@ def cmd_fulfill(args: argparse.Namespace) -> int:
 
 
 def cmd_wait(args: argparse.Namespace) -> int:
-    """Block until a job reaches terminal state or suspension."""
-    # Server routing (always JSON)
+    """Block until a job reaches terminal state or suspension.
+
+    Uses the same WebSocket-driven wait loop as --wait mode.
+    Supports SIGTSTP (ctrl-z) to detach without cancelling the job.
+    """
+    # Server routing: use WS-driven wait loop (same as --wait mode)
     server_url = _detect_server_url(args)
     if server_url:
-        from stepwise.api_client import StepwiseClient, StepwiseAPIError
+        from stepwise.runner import wait_for_job_id
+        return wait_for_job_id(server_url, args.job_id)
 
-        client = StepwiseClient(server_url)
-        try:
-            result = client.wait(args.job_id)
-            print(json.dumps(result, indent=2, default=str))
-            status = result.get("status", "")
-            if status == "failed":
-                return EXIT_JOB_FAILED
-            return EXIT_SUCCESS
-        except StepwiseAPIError as e:
-            if e.status == 0:
-                print(
-                    f"Warning: Server at {server_url} unreachable, falling back to direct mode",
-                    file=sys.stderr,
-                )
-                # Fall through to direct path
-            else:
-                print(json.dumps({"status": "error", "error": e.detail}))
-                return EXIT_JOB_FAILED
-
+    # Direct (no server): fall back to local engine path
     project = _find_project_or_exit(args)
 
     from stepwise.engine import Engine
