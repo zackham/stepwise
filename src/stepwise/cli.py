@@ -3432,6 +3432,92 @@ def cmd_wait(args: argparse.Namespace) -> int:
         store.close()
 
 
+def _get_doc_description(path: Path) -> str:
+    """Extract one-line description from a markdown file."""
+    try:
+        text = path.read_text()
+    except OSError:
+        return ""
+    lines = text.split("\n")
+    past_heading = False
+    for line in lines:
+        stripped = line.strip()
+        if not past_heading:
+            if stripped.startswith("# "):
+                past_heading = True
+            continue
+        if not stripped:
+            continue
+        # Skip blockquotes, sub-headings, metadata lines, and horizontal rules
+        if stripped.startswith(">") or stripped.startswith("#") or stripped.startswith("**") or stripped.startswith("---"):
+            continue
+        # Truncate long descriptions
+        if len(stripped) > 80:
+            return stripped[:77] + "..."
+        return stripped
+    return ""
+
+
+def _list_doc_topics(docs_dir: Path) -> None:
+    """List available doc topics with descriptions."""
+    topics = []
+    for md_file in sorted(docs_dir.rglob("*.md")):
+        stem = md_file.stem
+        desc = _get_doc_description(md_file)
+        topics.append((stem, desc))
+
+    if not topics:
+        print("No documentation files found.")
+        return
+
+    print("Available documentation topics:\n")
+    max_name = max(len(t[0]) for t in topics)
+    for name, desc in topics:
+        print(f"  {name:<{max_name}}  {desc}")
+    print(f"\nUse 'stepwise docs <topic>' to read a specific topic.")
+
+
+def cmd_docs(args: argparse.Namespace) -> int:
+    """Print reference documentation."""
+    from stepwise.project import get_docs_dir
+
+    docs_dir = get_docs_dir()
+    if docs_dir is None:
+        print("Documentation not found.", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    topic = getattr(args, "topic", None)
+
+    if not topic:
+        _list_doc_topics(docs_dir)
+        return EXIT_SUCCESS
+
+    # Collect all markdown files
+    candidates = list(docs_dir.rglob("*.md"))
+
+    # Try exact stem match
+    match = None
+    for c in candidates:
+        if c.stem == topic:
+            match = c
+            break
+
+    # Try partial match
+    if match is None:
+        for c in candidates:
+            if topic in c.stem:
+                match = c
+                break
+
+    if match is None:
+        print(f"No documentation found for '{topic}'.", file=sys.stderr)
+        print("Run 'stepwise docs' to see available topics.", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    print(match.read_text())
+    return EXIT_SUCCESS
+
+
 def cmd_agent_help(args: argparse.Namespace) -> int:
     """Generate agent-readable instructions for available flows."""
     from stepwise.agent_help import generate_agent_help, update_file
@@ -3955,6 +4041,10 @@ def build_parser() -> argparse.ArgumentParser:
                               default="compact",
                               help="Output format: compact (default), json, or full")
 
+    # docs
+    p_docs = sub.add_parser("docs", help="Print reference documentation")
+    p_docs.add_argument("topic", nargs="?", help="Documentation topic (e.g., patterns, cli, executors)")
+
     # cache
     p_cache = sub.add_parser("cache", help="Manage step result cache")
     cache_sub = p_cache.add_subparsers(dest="cache_action")
@@ -4211,6 +4301,7 @@ def main(argv: list[str] | None = None) -> int:
         "output": cmd_output,
         "fulfill": cmd_fulfill,
         "agent-help": cmd_agent_help,
+        "docs": cmd_docs,
         "cache": cmd_cache,
         "update": cmd_self_update,
         "welcome": cmd_welcome,

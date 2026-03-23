@@ -142,6 +142,24 @@ def get_bundled_web_dir() -> Path:
     return Path(__file__).parent / "_web"
 
 
+def get_docs_dir() -> Path | None:
+    """Find the docs directory.
+
+    Checks source tree first (editable installs), then bundled _docs/.
+    """
+    # Source tree (editable installs, running from checkout)
+    source_docs = Path(__file__).parent.parent.parent / "docs"
+    if source_docs.is_dir() and any(source_docs.glob("*.md")):
+        return source_docs
+
+    # Bundled docs (installed package via force-include)
+    bundled_docs = Path(__file__).parent / "_docs"
+    if bundled_docs.is_dir() and any(bundled_docs.glob("*.md")):
+        return bundled_docs
+
+    return None
+
+
 def get_web_dir() -> Path:
     """Resolve the web UI assets directory.
 
