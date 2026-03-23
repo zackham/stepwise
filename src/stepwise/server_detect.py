@@ -1,6 +1,8 @@
 """Detect whether a Stepwise server is running for the current project.
 
-Checks `.stepwise/server.pid` and probes the health endpoint.
+Resolution order:
+  1. Global registry (~/.config/stepwise/servers.json) matched by project path.
+  2. Local .stepwise/server.pid fallback.
 """
 
 from __future__ import annotations
@@ -13,6 +15,10 @@ from pathlib import Path
 def detect_server(project_dir: Path | None = None) -> str | None:
     """Check if a Stepwise server is running and reachable.
 
+    Resolution order:
+      1. Global registry (~/.config/stepwise/servers.json) matched by project path.
+      2. Local .stepwise/server.pid fallback.
+
     Args:
         project_dir: The .stepwise/ directory. If None, tries to find it.
 
@@ -22,6 +28,64 @@ def detect_server(project_dir: Path | None = None) -> str | None:
     if project_dir is None:
         return None
 
+    # 1. Registry-first: resolve by project root (parent of .stepwise/)
+    project_root = project_dir.parent
+    url = detect_server_for_project(project_root)
+    if url is not None:
+        return url
+
+    # 2. Fallback: local server.pid
+    return _detect_server_from_pidfile(project_dir)
+
+
+def detect_server_for_project(project_root: Path) -> str | None:
+    """Look up a running server for *project_root* in the global registry.
+
+    Matches registry entries by ``project_path`` field (resolved absolute path).
+    Verifies the registered PID is alive and probes the health endpoint before
+    returning a URL.
+
+    Args:
+        project_root: The project root directory (the directory that contains
+            ``.stepwise/``).
+
+    Returns:
+        Server URL if a live, healthy server is registered for this project,
+        ``None`` otherwise.
+    """
+    resolved_root = str(project_root.resolve())
+    servers = _load_registry()
+
+    for _key, entry in servers.items():
+        entry_path = entry.get("project_path", "")
+        if str(Path(entry_path).resolve()) != resolved_root:
+            continue
+
+        pid = entry.get("pid")
+        url = entry.get("url")
+        if not url:
+            continue
+
+        if pid and not _pid_alive(pid):
+            import logging
+            logging.getLogger("stepwise.server_detect").warning(
+                "Stale registry entry for %s (PID %d dead) — pruning.",
+                resolved_root,
+                pid,
+            )
+            # Prune stale entry from registry
+            del servers[_key]
+            _save_registry(servers)
+            return None
+
+        if _probe_health(url):
+            return url
+
+    return None
+
+
+def _detect_server_from_pidfile(project_dir: Path) -> str | None:
+    """Fallback: check .stepwise/server.pid for a running server."""
     pid_file = project_dir / "server.pid"
     if not pid_file.exists():
         return None
