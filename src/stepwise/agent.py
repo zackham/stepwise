@@ -404,10 +404,15 @@ class AcpxBackend:
         elif "--max-old-space-size" not in env.get("NODE_OPTIONS", ""):
             env["NODE_OPTIONS"] = env["NODE_OPTIONS"] + " --max-old-space-size=8192"
 
-        # Determine execution mode: exec (one-shot, no queue owner) vs session (persistent)
-        # Use exec mode for one-shot steps — avoids queue owner memory issues on heavy tasks.
-        # Use session mode only when continue_session needs conversation history across turns.
-        use_exec_mode = not config.get("_session_name")  # No session name = one-shot step
+        # Determine execution mode: exec (one-shot, no queue owner) vs session (persistent).
+        # Use exec mode only for truly one-shot steps — no continue_session, no _session_name.
+        # Steps with continue_session=True must use session mode even on first attempt,
+        # because downstream steps will try to continue the session.
+        use_exec_mode = (
+            not config.get("_session_name")     # No explicit session to continue
+            and not config.get("continue_session")  # Not part of a continuation chain
+        )
+        logger.info(f"[{step_id}] exec_mode={use_exec_mode} continue_session={config.get('continue_session')} _session_name={config.get('_session_name')} session_name={session_name}")
 
         if not use_exec_mode:
             # Session mode: ensure named session exists
