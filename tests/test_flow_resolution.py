@@ -144,9 +144,42 @@ class TestResolveFlowByName:
         result = resolve_flow("shared", project_dir=project)
         assert result == proj_flow
 
+    def test_dotted_name_resolves(self, tmp_path):
+        """Flow names with dots are valid and resolve correctly."""
+        flows_dir = tmp_path / "flows"
+        flows_dir.mkdir()
+        flow = flows_dir / "my.flow.flow.yaml"
+        flow.write_text(SIMPLE_FLOW)
+        assert resolve_flow("my.flow", project_dir=tmp_path) == flow
+
+    def test_versioned_name_resolves(self, tmp_path):
+        """Flow names like v2.1 are valid."""
+        flows_dir = tmp_path / "flows"
+        flows_dir.mkdir()
+        flow = flows_dir / "v2.1.flow.yaml"
+        flow.write_text(SIMPLE_FLOW)
+        assert resolve_flow("v2.1", project_dir=tmp_path) == flow
+
     def test_invalid_name_errors(self, tmp_path):
         with pytest.raises(FlowResolutionError, match="Invalid flow name"):
             resolve_flow("bad name!", project_dir=tmp_path)
+
+    def test_name_with_spaces_rejected(self, tmp_path):
+        with pytest.raises(FlowResolutionError, match="Invalid flow name"):
+            resolve_flow("my flow", project_dir=tmp_path)
+
+    def test_name_with_slash_in_middle_rejected(self, tmp_path):
+        """Names with slashes are treated as paths, not bare names."""
+        with pytest.raises(FlowResolutionError, match="not found"):
+            resolve_flow("my/flow", project_dir=tmp_path)
+
+    def test_name_with_at_sign_rejected(self, tmp_path):
+        with pytest.raises(FlowResolutionError, match="Invalid flow name"):
+            resolve_flow("my@flow", project_dir=tmp_path)
+
+    def test_name_with_hash_rejected(self, tmp_path):
+        with pytest.raises(FlowResolutionError, match="Invalid flow name"):
+            resolve_flow("my#flow", project_dir=tmp_path)
 
     def test_path_traversal_rejected(self, tmp_path):
         """Paths with / are treated as path lookups, not name resolution."""
@@ -282,6 +315,15 @@ class TestNewCommand:
         assert rc == EXIT_USAGE_ERROR
         err = capsys.readouterr().err
         assert "already exists" in err
+
+    def test_dotted_name_accepted(self, tmp_path, capsys, monkeypatch):
+        """Flow names with dots are valid for `stepwise new`."""
+        monkeypatch.chdir(tmp_path)
+        rc = main(["--project-dir", str(tmp_path), "new", "my.flow"])
+        assert rc == EXIT_SUCCESS
+        marker = tmp_path / "flows" / "my.flow" / "FLOW.yaml"
+        assert marker.exists()
+        assert "name: my.flow" in marker.read_text()
 
     def test_invalid_name_errors(self, tmp_path, capsys, monkeypatch):
         monkeypatch.chdir(tmp_path)
