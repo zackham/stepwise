@@ -557,17 +557,21 @@ def _cleanup_orphaned_acpx_processes(store: ThreadSafeStore) -> None:
 
 
 def _collect_active_agent_info(store: ThreadSafeStore) -> tuple[set[str], set[int]]:
-    """Collect ACP session IDs/names AND PIDs from ALL currently running step runs.
+    """Collect ACP session IDs/names AND PIDs from running AND recently completed step runs.
 
     Returns (active_session_ids, active_pids) — both are used to protect
-    running agents from the periodic cleanup. Session IDs protect queue owners
-    via lock file matching; PIDs protect via process-table matching.
+    running agents from the periodic cleanup.
 
-    Scans all jobs (not just active ones) because a job can be "failed" while
-    still having running agent steps.
+    Protects:
+    - Running step runs (regardless of parent job status)
+    - Recently completed step runs with continue_session=True (their queue
+      owners may still be needed by downstream steps in the chain)
     """
+    from datetime import datetime, timezone, timedelta
     active_ids: set[str] = set()
     active_pids: set[int] = set()
+
+    # Protect running steps
     for run in store.all_running_runs():
         if run.executor_state:
             if run.executor_state.get("session_id"):
@@ -578,6 +582,21 @@ def _collect_active_agent_info(store: ThreadSafeStore) -> tuple[set[str], set[in
                 active_pids.add(run.executor_state["pid"])
             if run.executor_state.get("pgid"):
                 active_pids.add(run.executor_state["pgid"])
+
+    # Protect recently completed continue_session steps (within 5 min)
+    # Their queue owners may still be needed by downstream steps
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
+    for job in store.active_jobs():
+        for run in store.completed_runs(job.id):
+            if (run.executor_state
+                    and run.executor_state.get("capture_transcript") is not None  # was an agent step
+                    and run.completed_at
+                    and run.completed_at > cutoff):
+                if run.executor_state.get("session_name"):
+                    active_ids.add(run.executor_state["session_name"])
+                if run.executor_state.get("session_id"):
+                    active_ids.add(run.executor_state["session_id"])
+
     return active_ids, active_pids
 
 
