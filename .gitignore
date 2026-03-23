@@ -44,3 +44,5 @@ data/
 # Scratch flow files at repo root
 /*.flow.yaml
 /*.flow.yaml.bak
+config.local.yaml
+*.config.local.yaml
