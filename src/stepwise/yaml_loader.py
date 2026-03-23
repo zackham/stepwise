@@ -839,6 +839,14 @@ def _parse_step(
             key_extra=cache_raw.get("key_extra"),
         )
 
+    # Step-level error policy
+    on_error_raw = step_data.get("on_error", "fail")
+    if on_error_raw not in ("fail", "continue"):
+        raise ValueError(
+            f"Step '{step_name}': invalid on_error '{on_error_raw}' "
+            f"(valid: 'fail', 'continue')"
+        )
+
     return StepDefinition(
         name=step_name,
         description=step_data.get("description", ""),
@@ -857,6 +865,7 @@ def _parse_step(
         loop_prompt=loop_prompt,
         max_continuous_attempts=max_continuous_attempts,
         cache=cache_config,
+        on_error=on_error_raw,
     )
 
 

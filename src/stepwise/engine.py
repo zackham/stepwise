@@ -874,6 +874,10 @@ class Engine:
         ):
             return False
 
+        # on_error: continue — if this step already failed, it is settled and should not re-run.
+        if latest and latest.status == StepRunStatus.FAILED and step_def.on_error == "continue":
+            return False
+
         # Check no current completed run
         if latest and latest.status == StepRunStatus.COMPLETED:
             if self._is_current(job, latest):
@@ -890,6 +894,7 @@ class Engine:
                         return False
 
         # Check regular deps (non-any_of, non-$job, non-optional): ALL must have current completed runs
+        # (or have failed with on_error: continue, which also unblocks downstream)
         regular_deps: list[str] = [
             b.source_step for b in step_def.inputs
             if not b.any_of_sources and b.source_step != "$job" and not b.optional
@@ -899,16 +904,11 @@ class Engine:
             regular_deps.append(step_def.for_each.source_step)
 
         for dep_step in regular_deps:
-            dep_latest = self.store.latest_completed_run(job.id, dep_step)
-            if not dep_latest:
-                return False
-            if not self._is_current(job, dep_latest):
-                return False
-            if self._dep_will_be_superseded(job, dep_step):
+            if not self._is_dep_settled(job, dep_step):
                 return False
 
         # Check any_of groups: at least ONE source per group must have current completed run
-        # (unless the binding is optional, in which case missing is OK)
+        # (or failed with on_error: continue — unless the binding is optional, in which case missing is OK)
         for binding in step_def.inputs:
             if binding.any_of_sources:
                 has_available = False
@@ -918,6 +918,10 @@ class Engine:
                         if not self._dep_will_be_superseded(job, src_step):
                             has_available = True
                             break
+                    # Also consider on_error: continue failed deps as available
+                    if not has_available and self._is_dep_settled_on_error_continue(job, src_step):
+                        has_available = True
+                        break
                 if not has_available and not binding.optional:
                     return False
 
@@ -952,6 +956,35 @@ class Engine:
                     target = rule.config.get("target", run.step_name)
                     if target == dep_step_name:
                         return True
+        return False
+
+    def _is_dep_settled_on_error_continue(self, job: Job, dep_step_name: str) -> bool:
+        """Check if a dep step has failed with on_error: continue (treated as settled).
+
+        Returns True if the dep's latest run is FAILED and its step definition
+        has on_error: continue. This allows downstream steps to proceed with
+        a null/error marker for that dep's outputs.
+        """
+        dep_def = job.workflow.steps.get(dep_step_name)
+        if not dep_def or dep_def.on_error != "continue":
+            return False
+        latest = self.store.latest_run(job.id, dep_step_name)
+        return latest is not None and latest.status == StepRunStatus.FAILED
+
+    def _is_dep_settled(self, job: Job, dep_step_name: str) -> bool:
+        """Check if a dep step is settled: either has a current completed run
+        or has failed with on_error: continue.
+
+        Used by _is_step_ready to determine if a regular dep unblocks downstream.
+        """
+        # Standard: current completed run
+        dep_latest = self.store.latest_completed_run(job.id, dep_step_name)
+        if dep_latest and self._is_current(job, dep_latest):
+            if not self._dep_will_be_superseded(job, dep_step_name):
+                return True
+        # on_error: continue failed dep also counts as settled
+        if self._is_dep_settled_on_error_continue(job, dep_step_name):
+            return True
         return False
 
     # ── Currentness ───────────────────────────────────────────────────────
@@ -993,6 +1026,14 @@ class Engine:
             try:
                 source_run = self.store.load_run(source_run_id)
             except KeyError:
+                return False
+            # on_error: continue failed deps are current if they are the latest run
+            dep_def = job.workflow.steps.get(dep_step)
+            if (dep_def and dep_def.on_error == "continue"
+                    and source_run.status == StepRunStatus.FAILED):
+                latest_dep = self.store.latest_run(job.id, dep_step)
+                if latest_dep and latest_dep.id == source_run.id:
+                    continue  # settled — treat as current
                 return False
             if not self._is_current(job, source_run):
                 return False
@@ -1052,12 +1093,19 @@ class Engine:
             latest = self.store.latest_completed_run(job.id, t)
             if latest and self._is_current(job, latest):
                 return True
-        # Also complete if every step has been resolved (completed or skipped)
+        # Also complete if every step has been resolved (completed or skipped),
+        # or failed with on_error: continue (treated as settled for completion purposes).
         # This handles cases where terminal steps were skipped due to
         # conditional branching (when conditions) after a loop resolved.
         all_resolved = True
         for step_name in job.workflow.steps:
             latest = self.store.latest_run(job.id, step_name)
+            step_def = job.workflow.steps.get(step_name)
+            if latest and latest.status == StepRunStatus.FAILED:
+                if step_def and step_def.on_error == "continue":
+                    continue  # on_error: continue — treated as settled
+                all_resolved = False
+                break
             if not latest or latest.status not in (StepRunStatus.COMPLETED, StepRunStatus.SKIPPED):
                 all_resolved = False
                 break
@@ -1345,17 +1393,23 @@ class Engine:
             f"Step '{step_name}' executor crashed: {type(error).__name__}: {error}",
             exc_info=True,
         )
-        run.status = StepRunStatus.FAILED
-        run.error = f"Executor crash: {type(error).__name__}: {error}"
-        run.pid = None
-        run.completed_at = _now()
-        self.store.save_run(run)
-        self._emit(job.id, STEP_FAILED, {
-            "step": step_name,
-            "attempt": run.attempt,
-            "error": str(error),
-        })
-        self._halt_job(job, run)
+        step_def = job.workflow.steps.get(step_name)
+        error_msg = f"Executor crash: {type(error).__name__}: {error}"
+        if step_def:
+            self._fail_run(job, run, step_def,
+                           error=error_msg, error_category="executor_crash")
+        else:
+            run.status = StepRunStatus.FAILED
+            run.error = error_msg
+            run.pid = None
+            run.completed_at = _now()
+            self.store.save_run(run)
+            self._emit(job.id, STEP_FAILED, {
+                "step": step_name,
+                "attempt": run.attempt,
+                "error": str(error),
+            })
+            self._halt_job(job, run)
 
     def _process_launch_result(
         self, job: Job, run: StepRun, result: ExecutorResult,
@@ -1897,7 +1951,8 @@ class Engine:
 
         for binding in step_def.inputs:
             if binding.any_of_sources:
-                # Resolve from first available completed source
+                # Resolve from first available completed source.
+                # Skip sources that failed with on_error: continue — prefer successful ones.
                 resolved = False
                 for src_step, src_field in binding.any_of_sources:
                     latest = self.store.latest_completed_run(job.id, src_step)
@@ -1916,6 +1971,16 @@ class Engine:
                         dep_run_ids[src_step] = latest.id
                         resolved = True
                         break  # first available wins
+                if not resolved:
+                    # Check if any source failed with on_error: continue
+                    for src_step, src_field in binding.any_of_sources:
+                        if self._is_dep_settled_on_error_continue(job, src_step):
+                            failed_run = self.store.latest_run(job.id, src_step)
+                            inputs[binding.local_name] = None
+                            if failed_run:
+                                dep_run_ids[src_step] = failed_run.id
+                            resolved = True
+                            break
                 if not resolved and binding.optional:
                     inputs[binding.local_name] = None
             elif binding.source_step == "$job":
@@ -1940,6 +2005,12 @@ class Engine:
                 elif binding.optional:
                     # Optional dep not available — set to None
                     inputs[binding.local_name] = None
+                elif self._is_dep_settled_on_error_continue(job, binding.source_step):
+                    # Dep failed with on_error: continue — resolve input as None
+                    failed_run = self.store.latest_run(job.id, binding.source_step)
+                    inputs[binding.local_name] = None
+                    if failed_run:
+                        dep_run_ids[binding.source_step] = failed_run.id
 
         # Record sequencing deps
         for seq_step in step_def.sequencing:
@@ -2398,7 +2469,7 @@ class Engine:
     def _fail_run(self, job: Job, run: StepRun, step_def: StepDefinition,
                   error: str, error_category: str | None = None) -> None:
         """Fail a step run and evaluate exit rules for error routing.
-        If no exit rule handles the failure, halt the job.
+        If no exit rule handles the failure, halt the job (unless on_error: continue).
         """
         run.status = StepRunStatus.FAILED
         run.error = error
@@ -2406,14 +2477,16 @@ class Engine:
         run.pid = None
         if run.result is None:
             run.result = HandoffEnvelope(
-                artifact={"error_category": error_category} if error_category else {},
+                artifact={"error_category": error_category, "_error": error} if error_category else {"_error": error},
                 sidecar=Sidecar(),
                 workspace=job.workspace_path,
                 timestamp=_now(),
             )
-        elif error_category:
-            # Inject error_category into existing artifact for exit rule evaluation
-            run.result.artifact["error_category"] = error_category
+        else:
+            # Inject error info into existing artifact for exit rule evaluation
+            if error_category:
+                run.result.artifact["error_category"] = error_category
+            run.result.artifact["_error"] = error
         run.completed_at = _now()
         self.store.save_run(run)
 
@@ -2422,7 +2495,17 @@ class Engine:
             "attempt": run.attempt,
             "error": error,
             "error_category": error_category,
+            "on_error": step_def.on_error,
         })
+
+        # on_error: continue — record failure but do not halt the job.
+        # Downstream steps will receive a null/error marker for this step's outputs.
+        if step_def.on_error == "continue":
+            _engine_logger.info(
+                "Step '%s' failed with on_error=continue — job continues",
+                run.step_name,
+            )
+            return
 
         # Try exit rules for failure routing (M4: exit rules can handle errors)
         if step_def.exit_rules:

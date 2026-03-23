@@ -448,6 +448,7 @@ class StepDefinition:
     loop_prompt: str | None = None  # alternate prompt template on attempt > 1
     max_continuous_attempts: int | None = None  # circuit breaker for session reuse
     cache: CacheConfig | None = None  # opt-in result caching
+    on_error: str = "fail"  # "fail" (default) | "continue" — step-level error policy
 
     def to_dict(self) -> dict:
         d = {
@@ -481,6 +482,8 @@ class StepDefinition:
             d["max_continuous_attempts"] = self.max_continuous_attempts
         if self.cache is not None:
             d["cache"] = self.cache.to_dict()
+        if self.on_error != "fail":
+            d["on_error"] = self.on_error
         return d
 
     @classmethod
@@ -504,6 +507,7 @@ class StepDefinition:
             loop_prompt=d.get("loop_prompt"),
             max_continuous_attempts=d.get("max_continuous_attempts"),
             cache=CacheConfig.from_dict(d["cache"]) if d.get("cache") else None,
+            on_error=d.get("on_error", "fail"),
         )
 
 
