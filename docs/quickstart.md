@@ -67,7 +67,7 @@ steps:
     inputs:
       suggestions: review.suggestions
     outputs: [result]
-    sequencing: [decide]
+    after: [decide]
 ```
 
 Four steps, three executor types:
@@ -75,7 +75,7 @@ Four steps, three executor types:
 - **gather-context** — a `script` step (the `run:` shorthand). Runs shell commands, parses JSON from stdout.
 - **review** — an `agent` step. An autonomous AI agent reviews the diff with tool access and streaming output.
 - **decide** — an `external` step. The job pauses and waits for your input via the web UI or terminal.
-- **apply-fixes** — another agent step. Only runs after `decide` completes (via `sequencing`).
+- **apply-fixes** — another agent step. Only runs after `decide` completes (via `after`).
 
 Dependencies are implicit from `inputs:` — `review` waits for `gather-context` because it needs `diff_summary` and `commits`. Steps with no data dependencies run in parallel automatically.
 

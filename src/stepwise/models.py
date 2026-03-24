@@ -433,7 +433,7 @@ class StepDefinition:
     outputs: list[str]  # declared output field names
     executor: ExecutorRef
     inputs: list[InputBinding] = field(default_factory=list)
-    sequencing: list[str] = field(default_factory=list)  # wait-for-completion deps
+    after: list[str] = field(default_factory=list)  # wait-for-completion deps
     exit_rules: list[ExitRule] = field(default_factory=list)
     idempotency: str = "idempotent"  # "idempotent" | "retriable_with_guard" | "non_retriable"
     description: str = ""  # optional human-readable description
@@ -456,7 +456,7 @@ class StepDefinition:
             "outputs": self.outputs,
             "executor": self.executor.to_dict(),
             "inputs": [b.to_dict() for b in self.inputs],
-            "sequencing": self.sequencing,
+            "after": self.after,
             "exit_rules": [r.to_dict() for r in self.exit_rules],
             "idempotency": self.idempotency,
         }
@@ -493,7 +493,7 @@ class StepDefinition:
             outputs=d["outputs"],
             executor=ExecutorRef.from_dict(d["executor"]),
             inputs=[InputBinding.from_dict(b) for b in d.get("inputs", [])],
-            sequencing=d.get("sequencing", []),
+            after=d.get("after") if "after" in d else d.get("sequencing", []),
             exit_rules=[ExitRule.from_dict(r) for r in d.get("exit_rules", [])],
             idempotency=d.get("idempotency", "idempotent"),
             when=d.get("when"),
@@ -606,11 +606,11 @@ class WorkflowDefinition:
                             f"'{binding.source_field}' on step '{binding.source_step}'"
                         )
 
-            # Check sequencing references
-            for seq_step in step.sequencing:
+            # Check after references
+            for seq_step in step.after:
                 if seq_step not in step_names:
                     errors.append(
-                        f"Step '{name}': sequencing references unknown step '{seq_step}'"
+                        f"Step '{name}': after references unknown step '{seq_step}'"
                     )
 
             # Check duplicate local names
@@ -824,14 +824,14 @@ class WorkflowDefinition:
                     loop_steps.add(name)
                     loop_steps.add(rule.config.get("target", name))
 
-        # Warn if a step has sequencing on a looping step but no when condition
+        # Warn if a step has after on a looping step but no when condition
         for name, step in self.steps.items():
             if step.when:
                 continue
-            for seq in step.sequencing:
+            for seq in step.after:
                 if seq in loop_steps:
                     warns.append(
-                        f"\u26a0 Step '{name}': has sequencing on looping step "
+                        f"\u26a0 Step '{name}': has 'after' on looping step "
                         f"'{seq}' but no 'when' condition — it will run after "
                         f"the first iteration, not after the loop exits"
                     )
@@ -889,7 +889,7 @@ class WorkflowDefinition:
         return warns
 
     def entry_steps(self) -> list[str]:
-        """Steps with no dependencies (no inputs, sequencing, or for_each source).
+        """Steps with no dependencies (no inputs, after, or for_each source).
 
         Loop back-edges are excluded: if step X depends on step Y and Y has
         a loop exit targeting X, that dependency doesn't prevent X from being
@@ -915,7 +915,7 @@ class WorkflowDefinition:
                 for b in step.inputs
             )
             has_for_each_dep = step.for_each is not None
-            if not has_step_deps and not has_any_of_deps and not step.sequencing and not has_for_each_dep:
+            if not has_step_deps and not has_any_of_deps and not step.after and not has_for_each_dep:
                 result.append(name)
         return result
 
@@ -940,7 +940,7 @@ class WorkflowDefinition:
                     # Skip self-deps and optional deps
                     if binding.source_step != step.name and not binding.optional:
                         depended_on.add(binding.source_step)
-            for seq in step.sequencing:
+            for seq in step.after:
                 depended_on.add(seq)
             if step.for_each:
                 depended_on.add(step.for_each.source_step)
@@ -970,7 +970,7 @@ class WorkflowDefinition:
                         own_deps.add(src)
                 elif b.source_step != "$job":
                     own_deps.add(b.source_step)
-            own_deps.update(step_def.sequencing)
+            own_deps.update(step_def.after)
             is_loop_internal = any(
                 rule.config.get("action") == "loop"
                 and rule.type == "always"  # Only unconditional loops
@@ -1016,7 +1016,7 @@ class WorkflowDefinition:
                         deps.add(src_step)
                 elif binding.source_step != "$job":
                     deps.add(binding.source_step)
-            for seq in step.sequencing:
+            for seq in step.after:
                 deps.add(seq)
             if step.for_each:
                 deps.add(step.for_each.source_step)

@@ -10,7 +10,7 @@ function makeStepDef(overrides: Partial<StepDefinition> = {}): StepDefinition {
     outputs: ["result"],
     executor: { type: "script", config: {}, decorators: [] },
     inputs: [],
-    sequencing: [],
+    after: [],
     exit_rules: [],
     idempotency: "idempotent",
     limits: null,

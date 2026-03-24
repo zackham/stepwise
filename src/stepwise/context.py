@@ -71,7 +71,7 @@ def topological_chain_order(
         for binding in step.inputs:
             if binding.source_step != "$job" and binding.source_step in members:
                 deps.add(binding.source_step)
-        for seq in step.sequencing:
+        for seq in step.after:
             if seq in members:
                 deps.add(seq)
         for dep in deps:

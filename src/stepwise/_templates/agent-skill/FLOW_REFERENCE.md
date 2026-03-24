@@ -43,7 +43,7 @@ steps:
       local_name: other_step.field   # from upstream step output
       from_job: $job.param           # from job-level inputs (--var)
 
-    sequencing: [step_a]             # optional — ordering without data transfer
+    after: [step_a]                  # optional — ordering without data transfer
 
     when: "python expression"        # optional — activation gate on resolved inputs
 
@@ -308,8 +308,8 @@ inputs:
   topic: $job.topic                # from job-level input (--var topic="...")
 ```
 
-- Input bindings **create implicit ordering** — no need to also add `sequencing`
-- Use `sequencing: [step]` only for ordering without data transfer
+- Input bindings **create implicit ordering** — no need to also add `after`
+- Use `after: [step]` only for ordering without data transfer
 - Dot-paths work: `step.field.nested`
 - `local_name` must be unique within a step
 - `source_field` must be in the source step's declared `outputs`
@@ -429,7 +429,7 @@ steps:
     executor: external
     prompt: "Review. Set approved=true or provide feedback."
     outputs: [approved, feedback]
-    sequencing: [draft]
+    after: [draft]
     exits:
       - name: approved
         when: "outputs.approved == 'true' or outputs.approved == True"
@@ -564,7 +564,7 @@ steps:
 - `any_of` inputs: resolves from first available completed source (>= 2 entries required)
 - At job settlement, never-started steps get SKIPPED runs for bookkeeping
 - Job completes if at least one terminal completed; fails if no terminal reached
-- Key distinction: `sequencing: [step-x]` = ordering only, `inputs: { field: step-x.field }` = data dep, `when: "expr"` = conditional gate
+- Key distinction: `after: [step-x]` = ordering only, `inputs: { field: step-x.field }` = data dep, `when: "expr"` = conditional gate
 
 ## Prompt Templating
 
@@ -665,7 +665,7 @@ decorators:
 
 ## Gotchas
 
-1. **Input bindings already imply ordering.** Don't add `sequencing: [A]` if you already have `inputs: {x: A.field}`.
+1. **Input bindings already imply ordering.** Don't add `after: [A]` if you already have `inputs: {x: A.field}`.
 2. **Agent `output_mode` must match downstream needs.** Default `effect` produces `{"status": "completed"}`, not agent text. Use `stream_result` if downstream steps need the response.
 3. **Outputs must be declared AND produced.** Artifact keys must match the step's `outputs` list — missing keys fail the step.
 4. **First-iteration null inputs in loops.** When `draft` takes `feedback` from `review` on first run, it's null. Design prompts to handle: `"Previous feedback (if any): $feedback"`.

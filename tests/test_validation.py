@@ -227,10 +227,10 @@ steps:
 
 
 class TestUngatedPostLoopWarning:
-    """Warn when a step has sequencing on a looping step but no when condition."""
+    """Warn when a step has after on a looping step but no when condition."""
 
-    def test_ungated_sequencing_on_loop_target(self):
-        """Step with sequencing on a loop target and no 'when' produces a warning."""
+    def test_ungated_after_on_loop_target(self):
+        """Step with after on a loop target and no 'when' produces a warning."""
         wf = WorkflowDefinition(steps={
             "draft": _callable_step("draft", ["content"], []),
             "review": _callable_step("review", ["score"], [
@@ -248,7 +248,7 @@ class TestUngatedPostLoopWarning:
                 outputs=["url"],
                 executor=ExecutorRef("callable", {"fn_name": "noop"}),
                 inputs=[InputBinding("content", "draft", "content")],
-                sequencing=["review"],
+                after=["review"],
                 # no when condition — this is the bug
             ),
         })
@@ -258,8 +258,8 @@ class TestUngatedPostLoopWarning:
         assert "publish" in post_loop_warns[0]
         assert "review" in post_loop_warns[0]
 
-    def test_gated_sequencing_on_loop_target_no_warning(self):
-        """Step with sequencing on a loop target AND a 'when' condition produces no warning."""
+    def test_gated_after_on_loop_target_no_warning(self):
+        """Step with after on a loop target AND a 'when' condition produces no warning."""
         wf = WorkflowDefinition(steps={
             "draft": _callable_step("draft", ["content"], []),
             "review": _callable_step("review", ["score"], [
@@ -280,7 +280,7 @@ class TestUngatedPostLoopWarning:
                     InputBinding("content", "draft", "content"),
                     InputBinding("score", "review", "score"),
                 ],
-                sequencing=["review"],
+                after=["review"],
                 when="float(score) >= 0.8",  # properly gated
             ),
         })
@@ -288,8 +288,8 @@ class TestUngatedPostLoopWarning:
         post_loop_warns = [w for w in warns if "looping step" in w]
         assert len(post_loop_warns) == 0
 
-    def test_self_loop_sequencing_warning(self):
-        """Step with sequencing on a self-looping step produces a warning."""
+    def test_self_loop_after_warning(self):
+        """Step with after on a self-looping step produces a warning."""
         wf = WorkflowDefinition(steps={
             "retry_step": _callable_step("retry_step", ["result"], [
                 ExitRule("done", "expression", {
@@ -305,7 +305,7 @@ class TestUngatedPostLoopWarning:
                 name="next_step",
                 outputs=["out"],
                 executor=ExecutorRef("callable", {"fn_name": "noop"}),
-                sequencing=["retry_step"],
+                after=["retry_step"],
                 # no when
             ),
         })
@@ -316,14 +316,14 @@ class TestUngatedPostLoopWarning:
         assert "retry_step" in post_loop_warns[0]
 
     def test_no_warning_when_no_loop(self):
-        """Step with sequencing on a non-looping step produces no warning."""
+        """Step with after on a non-looping step produces no warning."""
         wf = WorkflowDefinition(steps={
             "step_a": _callable_step("step_a", ["result"], []),
             "step_b": StepDefinition(
                 name="step_b",
                 outputs=["out"],
                 executor=ExecutorRef("callable", {"fn_name": "noop"}),
-                sequencing=["step_a"],
+                after=["step_a"],
             ),
         })
         warns = wf.warnings()

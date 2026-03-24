@@ -6,7 +6,7 @@ function makeStep(
   name: string,
   opts: {
     inputs?: Array<{ local_name: string; source_step: string; source_field: string }>;
-    sequencing?: string[];
+    after?: string[];
   } = {}
 ) {
   return {
@@ -15,7 +15,7 @@ function makeStep(
     outputs: ["result"],
     executor: { type: "script", config: {}, decorators: [] },
     inputs: opts.inputs ?? [],
-    sequencing: opts.sequencing ?? [],
+    after: opts.after ?? [],
     exit_rules: [],
     idempotency: "idempotent",
     limits: null,
@@ -152,7 +152,7 @@ describe("computeDagLayout", () => {
     expect(layout.edges).toHaveLength(0);
   });
 
-  it("deduplicates edges when same dependency comes from inputs and sequencing", () => {
+  it("deduplicates edges when same dependency comes from inputs and after", () => {
     const workflow: FlowDefinition = {
       steps: {
         A: makeStep("A"),
@@ -160,7 +160,7 @@ describe("computeDagLayout", () => {
           inputs: [
             { local_name: "x", source_step: "A", source_field: "result" },
           ],
-          sequencing: ["A"],
+          after: ["A"],
         }),
       },
     };
@@ -198,11 +198,11 @@ describe("computeDagLayout", () => {
     expect(layout.edges[0].to).toBe("B");
   });
 
-  it("uses sequencing-only edges for ordering", () => {
+  it("uses after-only edges for ordering", () => {
     const workflow: FlowDefinition = {
       steps: {
         A: makeStep("A"),
-        B: makeStep("B", { sequencing: ["A"] }),
+        B: makeStep("B", { after: ["A"] }),
       },
     };
 
@@ -248,11 +248,11 @@ describe("computeDagLayout", () => {
     expect(edge!.labels).toEqual(["result"]);
   });
 
-  it("sequencing-only edges have empty labels", () => {
+  it("after-only edges have empty labels", () => {
     const workflow: FlowDefinition = {
       steps: {
         A: makeStep("A"),
-        B: makeStep("B", { sequencing: ["A"] }),
+        B: makeStep("B", { after: ["A"] }),
       },
     };
 
@@ -266,7 +266,7 @@ describe("computeDagLayout", () => {
     const workflow: FlowDefinition = {
       steps: {
         A: makeStep("A"),
-        B: makeStep("B", { sequencing: ["A"] }),
+        B: makeStep("B", { after: ["A"] }),
       },
     };
 

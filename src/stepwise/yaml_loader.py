@@ -724,9 +724,19 @@ def _parse_step(
 
         input_bindings = _parse_inputs(step_data.get("inputs", {}), step_name)
 
-        sequencing = step_data.get("sequencing", [])
-        if isinstance(sequencing, str):
-            sequencing = [sequencing]
+        if "after" in step_data and "sequencing" in step_data:
+            raise ValueError(
+                f"Step '{step_name}': cannot use both 'after' and 'sequencing' "
+                f"(use 'after' — 'sequencing' is deprecated)"
+            )
+        if "after" in step_data:
+            after = step_data["after"] or []
+        elif "sequencing" in step_data:
+            after = step_data["sequencing"] or []
+        else:
+            after = []
+        if isinstance(after, str):
+            after = [after]
 
         return StepDefinition(
             name=step_name,
@@ -735,7 +745,7 @@ def _parse_step(
             output_schema=output_schema,
             executor=ExecutorRef("sub_flow", {"flow_ref": flow_ref} if flow_ref else {}),
             inputs=input_bindings,
-            sequencing=sequencing,
+            after=after,
             sub_flow=sub_flow,
         )
 
@@ -754,9 +764,19 @@ def _parse_step(
         if not outputs:
             outputs = ["results"]
 
-        sequencing = step_data.get("sequencing", [])
-        if isinstance(sequencing, str):
-            sequencing = [sequencing]
+        if "after" in step_data and "sequencing" in step_data:
+            raise ValueError(
+                f"Step '{step_name}': cannot use both 'after' and 'sequencing' "
+                f"(use 'after' — 'sequencing' is deprecated)"
+            )
+        if "after" in step_data:
+            after = step_data["after"] or []
+        elif "sequencing" in step_data:
+            after = step_data["sequencing"] or []
+        else:
+            after = []
+        if isinstance(after, str):
+            after = [after]
 
         return StepDefinition(
             name=step_name,
@@ -765,7 +785,7 @@ def _parse_step(
             output_schema=output_schema,
             executor=executor,
             inputs=input_bindings,
-            sequencing=sequencing,
+            after=after,
             for_each=for_each_spec,
             sub_flow=sub_flow,
         )
@@ -777,10 +797,20 @@ def _parse_step(
     # Inputs
     input_bindings = _parse_inputs(step_data.get("inputs", {}), step_name)
 
-    # Sequencing
-    sequencing = step_data.get("sequencing", [])
-    if isinstance(sequencing, str):
-        sequencing = [sequencing]
+    # After (ordering deps)
+    if "after" in step_data and "sequencing" in step_data:
+        raise ValueError(
+            f"Step '{step_name}': cannot use both 'after' and 'sequencing' "
+            f"(use 'after' — 'sequencing' is deprecated)"
+        )
+    if "after" in step_data:
+        after = step_data["after"] or []
+    elif "sequencing" in step_data:
+        after = step_data["sequencing"] or []
+    else:
+        after = []
+    if isinstance(after, str):
+        after = [after]
 
     # Exit rules
     exits_data = step_data.get("exits", [])
@@ -854,7 +884,7 @@ def _parse_step(
         output_schema=output_schema,
         executor=executor,
         inputs=input_bindings,
-        sequencing=sequencing,
+        after=after,
         exit_rules=exit_rules,
         idempotency=idempotency,
         when=when_condition,

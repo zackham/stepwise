@@ -156,7 +156,7 @@ class TestCouncilPipeline:
                 executor=ExecutorRef("script", {
                     "command": "printf '{\"models\": [\"m1\", \"m2\"]}'"
                 }),
-                sequencing=["init"],
+                after=["init"],
             ),
             "council-1": StepDefinition(
                 name="council-1", outputs=["results"],

@@ -236,7 +236,7 @@ steps:
         target: run-tests       # loop stays (backward jump)
 ```
 
-Key distinction: `sequencing: [step-x]` = ordering only, `inputs: { field: step-x.field }` = data dep, `when: "expr"` = conditional gate on resolved inputs.
+Key distinction: `after: [step-x]` = ordering only, `inputs: { field: step-x.field }` = data dep, `when: "expr"` = conditional gate on resolved inputs.
 
 Poll step (wait for external condition):
 

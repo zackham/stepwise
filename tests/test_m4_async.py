@@ -632,7 +632,7 @@ class TestLoopPattern:
                 outputs=["status"],
                 executor=ExecutorRef("callable", {"fn_name": "implement_fn"}),
                 inputs=[InputBinding("plan_content", "score", "plan_content")],
-                sequencing=["score"],
+                after=["score"],
             ),
         })
 

@@ -26,7 +26,7 @@ function makeStepDef(overrides: Partial<StepDefinition> = {}): StepDefinition {
     outputs: ["summary"],
     executor: { type: "llm", config: { prompt: "Analyze data", model: "gpt-4o" }, decorators: [] },
     inputs: [{ local_name: "raw", source_step: "fetch", source_field: "data" }],
-    sequencing: [],
+    after: [],
     exit_rules: [],
     idempotency: "default",
     limits: null,

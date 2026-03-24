@@ -922,7 +922,7 @@ steps:
       quickstart_html: gen-quickstart.html
       gallery_html: gen-gallery.html
       meta_html: gen-meta.html
-    sequencing: [review-hero, review-features, review-quickstart, review-gallery, review-meta]
+    after: [review-hero, review-features, review-quickstart, review-gallery, review-meta]
 
   # ─── Phase 8: Final Review ──────────────────────────────────────────
 
@@ -1036,4 +1036,4 @@ steps:
       html: assemble.html
       output_dir: $job.output_dir
       project_name: ingest-repo.project_name
-    sequencing: [external-review]
+    after: [external-review]

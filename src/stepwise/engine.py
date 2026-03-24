@@ -916,7 +916,7 @@ class Engine:
             b.source_step for b in step_def.inputs
             if not b.any_of_sources and b.source_step != "$job" and not b.optional
         ]
-        regular_deps.extend(step_def.sequencing)
+        regular_deps.extend(step_def.after)
         if step_def.for_each:
             regular_deps.append(step_def.for_each.source_step)
 
@@ -1030,7 +1030,7 @@ class Engine:
             b.source_step for b in step_def.inputs
             if not b.any_of_sources and b.source_step != "$job" and not b.optional
         ]
-        regular_dep_steps.extend(step_def.sequencing)
+        regular_dep_steps.extend(step_def.after)
         if step_def.for_each:
             regular_dep_steps.append(step_def.for_each.source_step)
 
@@ -1079,13 +1079,13 @@ class Engine:
         return True
 
     def _dep_steps(self, step_def: StepDefinition) -> list[str]:
-        """All dependency steps: input binding sources + sequencing + for_each source."""
+        """All dependency steps: input binding sources + after + for_each source."""
         deps = [b.source_step for b in step_def.inputs if not b.any_of_sources]
         for b in step_def.inputs:
             if b.any_of_sources:
                 for src_step, _ in b.any_of_sources:
                     deps.append(src_step)
-        deps.extend(step_def.sequencing)
+        deps.extend(step_def.after)
         if step_def.for_each:
             deps.append(step_def.for_each.source_step)
         return deps
@@ -1651,7 +1651,7 @@ class Engine:
             for binding in step.inputs:
                 if binding.source_step != "$job" and binding.source_step in all_steps:
                     has_dependents.add(binding.source_step)
-            for seq in step.sequencing:
+            for seq in step.after:
                 if seq in all_steps:
                     has_dependents.add(seq)
         return [s for s in all_steps if s not in has_dependents]
@@ -2059,8 +2059,8 @@ class Engine:
                     if failed_run:
                         dep_run_ids[binding.source_step] = failed_run.id
 
-        # Record sequencing deps
-        for seq_step in step_def.sequencing:
+        # Record after deps
+        for seq_step in step_def.after:
             latest = self.store.latest_completed_run(job.id, seq_step)
             if latest:
                 dep_run_ids[seq_step] = latest.id

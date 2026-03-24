@@ -241,7 +241,7 @@ export function StepDefinitionPanel({
     stepDef.inputs.length > 0;
   const hasControlFlow =
     stepDef.exit_rules.length > 0 ||
-    stepDef.sequencing.length > 0 ||
+    stepDef.after.length > 0 ||
     !!stepDef.for_each;
   const hasDecorators = stepDef.executor.decorators.length > 0;
   const hasSettings =
@@ -589,11 +589,11 @@ export function StepDefinitionPanel({
                     </div>
                   </div>
                 )}
-                {stepDef.sequencing.length > 0 && (
+                {stepDef.after.length > 0 && (
                   <div className="space-y-1.5">
-                    <span className="text-xs text-zinc-500">Sequencing</span>
+                    <span className="text-xs text-zinc-500">After</span>
                     <div className="flex flex-wrap gap-1.5">
-                      {stepDef.sequencing.map((s) => (
+                      {stepDef.after.map((s) => (
                         <span
                           key={s}
                           className="text-xs font-mono bg-zinc-800 text-zinc-400 px-2 py-1 rounded"

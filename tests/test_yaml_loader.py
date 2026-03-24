@@ -238,7 +238,7 @@ steps:
         assert step.exit_rules[1].config["target"] == "check"
         assert step.exit_rules[2].config["action"] == "escalate"
 
-    def test_sequencing(self):
+    def test_after(self):
         wf = load_workflow_string("""
 steps:
   a:
@@ -248,12 +248,12 @@ steps:
   b:
     run: scripts/b.py
     outputs: [result]
-    sequencing: [a]
+    after: [a]
 """)
-        assert wf.steps["b"].sequencing == ["a"]
+        assert wf.steps["b"].after == ["a"]
 
-    def test_sequencing_string(self):
-        """Sequencing as a single string (not list) should be accepted."""
+    def test_after_string(self):
+        """After as a single string (not list) should be accepted."""
         wf = load_workflow_string("""
 steps:
   a:
@@ -263,9 +263,9 @@ steps:
   b:
     run: scripts/b.py
     outputs: [result]
-    sequencing: a
+    after: a
 """)
-        assert wf.steps["b"].sequencing == ["a"]
+        assert wf.steps["b"].after == ["a"]
 
     def test_decorators(self):
         wf = load_workflow_string("""
@@ -367,6 +367,34 @@ steps:
 """)
         rules = wf.steps["check"].exit_rules
         assert rules[0].priority > rules[1].priority
+
+    def test_sequencing_deprecated_alias(self):
+        """The old 'sequencing' key still works as a deprecated alias."""
+        wf = load_workflow_string("""
+steps:
+  a:
+    run: echo ok
+    outputs: [x]
+  b:
+    run: echo ok
+    outputs: [y]
+    sequencing: [a]
+""")
+        assert wf.steps["b"].after == ["a"]
+
+    def test_after_and_sequencing_conflict(self):
+        with pytest.raises(YAMLLoadError, match="cannot use both"):
+            load_workflow_string("""
+steps:
+  a:
+    run: echo ok
+    outputs: [x]
+  b:
+    run: echo ok
+    outputs: [y]
+    after: [a]
+    sequencing: [a]
+""")
 
 
 # ── Error Cases ──────────────────────────────────────────────────────
@@ -512,14 +540,14 @@ steps:
         with pytest.raises(YAMLLoadError, match="must be a mapping"):
             load_workflow_string("- just\n- a\n- list")
 
-    def test_sequencing_unknown_step(self):
+    def test_after_unknown_step(self):
         with pytest.raises(YAMLLoadError, match="unknown step"):
             load_workflow_string("""
 steps:
   a:
     run: scripts/a.py
     outputs: [result]
-    sequencing: [nonexistent]
+    after: [nonexistent]
 """)
 
 
@@ -559,7 +587,7 @@ steps:
     outputs: [url]
     inputs:
       content: draft.content
-    sequencing: [review]
+    after: [review]
 """)
         # Structure checks
         assert len(wf.steps) == 3
