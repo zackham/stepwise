@@ -46,7 +46,7 @@ Returns a JSON tool contract with parameter schemas, output fields, and external
 ### 3. Run a flow
 
 ```bash
-stepwise run council --wait --var question="Should we migrate to microservices?" --output json
+stepwise run council --wait --input question="Should we migrate to microservices?" --output json
 ```
 
 Output:
@@ -71,7 +71,7 @@ Every `stepwise run --wait` call returns a structured exit code. The agent shoul
 |---|---|---|---|
 | 0 | `completed` | Flow finished successfully | Parse `outputs[0]` |
 | 1 | `failed` | A step failed | Read `error` and `failed_step`; check `completed_outputs` for partial results |
-| 2 | `error` | Invalid input | Read `error` message — it tells you which `--var` to add |
+| 2 | `error` | Invalid input | Read `error` message — it tells you which `--input` to add |
 | 3 | `timeout` | Timed out (job still alive) | Use `stepwise output <job_id>` to check progress, or `stepwise fulfill` if suspended |
 | 4 | `cancelled` | Job was cancelled | Retry or report to user |
 | 5 | `suspended` | Waiting for external input | Read `suspended_steps` and fulfill (see below) |
@@ -79,7 +79,7 @@ Every `stepwise run --wait` call returns a structured exit code. The agent shoul
 Example error handling in a script context:
 
 ```bash
-result=$(stepwise run my-flow --wait --var input="data" --output json 2>/dev/null)
+result=$(stepwise run my-flow --wait --input input="data" --output json 2>/dev/null)
 exit_code=$?
 
 case $exit_code in
@@ -98,7 +98,7 @@ esac
 Call a flow, wait for the result, act on it:
 
 ```bash
-stepwise run code-review --wait --var repo_path="/path/to/repo" --output json
+stepwise run code-review --wait --input repo_path="/path/to/repo" --output json
 ```
 
 The agent treats this like a subprocess call — structured in, structured out. Works for any flow that runs to completion without external steps.
@@ -136,7 +136,7 @@ For long-running flows, use async mode to avoid blocking:
 
 ```bash
 # Start the flow — returns immediately
-stepwise run long-analysis --async --var dataset="large.csv"
+stepwise run long-analysis --async --input dataset="large.csv"
 # → {"job_id": "job-e5f6g7h8"}
 
 # Check progress later
@@ -175,7 +175,7 @@ After running `stepwise agent-help --update AGENTS.md`, your file will contain:
 ## Available Flows
 
 ### council
-Run: `stepwise run council --wait --var question="..."`
+Run: `stepwise run council --wait --input question="..."`
 Outputs: synthesis, model_responses
 ...
 <!-- STEPWISE:END -->
@@ -198,7 +198,7 @@ This means teams can share flows across different agent setups. Write once, call
 ## Troubleshooting
 
 **"Missing required input" (exit code 2)**
-Run `stepwise schema <flow>` to see required inputs. The error message tells you exactly which `--var` flags to add.
+Run `stepwise schema <flow>` to see required inputs. The error message tells you exactly which `--input` flags to add.
 
 **Agent doesn't know about flows**
 Re-run `stepwise agent-help --update AGENTS.md` to refresh the instruction block. Make sure your agent's configuration points to the right instruction file.

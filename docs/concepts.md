@@ -20,7 +20,7 @@ Stepwise has three runtime concepts, a dependency system, and a control flow mec
 A **job** is a unit of work with an objective, initial inputs, and a workflow.
 
 ```bash
-stepwise run code-review --var repo="/path/to/repo" --var branch="feature-x"
+stepwise run code-review --input repo="/path/to/repo" --input branch="feature-x"
 ```
 
 Jobs track their own lifecycle: created → running → completed/failed. They persist to SQLite — if the process restarts, the job resumes where it left off.
@@ -332,7 +332,7 @@ A Stepwise flow is a prompted workflow run with a working directory. The input i
 
 ```bash
 # Agent calls a flow and gets JSON back
-stepwise run council --wait --var question="Should we use Postgres?"
+stepwise run council --wait --input question="Should we use Postgres?"
 
 # Self-documenting: generate the instructions block for CLAUDE.md
 stepwise agent-help --update CLAUDE.md
@@ -360,9 +360,9 @@ Agents interact with flows in five modes, all using the same flow definition:
 ### Design for Agents
 
 - **Stdout purity**: `--wait` prints ONLY the JSON payload to stdout. Zero logging, zero progress noise.
-- **Actionable errors**: Every error includes the fix. `Missing required input 'question'. Usage: --var question="..."`.
+- **Actionable errors**: Every error includes the fix. `Missing required input 'question'. Usage: --input question="..."`.
 - **Explicit exit codes**: 0=success, 1=failed, 2=input error, 3=timeout, 4=cancelled, 5=suspended.
 - **Partial outputs on failure**: Steps that completed before the failure are included in the response.
-- **`--var-file key=path`**: Agents write long inputs to a temp file and pass the path — no shell escaping needed.
+- **`--input key=@path`**: Agents write long inputs to a temp file and pass the path — no shell escaping needed.
 - **Idempotent fulfill**: Double-fulfilling a step returns an error but doesn't corrupt state.
 - **Project hooks**: `.stepwise/hooks/on-suspend` fires when steps suspend — agents and hooks can race safely.

@@ -40,8 +40,8 @@ result = subprocess.run(
     [
         "stepwise", "run", "code-review",
         "--wait", "--output", "json",
-        "--var", "repo_path=/path/to/repo",
-        "--var", "branch=main",
+        "--input", "repo_path=/path/to/repo",
+        "--input", "branch=main",
     ],
     capture_output=True,
     text=True,
@@ -85,7 +85,7 @@ def run_flow(
     """Run a Stepwise flow and return parsed output."""
     cmd = ["stepwise", "run", flow, "--wait", "--output", "json"]
     for key, value in variables.items():
-        cmd.extend(["--var", f"{key}={value}"])
+        cmd.extend(["--input", f"{key}={value}"])
     if timeout:
         cmd.extend(["--timeout", str(timeout)])
 
@@ -142,7 +142,7 @@ def run_flow_async(flow: str, variables: dict[str, str]) -> str:
     """Start a flow asynchronously. Returns job_id."""
     cmd = ["stepwise", "run", flow, "--async"]
     for key, value in variables.items():
-        cmd.extend(["--var", f"{key}={value}"])
+        cmd.extend(["--input", f"{key}={value}"])
 
     result = subprocess.run(cmd, capture_output=True, text=True)
     data = json.loads(result.stdout)
@@ -190,7 +190,7 @@ Instead of polling, receive push notifications when jobs complete, suspend, or f
 
 ```bash
 stepwise run my-flow --async \
-  --var input="data" \
+  --input input="data" \
   --notify "https://your-app.com/webhooks/stepwise" \
   --notify-context '{"request_id": "req-123"}'
 ```
@@ -245,7 +245,7 @@ All `stepwise run --wait` calls return these exit codes:
 |---|---|---|
 | 0 | `completed` | Success — read `outputs[0]` |
 | 1 | `failed` | Step failed — read `error`, `failed_step`, `completed_outputs` |
-| 2 | `error` | Invalid input — read `error` for which `--var` to add |
+| 2 | `error` | Invalid input — read `error` for which `--input` to add |
 | 3 | `timeout` | Timed out — job still alive, use `stepwise output` to check |
 | 4 | `cancelled` | Job cancelled |
 | 5 | `suspended` | Waiting for external input — read `suspended_steps` |
@@ -299,10 +299,10 @@ All `stepwise run --wait` calls return these exit codes:
 
 ## Passing Large Inputs
 
-For inputs that are multiline or contain special characters, use `--var-file`:
+For inputs that are multiline or contain special characters, use `--input KEY=@path`:
 
 ```bash
-stepwise run analyze --wait --var-file document=report.md --var format="summary" --output json
+stepwise run analyze --wait --input document=@report.md --input format="summary" --output json
 ```
 
 This reads the file contents as the variable value. For multiple variables from a single file:

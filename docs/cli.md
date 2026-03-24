@@ -87,7 +87,7 @@ Runs the flow headless and generates a self-contained HTML report on completion.
 #### Passing inputs
 
 ```bash
-stepwise run my-flow.flow.yaml --var topic="distributed caching" --var depth=3
+stepwise run my-flow.flow.yaml --input topic="distributed caching" --input depth=3
 stepwise run my-flow.flow.yaml --vars-file inputs.yaml
 ```
 
@@ -97,20 +97,20 @@ Input variables are available in steps via `$job.field_name`:
 steps:
   research:
     inputs:
-      topic: $job.topic       # ← reads from --var topic="..."
+      topic: $job.topic       # ← reads from --input topic="..."
 ```
 
 #### Agent mode (--wait)
 
 ```bash
-stepwise run council --wait --var question="Should we use Postgres?"
+stepwise run council --wait --input question="Should we use Postgres?"
 ```
 
 Blocks until the flow completes. Prints a single JSON object to stdout — nothing else. All logging goes to stderr. This is the primary integration path for agents calling flows as tools.
 
 ```bash
-stepwise run deploy.flow.yaml --wait --var repo=/path --var branch=main
-stepwise run review.flow.yaml --wait --var-file spec=spec.md
+stepwise run deploy.flow.yaml --wait --input repo=/path --input branch=main
+stepwise run review.flow.yaml --wait --input spec=@spec.md
 ```
 
 Exit codes in wait mode: 0=success, 1=failed, 2=input error, 4=cancelled, 5=suspended.
@@ -120,7 +120,7 @@ When a flow has external steps and `--wait` is used, the command returns exit co
 #### Async mode (--async)
 
 ```bash
-stepwise run council --async --var question="..."
+stepwise run council --async --input question="..."
 ```
 
 Returns `{"job_id": "job-a1b2c3d4", "status": "running"}`.
@@ -130,7 +130,7 @@ Fire-and-forget. Spawns a detached background process (no server required), retu
 #### JSON output (--output json)
 
 ```bash
-stepwise run my-flow.flow.yaml --output json --var k=v
+stepwise run my-flow.flow.yaml --output json --input k=v
 ```
 
 Same as headless mode (shows step progress to stderr) but prints structured JSON result to stdout on completion. Combine with --wait for fully silent machine-readable output.
@@ -141,8 +141,8 @@ Same as headless mode (shows step progress to stderr) but prints structured JSON
 | `--wait` | Block until completion, JSON output on stdout |
 | `--async` | Fire-and-forget, returns job_id immediately |
 | `--output json` | Print structured JSON result to stdout on completion |
-| `--var KEY=VALUE` | Pass input variable (repeatable) |
-| `--var-file KEY=PATH` | Pass input from file contents (repeatable, avoids shell escaping) |
+| `--input KEY=VALUE` | Pass input variable (repeatable) |
+| `--input KEY=@PATH` | Pass input from file contents (`@` prefix, repeatable, avoids shell escaping) |
 | `--vars-file PATH` | Load variables from YAML or JSON file |
 | `--port INT` | Override port for --watch (default: random) |
 | `--objective STR` | Set job objective (default: flow filename) |
@@ -167,7 +167,7 @@ See [Patterns](patterns.md) for pipeline composition examples.
 
 ```bash
 stepwise chain fetch-data.flow.yaml transform.flow.yaml report.flow.yaml
-stepwise chain fetch transform report --var url="https://example.com"
+stepwise chain fetch transform report --input url="https://example.com"
 ```
 
 Accepts 2+ flow names or paths as positional arguments. Shares all flags with `run`:
@@ -178,8 +178,8 @@ Accepts 2+ flow names or paths as positional arguments. Shares all flags with `r
 | `--wait` | Block until completion, JSON output on stdout |
 | `--async` | Fire-and-forget, returns job_id immediately |
 | `--output json` | Print structured JSON result to stdout on completion |
-| `--var KEY=VALUE` | Pass input variable (repeatable) |
-| `--var-file KEY=PATH` | Pass input from file contents (repeatable) |
+| `--input KEY=VALUE` | Pass input variable (repeatable) |
+| `--input KEY=@PATH` | Pass input from file contents (`@` prefix, repeatable) |
 | `--vars-file PATH` | Load variables from YAML or JSON file |
 | `--port INT` | Override port for --watch |
 | `--objective STR` | Set job objective (default: chain name) |
@@ -195,8 +195,8 @@ Accepts 2+ flow names or paths as positional arguments. Shares all flags with `r
 | `--meta KEY=VALUE` | Set job metadata (dot notation) |
 
 ```bash
-stepwise chain research analyze synthesize --watch --var topic="AI safety"
-stepwise chain fetch transform --wait --var url="https://api.example.com/data"
+stepwise chain research analyze synthesize --watch --input topic="AI safety"
+stepwise chain fetch transform --wait --input url="https://api.example.com/data"
 ```
 
 ---
@@ -263,13 +263,13 @@ Pre-run check: validates config, requirements, and model resolution for a flow. 
 
 ```bash
 stepwise preflight my-flow.flow.yaml
-stepwise preflight my-flow.flow.yaml --var api_key=sk-test
+stepwise preflight my-flow.flow.yaml --input api_key=sk-test
 ```
 
 | Flag | Description |
 |------|-------------|
 | `flow` | Flow name or path to `.flow.yaml` file (positional) |
-| `--var KEY=VALUE` | Variable override (repeatable) |
+| `--input KEY=VALUE` | Variable override (repeatable) |
 
 ---
 
@@ -873,7 +873,7 @@ stepwise cache clear --step fetch          # clear for a specific step
 Show the computed cache key for a step. Useful for understanding why a step is or isn't getting cache hits.
 
 ```bash
-stepwise cache debug my-flow.flow.yaml fetch --var url="https://example.com"
+stepwise cache debug my-flow.flow.yaml fetch --input url="https://example.com"
 ```
 
 | Argument | Description |
@@ -883,7 +883,7 @@ stepwise cache debug my-flow.flow.yaml fetch --var url="https://example.com"
 
 | Flag | Description |
 |------|-------------|
-| `--var KEY=VALUE` | Input variable (repeatable) |
+| `--input KEY=VALUE` | Input variable (repeatable) |
 
 ---
 

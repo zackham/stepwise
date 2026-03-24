@@ -28,7 +28,7 @@ from stepwise.runner import (
     EXIT_SUCCESS,
     EXIT_USAGE_ERROR,
     load_vars_file,
-    parse_vars,
+    parse_inputs,
     run_flow,
 )
 from stepwise.store import SQLiteStore
@@ -234,31 +234,31 @@ class TestExternalStepEndToEnd:
 
 
 class TestParseVars:
-    """--var flag parsing."""
+    """--input flag parsing."""
 
     def test_simple_key_value(self):
-        result = parse_vars(["key=value"])
+        result = parse_inputs(["key=value"])
         assert result == {"key": "value"}
 
     def test_splits_on_first_equals(self):
-        result = parse_vars(["key=value=with=equals"])
+        result = parse_inputs(["key=value=with=equals"])
         assert result == {"key": "value=with=equals"}
 
     def test_multiple_vars(self):
-        result = parse_vars(["env=staging", "region=us-west-2"])
+        result = parse_inputs(["env=staging", "region=us-west-2"])
         assert result == {"env": "staging", "region": "us-west-2"}
 
     def test_empty_list(self):
-        result = parse_vars([])
+        result = parse_inputs([])
         assert result == {}
 
     def test_none(self):
-        result = parse_vars(None)
+        result = parse_inputs(None)
         assert result == {}
 
     def test_no_equals_raises(self):
         with pytest.raises(ValueError, match="KEY=VALUE"):
-            parse_vars(["invalid"])
+            parse_inputs(["invalid"])
 
 
 class TestLoadVarsFile:

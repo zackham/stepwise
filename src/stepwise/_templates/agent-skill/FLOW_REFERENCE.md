@@ -41,7 +41,7 @@ steps:
 
     inputs:                          # optional
       local_name: other_step.field   # from upstream step output
-      from_job: $job.param           # from job-level inputs (--var)
+      from_job: $job.param           # from job-level inputs (--input)
 
     after: [step_a]                  # optional — ordering without data transfer
 
@@ -305,7 +305,7 @@ steps:
 ```yaml
 inputs:
   data: fetch_step.result          # from upstream step's output field
-  topic: $job.topic                # from job-level input (--var topic="...")
+  topic: $job.topic                # from job-level input (--input topic="...")
 ```
 
 - Input bindings **create implicit ordering** — no need to also add `after`
@@ -344,10 +344,10 @@ inputs:
 
 **Cycle detection:** A cycle in the dependency graph is valid if every cycle contains at least one `optional: true` edge.
 
-Job inputs are passed via `--var` on the CLI or in the `inputs` dict via the API:
+Job inputs are passed via `--input` on the CLI or in the `inputs` dict via the API:
 
 ```bash
-stepwise run my-flow.flow.yaml --var topic="login flow UX"
+stepwise run my-flow.flow.yaml --input topic="login flow UX"
 ```
 
 ## Exit Rules

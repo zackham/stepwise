@@ -1243,7 +1243,7 @@ def cmd_new(args: argparse.Namespace) -> int:
         f'description: ""\n'
         f"\n"
         f"# A 3-step workflow: gather data → analyze with LLM → format results\n"
-        f"# Run with: stepwise run {name} --var topic=\"your topic\"\n"
+        f"# Run with: stepwise run {name} --input topic=\"your topic\"\n"
         f"\n"
         f"config:\n"
         f"  topic:\n"
@@ -1285,7 +1285,7 @@ def cmd_new(args: argparse.Namespace) -> int:
 
     io.log("success", f"Created flows/{name}/{FLOW_DIR_MARKER}")
     io.log("info", f"Edit: {flow_dir / FLOW_DIR_MARKER}")
-    io.log("info", f"Run:  stepwise run {name} --var topic=\"your topic\"")
+    io.log("info", f"Run:  stepwise run {name} --input topic=\"your topic\"")
     return EXIT_SUCCESS
 
 
@@ -1675,13 +1675,13 @@ def cmd_preflight(args: argparse.Namespace) -> int:
 
     if job_fields:
         config = load_flow_config(flow_path, wf)
-        # Also apply --var overrides for checking
-        var_overrides = {}
-        for pair in getattr(args, "var", None) or []:
+        # Also apply --input overrides for checking
+        input_overrides = {}
+        for pair in getattr(args, "inputs", None) or []:
             if "=" in pair:
                 k, v = pair.split("=", 1)
-                var_overrides[k] = v
-        merged = {**config, **var_overrides}
+                input_overrides[k] = v
+        merged = {**config, **input_overrides}
 
         from_defaults = sum(1 for v in wf.config_vars if v.default is not None and v.name in job_fields)
         from_local = sum(1 for k in merged if k not in {v.name: v for v in wf.config_vars if v.default is not None} and k in job_fields)
@@ -1701,7 +1701,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
                 if cv and cv.sensitive:
                     io.log("info", f"  ✗ {m}{desc} — set STEPWISE_VAR_{m.upper()} or config.local.yaml")
                 else:
-                    io.log("info", f"  ✗ {m}{desc} — use --var {m}=\"...\" or config.local.yaml")
+                    io.log("info", f"  ✗ {m}{desc} — use --input {m}=\"...\" or config.local.yaml")
     else:
         io.log("success", "Config:       no config variables needed")
 
@@ -1882,7 +1882,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     from stepwise.flow_resolution import (
         FlowResolutionError, parse_registry_ref, resolve_flow, resolve_registry_flow,
     )
-    from stepwise.runner import run_flow, parse_vars, load_vars_file, load_flow_config
+    from stepwise.runner import run_flow, parse_inputs, load_vars_file, load_flow_config
 
     io = _io(args)
     project = _find_project_or_exit(args, auto_init=True)
@@ -1929,7 +1929,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             return EXIT_USAGE_ERROR
 
     try:
-        inputs.update(parse_vars(args.vars))
+        inputs.update(parse_inputs(args.inputs))
     except ValueError as e:
         if getattr(args, "wait", False) or getattr(args, "async_mode", False):
             from stepwise.runner import _json_error
@@ -1937,29 +1937,6 @@ def cmd_run(args: argparse.Namespace) -> int:
             return EXIT_USAGE_ERROR
         print(f"Error: {e}", file=sys.stderr)
         return EXIT_USAGE_ERROR
-
-    # --var-file key=path: read file contents as variable value
-    if args.var_files:
-        for item in args.var_files:
-            if "=" not in item:
-                msg = f"Invalid --var-file format: '{item}' (expected KEY=PATH)"
-                if getattr(args, "wait", False) or getattr(args, "async_mode", False):
-                    from stepwise.runner import _json_error
-                    _json_error(2, msg)
-                    return EXIT_USAGE_ERROR
-                print(f"Error: {msg}", file=sys.stderr)
-                return EXIT_USAGE_ERROR
-            key, fpath = item.split("=", 1)
-            try:
-                inputs[key] = Path(fpath).read_text()
-            except FileNotFoundError:
-                msg = f"--var-file path not found: {fpath}"
-                if getattr(args, "wait", False) or getattr(args, "async_mode", False):
-                    from stepwise.runner import _json_error
-                    _json_error(2, msg)
-                    return EXIT_USAGE_ERROR
-                print(f"Error: {msg}", file=sys.stderr)
-                return EXIT_USAGE_ERROR
 
     # Parse metadata flags
     metadata = parse_meta_flags(args.meta) if args.meta else None
@@ -2049,7 +2026,7 @@ def cmd_chain(args: argparse.Namespace) -> int:
     from stepwise.flow_resolution import (
         FlowResolutionError, parse_registry_ref, resolve_flow, resolve_registry_flow,
     )
-    from stepwise.runner import parse_vars, load_vars_file
+    from stepwise.runner import parse_inputs, load_vars_file
 
     io = _io(args)
     project = _find_project_or_exit(args, auto_init=True)
@@ -2091,22 +2068,10 @@ def cmd_chain(args: argparse.Namespace) -> int:
             return EXIT_USAGE_ERROR
 
     try:
-        inputs.update(parse_vars(args.vars))
+        inputs.update(parse_inputs(args.inputs))
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return EXIT_USAGE_ERROR
-
-    if args.var_files:
-        for item in args.var_files:
-            if "=" not in item:
-                print(f"Error: Invalid --var-file format: '{item}' (expected KEY=PATH)", file=sys.stderr)
-                return EXIT_USAGE_ERROR
-            key, fpath = item.split("=", 1)
-            try:
-                inputs[key] = Path(fpath).read_text()
-            except FileNotFoundError:
-                print(f"Error: --var-file path not found: {fpath}", file=sys.stderr)
-                return EXIT_USAGE_ERROR
 
     # Compile the chain
     var_names = list(inputs.keys())
@@ -3955,10 +3920,10 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Fire-and-forget, returns job_id immediately")
     p_run.add_argument("--output", choices=["json"], dest="output_format",
                        help="Output format (currently only json)")
-    p_run.add_argument("--var", action="append", dest="vars", metavar="KEY=VALUE",
-                       help="Pass input variable (repeatable)")
-    p_run.add_argument("--var-file", action="append", dest="var_files", metavar="KEY=PATH",
-                       help="Pass input variable from file contents (repeatable)")
+    p_run.add_argument("--input", action="append", dest="inputs", metavar="KEY=VALUE",
+                       help="Pass input variable (repeatable). Use KEY=@path to read from file.")
+    p_run.add_argument("--var", action="append", dest="inputs", metavar="KEY=VALUE",
+                       help=argparse.SUPPRESS)  # deprecated alias for --input
     p_run.add_argument("--vars-file", help="Load variables from YAML/JSON file")
     p_run.add_argument("--port", type=int, help="Override port (for --watch)")
     p_run.add_argument("--objective", help="Set job objective (defaults to flow name)")
@@ -3986,10 +3951,10 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Fire-and-forget, returns job_id immediately")
     p_chain.add_argument("--output", choices=["json"], dest="output_format",
                          help="Output format (currently only json)")
-    p_chain.add_argument("--var", action="append", dest="vars", metavar="KEY=VALUE",
-                         help="Pass input variable (repeatable)")
-    p_chain.add_argument("--var-file", action="append", dest="var_files", metavar="KEY=PATH",
-                         help="Pass input variable from file contents (repeatable)")
+    p_chain.add_argument("--input", action="append", dest="inputs", metavar="KEY=VALUE",
+                         help="Pass input variable (repeatable). Use KEY=@path to read from file.")
+    p_chain.add_argument("--var", action="append", dest="inputs", metavar="KEY=VALUE",
+                         help=argparse.SUPPRESS)  # deprecated alias for --input
     p_chain.add_argument("--vars-file", help="Load variables from YAML/JSON file")
     p_chain.add_argument("--port", type=int, help="Override port (for --watch)")
     p_chain.add_argument("--objective", help="Set job objective (defaults to chain name)")
@@ -4019,7 +3984,10 @@ def build_parser() -> argparse.ArgumentParser:
     # preflight
     p_preflight = sub.add_parser("preflight", help="Pre-run check: config + requirements + models")
     p_preflight.add_argument("flow", help="Flow name or path to .flow.yaml file")
-    p_preflight.add_argument("--var", action="append", help="Variable override (key=value)")
+    p_preflight.add_argument("--input", action="append", dest="inputs",
+                             help="Variable override (key=value)")
+    p_preflight.add_argument("--var", action="append", dest="inputs",
+                             help=argparse.SUPPRESS)  # deprecated alias for --input
 
     # diagram
     p_diagram = sub.add_parser("diagram", help="Generate a diagram from a flow file")
@@ -4174,8 +4142,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_cache_debug = cache_sub.add_parser("debug", help="Show cache key for a step")
     p_cache_debug.add_argument("flow", help="Flow file path")
     p_cache_debug.add_argument("step", help="Step name")
-    p_cache_debug.add_argument("--var", action="append", dest="vars", metavar="KEY=VALUE",
+    p_cache_debug.add_argument("--input", action="append", dest="inputs", metavar="KEY=VALUE",
                                help="Input variable (repeatable)")
+    p_cache_debug.add_argument("--var", action="append", dest="inputs", metavar="KEY=VALUE",
+                               help=argparse.SUPPRESS)  # deprecated alias for --input
 
     # login
     sub.add_parser("login", help="Log in to the Stepwise registry via GitHub")
@@ -4293,7 +4263,7 @@ def cmd_cache(args: argparse.Namespace) -> int:
 
     elif action == "debug":
         from stepwise.cache import compute_cache_key
-        from stepwise.runner import parse_vars
+        from stepwise.runner import parse_inputs
         from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
 
         flow_path = Path(args.flow)
@@ -4319,7 +4289,7 @@ def cmd_cache(args: argparse.Namespace) -> int:
 
         # Parse inputs
         try:
-            inputs = parse_vars(getattr(args, "vars", None))
+            inputs = parse_inputs(getattr(args, "inputs", None))
         except ValueError as e:
             print(f"Error: {e}", file=sys.stderr)
             return EXIT_USAGE_ERROR

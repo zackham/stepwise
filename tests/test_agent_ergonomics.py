@@ -326,7 +326,7 @@ class TestStatusJsonCLI:
         code, output = _capture_stdout([
             "--project-dir", str(tmp_project),
             "run", str(external_flow), "--wait",
-            "--var", "repo=test",
+            "--input", "repo=test",
         ])
         data = json.loads(output)
         job_id = data["job_id"]

@@ -37,14 +37,14 @@ stepwise run @stepwise:code-review --watch
 Stepwise flows are callable as tools by AI agents (Claude Code, Codex, etc.) via plain CLI. No MCP servers, no protocol layers — just bash commands that return JSON.
 
 ```bash
-stepwise run council --wait --var question="Should we use Postgres?"
+stepwise run council --wait --input question="Should we use Postgres?"
 ```
 
 ```json
 {"status": "completed", "job_id": "job-abc123", "outputs": [{"verdict": "yes", "reasoning": "..."}]}
 ```
 
-`--wait` prints **only** JSON to stdout — zero logging, zero progress noise. Missing an input? The error tells you exactly which `--var` flags to add.
+`--wait` prints **only** JSON to stdout — zero logging, zero progress noise. Missing an input? The error tells you exactly which `--input` flags to add.
 
 To generate per-flow instructions your agent can reference:
 

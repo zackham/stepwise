@@ -46,7 +46,7 @@ This outputs a JSON tool contract with input parameters, output fields, and any 
 ### 3. Run a flow and use the result
 
 ```bash
-stepwise run my-flow --wait --var question="What database should we use?" --output json
+stepwise run my-flow --wait --input question="What database should we use?" --output json
 ```
 
 The `--wait` flag blocks until the flow completes (or suspends), and `--output json` ensures clean JSON on stdout. The agent parses the result and acts on it:
@@ -71,7 +71,7 @@ The simplest pattern: the agent calls a flow, waits for the result, and continue
 
 ```bash
 # Agent decides it needs a code review
-result=$(stepwise run code-review --wait --var repo_path="/path/to/repo" --output json)
+result=$(stepwise run code-review --wait --input repo_path="/path/to/repo" --output json)
 
 # Agent parses the JSON output and acts on it
 # e.g., reads outputs[0].recommendations and applies fixes
@@ -85,7 +85,7 @@ When a flow has an `external` step, it suspends and waits for human input. The `
 
 ```bash
 # Run a flow that includes a human approval step
-stepwise run deploy-pipeline --wait --var env="staging" --output json
+stepwise run deploy-pipeline --wait --input env="staging" --output json
 ```
 
 If the flow suspends (exit code 5):
@@ -147,7 +147,7 @@ After running `stepwise agent-help --update CLAUDE.md`, your file will contain a
 ## Available Flows
 
 ### council
-Run: `stepwise run council --wait --var question="..."`
+Run: `stepwise run council --wait --input question="..."`
 Outputs: synthesis, model_responses
 ...
 <!-- STEPWISE:END -->
@@ -163,7 +163,7 @@ Claude Code skills and Stepwise flows are complementary. A skill can trigger a f
 # My Skill
 
 When asked to review code, run:
-stepwise run code-review --wait --var repo_path="$PWD" --output json
+stepwise run code-review --wait --input repo_path="$PWD" --output json
 ```
 
 And a flow can include agent steps that use Claude Code's tool access (file editing, shell commands, etc.). The two systems compose naturally.

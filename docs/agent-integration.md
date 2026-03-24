@@ -1,6 +1,6 @@
 # Agent Integration
 
-> **TL;DR:** `stepwise run flow.yaml --wait --var key=value` → JSON on stdout. `stepwise agent-help --update CLAUDE.md` to teach your agent about available flows. No MCP, no background services.
+> **TL;DR:** `stepwise run flow.yaml --wait --input key=value` → JSON on stdout. `stepwise agent-help --update CLAUDE.md` to teach your agent about available flows. No MCP, no background services.
 
 How to make your AI agent call Stepwise flows as tools. This guide covers the complete workflow — from discovery to execution to handling every response shape.
 
@@ -9,7 +9,7 @@ How to make your AI agent call Stepwise flows as tools. This guide covers the co
 Stepwise flows are callable via CLI. No MCP servers, no protocol layers, no background services required. Your agent runs a bash command and gets JSON back.
 
 ```bash
-stepwise run review.flow.yaml --wait --var repo="/path/to/repo" --var branch="feature-x"
+stepwise run review.flow.yaml --wait --input repo="/path/to/repo" --input branch="feature-x"
 # → {"status": "completed", "job_id": "job-...", "outputs": [{...}], ...}
 ```
 
@@ -77,7 +77,7 @@ stepwise schema council
 ```
 
 Key fields:
-- **inputs** — required `--var` flags. If empty, the flow needs no inputs.
+- **inputs** — required `--input` flags. If empty, the flow needs no inputs.
 - **outputs** — fields in the terminal step artifacts. This is what you get back on success.
 - **externalSteps** — steps that will suspend and wait for external input. If non-empty, use `--timeout` with `--wait` to avoid blocking forever.
 
@@ -86,30 +86,30 @@ Key fields:
 The primary pattern — run the flow and wait for the result:
 
 ```bash
-stepwise run council --wait --var question="Should we use Postgres?"
+stepwise run council --wait --input question="Should we use Postgres?"
 ```
 
 **Stdout purity**: `--wait` prints exactly one JSON object to stdout. Nothing else. All logging goes to stderr. You can safely parse stdout as JSON.
 
 ```bash
 # Suppress stderr too if you only want the JSON
-result=$(stepwise run flow.yaml --wait --var k=v 2>/dev/null)
+result=$(stepwise run flow.yaml --wait --input k=v 2>/dev/null)
 ```
 
 ### Passing inputs
 
 ```bash
 # Inline (repeatable)
-stepwise run flow.yaml --wait --var topic="caching" --var depth="3"
+stepwise run flow.yaml --wait --input topic="caching" --input depth="3"
 
 # From a file (avoids shell escaping — good for long text)
-stepwise run flow.yaml --wait --var-file spec=spec.md --var-file context=notes.txt
+stepwise run flow.yaml --wait --input spec=@spec.md --input context=@notes.txt
 
 # From a YAML/JSON file (all variables at once)
 stepwise run flow.yaml --wait --vars-file inputs.yaml
 ```
 
-`--var-file` reads the file contents as the variable value. Use it when the input is multiline or contains special characters.
+`--input KEY=@path` reads the file contents as the variable value. Use it when the input is multiline or contains special characters.
 
 ## 4. Handle Every Response Shape
 
@@ -148,11 +148,11 @@ stepwise run flow.yaml --wait --vars-file inputs.yaml
 ```json
 {
   "status": "error",
-  "error": "Missing required input 'question'. Usage: --var question=\"...\""
+  "error": "Missing required input 'question'. Usage: --input question=\"...\""
 }
 ```
 
-Error messages are actionable — they tell you exactly which `--var` flags to add.
+Error messages are actionable — they tell you exactly which `--input` flags to add.
 
 ### Timeout (exit code 3)
 
@@ -182,7 +182,7 @@ For long-running flows or when you don't want to block:
 
 ```bash
 # Start the flow — returns immediately
-stepwise run deploy.flow.yaml --async --var repo="/path" --var branch="main"
+stepwise run deploy.flow.yaml --async --input repo="/path" --input branch="main"
 # → {"job_id": "job-e5f6g7h8", "status": "running"}
 ```
 
@@ -207,7 +207,7 @@ import subprocess, json, time
 
 # Start
 result = json.loads(subprocess.check_output([
-    "stepwise", "run", "flow.yaml", "--async", "--var", "k=v"
+    "stepwise", "run", "flow.yaml", "--async", "--input", "k=v"
 ]))
 job_id = result["job_id"]
 
@@ -228,7 +228,7 @@ Some flows have steps that pause for human input. When you hit one:
 ### With --wait and --timeout
 
 ```bash
-stepwise run review.flow.yaml --wait --timeout 300 --var content="Draft text"
+stepwise run review.flow.yaml --wait --timeout 300 --input content="Draft text"
 ```
 
 If the flow reaches an external step and the timeout fires, you get:
@@ -283,7 +283,7 @@ After fulfillment, the flow continues. If you're still blocking with `--wait`, i
 
 ```bash
 # 1. Start with timeout
-result=$(stepwise run flow.yaml --wait --timeout 60 --var k=v 2>/dev/null)
+result=$(stepwise run flow.yaml --wait --timeout 60 --input k=v 2>/dev/null)
 
 # 2. If timeout, get suspended step details
 if [ $? -eq 3 ]; then
@@ -305,7 +305,7 @@ fi
 |------|---------|------|
 | `0` | Success | Flow completed |
 | `1` | Failed | A step errored |
-| `2` | Input error | Missing/invalid `--var`, bad file path |
+| `2` | Input error | Missing/invalid `--input`, bad file path |
 | `3` | Timeout | `--timeout` exceeded (job still alive) |
 | `4` | Cancelled | Job was cancelled |
 
@@ -315,7 +315,7 @@ fi
 
 ```bash
 for attempt in 1 2 3; do
-    result=$(stepwise run flow.yaml --wait --var k=v 2>/dev/null)
+    result=$(stepwise run flow.yaml --wait --input k=v 2>/dev/null)
     if [ $? -eq 0 ]; then break; fi
     echo "Attempt $attempt failed, retrying..." >&2
 done
@@ -325,12 +325,12 @@ done
 
 ```bash
 # Flow 1: research
-research=$(stepwise run research.flow.yaml --wait --var topic="caching" 2>/dev/null)
+research=$(stepwise run research.flow.yaml --wait --input topic="caching" 2>/dev/null)
 findings=$(echo "$research" | jq -r '.outputs[0].findings')
 
 # Flow 2: write report using research output (pass via temp file)
 echo "$findings" > /tmp/findings.txt
-stepwise run report.flow.yaml --wait --var-file findings=/tmp/findings.txt
+stepwise run report.flow.yaml --wait --input findings=@/tmp/findings.txt
 ```
 
 ### Conditional on external steps
@@ -341,15 +341,15 @@ schema=$(stepwise schema flow.yaml)
 has_human=$(echo "$schema" | jq '.externalSteps | length')
 
 if [ "$has_human" -gt 0 ]; then
-    stepwise run flow.yaml --wait --timeout 300 --var k=v
+    stepwise run flow.yaml --wait --timeout 300 --input k=v
 else
-    stepwise run flow.yaml --wait --var k=v
+    stepwise run flow.yaml --wait --input k=v
 fi
 ```
 
 ## Troubleshooting
 
-**"Missing required input"** — The flow needs `--var` flags. Run `stepwise schema flow.yaml` to see what inputs are required.
+**"Missing required input"** — The flow needs `--input` flags. Run `stepwise schema flow.yaml` to see what inputs are required.
 
 **Timeout on external step** — The flow is waiting for external input. Use `stepwise output <job-id>` to see the suspended step, then `stepwise fulfill` to provide the input.
 
