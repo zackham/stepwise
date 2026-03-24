@@ -449,6 +449,7 @@ class StepDefinition:
     max_continuous_attempts: int | None = None  # circuit breaker for session reuse
     cache: CacheConfig | None = None  # opt-in result caching
     on_error: str = "fail"  # "fail" (default) | "continue" — step-level error policy
+    derived_outputs: dict[str, str] = field(default_factory=dict)  # computed fields from artifact
 
     def to_dict(self) -> dict:
         d = {
@@ -484,6 +485,8 @@ class StepDefinition:
             d["cache"] = self.cache.to_dict()
         if self.on_error != "fail":
             d["on_error"] = self.on_error
+        if self.derived_outputs:
+            d["derived_outputs"] = self.derived_outputs
         return d
 
     @classmethod
@@ -508,6 +511,7 @@ class StepDefinition:
             max_continuous_attempts=d.get("max_continuous_attempts"),
             cache=CacheConfig.from_dict(d["cache"]) if d.get("cache") else None,
             on_error=d.get("on_error", "fail"),
+            derived_outputs=d.get("derived_outputs", {}),
         )
 
 
@@ -618,7 +622,7 @@ class WorkflowDefinition:
                                 f"Step '{name}': input '{binding.local_name}' any_of references "
                                 f"unknown step '{src_step}'"
                             )
-                        elif src_field.split(".")[0] not in self.steps[src_step].outputs:
+                        elif src_field.split(".")[0] not in (set(self.steps[src_step].outputs) | set(self.steps[src_step].derived_outputs)):
                             errors.append(
                                 f"Step '{name}': input '{binding.local_name}' any_of references "
                                 f"unknown field '{src_field}' on step '{src_step}'"
@@ -632,7 +636,8 @@ class WorkflowDefinition:
                     # Support nested field references: "hero.headline" checks "hero" exists
                     field_root = binding.source_field.split(".")[0]
                     # Skip validation for _-prefixed fields (auto-injected metadata like _session_id)
-                    if not field_root.startswith("_") and field_root not in source_step.outputs:
+                    all_outputs = set(source_step.outputs) | set(source_step.derived_outputs)
+                    if not field_root.startswith("_") and field_root not in all_outputs:
                         errors.append(
                             f"Step '{name}': input binding references unknown field "
                             f"'{binding.source_field}' on step '{binding.source_step}'"
@@ -700,7 +705,7 @@ class WorkflowDefinition:
                     errors.append(
                         f"Step '{name}': for_each references unknown step '{fe.source_step}'"
                     )
-                elif fe.source_field.split(".")[0] not in self.steps[fe.source_step].outputs:
+                elif fe.source_field.split(".")[0] not in (set(self.steps[fe.source_step].outputs) | set(self.steps[fe.source_step].derived_outputs)):
                     errors.append(
                         f"Step '{name}': for_each references unknown field "
                         f"'{fe.source_field}' on step '{fe.source_step}'"
