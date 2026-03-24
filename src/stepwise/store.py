@@ -105,6 +105,16 @@ class SQLiteStore:
                 ON events(job_id, timestamp);
             CREATE INDEX IF NOT EXISTS idx_step_events_run
                 ON step_events(run_id, timestamp);
+
+            CREATE TABLE IF NOT EXISTS job_dependencies (
+                job_id TEXT NOT NULL,
+                depends_on_job_id TEXT NOT NULL,
+                PRIMARY KEY (job_id, depends_on_job_id),
+                FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE,
+                FOREIGN KEY (depends_on_job_id) REFERENCES jobs(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_job_deps_depends_on
+                ON job_dependencies(depends_on_job_id);
         """)
         self._conn.commit()
         self._migrate()
@@ -130,6 +140,7 @@ class SQLiteStore:
             ("notify_context", "TEXT", None),
             ("name", "TEXT", None),
             ("metadata", "TEXT", "'{}'"),
+            ("job_group", "TEXT", None),
         ]:
             if col not in job_columns:
                 default_clause = f" DEFAULT {default}" if default else ""
@@ -144,8 +155,8 @@ class SQLiteStore:
                 (id, objective, workflow, status, inputs, parent_job_id,
                  parent_step_run_id, workspace_path, config, created_at, updated_at,
                  created_by, runner_pid, heartbeat_at, notify_url, notify_context, name,
-                 metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 metadata, job_group)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 objective = excluded.objective,
                 workflow = excluded.workflow,
@@ -162,7 +173,8 @@ class SQLiteStore:
                 notify_url = excluded.notify_url,
                 notify_context = excluded.notify_context,
                 name = excluded.name,
-                metadata = excluded.metadata
+                metadata = excluded.metadata,
+                job_group = excluded.job_group
             """,
             (
                 job.id,
@@ -183,6 +195,7 @@ class SQLiteStore:
                 _dumps(job.notify_context) if job.notify_context else None,
                 job.name,
                 _dumps(job.metadata),
+                job.job_group,
             ),
         )
         self._conn.commit()
@@ -215,6 +228,7 @@ class SQLiteStore:
             notify_url=row["notify_url"] if "notify_url" in row.keys() else None,
             notify_context=json.loads(row["notify_context"]) if "notify_context" in row.keys() and row["notify_context"] else {},
             metadata=json.loads(row["metadata"]) if "metadata" in row.keys() and row["metadata"] else {"sys": {}, "app": {}},
+            job_group=row["job_group"] if "job_group" in row.keys() else None,
         )
 
     def active_jobs(self) -> list[Job]:
@@ -233,11 +247,73 @@ class SQLiteStore:
         return [self._row_to_job(r) for r in rows]
 
     def delete_job(self, job_id: str) -> None:
-        """Delete a job and all associated runs and events."""
-        self._conn.execute("DELETE FROM events WHERE job_id = ?", (job_id,))
-        self._conn.execute("DELETE FROM step_runs WHERE job_id = ?", (job_id,))
-        self._conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
-        self._conn.commit()
+        """Delete a job and all associated runs, events, and dependency edges."""
+        with self._conn:
+            self._conn.execute(
+                "DELETE FROM job_dependencies WHERE job_id = ? OR depends_on_job_id = ?",
+                (job_id, job_id),
+            )
+            self._conn.execute("DELETE FROM events WHERE job_id = ?", (job_id,))
+            self._conn.execute("DELETE FROM step_runs WHERE job_id = ?", (job_id,))
+            self._conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+
+    # ── Job Dependencies ─────────────────────────────────────────────────
+
+    def add_job_dependency(self, job_id: str, depends_on_job_id: str) -> None:
+        """Add a dependency edge: job_id depends on depends_on_job_id.
+
+        Caller must validate: both jobs exist, dependent is STAGED, no cycle.
+        INSERT OR IGNORE makes this idempotent (silent no-op on duplicate).
+        """
+        with self._conn:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO job_dependencies (job_id, depends_on_job_id) VALUES (?, ?)",
+                (job_id, depends_on_job_id),
+            )
+
+    def remove_job_dependency(self, job_id: str, depends_on_job_id: str) -> None:
+        """Remove a dependency edge. Caller must validate dependent is STAGED."""
+        with self._conn:
+            self._conn.execute(
+                "DELETE FROM job_dependencies WHERE job_id = ? AND depends_on_job_id = ?",
+                (job_id, depends_on_job_id),
+            )
+
+    def get_job_dependencies(self, job_id: str) -> list[str]:
+        """Return list of job IDs that this job depends on."""
+        rows = self._conn.execute(
+            "SELECT depends_on_job_id FROM job_dependencies WHERE job_id = ?",
+            (job_id,),
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    def get_job_dependents(self, depends_on_job_id: str) -> list[str]:
+        """Return list of job IDs that depend on the given job."""
+        rows = self._conn.execute(
+            "SELECT job_id FROM job_dependencies WHERE depends_on_job_id = ?",
+            (depends_on_job_id,),
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    def pending_jobs_with_deps_met(self) -> list[Job]:
+        """Return PENDING jobs whose dependencies are all COMPLETED (or have no deps).
+
+        Uses LEFT JOIN to handle missing dep rows defensively — if a dep's job record
+        was forcefully deleted, the dep is treated as unmet (job stays PENDING).
+        """
+        rows = self._conn.execute(
+            """SELECT j.* FROM jobs j
+               WHERE j.status = ?
+                 AND NOT EXISTS (
+                   SELECT 1 FROM job_dependencies d
+                   LEFT JOIN jobs dep ON dep.id = d.depends_on_job_id
+                   WHERE d.job_id = j.id
+                     AND (dep.id IS NULL OR dep.status != ?)
+                 )
+               ORDER BY j.created_at""",
+            (JobStatus.PENDING.value, JobStatus.COMPLETED.value),
+        ).fetchall()
+        return [self._row_to_job(r) for r in rows]
 
     def all_jobs(self, status: JobStatus | None = None, top_level_only: bool = False, limit: int = 0, meta_filters: dict[str, str] | None = None) -> list[Job]:
         clauses = []
