@@ -324,6 +324,35 @@ Every state transition, every input/output handoff, every cost event is persiste
 
 The engine is designed to make the implicit explicit. When something goes wrong at step 4 of a 7-step pipeline, you can see exactly what inputs it received, what it produced, and why the exit rule fired the way it did.
 
+## Shell Hooks vs Server Notifications
+
+Stepwise has two mechanisms for reacting to job events. They serve different use cases.
+
+**Shell hooks** (`.stepwise/hooks/on-suspend`, `on-complete`, `on-fail`) are scripts that run in the engine's process context — the same machine, same filesystem, same environment. They fire synchronously (with a 30s timeout) and receive the event envelope on stdin and via `$STEPWISE_EVENT_FILE`. Use hooks for local automation: sending a notification, writing a log, triggering a local build.
+
+```bash
+# .stepwise/hooks/on-complete
+#!/bin/sh
+echo "Job $STEPWISE_JOB_ID completed" >> /var/log/stepwise.log
+```
+
+**Server notifications** (`--notify URL`) are HTTP POST webhooks fired by the server on job events. They are fire-and-forget, remote, and stateless. The POST body is the same event envelope as hooks, with `--notify-context` merged in. Use notifications for remote integrations: updating a dashboard, triggering a CI pipeline, posting to Slack.
+
+```bash
+stepwise run deploy --async \
+  --notify https://my-server.com/api/events \
+  --notify-context '{"channel": "#deploys"}'
+```
+
+| | Shell hooks | Server notifications |
+|---|---|---|
+| **Where they run** | Same machine as the engine | Remote HTTP endpoint |
+| **Configuration** | `.stepwise/hooks/` scripts | `--notify URL` per job |
+| **Scope** | All jobs in the project | Single job |
+| **Use case** | Local automation, file ops | Remote integrations, dashboards |
+
+See [Extensions](extensions.md) for full details on both mechanisms plus the WebSocket event stream.
+
 ## Flows as Tools
 
 A Stepwise flow is a prompted workflow run with a working directory. The input is a string (the objective) plus optional string variables. The output is an array of terminal step artifacts. This makes flows callable by agents via CLI — turning flows from "things humans run" into "tools agents delegate to."
