@@ -1559,7 +1559,7 @@ def cmd_config(args: argparse.Namespace) -> int:
 
 def cmd_check(args: argparse.Namespace) -> int:
     """Verify model resolution for every LLM step in a flow."""
-    from stepwise.config import load_config, DEFAULT_LABELS, label_model_id
+    from stepwise.config import load_config_with_sources, label_model_id
     from stepwise.flow_resolution import FlowResolutionError, resolve_flow
     import yaml
 
@@ -1575,17 +1575,14 @@ def cmd_check(args: argparse.Namespace) -> int:
         data = yaml.safe_load(f)
 
     steps = data.get("steps", {})
-    cfg = load_config(project_dir)
+    cws = load_config_with_sources(project_dir)
+    cfg = cws.config
 
-    # Determine source for each label
-    all_labels = {**DEFAULT_LABELS, **cfg.labels}
-    label_sources: dict[str, str] = {n: "default" for n in DEFAULT_LABELS}
-    # Rough: user labels override default, project overrides user
-    for name in cfg.labels:
-        if name in DEFAULT_LABELS:
-            label_sources[name] = "project"
-        else:
-            label_sources[name] = "project"
+    # Build label source map from proper config hierarchy
+    all_labels = dict(cfg.labels)
+    label_sources: dict[str, str] = {
+        li.name: li.source for li in cws.label_info
+    }
 
     io = _io(args)
     io.log("info", f"Flow: {flow_path.name}")
