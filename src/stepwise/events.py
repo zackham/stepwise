@@ -29,6 +29,11 @@ STEP_LIMIT_EXCEEDED = "step.limit_exceeded"
 STEP_CANCELLED = "step.cancelled"
 STEP_SKIPPED = "step.skipped"
 
+# Job staging
+JOB_STAGED = "job.staged"
+JOB_CANCELLED = "job.cancelled"
+JOB_DEPS_CHANGED = "job.deps_changed"
+
 # For-each events
 FOR_EACH_STARTED = "for_each.started"
 FOR_EACH_COMPLETED = "for_each.completed"
