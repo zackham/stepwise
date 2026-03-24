@@ -1031,6 +1031,7 @@ class Engine:
 
     # ── Currentness ───────────────────────────────────────────────────────
 
+    # Currentness with cycle detection
     def _is_current(self, job: Job, run: StepRun, _checking_steps: set | None = None) -> bool:
         """A run is current if:
         1. It is the latest run (any status) for its step
