@@ -2874,6 +2874,13 @@ class AsyncEngine(Engine):
             self._cancel_poll_task(run.id)
         super().cancel_job(job_id)
         self._signal_job_done(job_id)
+        # A slot opened — start queued jobs
+        self._start_queued_jobs()
+
+    def pause_job(self, job_id: str) -> None:
+        super().pause_job(job_id)
+        # A slot opened — start queued jobs
+        self._start_queued_jobs()
 
     def fulfill_watch(self, run_id: str, payload: dict) -> dict | None:
         self._cancel_poll_task(run_id)
