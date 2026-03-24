@@ -515,6 +515,94 @@ steps:
         target: nonexistent
 """)
 
+    def test_loop_to_self(self):
+        """Loop targeting the step itself is valid."""
+        wf = load_workflow_string("""
+steps:
+  a:
+    run: echo ok
+    outputs: [result]
+    exits:
+      - name: retry
+        when: "attempt < 3"
+        action: loop
+        target: a
+""")
+        assert "a" in wf.steps
+
+    def test_loop_to_ancestor(self):
+        """Loop targeting an upstream dependency is valid."""
+        wf = load_workflow_string("""
+steps:
+  a:
+    run: echo ok
+    outputs: [result]
+
+  b:
+    run: echo ok
+    inputs:
+      x: a.result
+    outputs: [result]
+    exits:
+      - name: retry
+        when: "True"
+        action: loop
+        target: a
+""")
+        assert "b" in wf.steps
+
+    def test_loop_to_non_ancestor(self):
+        """Loop targeting a step that is not connected in the DAG should fail."""
+        with pytest.raises(YAMLLoadError, match="not connected"):
+            load_workflow_string("""
+steps:
+  a:
+    run: echo ok
+    outputs: [result]
+
+  b:
+    run: echo ok
+    outputs: [result]
+
+  c:
+    run: echo ok
+    inputs:
+      x: a.result
+    outputs: [result]
+    exits:
+      - name: retry
+        when: "True"
+        action: loop
+        target: b
+""")
+
+    def test_loop_to_transitive_ancestor(self):
+        """Loop targeting a transitive ancestor (grandparent) is valid."""
+        wf = load_workflow_string("""
+steps:
+  a:
+    run: echo ok
+    outputs: [result]
+
+  b:
+    run: echo ok
+    inputs:
+      x: a.result
+    outputs: [result]
+
+  c:
+    run: echo ok
+    inputs:
+      x: b.result
+    outputs: [result]
+    exits:
+      - name: retry
+        when: "True"
+        action: loop
+        target: a
+""")
+        assert "c" in wf.steps
+
     def test_cycle_detection(self):
         with pytest.raises(YAMLLoadError, match="Cycle"):
             load_workflow_string("""

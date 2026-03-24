@@ -562,6 +562,38 @@ class WorkflowDefinition:
     requires: list[FlowRequirement] = field(default_factory=list)
     readme: str = ""
 
+    def _get_step_deps(self, step_name: str) -> set[str]:
+        """Get direct dependencies of a step (via inputs and after)."""
+        step = self.steps[step_name]
+        deps: set[str] = set()
+        for b in step.inputs:
+            if b.source_step != "$job" and b.source_step in self.steps:
+                deps.add(b.source_step)
+            if b.any_of_sources:
+                for src_step, _ in b.any_of_sources:
+                    if src_step in self.steps:
+                        deps.add(src_step)
+        for seq_step in step.after:
+            if seq_step in self.steps:
+                deps.add(seq_step)
+        return deps
+
+    def _get_ancestors(self, step_name: str) -> set[str]:
+        """Get all transitive ancestors of a step in the dependency graph."""
+        ancestors: set[str] = set()
+        frontier = set(self._get_step_deps(step_name))
+        while frontier:
+            dep = frontier.pop()
+            if dep in ancestors:
+                continue
+            ancestors.add(dep)
+            frontier.update(self._get_step_deps(dep) - ancestors)
+        return ancestors
+
+    def _is_dag_connected(self, step_name: str, target: str) -> bool:
+        """Check if target is an ancestor or descendant of step_name."""
+        return target in self._get_ancestors(step_name) or step_name in self._get_ancestors(target)
+
     def validate(self) -> list[str]:
         """Validate the workflow definition. Returns list of errors."""
         errors: list[str] = []
@@ -647,6 +679,19 @@ class WorkflowDefinition:
                         f"Step '{name}': exit rule '{rule.name}' has 'advance' with 'target' — "
                         f"use step-level 'when' for conditional branching instead"
                     )
+
+            # Check loop targets are connected in the DAG (ancestor, descendant, or self)
+            for rule in step.exit_rules:
+                target = rule.config.get("target")
+                action = rule.config.get("action")
+                if action == "loop" and target and target in step_names and target != name:
+                    if not self._is_dag_connected(name, target):
+                        errors.append(
+                            f"Step '{name}': exit rule '{rule.name}' loops to '{target}' "
+                            f"which is not connected in the dependency graph — "
+                            f"loop targets must be the step itself or connected "
+                            f"via inputs/after dependencies"
+                        )
 
             # Check for_each steps
             if step.for_each:
