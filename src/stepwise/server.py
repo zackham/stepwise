@@ -668,11 +668,14 @@ async def lifespan(app: FastAPI):
     # Re-evaluate surviving RUNNING jobs (settle any that completed pre-crash)
     _engine.recover_jobs()
 
-    # Clean up orphaned acpx queue owner processes from previous server
-    _cleanup_stale_queue_owners(store)
-
-    # Broad scan: kill any acpx/claude processes not belonging to a running step
-    _cleanup_orphaned_acpx_processes(store)
+    # NOTE: Queue owner cleanup disabled. Queue owners manage their own lifecycle
+    # via TTL (--ttl 0 = stay alive forever). Stepwise's cleanup routines were
+    # killing queue owners that belonged to running steps, causing
+    # "Queue owner disconnected" failures. The cleanup code had multiple bugs:
+    # session-ID mismatches, PGID mismatches for setsid processes, and race
+    # conditions with concurrent jobs. Rather than maintain fragile heuristics,
+    # let acpx manage its own processes. Stale queue owners are harmless (they
+    # idle and eventually exit when their TTL expires on non-zero TTL sessions).
 
     # Register in global server registry
     from stepwise.server_detect import register_server, unregister_server
@@ -689,7 +692,8 @@ async def lifespan(app: FastAPI):
     _engine_task = asyncio.create_task(_engine.run())
     _stream_monitor = asyncio.create_task(_agent_stream_monitor())
     _observer = asyncio.create_task(_observe_external_jobs())
-    _queue_cleanup = asyncio.create_task(_periodic_queue_owner_cleanup())
+    # Periodic queue owner cleanup disabled — see note above
+    _queue_cleanup = None
 
     yield
 
@@ -698,11 +702,12 @@ async def lifespan(app: FastAPI):
         task.cancel()
     _stream_tasks.clear()
 
-    _queue_cleanup.cancel()
-    try:
-        await _queue_cleanup
-    except asyncio.CancelledError:
-        pass
+    if _queue_cleanup:
+        _queue_cleanup.cancel()
+        try:
+            await _queue_cleanup
+        except asyncio.CancelledError:
+            pass
 
     _observer.cancel()
     try:

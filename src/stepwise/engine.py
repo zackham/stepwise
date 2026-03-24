@@ -857,6 +857,7 @@ class Engine:
                 ready.append(step_name)
         return ready
 
+    # Central readiness check — controls what steps can launch
     def _is_step_ready(self, job: Job, step_name: str, step_def: StepDefinition) -> bool:
         """A step is ready when:
         1. No active run exists (running, suspended, delegated)
