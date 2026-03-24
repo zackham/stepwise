@@ -27,6 +27,7 @@ def _now() -> datetime:
 
 
 class JobStatus(Enum):
+    STAGED = "staged"
     PENDING = "pending"
     RUNNING = "running"
     PAUSED = "paused"
