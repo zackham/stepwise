@@ -110,6 +110,8 @@ class CreateJobRequest(BaseModel):
     notify_context: dict | None = None
     name: str | None = None
     metadata: dict | None = None
+    job_group: str | None = None
+    status: str | None = None  # "staged" to create in staged state
 
 
 class FulfillWatchRequest(BaseModel):
@@ -808,9 +810,18 @@ def create_job(req: CreateJobRequest):
             name=req.name,
             metadata=req.metadata,
         )
+        needs_save = False
+        if req.status == "staged":
+            job.status = JobStatus.STAGED
+            needs_save = True
+        if req.job_group:
+            job.job_group = req.job_group
+            needs_save = True
         if req.notify_url:
             job.notify_url = req.notify_url
             job.notify_context = req.notify_context or {}
+            needs_save = True
+        if needs_save:
             engine.store.save_job(job)
         _notify_change(job.id)
         return _serialize_job(job)
@@ -946,6 +957,112 @@ def delete_all_jobs():
             _broadcast({"type": "jobs_changed"}),
         )
     return {"status": "deleted", "count": len(jobs)}
+
+
+# ── Job staging & dependency endpoints ──────────────────────────────
+
+
+class StageJobRequest(BaseModel):
+    job_group: str | None = None
+
+
+class RunGroupRequest(BaseModel):
+    group: str
+
+
+class AddDepRequest(BaseModel):
+    depends_on_job_id: str
+
+
+@app.post("/api/jobs/{job_id}/stage")
+def stage_job(job_id: str, req: StageJobRequest):
+    """Set a job to STAGED status and optionally assign a group."""
+    engine = _get_engine()
+    try:
+        job = engine.store.load_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    job.status = JobStatus.STAGED
+    if req.job_group is not None:
+        job.job_group = req.job_group
+    job.updated_at = _now()
+    engine.store.save_job(job)
+    _notify_change(job_id)
+    return {"status": "staged", "job_id": job_id}
+
+
+@app.post("/api/jobs/{job_id}/run")
+def run_staged_job(job_id: str):
+    """Transition a single STAGED job to PENDING."""
+    engine = _get_engine()
+    try:
+        engine.store.transition_job_to_pending(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    engine._start_queued_jobs()
+    _notify_change(job_id)
+    return {"status": "pending", "job_id": job_id}
+
+
+@app.post("/api/jobs/run-group")
+def run_group(req: RunGroupRequest):
+    """Transition all staged jobs in a group to PENDING."""
+    engine = _get_engine()
+    job_ids = engine.store.transition_group_to_pending(req.group)
+    engine._start_queued_jobs()
+    for jid in job_ids:
+        _notify_change(jid)
+    return {"status": "pending", "group": req.group, "count": len(job_ids), "job_ids": job_ids}
+
+
+@app.post("/api/jobs/{job_id}/deps")
+def add_dependency(job_id: str, req: AddDepRequest):
+    """Add a dependency edge. Validates STAGED status and cycle-free."""
+    engine = _get_engine()
+    try:
+        job = engine.store.load_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    try:
+        engine.store.load_job(req.depends_on_job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Dependency target not found: {req.depends_on_job_id}")
+    if job.status != JobStatus.STAGED:
+        raise HTTPException(status_code=400, detail=f"Can only add deps to STAGED jobs (job is {job.status.value})")
+    if engine.store.would_create_cycle(job_id, req.depends_on_job_id):
+        raise HTTPException(status_code=409, detail="Cannot add dependency: would create a cycle")
+    engine.store.add_job_dependency(job_id, req.depends_on_job_id)
+    _notify_change(job_id)
+    return {"job_id": job_id, "depends_on": req.depends_on_job_id, "action": "added"}
+
+
+@app.delete("/api/jobs/{job_id}/deps/{dep_job_id}")
+def remove_dependency(job_id: str, dep_job_id: str):
+    """Remove a dependency edge. Validates STAGED status."""
+    engine = _get_engine()
+    try:
+        job = engine.store.load_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    if job.status != JobStatus.STAGED:
+        raise HTTPException(status_code=400, detail=f"Can only remove deps from STAGED jobs (job is {job.status.value})")
+    engine.store.remove_job_dependency(job_id, dep_job_id)
+    _notify_change(job_id)
+    return {"job_id": job_id, "depends_on": dep_job_id, "action": "removed"}
+
+
+@app.get("/api/jobs/{job_id}/deps")
+def get_dependencies(job_id: str):
+    """Return dependency list for a job."""
+    engine = _get_engine()
+    try:
+        engine.store.load_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    deps = engine.store.get_job_dependencies(job_id)
+    return {"job_id": job_id, "depends_on": deps}
 
 
 @app.get("/api/jobs/{job_id}/tree")
