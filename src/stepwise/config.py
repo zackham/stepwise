@@ -43,6 +43,7 @@ DEFAULT_MODEL_IDS: tuple[str, ...] = (
     "anthropic/claude-opus-4.6",
     "deepseek/deepseek-v3.2",
     "x-ai/grok-4.1-fast",
+    "x-ai/grok-4.20-beta",
     "meta-llama/llama-4-maverick",
 )
 
