@@ -206,7 +206,9 @@ class SQLiteStore:
         ).fetchone()
         if not row:
             raise KeyError(f"Job not found: {job_id}")
-        return self._row_to_job(row)
+        job = self._row_to_job(row)
+        job.depends_on = self.get_job_dependencies(job_id)
+        return job
 
     def _row_to_job(self, row: sqlite3.Row) -> Job:
         return Job(
