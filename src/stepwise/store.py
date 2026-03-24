@@ -338,6 +338,33 @@ class SQLiteStore:
         ).fetchall()
         return [self._row_to_job(r) for r in rows]
 
+    def transition_group_to_pending(self, group: str) -> list[str]:
+        """Atomically transition all STAGED jobs in a group to PENDING. Returns transitioned job IDs."""
+        from stepwise.models import _now
+        now = _now().isoformat()
+        with self._conn:
+            self._conn.execute(
+                "UPDATE jobs SET status = ?, updated_at = ? WHERE job_group = ? AND status = ?",
+                (JobStatus.PENDING.value, now, group, JobStatus.STAGED.value),
+            )
+            rows = self._conn.execute(
+                "SELECT id FROM jobs WHERE job_group = ? AND status = ? AND updated_at = ?",
+                (group, JobStatus.PENDING.value, now),
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def transition_job_to_pending(self, job_id: str) -> None:
+        """Transition a single STAGED job to PENDING. Raises ValueError if not STAGED."""
+        from stepwise.models import _now
+        job = self.load_job(job_id)
+        if job.status != JobStatus.STAGED:
+            raise ValueError(f"Cannot run job in status {job.status.value} (must be STAGED)")
+        with self._conn:
+            self._conn.execute(
+                "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?",
+                (JobStatus.PENDING.value, _now().isoformat(), job_id),
+            )
+
     def all_jobs(self, status: JobStatus | None = None, top_level_only: bool = False, limit: int = 0, meta_filters: dict[str, str] | None = None) -> list[Job]:
         clauses = []
         params: list = []
