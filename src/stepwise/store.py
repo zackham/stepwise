@@ -297,6 +297,27 @@ class SQLiteStore:
         ).fetchall()
         return [r[0] for r in rows]
 
+    def would_create_cycle(self, job_id: str, depends_on_job_id: str) -> bool:
+        """Check if adding edge (job_id depends_on depends_on_job_id) creates a cycle.
+
+        When adding A->B ("A depends on B"), check: does B already transitively
+        depend on A? BFS from B through existing forward edges; if we reach A,
+        adding A->B would create A->B->...->A.
+        """
+        if job_id == depends_on_job_id:
+            return True
+        visited: set[str] = set()
+        queue = [depends_on_job_id]
+        while queue:
+            current = queue.pop(0)
+            if current == job_id:
+                return True
+            if current in visited:
+                continue
+            visited.add(current)
+            queue.extend(self.get_job_dependencies(current))
+        return False
+
     def pending_jobs_with_deps_met(self) -> list[Job]:
         """Return PENDING jobs whose dependencies are all COMPLETED (or have no deps).
 
