@@ -505,6 +505,29 @@ steps:
 - `StepDefinition.loop_prompt = "..."`
 - `StepDefinition.max_continuous_attempts = 5`
 
+### Agent Output Modes
+
+Agent steps support three output modes, configured via `output_mode`:
+
+| Mode | Artifact | Use When |
+|---|---|---|
+| `"effect"` (default) | `{"status": "completed"}` | Agent modifies files; workspace IS the output |
+| `"stream_result"` | `{"result": "<full agent text>"}` | You need the agent's textual response downstream |
+| `"file"` | Parsed JSON from `output_path` | Agent writes structured JSON to a specific file |
+
+```yaml
+analyze:
+  executor: agent
+  output_mode: file
+  output_path: .stepwise/analysis.json
+  prompt: |
+    Analyze the codebase. Write your findings as JSON to .stepwise/analysis.json
+    with keys: overview, modules, risks.
+  outputs: [overview, modules, risks]
+```
+
+**`output_mode: file` requires explicit prompt instructions.** The engine reads `output_path` after the agent finishes and parses it as JSON. The agent will not automatically write this file — your prompt must explicitly tell the agent to write JSON to the `output_path` location, and the JSON keys must match the step's declared `outputs`. If the file is missing or doesn't contain valid JSON, the step fails.
+
 ## Common Patterns
 
 ### Gating a post-loop step

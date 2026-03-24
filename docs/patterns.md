@@ -123,6 +123,27 @@ prompt: |
 
 The downstream agent can `grep -n "^## " .stepwise/analysis.md` to find sections and read only what it needs.
 
+### Cross-codebase paths must be absolute
+
+When using `working_dir` to run agent steps in a different codebase, the path must be absolute or use `~` expansion. Relative paths resolve against the flow's project directory, not the target codebase.
+
+```yaml
+# Correct — absolute path
+working_dir: /home/user/other-repo
+
+# Correct — passed as job input (caller provides absolute path)
+working_dir: $project_path
+# stepwise run flow.yaml --input project_path=/home/user/other-repo
+
+# Correct — ~ expansion
+working_dir: ~/other-repo
+
+# WRONG — resolves relative to the flow's .stepwise/ project, not the target
+working_dir: ../other-repo
+```
+
+This applies to `output_path` and any file paths in agent prompts that reference the target codebase. Always use absolute paths or pass them as job inputs.
+
 **When to use file-based passing:**
 - Prior step output exceeds ~4K tokens
 - Downstream agent only needs specific sections
