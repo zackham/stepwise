@@ -4023,6 +4023,49 @@ def build_parser() -> argparse.ArgumentParser:
     p_cache_debug.add_argument("--var", action="append", dest="inputs", metavar="KEY=VALUE",
                                help=argparse.SUPPRESS)  # deprecated alias for --input
 
+    # job (staging & orchestration)
+    p_job = sub.add_parser("job", help="Job staging and orchestration")
+    job_sub = p_job.add_subparsers(dest="job_command")
+
+    # job create
+    p_job_create = job_sub.add_parser("create", help="Create a staged job")
+    p_job_create.add_argument("flow", help="Flow name or path")
+    p_job_create.add_argument("--input", "-i", action="append", default=[], dest="inputs",
+                              metavar="KEY=VALUE", help="Input parameter")
+    p_job_create.add_argument("--group", "-g", help="Group label")
+    p_job_create.add_argument("--name", help="Job name")
+    p_job_create.add_argument("--output", choices=["table", "json"], default="table")
+
+    # job show
+    p_job_show = job_sub.add_parser("show", help="Show staged/pending jobs")
+    p_job_show.add_argument("job_id", nargs="?", help="Job ID (omit for listing)")
+    p_job_show.add_argument("--group", "-g", help="Filter by group")
+    p_job_show.add_argument("--all", action="store_true", help="Include running/paused jobs")
+    p_job_show.add_argument("--output", choices=["table", "json"], default="table")
+
+    # job run
+    p_job_run = job_sub.add_parser("run", help="Run staged jobs")
+    p_job_run.add_argument("job_id", nargs="?", help="Run a single staged job")
+    p_job_run.add_argument("--group", "-g", help="Run all staged jobs in group")
+    p_job_run.add_argument("--output", choices=["table", "json"], default="table")
+
+    # job dep
+    p_job_dep = job_sub.add_parser("dep", help="Manage dependencies between jobs")
+    p_job_dep.add_argument("job_id", help="Job that should wait")
+    p_job_dep.add_argument("--after", help="Job to wait for (add dep)")
+    p_job_dep.add_argument("--rm", help="Remove dependency on this job")
+    p_job_dep.add_argument("--output", choices=["table", "json"], default="table")
+
+    # job cancel
+    p_job_cancel = job_sub.add_parser("cancel", help="Cancel a staged/pending/running job")
+    p_job_cancel.add_argument("job_id", help="Job ID")
+    p_job_cancel.add_argument("--output", choices=["table", "json"], default="table")
+
+    # job rm
+    p_job_rm = job_sub.add_parser("rm", help="Remove a staged job")
+    p_job_rm.add_argument("job_id", help="Job ID")
+    p_job_rm.add_argument("--output", choices=["table", "json"], default="table")
+
     # login
     sub.add_parser("login", help="Log in to the Stepwise registry via GitHub")
 
@@ -4090,6 +4133,517 @@ def cmd_extensions(args: argparse.Namespace) -> int:
         print(f"{ext.name:<{name_w}}  {ver:<{ver_w}}  {desc:<{desc_w}}  {ext.path}")
 
     return EXIT_SUCCESS
+
+
+def _get_store_or_client(args):
+    """Return (store, client) — exactly one is non-None.
+
+    Uses detect_server(). If server running, return StepwiseClient for API
+    calls. If not, open store directly.
+    """
+    project = _find_project_or_exit(args)
+    server_url = _detect_server_url(args)
+    if server_url:
+        from stepwise.api_client import StepwiseClient
+        return None, StepwiseClient(server_url), project
+    from stepwise.store import SQLiteStore
+    return SQLiteStore(str(project.db_path)), None, project
+
+
+def _cmd_job_create(args) -> int:
+    """Create a staged job from a flow."""
+    from stepwise.flow_resolution import FlowResolutionError, resolve_flow
+    from stepwise.runner import parse_inputs
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+    from stepwise.models import Job, JobStatus, WorkflowDefinition, _now
+
+    io = _io(args)
+    project = _find_project_or_exit(args)
+    project_dir = _project_dir(args) or Path.cwd()
+
+    # Resolve flow
+    try:
+        flow_path = resolve_flow(args.flow, project_dir)
+    except FlowResolutionError as e:
+        io.log("error", str(e))
+        return EXIT_USAGE_ERROR
+
+    # Parse workflow
+    try:
+        workflow = load_workflow_yaml(str(flow_path))
+    except YAMLLoadError as e:
+        io.log("error", f"Invalid flow: {'; '.join(e.errors)}")
+        return EXIT_USAGE_ERROR
+
+    # Parse inputs
+    try:
+        inputs = parse_inputs(args.inputs)
+    except ValueError as e:
+        io.log("error", str(e))
+        return EXIT_USAGE_ERROR
+
+    # Server delegation
+    server_url = _detect_server_url(args)
+    if server_url:
+        from stepwise.api_client import StepwiseClient, StepwiseAPIError
+        client = StepwiseClient(server_url)
+        try:
+            result = client.create_job(
+                objective=getattr(args, "name", None) or workflow.name or args.flow,
+                workflow=workflow.to_dict(),
+                inputs=inputs or None,
+                name=getattr(args, "name", None),
+            )
+            # Transition to staged via API
+            job_id = result.get("id")
+            # Set staged + group via direct store update through API
+            # Use the new staging endpoint
+            client._request("POST", f"/api/jobs/{job_id}/stage", {
+                "job_group": getattr(args, "group", None),
+            })
+            if args.output == "json":
+                print(json.dumps({"id": job_id, "status": "staged",
+                                  "job_group": getattr(args, "group", None)}))
+            else:
+                io.log("success", f"Created staged job {job_id}")
+            return EXIT_SUCCESS
+        except StepwiseAPIError as e:
+            io.log("error", e.detail)
+            return EXIT_JOB_FAILED
+
+    # Local path
+    from stepwise.store import SQLiteStore
+    store = SQLiteStore(str(project.db_path))
+    try:
+        now = _now()
+        job = Job(
+            objective=getattr(args, "name", None) or workflow.name or args.flow,
+            name=getattr(args, "name", None),
+            workflow=workflow,
+            status=JobStatus.STAGED,
+            inputs=inputs,
+            job_group=getattr(args, "group", None),
+            created_at=now,
+            updated_at=now,
+        )
+        store.save_job(job)
+        if args.output == "json":
+            print(json.dumps({"id": job.id, "status": "staged",
+                              "job_group": job.job_group}))
+        else:
+            io.log("success", f"Created staged job {job.id}")
+        return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def _cmd_job_show(args) -> int:
+    """Show staged/pending jobs or detail for a single job."""
+    from stepwise.models import JobStatus
+    from stepwise.store import SQLiteStore
+
+    io = _io(args)
+    project = _find_project_or_exit(args)
+
+    # Server delegation for JSON
+    if args.output == "json":
+        data, code = _try_server(
+            args, lambda c: c._request("GET", f"/api/jobs/{args.job_id}") if args.job_id
+            else c.jobs(status=None)
+        )
+        if code is not None:
+            print(json.dumps(data, indent=2, default=str))
+            return code
+
+    store = SQLiteStore(str(project.db_path))
+    try:
+        if args.job_id:
+            # Single job detail
+            try:
+                job = store.load_job(args.job_id)
+            except KeyError:
+                io.log("error", f"Job not found: {args.job_id}")
+                return EXIT_JOB_FAILED
+            deps = job.depends_on
+            dep_details = []
+            for dep_id in deps:
+                try:
+                    dep_job = store.load_job(dep_id)
+                    dep_details.append(f"  {dep_id} ({dep_job.status.value})")
+                except KeyError:
+                    dep_details.append(f"  {dep_id} (not found)")
+
+            if args.output == "json":
+                print(json.dumps({
+                    "id": job.id, "name": job.name, "status": job.status.value,
+                    "objective": job.objective, "job_group": job.job_group,
+                    "depends_on": deps, "inputs": job.inputs,
+                    "steps": len(job.workflow.steps),
+                    "created_at": str(job.created_at),
+                }, indent=2, default=str))
+            else:
+                info = f"Job: {job.id}"
+                if job.name:
+                    info += f"\nName: {job.name}"
+                info += f"\nStatus: {job.status.value}"
+                if job.job_group:
+                    info += f"\nGroup: {job.job_group}"
+                info += f"\nObjective: {job.objective}"
+                info += f"\nSteps: {len(job.workflow.steps)}"
+                if deps:
+                    info += f"\nDepends on:\n" + "\n".join(dep_details)
+                if job.inputs:
+                    info += f"\nInputs: {json.dumps(job.inputs, default=str)}"
+                io.note(info, title="Job Details")
+            return EXIT_SUCCESS
+        else:
+            # Listing mode
+            statuses = [JobStatus.STAGED, JobStatus.PENDING]
+            if args.all:
+                statuses.extend([JobStatus.RUNNING, JobStatus.PAUSED])
+
+            all_jobs = []
+            for status in statuses:
+                all_jobs.extend(store.all_jobs(status=status, top_level_only=True))
+
+            if getattr(args, "group", None):
+                all_jobs = [j for j in all_jobs if j.job_group == args.group]
+
+            if args.output == "json":
+                print(json.dumps([_job_summary(j) for j in all_jobs], indent=2, default=str))
+                return EXIT_SUCCESS
+
+            if not all_jobs:
+                io.log("info", "No staged/pending jobs found.")
+                return EXIT_SUCCESS
+
+            rows = []
+            for j in all_jobs:
+                name = (j.name or "")[:30]
+                group = (j.job_group or "")[:15]
+                created = _relative_time(j.created_at) if j.created_at else ""
+                rows.append([j.id, name, j.status.value, group, created])
+            io.table(["ID", "NAME", "STATUS", "GROUP", "CREATED"], rows)
+            return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def _cmd_job_run(args) -> int:
+    """Transition staged jobs to PENDING."""
+    from stepwise.models import JobStatus
+    from stepwise.store import SQLiteStore
+
+    io = _io(args)
+
+    if not args.job_id and not getattr(args, "group", None):
+        io.log("error", "Specify a job ID or --group")
+        return EXIT_USAGE_ERROR
+
+    # Server delegation
+    server_url = _detect_server_url(args)
+    if server_url:
+        from stepwise.api_client import StepwiseClient, StepwiseAPIError
+        client = StepwiseClient(server_url)
+        try:
+            if args.job_id:
+                result = client._request("POST", f"/api/jobs/{args.job_id}/run")
+            else:
+                result = client._request("POST", "/api/jobs/run-group", {"group": args.group})
+            if args.output == "json":
+                print(json.dumps(result, indent=2, default=str))
+            else:
+                if args.job_id:
+                    io.log("success", f"Job {args.job_id} is now PENDING")
+                else:
+                    count = result.get("count", 0)
+                    io.log("success", f"Transitioned {count} job(s) in group '{args.group}' to PENDING")
+            return EXIT_SUCCESS
+        except StepwiseAPIError as e:
+            io.log("error", e.detail)
+            return EXIT_JOB_FAILED
+
+    # Local path
+    project = _find_project_or_exit(args)
+    store = SQLiteStore(str(project.db_path))
+    try:
+        if args.job_id:
+            try:
+                store.transition_job_to_pending(args.job_id)
+            except (KeyError, ValueError) as e:
+                io.log("error", str(e))
+                return EXIT_JOB_FAILED
+            if args.output == "json":
+                print(json.dumps({"job_id": args.job_id, "status": "pending"}))
+            else:
+                io.log("success", f"Job {args.job_id} is now PENDING")
+        else:
+            job_ids = store.transition_group_to_pending(args.group)
+            # Check for cross-group unmet deps
+            cross_group_count = 0
+            for jid in job_ids:
+                deps = store.get_job_dependencies(jid)
+                for dep_id in deps:
+                    try:
+                        dep_job = store.load_job(dep_id)
+                        if dep_job.job_group != args.group and dep_job.status != JobStatus.COMPLETED:
+                            cross_group_count += 1
+                            break
+                    except KeyError:
+                        cross_group_count += 1
+                        break
+            if args.output == "json":
+                print(json.dumps({"group": args.group, "count": len(job_ids),
+                                  "job_ids": job_ids}))
+            else:
+                io.log("success", f"Transitioned {len(job_ids)} job(s) in group '{args.group}' to PENDING")
+                if cross_group_count:
+                    io.log("info", f"{cross_group_count} job(s) have unmet dependencies outside this group")
+        return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def _cmd_job_dep(args) -> int:
+    """Manage dependencies between jobs."""
+    from stepwise.models import JobStatus
+    from stepwise.store import SQLiteStore
+
+    io = _io(args)
+
+    # Server delegation
+    server_url = _detect_server_url(args)
+    if server_url:
+        from stepwise.api_client import StepwiseClient, StepwiseAPIError
+        client = StepwiseClient(server_url)
+        try:
+            if getattr(args, "after", None):
+                result = client._request("POST", f"/api/jobs/{args.job_id}/deps",
+                                         {"depends_on_job_id": args.after})
+            elif getattr(args, "rm", None):
+                result = client._request("DELETE", f"/api/jobs/{args.job_id}/deps/{args.rm}")
+            else:
+                result = client._request("GET", f"/api/jobs/{args.job_id}/deps")
+            if args.output == "json":
+                print(json.dumps(result, indent=2, default=str))
+            else:
+                if getattr(args, "after", None):
+                    io.log("success", f"Added dependency: {args.job_id} waits for {args.after}")
+                elif getattr(args, "rm", None):
+                    io.log("success", f"Removed dependency: {args.job_id} no longer waits for {args.rm}")
+                else:
+                    deps = result.get("depends_on", [])
+                    if deps:
+                        io.log("info", f"Dependencies for {args.job_id}: {', '.join(deps)}")
+                    else:
+                        io.log("info", f"No dependencies for {args.job_id}")
+            return EXIT_SUCCESS
+        except StepwiseAPIError as e:
+            io.log("error", e.detail)
+            return EXIT_JOB_FAILED
+
+    # Local path
+    project = _find_project_or_exit(args)
+    store = SQLiteStore(str(project.db_path))
+    try:
+        if getattr(args, "after", None):
+            # Add dependency
+            try:
+                job = store.load_job(args.job_id)
+            except KeyError:
+                io.log("error", f"Job not found: {args.job_id}")
+                return EXIT_JOB_FAILED
+            try:
+                store.load_job(args.after)
+            except KeyError:
+                io.log("error", f"Dependency target not found: {args.after}")
+                return EXIT_JOB_FAILED
+            if job.status != JobStatus.STAGED:
+                io.log("error", f"Can only add deps to STAGED jobs (job is {job.status.value})")
+                return EXIT_USAGE_ERROR
+            if store.would_create_cycle(args.job_id, args.after):
+                io.log("error", "Cannot add dependency: would create a cycle")
+                return EXIT_USAGE_ERROR
+            store.add_job_dependency(args.job_id, args.after)
+            if args.output == "json":
+                print(json.dumps({"job_id": args.job_id, "depends_on": args.after, "action": "added"}))
+            else:
+                io.log("success", f"Added dependency: {args.job_id} waits for {args.after}")
+
+        elif getattr(args, "rm", None):
+            # Remove dependency
+            try:
+                job = store.load_job(args.job_id)
+            except KeyError:
+                io.log("error", f"Job not found: {args.job_id}")
+                return EXIT_JOB_FAILED
+            if job.status != JobStatus.STAGED:
+                io.log("error", f"Can only remove deps from STAGED jobs (job is {job.status.value})")
+                return EXIT_USAGE_ERROR
+            store.remove_job_dependency(args.job_id, args.rm)
+            if args.output == "json":
+                print(json.dumps({"job_id": args.job_id, "depends_on": args.rm, "action": "removed"}))
+            else:
+                io.log("success", f"Removed dependency: {args.job_id} no longer waits for {args.rm}")
+
+        else:
+            # List dependencies
+            try:
+                job = store.load_job(args.job_id)
+            except KeyError:
+                io.log("error", f"Job not found: {args.job_id}")
+                return EXIT_JOB_FAILED
+            deps = job.depends_on
+            if args.output == "json":
+                print(json.dumps({"job_id": args.job_id, "depends_on": deps}))
+            else:
+                if deps:
+                    io.log("info", f"Dependencies for {args.job_id}: {', '.join(deps)}")
+                else:
+                    io.log("info", f"No dependencies for {args.job_id}")
+
+        return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def _cmd_job_cancel(args) -> int:
+    """Cancel a staged/pending/running job."""
+    from stepwise.models import JobStatus
+    from stepwise.store import SQLiteStore
+    from stepwise.events import JOB_CANCELLED
+
+    io = _io(args)
+
+    # Server delegation
+    server_url = _detect_server_url(args)
+    if server_url:
+        from stepwise.api_client import StepwiseClient, StepwiseAPIError
+        client = StepwiseClient(server_url)
+        try:
+            result = client.cancel(args.job_id)
+            if args.output == "json":
+                print(json.dumps(result, indent=2, default=str))
+            else:
+                io.log("success", f"Cancelled {args.job_id}")
+            return EXIT_SUCCESS
+        except StepwiseAPIError as e:
+            io.log("error", e.detail)
+            return EXIT_JOB_FAILED
+
+    # Local path
+    project = _find_project_or_exit(args)
+    store = SQLiteStore(str(project.db_path))
+    try:
+        try:
+            job = store.load_job(args.job_id)
+        except KeyError:
+            io.log("error", f"Job not found: {args.job_id}")
+            return EXIT_JOB_FAILED
+
+        if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
+            io.log("error", f"Job already {job.status.value}")
+            return EXIT_USAGE_ERROR
+
+        if job.status == JobStatus.STAGED:
+            # Direct cancel for staged jobs
+            from stepwise.models import _now
+            job.status = JobStatus.CANCELLED
+            job.updated_at = _now()
+            store.save_job(job)
+            if args.output == "json":
+                print(json.dumps({"job_id": args.job_id, "status": "cancelled"}))
+            else:
+                io.log("success", f"Cancelled {args.job_id}")
+        else:
+            # Delegate to engine for pending/running jobs
+            from stepwise.engine import Engine
+            from stepwise.registry_factory import create_default_registry
+            registry = create_default_registry()
+            engine = Engine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir)
+            engine.cancel_job(args.job_id)
+            if args.output == "json":
+                print(json.dumps({"job_id": args.job_id, "status": "cancelled"}))
+            else:
+                io.log("success", f"Cancelled {args.job_id}")
+
+        return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def _cmd_job_rm(args) -> int:
+    """Remove a staged job."""
+    from stepwise.models import JobStatus
+    from stepwise.store import SQLiteStore
+
+    io = _io(args)
+
+    # Server delegation
+    server_url = _detect_server_url(args)
+    if server_url:
+        from stepwise.api_client import StepwiseClient, StepwiseAPIError
+        client = StepwiseClient(server_url)
+        try:
+            result = client._request("DELETE", f"/api/jobs/{args.job_id}")
+            if args.output == "json":
+                print(json.dumps(result, indent=2, default=str))
+            else:
+                io.log("success", f"Removed job {args.job_id}")
+            return EXIT_SUCCESS
+        except StepwiseAPIError as e:
+            io.log("error", e.detail)
+            return EXIT_JOB_FAILED
+
+    # Local path
+    project = _find_project_or_exit(args)
+    store = SQLiteStore(str(project.db_path))
+    try:
+        try:
+            job = store.load_job(args.job_id)
+        except KeyError:
+            io.log("error", f"Job not found: {args.job_id}")
+            return EXIT_JOB_FAILED
+
+        if job.status != JobStatus.STAGED:
+            io.log("error", f"Can only remove STAGED jobs (job is {job.status.value})")
+            return EXIT_USAGE_ERROR
+
+        # Check for dependents
+        dependents = store.get_job_dependents(args.job_id)
+        if dependents:
+            io.log("error",
+                   f"Cannot remove: {len(dependents)} job(s) depend on this job: "
+                   f"{', '.join(dependents)}. Remove deps first with 'job dep <id> --rm {args.job_id}'")
+            return EXIT_USAGE_ERROR
+
+        store.delete_job(args.job_id)
+        if args.output == "json":
+            print(json.dumps({"job_id": args.job_id, "action": "removed"}))
+        else:
+            io.log("success", f"Removed job {args.job_id}")
+        return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def cmd_job(args: argparse.Namespace) -> int:
+    """Job staging and orchestration commands."""
+    action = getattr(args, "job_command", None)
+    handlers = {
+        "create": _cmd_job_create,
+        "show": _cmd_job_show,
+        "run": _cmd_job_run,
+        "dep": _cmd_job_dep,
+        "cancel": _cmd_job_cancel,
+        "rm": _cmd_job_rm,
+    }
+    handler = handlers.get(action)
+    if handler:
+        return handler(args)
+    # No subcommand — print help
+    print("Usage: stepwise job {create|show|run|dep|cancel|rm} ...", file=sys.stderr)
+    return EXIT_USAGE_ERROR
 
 
 def cmd_cache(args: argparse.Namespace) -> int:
@@ -4311,6 +4865,7 @@ def main(argv: list[str] | None = None) -> int:
         "agent-help": cmd_agent_help,
         "docs": cmd_docs,
         "cache": cmd_cache,
+        "job": cmd_job,
         "update": cmd_self_update,
         "welcome": cmd_welcome,
         "uninstall": cmd_uninstall,
