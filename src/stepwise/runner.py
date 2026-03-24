@@ -139,11 +139,10 @@ async def _fetch_job_state(
     """Fetch job and runs from the server. Returns (job_dict, runs_list)."""
     for attempt in range(3):
         job_resp = await client.get(f"/api/jobs/{job_id}")
-        if job_resp.status_code == 404 and attempt < 2:
-            await asyncio.sleep(1)
-            continue
-        job_resp.raise_for_status()
-        break
+        if job_resp.status_code != 404 or attempt == 2:
+            break
+        await asyncio.sleep(1)
+    job_resp.raise_for_status()
     runs_resp = await client.get(f"/api/jobs/{job_id}/runs")
     runs_resp.raise_for_status()
     return job_resp.json(), runs_resp.json()
