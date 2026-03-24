@@ -918,15 +918,22 @@ class Engine:
             if self._is_current(job, latest):
                 return False
 
-            # Loop guard: if this step has a non-current completed run AND
-            # it has an unconditional loop exit rule targeting one of its own
-            # deps, re-triggering would create an infinite loop. Skip it.
+            # Loop guard 1: unconditional loop rules targeting deps
             dep_step_names = set(self._dep_steps(step_def))
             for rule in step_def.exit_rules:
                 if rule.config.get("action") == "loop" and rule.type == "always":
                     target = rule.config.get("target", step_name)
                     if target in dep_step_names:
                         return False
+
+            # Loop guard 2: circular dep chains (score→refine→score via any_of).
+            # The currentness check walks the cycle and always finds a
+            # superseded run, causing infinite relaunch. Block if in cycle.
+            # Exception: external steps provide genuinely new data (human input)
+            # and should always be allowed to relaunch in cycles.
+            if (step_def.executor.type != "external"
+                    and self._step_in_dep_cycle(job, step_name)):
+                return False
 
         # Check regular deps (non-any_of, non-$job, non-optional): ALL must have current completed runs
         # (or have failed with on_error: continue, which also unblocks downstream)
@@ -1024,21 +1031,22 @@ class Engine:
 
     # ── Currentness ───────────────────────────────────────────────────────
 
-    def _is_current(self, job: Job, run: StepRun, _visited: set | None = None) -> bool:
+    def _is_current(self, job: Job, run: StepRun, _checking_steps: set | None = None) -> bool:
         """A run is current if:
         1. It is the latest run (any status) for its step
         2. It has COMPLETED status
         3. Every dependency run it used is itself current
 
-        The _visited set prevents infinite recursion through circular dep chains
-        (e.g., score→refine→score loops). If we encounter a run already being
-        checked, treat it as current to break the cycle.
+        _checking_steps tracks which step names are being checked up the call
+        stack. If we encounter a step already being checked, we've hit a
+        circular dep chain (score→refine→score). Treat it as current to
+        break the cycle — the runs in the cycle are self-consistent.
         """
-        if _visited is None:
-            _visited = set()
-        if run.id in _visited:
-            return True  # Break cycle — assume current
-        _visited.add(run.id)
+        if _checking_steps is None:
+            _checking_steps = set()
+        if run.step_name in _checking_steps:
+            return True  # Break cycle — steps in the loop are self-consistent
+        _checking_steps = _checking_steps | {run.step_name}  # copy to avoid mutation across branches
 
         # Supersession: ANY newer run invalidates this one
         latest = self.store.latest_run(job.id, run.step_name)
@@ -1080,7 +1088,7 @@ class Engine:
                 if latest_dep and latest_dep.id == source_run.id:
                     continue  # settled — treat as current
                 return False
-            if not self._is_current(job, source_run, _visited):
+            if not self._is_current(job, source_run, _checking_steps):
                 return False
 
         # For any_of deps: only check the source that was actually used (in dep_run_ids)
@@ -1095,7 +1103,7 @@ class Engine:
                         source_run_id = run.dep_run_ids[src_step]
                         try:
                             source_run = self.store.load_run(source_run_id)
-                            if self._is_current(job, source_run, _visited):
+                            if self._is_current(job, source_run, _checking_steps):
                                 found_current = True
                                 break
                         except KeyError:
@@ -1117,6 +1125,30 @@ class Engine:
         if step_def.for_each:
             deps.append(step_def.for_each.source_step)
         return deps
+
+    def _step_in_dep_cycle(self, job: Job, step_name: str) -> bool:
+        """Check if a step participates in a circular dependency chain.
+
+        Returns True if step_name can reach itself by following input/after
+        edges. Detects score→refine→score patterns where _dispatch_ready
+        would infinitely relaunch due to currentness invalidation.
+        """
+        step_def = job.workflow.steps.get(step_name)
+        if not step_def:
+            return False
+        visited: set[str] = set()
+        queue = list(set(self._dep_steps(step_def)))
+        while queue:
+            dep = queue.pop(0)
+            if dep == step_name:
+                return True
+            if dep in visited or dep == "$job":
+                continue
+            visited.add(dep)
+            dep_def = job.workflow.steps.get(dep)
+            if dep_def:
+                queue.extend(self._dep_steps(dep_def))
+        return False
 
     # ── Job Completion ────────────────────────────────────────────────────
 

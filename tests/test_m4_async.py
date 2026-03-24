@@ -659,6 +659,87 @@ class TestLoopPattern:
         assert impl_run.result.artifact["status"] == "done"
 
 
+    def test_circular_dep_score_refine_no_runaway(self, engine, store):
+        """Score depends on any_of [refine, plan]. After refine completes and
+        loops back to score, score should NOT be relaunched infinitely by
+        _dispatch_ready. The circular dep chain (score→refine→score) must not
+        cause currentness invalidation loops."""
+        score_count = [0]
+
+        def score_fn(inputs):
+            score_count[0] += 1
+            return {"average": "5.0", "critique": "good", "result": "ok"}
+
+        def refine_fn(inputs):
+            return {"result": "refined plan"}
+
+        register_step_fn("cd_score", score_fn)
+        register_step_fn("cd_plan", lambda inputs: {"result": "initial plan"})
+        register_step_fn("cd_refine", refine_fn)
+        register_step_fn("cd_report", lambda inputs: {"result": "done"})
+
+        wf = WorkflowDefinition(steps={
+            "plan": StepDefinition(
+                name="plan", outputs=["result"],
+                executor=ExecutorRef("callable", {"fn_name": "cd_plan"}),
+            ),
+            "score": StepDefinition(
+                name="score", outputs=["average", "critique", "result"],
+                executor=ExecutorRef("callable", {"fn_name": "cd_score"}),
+                inputs=[InputBinding("plan_text", "", "",
+                    any_of_sources=[("refine", "result"), ("plan", "result")])],
+                exit_rules=[
+                    ExitRule("quality_met", "expression", {
+                        "condition": "float(str(outputs.get('average', '0'))) >= 4.0",
+                        "action": "advance",
+                    }, priority=10),
+                    ExitRule("refine_needed", "expression", {
+                        "condition": "True",
+                        "action": "loop", "target": "refine",
+                        "max_iterations": 3,
+                    }, priority=5),
+                ],
+            ),
+            "refine": StepDefinition(
+                name="refine", outputs=["result"],
+                executor=ExecutorRef("callable", {"fn_name": "cd_refine"}),
+                inputs=[InputBinding("critique", "score", "critique")],
+                exit_rules=[
+                    ExitRule("rescore", "always", {
+                        "action": "loop", "target": "score",
+                    }, priority=10),
+                ],
+            ),
+            "report": StepDefinition(
+                name="report", outputs=["result"],
+                executor=ExecutorRef("callable", {"fn_name": "cd_report"}),
+                inputs=[InputBinding("average", "score", "average")],
+                after=["score"],
+            ),
+        })
+
+        job = engine.create_job("Circular dep test", wf)
+        engine.start_job(job.id)
+
+        # Tick enough times to settle — should not run away
+        for _ in range(20):
+            job = store.load_job(job.id)
+            if job.status != JobStatus.RUNNING:
+                break
+            engine.tick()
+
+        job = store.load_job(job.id)
+        assert job.status == JobStatus.COMPLETED
+
+        # Score should run at most a few times (1-2), NOT hundreds
+        score_runs = store.runs_for_step(job.id, "score")
+        assert len(score_runs) <= 5, f"Score ran {len(score_runs)} times — runaway detected"
+
+        # Report should have completed
+        report_run = store.latest_run(job.id, "report")
+        assert report_run.status == StepRunStatus.COMPLETED
+
+
 # ── Test: Agent Executor ──────────────────────────────────────────────
 
 
