@@ -41,17 +41,32 @@ EXIT_SUSPENDED = 5
 
 
 
-def parse_vars(var_list: list[str] | None) -> dict[str, str]:
-    """Parse --var KEY=VALUE flags. Splits on first = only."""
+def parse_inputs(input_list: list[str] | None) -> dict[str, str]:
+    """Parse --input KEY=VALUE flags. Splits on first = only.
+
+    Values starting with @ are treated as file paths — the file contents
+    become the value (replaces the old --var-file flag).
+    """
     result: dict[str, str] = {}
-    if not var_list:
+    if not input_list:
         return result
-    for item in var_list:
+    for item in input_list:
         if "=" not in item:
-            raise ValueError(f"Invalid --var format: '{item}' (expected KEY=VALUE)")
+            raise ValueError(f"Invalid --input format: '{item}' (expected KEY=VALUE)")
         key, value = item.split("=", 1)
-        result[key] = value
+        if value.startswith("@"):
+            fpath = value[1:]
+            try:
+                result[key] = Path(fpath).read_text()
+            except FileNotFoundError:
+                raise ValueError(f"Input file not found: {fpath} (from --input {key}=@{fpath})")
+        else:
+            result[key] = value
     return result
+
+
+# Deprecated alias
+parse_vars = parse_inputs
 
 
 def load_vars_file(path: str) -> dict:
@@ -882,7 +897,7 @@ def run_wait(
             if cv and cv.sensitive:
                 usage_parts.append(f"STEPWISE_VAR_{m.upper()}=...")
             else:
-                usage_parts.append(f'--var {m}="..."')
+                usage_parts.append(f'--input {m}="..."')
         missing_list = ", ".join(missing_parts)
         usage = " ".join(usage_parts)
         _json_error(

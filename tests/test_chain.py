@@ -156,7 +156,7 @@ class TestCompileChain:
         assert s2_inputs["result"] == "stage-1.result"
 
     def test_var_passthrough_matching(self, tmp_path):
-        """--var values matching config vars are wired as $job.* passthrough."""
+        """--input values matching config vars are wired as $job.* passthrough."""
         flow_a = write_flow(tmp_path, "flow-a",
                             simple_echo_flow("flow-a", ["result"],
                                              config={"project": "Project name"}))
@@ -245,7 +245,7 @@ class TestCompileChain:
             assert Path(step["flow"]).is_absolute()
 
     def test_var_passthrough_no_config_vars(self, tmp_path):
-        """When flow has no config vars, all --var values pass through."""
+        """When flow has no config vars, all --input values pass through."""
         flow_a = write_flow(tmp_path, "flow-a",
                             simple_echo_flow("flow-a", ["result"]))
         flow_b = write_flow(tmp_path, "flow-b",

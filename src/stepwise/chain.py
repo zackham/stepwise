@@ -18,7 +18,7 @@ def compile_chain(flow_paths: list[Path], var_names: list[str]) -> str:
 
     Args:
         flow_paths: Resolved absolute paths to each flow file (2+ required).
-        var_names: Names of job-level variables (from --var flags) to pass through.
+        var_names: Names of job-level variables (from --input flags) to pass through.
 
     Returns:
         YAML string for the ephemeral chain workflow.

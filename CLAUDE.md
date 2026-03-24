@@ -41,7 +41,7 @@ make build-web                             # npm build → copies web/dist/ → 
 | `stepwise server status` | Show PID, port, uptime, log path (or "not running") |
 | `stepwise cache stats` | Show cache entries, hits, size, per-flow/step breakdown |
 | `stepwise cache clear` | Clear cached results (`--flow`, `--step` filters) |
-| `stepwise cache debug <flow> <step>` | Show computed cache key for a step (requires `--var`) |
+| `stepwise cache debug <flow> <step>` | Show computed cache key for a step (requires `--input`) |
 
 All delegation modes (`run`, `--wait`, `--async`) use WebSocket notifications from the server for low-latency updates, falling back to REST polling at 2s intervals if WS connection fails.
 
@@ -374,7 +374,7 @@ plan:
   outputs: [result]
 ```
 
-Use `$variable` references to pass paths from job inputs (`--var project_path=/path/to/repo`). This is essential for flows that dispatch agents into external codebases.
+Use `$variable` references to pass paths from job inputs (`--input project_path=/path/to/repo`). This is essential for flows that dispatch agents into external codebases.
 
 ### The ESCALATE pattern
 

@@ -5,7 +5,7 @@ Idioms for building effective multi-agent flows. Complements [flow-reference.md]
 **Prerequisites:** This document assumes familiarity with the core YAML syntax from flow-reference.md. Key concepts used throughout:
 
 - **`$variable`** in prompts resolves from the step's `inputs:` bindings
-- **`$job.variable`** references job-level inputs (from `--var` or `config:` block)
+- **`$job.variable`** references job-level inputs (from `--input` or `config:` block)
 - **`attempt`** is a built-in counter: how many times this step has executed in the current job (1-indexed)
 - **`outputs`** in exit rule expressions is a DotDict of the step's produced artifact
 - **Script steps** (`run:`) print JSON to stdout; the engine parses it and maps keys to declared `outputs`

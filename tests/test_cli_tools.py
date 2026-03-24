@@ -245,7 +245,7 @@ class TestWaitMode:
             "--project-dir", str(tmp_project),
             "run", str(simple_flow),
             "--wait",
-            "--var", "question=What is 2+2?",
+            "--input", "question=What is 2+2?",
         ])
 
         assert code == EXIT_SUCCESS
@@ -261,14 +261,14 @@ class TestWaitMode:
             "--project-dir", str(tmp_project),
             "run", str(simple_flow),
             "--wait",
-            # No --var question=...
+            # No --input question=...
         ])
 
         assert code == EXIT_USAGE_ERROR
         result = json.loads(output)
         assert result["status"] == "error"
         assert "question" in result["error"]
-        assert "--var" in result["error"]  # actionable error message
+        assert "--input" in result["error"]  # actionable error message
 
     def test_wait_file_not_found(self, tmp_project):
         code, output = _capture_stdout([
@@ -306,7 +306,7 @@ class TestOutputCommand:
             "--project-dir", str(tmp_project),
             "run", str(simple_flow),
             "--wait",
-            "--var", "question=test",
+            "--input", "question=test",
         ])
         assert code == EXIT_SUCCESS
         job_id = json.loads(run_output)["job_id"]
@@ -328,7 +328,7 @@ class TestOutputCommand:
             "--project-dir", str(tmp_project),
             "run", str(simple_flow),
             "--wait",
-            "--var", "question=test",
+            "--input", "question=test",
         ])
         assert code == EXIT_SUCCESS
         job_id = json.loads(run_output)["job_id"]
@@ -472,7 +472,7 @@ class TestAgentHelp:
 
         assert code == EXIT_SUCCESS
         assert "question" in output
-        assert '--var question="..."' in output
+        assert '--input question="..."' in output
 
     def test_agent_help_compact_shows_external_steps(self, external_flow, tmp_project):
         code, output = _capture_stdout([
@@ -613,7 +613,7 @@ class TestOutputJsonStandalone:
             "--project-dir", str(tmp_project),
             "run", str(simple_flow),
             "--output", "json",
-            "--var", "question=test",
+            "--input", "question=test",
         ])
 
         assert code == EXIT_SUCCESS
@@ -656,7 +656,7 @@ class TestWaitSuspension:
             "--project-dir", str(tmp_project),
             "run", str(external_flow),
             "--wait",
-            "--var", "repo=/tmp/test",
+            "--input", "repo=/tmp/test",
         ])
 
         assert code == 5  # EXIT_SUSPENDED
@@ -666,9 +666,9 @@ class TestWaitSuspension:
         assert "job_id" in result
 
 
-class TestVarFile:
-    def test_var_file_flag(self, simple_flow, tmp_project):
-        """--var-file reads file contents as variable value."""
+class TestInputFile:
+    def test_input_at_file_flag(self, simple_flow, tmp_project):
+        """--input KEY=@path reads file contents as variable value."""
         question_file = tmp_project / "question.txt"
         question_file.write_text("What is the meaning of life?")
 
@@ -676,18 +676,18 @@ class TestVarFile:
             "--project-dir", str(tmp_project),
             "run", str(simple_flow),
             "--wait",
-            "--var-file", f"question={question_file}",
+            "--input", f"question=@{question_file}",
         ])
 
         assert code == EXIT_SUCCESS
         result = json.loads(output)
         assert result["status"] == "completed"
 
-    def test_var_file_not_found(self, simple_flow, tmp_project):
+    def test_input_at_file_not_found(self, simple_flow, tmp_project):
         code, _ = _capture_stdout([
             "--project-dir", str(tmp_project),
             "run", str(simple_flow),
-            "--var-file", "question=/nonexistent/file.txt",
+            "--input", "question=@/nonexistent/file.txt",
         ])
         assert code == EXIT_USAGE_ERROR
 
@@ -876,7 +876,7 @@ class TestWaitCommand:
             "--project-dir", str(tmp_project),
             "run", str(simple_flow),
             "--wait",
-            "--var", "question=hello",
+            "--input", "question=hello",
         ])
         assert code == EXIT_SUCCESS
         job_id = json.loads(run_output)["job_id"]
@@ -939,7 +939,7 @@ steps:
             "--project-dir", str(tmp_project),
             "run", str(external_flow),
             "--wait",
-            "--var", "repo=/tmp/test",
+            "--input", "repo=/tmp/test",
         ])
         assert code == 5  # EXIT_SUSPENDED
         job_id = json.loads(run_output)["job_id"]

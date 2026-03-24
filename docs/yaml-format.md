@@ -592,9 +592,9 @@ config:
 | `options` | list | `None` | Required for `choice` type |
 | `sensitive` | bool | `false` | Masks value in output, suggests env var |
 
-**Resolution priority** (highest wins): `--var` → `--vars-file` → `config.local.yaml` → `STEPWISE_VAR_{NAME}` env vars → config defaults.
+**Resolution priority** (highest wins): `--input` → `--vars-file` → `config.local.yaml` → `STEPWISE_VAR_{NAME}` env vars → config defaults.
 
-**Sensitive variables:** When `sensitive: true`, the value is masked in `stepwise info` output, missing-input errors suggest `STEPWISE_VAR_{NAME}` instead of `--var`, and the env var is auto-resolved by `load_flow_config`.
+**Sensitive variables:** When `sensitive: true`, the value is masked in `stepwise info` output, missing-input errors suggest `STEPWISE_VAR_{NAME}` instead of `--input`, and the env var is auto-resolved by `load_flow_config`.
 
 ## Requirements
 

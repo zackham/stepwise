@@ -161,14 +161,14 @@ When the flow reaches this step, it suspends. With `--watch`, you see the prompt
 Stepwise flows are callable as tools by AI agents (Claude Code, Codex, etc.) via plain CLI:
 
 ```bash
-stepwise run code-review --wait --var repo_path="/path/to/repo"
+stepwise run code-review --wait --input repo_path="/path/to/repo"
 ```
 
 ```json
 {"status": "completed", "job_id": "job-abc123", "outputs": [{"verdict": "approve", "issues": [], "suggestions": []}]}
 ```
 
-`--wait` prints **only** JSON to stdout — zero logging, zero progress noise. Your agent parses the output and acts on it. Missing an input? The error tells you exactly which `--var` flags to add.
+`--wait` prints **only** JSON to stdout — zero logging, zero progress noise. Your agent parses the output and acts on it. Missing an input? The error tells you exactly which `--input` flags to add.
 
 See [Agent Integration](agent-integration.md) for the full guide.
 

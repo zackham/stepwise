@@ -51,13 +51,13 @@ def _build_flow_entries(
                 run_ref = str(flow_path.relative_to(project_dir))
             except ValueError:
                 run_ref = flow_path.name
-        # Use config var descriptions for --var hints when available
+        # Use config var descriptions for --input hints when available
         config_map = {v.name: v for v in wf.config_vars} if wf.config_vars else {}
         var_parts = []
         for inp in inputs:
             cv = config_map.get(inp)
             hint = f"<{cv.description}>" if cv and cv.description else "..."
-            var_parts.append(f'--var {inp}="{hint}"')
+            var_parts.append(f'--input {inp}="{hint}"')
         var_args = " ".join(var_parts)
         cmd = f"stepwise run {run_ref} --wait"
         if var_args:
@@ -113,7 +113,7 @@ def _build_registry_entries(
         external_steps = schema.get("externalSteps", [])
         desc = schema.get("description", "")
 
-        var_args = " ".join(f'--var {inp}="..."' for inp in inputs)
+        var_args = " ".join(f'--input {inp}="..."' for inp in inputs)
         cmd = f"stepwise run {rf.ref} --wait"
         if var_args:
             cmd += f" {var_args}"
@@ -250,7 +250,7 @@ def _format_compact(entries: list[dict], registry_entries: list[dict] | None = N
         "## How to Run Flows",
         "",
         "**Default: background `--wait`** — Run a flow, stay free, get notified on completion.",
-        "  `stepwise run <flow> --wait --var k=v`",
+        "  `stepwise run <flow> --wait --input k=v`",
         "  Run this command in a **background process** (not foreground). You get:",
         "  - Automatic notification with the full JSON result when the job completes",
         "  - The job is visible in the server's web UI for human monitoring",
@@ -264,7 +264,7 @@ def _format_compact(entries: list[dict], registry_entries: list[dict] | None = N
         "  Only use this when you have nothing else to do and the job is fast (<30s).",
         "",
         "**Async (for external callers)** — Fire-and-forget, requires manual polling.",
-        "  `stepwise run <flow> --async --var k=v`",
+        "  `stepwise run <flow> --async --input k=v`",
         "  Returns `{\"job_id\": \"...\"}`. You must poll with `stepwise status`/`output`.",
         "  Use this for webhooks, cron triggers, or non-interactive callers that can't",
         "  run background processes. **Don't use this in interactive agent sessions** —",
@@ -370,7 +370,7 @@ def _format_compact(entries: list[dict], registry_entries: list[dict] | None = N
     lines.extend([
         "## CLI Reference",
         "",
-        "`stepwise run <flow> --wait --var k=v` — run and block for JSON result.",
+        "`stepwise run <flow> --wait --input k=v` — run and block for JSON result.",
         "`stepwise run <flow> --async` — fire-and-forget, returns job_id.",
         "`stepwise run <flow> --async --notify <url>` — async with webhook callbacks on suspend/complete/fail.",
         "`stepwise run <flow> --async --notify <url> --notify-context '{...}'` — async with context passed to webhooks.",
@@ -397,7 +397,7 @@ def _format_compact(entries: list[dict], registry_entries: list[dict] | None = N
         "**Mediation example:**",
         "```",
         "# 1. Start flow — blocks until suspended",
-        "result=$(stepwise run meeting-ingest.flow.yaml --wait --var audio=rec.mp3)",
+        "result=$(stepwise run meeting-ingest.flow.yaml --wait --input audio=rec.mp3)",
         "# exit=5, result has suspended_steps with run_id and prompt",
         "",
         "# 2. Read the prompt, prepare your response",
@@ -511,7 +511,7 @@ def _format_full(entries: list[dict]) -> str:
         "## Quick Reference",
         "",
         "```",
-        "stepwise run <flow> --wait --var k=v     # run, block, get JSON",
+        "stepwise run <flow> --wait --input k=v     # run, block, get JSON",
         "stepwise run <flow> --async               # fire-and-forget",
         "stepwise output <job-id>                  # retrieve outputs",
         "stepwise fulfill <run-id> '{...}'         # satisfy external step",
