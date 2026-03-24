@@ -305,12 +305,15 @@ def _get_process_pgid(pid: int) -> int | None:
         return None
 
 
+# Queue owners use setsid; protected via session-ID matching in periodic cleanup
 def cleanup_orphaned_acpx(active_pids: set[int] | None = None) -> list[tuple[int, str]]:
     """Detect and terminate orphaned acpx/claude processes.
 
     Scans for processes matching "claude-agent-acp" or "acpx.*__queue-owner",
     cross-references their process group IDs with PIDs from running steps,
     and kills any that are orphaned.
+
+    Detached queue owners (setsid) are protected via session-ID matching against active_pids.
 
     Args:
         active_pids: PIDs from currently running step_runs (executor_state.pid).
@@ -400,14 +403,24 @@ class AcpxBackend:
         # Ensure named session exists (acpx requires it before prompting).
         # Short timeout + non-fatal: if ensure fails, acpx prompt will fail
         # with a clear error rather than blocking the thread pool for 30s.
+        # Parse the acpxRecordId (UUID) from stdout — needed so the periodic
+        # queue-owner cleanup can match lock files to running steps.
         t_ensure = time.monotonic()
         logger.info(f"[{step_id}] sessions ensure starting (session={session_name})")
+        session_id: str | None = None
         try:
-            subprocess.run(
+            ensure_result = subprocess.run(
                 [self.acpx_path, "--cwd", working_dir,
                  agent, "sessions", "ensure", "--name", session_name],
-                capture_output=True, timeout=10, env=env,
+                capture_output=True, timeout=10, env=env, text=True,
             )
+            # acpx sessions ensure prints "UUID\t(created|existing)" to stdout
+            raw = ensure_result.stdout.strip().split("\n")[-1].strip() if ensure_result.stdout else ""
+            # Extract UUID before the tab (e.g. "263ce38b-...\t(existing)" → "263ce38b-...")
+            uuid_part = raw.split("\t")[0].strip() if raw else ""
+            if uuid_part and len(uuid_part) < 128:
+                session_id = uuid_part
+                logger.info(f"[{step_id}] resolved session_id={session_id}")
         except (subprocess.TimeoutExpired, FileNotFoundError):
             logger.warning(f"[{step_id}] sessions ensure timed out or not found")
         logger.info(f"[{step_id}] sessions ensure done ({time.monotonic() - t_ensure:.1f}s)")
@@ -436,8 +449,9 @@ class AcpxBackend:
             args,
             cwd=working_dir,
             stdout=out_f,
-            stderr=err_f,  # File, not PIPE — avoids deadlock on large stderr
+            stderr=err_f,
             env=env,
+            start_new_session=True,
         )
         out_f.close()
         err_f.close()
@@ -449,6 +463,7 @@ class AcpxBackend:
             pgid=os.getpgid(proc.pid),
             output_path=str(output_file),
             working_dir=working_dir,
+            session_id=session_id,
             session_name=session_name,
         )
 
@@ -990,6 +1005,7 @@ class AgentExecutor(Executor):
                 "pgid": process.pgid,
                 "output_path": process.output_path,
                 "working_dir": process.working_dir,
+                "session_id": process.session_id,
                 "session_name": process.session_name,
                 "output_mode": self.output_mode,
                 "output_file": output_file,
@@ -999,8 +1015,11 @@ class AgentExecutor(Executor):
         agent_status = self.backend.wait(process)
         logger.info(f"[{step_id}] executor done ({time.monotonic() - t0:.1f}s total, status={agent_status.state})")
 
-        # Clean up lingering queue owner process for this completed session
-        if hasattr(self.backend, 'cleanup_session_queue_owner'):
+        # Clean up lingering queue owner process for this completed session.
+        # Skip cleanup when continue_session is set — the queue owner and session
+        # must stay alive for downstream steps that reuse this session.
+        if (hasattr(self.backend, 'cleanup_session_queue_owner')
+                and not self.continue_session):
             try:
                 self.backend.cleanup_session_queue_owner(
                     agent_status.session_id, session_name=process.session_name,

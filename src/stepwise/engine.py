@@ -878,6 +878,19 @@ class Engine:
         if latest and latest.status == StepRunStatus.FAILED and step_def.on_error == "continue":
             return False
 
+        # If this step FAILED and its exit rules launched a loop target,
+        # the failure is "handled" — don't re-launch via _dispatch_ready.
+        # Otherwise both the loop target AND a retry of this step run concurrently.
+        if latest and latest.status == StepRunStatus.FAILED and step_def.exit_rules:
+            for rule in step_def.exit_rules:
+                if rule.config.get("action") == "loop":
+                    target = rule.config.get("target", step_name)
+                    target_latest = self.store.latest_run(job.id, target)
+                    if target_latest and target_latest.status in (
+                        StepRunStatus.RUNNING, StepRunStatus.SUSPENDED, StepRunStatus.DELEGATED,
+                    ):
+                        return False  # loop target is in-flight — don't re-launch this step
+
         # Check no current completed run
         if latest and latest.status == StepRunStatus.COMPLETED:
             if self._is_current(job, latest):
