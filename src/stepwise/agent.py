@@ -414,7 +414,7 @@ class AcpxBackend:
 
         # Build acpx prompt command
         permissions = config.get("permissions") or self.default_permissions
-        args = [self.acpx_path, "--format", "json", "--cwd", working_dir]
+        args = [self.acpx_path, "--format", "json", "--ttl", "0", "--cwd", working_dir]
         if permissions == "approve_all":
             args.append("--approve-all")
         elif permissions == "deny":
