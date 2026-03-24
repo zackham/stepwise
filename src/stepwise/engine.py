@@ -1024,12 +1024,22 @@ class Engine:
 
     # ── Currentness ───────────────────────────────────────────────────────
 
-    def _is_current(self, job: Job, run: StepRun) -> bool:
+    def _is_current(self, job: Job, run: StepRun, _visited: set | None = None) -> bool:
         """A run is current if:
         1. It is the latest run (any status) for its step
         2. It has COMPLETED status
         3. Every dependency run it used is itself current
+
+        The _visited set prevents infinite recursion through circular dep chains
+        (e.g., score→refine→score loops). If we encounter a run already being
+        checked, treat it as current to break the cycle.
         """
+        if _visited is None:
+            _visited = set()
+        if run.id in _visited:
+            return True  # Break cycle — assume current
+        _visited.add(run.id)
+
         # Supersession: ANY newer run invalidates this one
         latest = self.store.latest_run(job.id, run.step_name)
         if not latest or latest.id != run.id:
@@ -1070,7 +1080,7 @@ class Engine:
                 if latest_dep and latest_dep.id == source_run.id:
                     continue  # settled — treat as current
                 return False
-            if not self._is_current(job, source_run):
+            if not self._is_current(job, source_run, _visited):
                 return False
 
         # For any_of deps: only check the source that was actually used (in dep_run_ids)
@@ -1085,7 +1095,7 @@ class Engine:
                         source_run_id = run.dep_run_ids[src_step]
                         try:
                             source_run = self.store.load_run(source_run_id)
-                            if self._is_current(job, source_run):
+                            if self._is_current(job, source_run, _visited):
                                 found_current = True
                                 break
                         except KeyError:
