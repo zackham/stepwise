@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import subprocess
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -833,6 +834,7 @@ class Engine:
                 job.updated_at = _now()
                 self.store.save_job(job)
                 self._emit(job.id, JOB_COMPLETED)
+                self._cleanup_job_sessions(job.id)
                 return
 
             if not made_progress:
@@ -845,6 +847,7 @@ class Engine:
                     job.updated_at = _now()
                     self.store.save_job(job)
                     self._emit(job.id, JOB_FAILED, {"reason": "no_terminal_reached"})
+                    self._cleanup_job_sessions(job.id)
                 return  # No progress possible, wait for next tick
 
     # ── Readiness ─────────────────────────────────────────────────────────
@@ -1138,6 +1141,36 @@ class Engine:
                 )
                 self.store.save_run(run)
                 self._emit(job.id, STEP_SKIPPED, {"step": step_name, "reason": "settlement"})
+
+    def _cleanup_job_sessions(self, job_id: str) -> None:
+        """Close acpx queue owners for all agent sessions used by this job.
+
+        Runs in a daemon thread so it doesn't block the engine.
+        """
+        runs = self.store.runs_for_job(job_id)
+        session_names: set[str] = set()
+        for run in runs:
+            es = run.executor_state or {}
+            name = es.get("session_name")
+            if name:
+                session_names.add(name)
+
+        if not session_names:
+            return
+
+        def _close_sessions(names: set[str]) -> None:
+            for name in names:
+                try:
+                    subprocess.run(
+                        ["acpx", "claude", "sessions", "close", "--name", name],
+                        capture_output=True, timeout=10,
+                    )
+                    _engine_logger.debug("Closed session queue owner: %s", name)
+                except Exception as exc:
+                    _engine_logger.warning("Failed to close session %s: %s", name, exc)
+
+        t = threading.Thread(target=_close_sessions, args=(session_names,), daemon=True)
+        t.start()
 
     # ── Launching ─────────────────────────────────────────────────────────
 
@@ -2570,6 +2603,7 @@ class Engine:
                                 "step": run.step_name,
                                 "rule": rule.name,
                             })
+                            self._cleanup_job_sessions(job.id)
                             return
                         case "advance":
                             return  # Move past the failure
@@ -2590,6 +2624,7 @@ class Engine:
             "step": run.step_name,
             "error": run.error,
         })
+        self._cleanup_job_sessions(job.id)
 
     # ── Events ────────────────────────────────────────────────────────────
 
@@ -3144,6 +3179,7 @@ class AsyncEngine(Engine):
             job.updated_at = _now()
             self.store.save_job(job)
             self._emit(job.id, JOB_COMPLETED)
+            self._cleanup_job_sessions(job.id)
         elif job.status == JobStatus.RUNNING:
             # Check for settled-but-failed: nothing active, nothing ready, no terminal completed
             if (not self.store.running_runs(job.id) and
@@ -3155,6 +3191,7 @@ class AsyncEngine(Engine):
                 job.updated_at = _now()
                 self.store.save_job(job)
                 self._emit(job.id, JOB_FAILED, {"reason": "no_terminal_reached"})
+                self._cleanup_job_sessions(job.id)
 
         # Signal done if terminal
         job = self.store.load_job(job_id)
