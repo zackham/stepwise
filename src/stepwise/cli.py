@@ -4190,7 +4190,7 @@ def _cmd_job_create(args) -> int:
         try:
             group = getattr(args, "group", None)
             result = client.create_job(
-                objective=getattr(args, "name", None) or workflow.name or args.flow,
+                objective=getattr(args, "name", None) or workflow.metadata.name or args.flow,
                 workflow=workflow.to_dict(),
                 inputs=inputs or None,
                 name=getattr(args, "name", None),
@@ -4215,7 +4215,7 @@ def _cmd_job_create(args) -> int:
         now = _now()
         job = Job(
             id=_gen_id("job"),
-            objective=getattr(args, "name", None) or workflow.name or args.flow,
+            objective=getattr(args, "name", None) or workflow.metadata.name or args.flow,
             name=getattr(args, "name", None),
             workflow=workflow,
             status=JobStatus.STAGED,
