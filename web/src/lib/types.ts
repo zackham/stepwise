@@ -1,6 +1,7 @@
 // ── Enums ──────────────────────────────────────────────────────────────
 
 export type JobStatus =
+  | "staged"
   | "pending"
   | "running"
   | "paused"
