@@ -5,6 +5,7 @@ import io
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from starlette.testclient import TestClient
 
@@ -428,13 +429,11 @@ class TestDelegatedWsLoopHelpers:
 
     def test_fetch_job_state_retries_on_404(self):
         """_fetch_job_state retries up to 3 times when server returns 404."""
-        import httpx
-
         call_count = 0
 
         async def _get(url):
             nonlocal call_count
-            if url == f"/api/jobs/j1":
+            if url == "/api/jobs/j1":
                 call_count += 1
                 if call_count < 3:
                     resp = _mock_response(status_code=404)
@@ -445,7 +444,7 @@ class TestDelegatedWsLoopHelpers:
                     )
                     return resp
                 return _mock_response(json_data={"id": "j1", "status": "running"})
-            if url == f"/api/jobs/j1/runs":
+            if url == "/api/jobs/j1/runs":
                 return _mock_response(json_data=[])
             raise ValueError(f"unexpected url: {url}")
 
@@ -460,12 +459,16 @@ class TestDelegatedWsLoopHelpers:
         with patch("stepwise.runner.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             asyncio.run(_run())
             assert mock_sleep.await_count == 2
+            mock_sleep.assert_awaited_with(1)
 
     def test_fetch_job_state_raises_after_retries_exhausted(self):
         """_fetch_job_state raises after 3 failed 404 attempts."""
-        import httpx
+        call_count = 0
 
         async def _get(url):
+            nonlocal call_count
+            if url == "/api/jobs/j1":
+                call_count += 1
             resp = _mock_response(status_code=404)
             resp.raise_for_status = MagicMock(
                 side_effect=httpx.HTTPStatusError(
@@ -481,8 +484,10 @@ class TestDelegatedWsLoopHelpers:
             with pytest.raises(httpx.HTTPStatusError):
                 await _fetch_job_state(client, "j1")
 
-        with patch("stepwise.runner.asyncio.sleep", new_callable=AsyncMock):
+        with patch("stepwise.runner.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             asyncio.run(_run())
+            assert call_count == 3
+            assert mock_sleep.await_count == 2
 
     def test_suspension_detection(self):
         """_is_blocked_by_suspension_from_runs detects when job is blocked."""
