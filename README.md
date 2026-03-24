@@ -115,12 +115,15 @@ steps:
 ## Features
 
 - **DAG engine** — automatic parallelism, conditional loops, `when` branching, expression-based exit rules
+- **`after:` ordering** — declare step sequencing without data dependencies
 - **Four run modes** — headless `run`, ephemeral `--watch` UI, blocking `--wait` JSON, fire-and-forget `--async`
+- **`--input` flag** — pass job inputs from the command line (`--input key=value`)
 - **Human-in-the-loop** — stdin prompts in headless mode, schema-driven web forms in watch mode
 - **Real-time streaming** — agent output (text + tool calls) streamed live via WebSocket
 - **Context chains** — session continuity across agent steps via compiled transcripts
 - **Expression exit rules** — `outputs.score >= 0.8`, `attempt < 5`, branch on any output value
-- **Cost tracking** — cap spend, duration, or iterations per step
+- **Job completion cleanup** — automatic resource cleanup when jobs complete or fail
+- **Agent step reliability** — retry logic, session continuity, and circuit breakers for agent steps
 - **Decorators** — timeout, retry, fallback (composable per step)
 
 ## CLI
@@ -153,6 +156,12 @@ See [`docs/cli.md`](docs/cli.md) for the full reference with all flags, examples
 | [CLI Reference](docs/cli.md) | All commands, flags, examples, exit codes |
 | [API Reference](docs/api.md) | REST endpoints, WebSocket protocol, error handling |
 | [Flow Sharing](docs/flow-sharing.md) | Registry commands (`get`, `share`, `search`, `info`) |
+| [Flows vs Skills](docs/flows-vs-skills.md) | When to use a flow vs a skill/prompt |
+| [How Stepwise Is Different](docs/how-stepwise-is-different.md) | Comparison with other orchestration tools |
+| [How-To: Build Extensions](docs/how-to-plugins.md) | Write custom executor plugins |
+| [How-To: Create Agent Skills](docs/how-to-skills.md) | Wrap flows as agent-callable skills |
+| [How-To: Tool Comparison](docs/how-to-comparison.md) | Choosing between executor types |
+| [How-To: Non-Claude Agents](docs/how-to-generic-agents.md) | Using Stepwise with non-Claude agents |
 
 ## Development
 
@@ -161,7 +170,7 @@ See [`docs/cli.md`](docs/cli.md) for the full reference with all flags, examples
 ```bash
 git clone https://github.com/zackham/stepwise.git && cd stepwise
 uv sync
-uv run pytest tests/
+uv run pytest tests/                       # 1705 tests
 uv run stepwise --help
 ```
 
