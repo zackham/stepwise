@@ -8,7 +8,7 @@ See [Quickstart](quickstart.md) for installation and first-run instructions.
 
 | Group | Commands |
 |-------|----------|
-| [Core](#core-commands) | `run`, `chain`, `new`, `validate`, `check`, `preflight` |
+| [Core](#core-commands) | `run`, `new`, `validate`, `check`, `preflight` |
 | [Jobs](#job-commands) | `jobs`, `status`, `output`, `tail`, `logs`, `wait`, `cancel`, `fulfill`, `list` |
 | [Server](#server-commands) | `server start`, `server stop`, `server restart`, `server status` |
 | [Registry](#registry-commands) | `share`, `get`, `search`, `info`, `login`, `logout` |
@@ -156,48 +156,6 @@ Same as headless mode (shows step progress to stderr) but prints structured JSON
 | `--notify URL` | Webhook URL for job event notifications |
 | `--notify-context JSON` | JSON context to include in webhook payloads |
 | `--meta KEY=VALUE` | Set job metadata (dot notation: `sys.origin=cli`, `app.project=foo`) |
-
----
-
-### `stepwise chain`
-
-Chain multiple flows into a linear pipeline. Each flow runs in sequence; the terminal outputs of one become the inputs of the next.
-
-See [Patterns](patterns.md) for pipeline composition examples.
-
-```bash
-stepwise chain fetch-data.flow.yaml transform.flow.yaml report.flow.yaml
-stepwise chain fetch transform report --input url="https://example.com"
-```
-
-Accepts 2+ flow names or paths as positional arguments. Shares all flags with `run`:
-
-| Flag | Description |
-|------|-------------|
-| `--watch` | Ephemeral server + browser UI |
-| `--wait` | Block until completion, JSON output on stdout |
-| `--async` | Fire-and-forget, returns job_id immediately |
-| `--output json` | Print structured JSON result to stdout on completion |
-| `--input KEY=VALUE` | Pass input variable (repeatable) |
-| `--input KEY=@PATH` | Pass input from file contents (`@` prefix, repeatable) |
-| `--vars-file PATH` | Load variables from YAML or JSON file |
-| `--port INT` | Override port for --watch |
-| `--objective STR` | Set job objective (default: chain name) |
-| `--name STR` | Human-friendly job name |
-| `--workspace PATH` | Override workspace directory |
-| `--report` | Generate HTML report after completion |
-| `--report-output PATH` | Report output path |
-| `--no-open` | Don't auto-open browser in --watch mode |
-| `--local` | Force local execution (skip server delegation) |
-| `--rerun STEP` | Bypass cache for this step (repeatable) |
-| `--notify URL` | Webhook URL for job event notifications |
-| `--notify-context JSON` | JSON context to include in webhook payloads |
-| `--meta KEY=VALUE` | Set job metadata (dot notation) |
-
-```bash
-stepwise chain research analyze synthesize --watch --input topic="AI safety"
-stepwise chain fetch transform --wait --input url="https://api.example.com/data"
-```
 
 ---
 
