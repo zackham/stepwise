@@ -1412,6 +1412,8 @@ class Job:
     notify_url: str | None = None
     notify_context: dict = field(default_factory=dict)
     metadata: dict = field(default_factory=lambda: {"sys": {}, "app": {}})
+    job_group: str | None = None
+    depends_on: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         d = {
@@ -1431,6 +1433,8 @@ class Job:
             "runner_pid": self.runner_pid,
             "heartbeat_at": self.heartbeat_at.isoformat() if self.heartbeat_at else None,
             "metadata": self.metadata,
+            "job_group": self.job_group,
+            "depends_on": self.depends_on,
         }
         if self.notify_url:
             d["notify_url"] = self.notify_url
@@ -1458,6 +1462,8 @@ class Job:
             notify_url=d.get("notify_url"),
             notify_context=d.get("notify_context", {}),
             metadata=d.get("metadata", {"sys": {}, "app": {}}),
+            job_group=d.get("job_group"),
+            depends_on=d.get("depends_on", []),
         )
 
 
