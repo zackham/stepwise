@@ -430,8 +430,9 @@ class TestJobCompletionWithWhen:
         result = run_job_sync(async_engine, job.id)
         assert result.status == JobStatus.COMPLETED
 
-    def test_job_fails_when_no_terminal_reached(self, async_engine):
-        """All terminals gated by false `when`, job fails."""
+    def test_all_terminals_gated_completes(self, async_engine):
+        """All terminals gated by false `when` — job completes after settlement
+        skips the gated steps (all steps resolved)."""
         register_step_fn("a", lambda inputs: {"x": 1})
         register_step_fn("b", lambda inputs: {"result": "b"})
         register_step_fn("c", lambda inputs: {"result": "c"})
@@ -460,7 +461,12 @@ class TestJobCompletionWithWhen:
 
         job = async_engine.create_job(objective="test", workflow=wf)
         result = run_job_sync(async_engine, job.id)
-        assert result.status == JobStatus.FAILED
+        assert result.status == JobStatus.COMPLETED
+
+        runs = async_engine.store.runs_for_job(job.id)
+        run_map = {r.step_name: r for r in runs}
+        assert run_map["b"].status == StepRunStatus.SKIPPED
+        assert run_map["c"].status == StepRunStatus.SKIPPED
 
 
 # ── Test: loop + when interaction ────────────────────────────────────
@@ -725,14 +731,44 @@ class TestWhenSpecific:
 
         job = async_engine.create_job(objective="test", workflow=wf)
         result = run_job_sync(async_engine, job.id)
-        # Job fails since the only terminal is gated
-        assert result.status == JobStatus.FAILED
+        # Gated terminal is skipped, job completes via all-resolved
+        assert result.status == JobStatus.COMPLETED
 
         runs = async_engine.store.runs_for_job(job.id)
         b_runs = [r for r in runs if r.step_name == "b"]
         assert len(b_runs) == 1
         assert b_runs[0].status == StepRunStatus.SKIPPED
         assert b_runs[0].error == "Not reached"
+
+    def test_external_step_with_when_false_skipped_not_suspended(self, async_engine):
+        """External (escalate) step with when: False is SKIPPED, not SUSPENDED.
+        Reproduces N36: escalate step should not fire when upstream output
+        doesn't match the when condition."""
+        register_step_fn("implement", lambda inputs: {"result": "all good, no escalation"})
+
+        wf = WorkflowDefinition(steps={
+            "implement": StepDefinition(
+                name="implement",
+                executor=_callable_ref("implement"),
+                outputs=["result"],
+            ),
+            "escalate": StepDefinition(
+                name="escalate",
+                executor=ExecutorRef(type="external", config={"prompt": "Escalate to human"}),
+                inputs=[InputBinding("result", "implement", "result")],
+                outputs=["resolution"],
+                when="'ESCALATE' in result",
+            ),
+        })
+
+        job = async_engine.create_job(objective="test", workflow=wf)
+        result = run_job_sync(async_engine, job.id)
+        assert result.status == JobStatus.COMPLETED
+
+        runs = async_engine.store.runs_for_job(job.id)
+        run_map = {r.step_name: r for r in runs}
+        assert run_map["implement"].status == StepRunStatus.COMPLETED
+        assert run_map["escalate"].status == StepRunStatus.SKIPPED
 
     def test_when_with_any_of_input(self, async_engine):
         """when condition evaluates against any_of-resolved input value."""
