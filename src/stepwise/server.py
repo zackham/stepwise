@@ -65,6 +65,16 @@ class _LockedConnection:
         with self._lock:
             return self._conn.close(*args, **kwargs)
 
+    def __enter__(self):
+        self._lock.acquire()
+        return self._conn.__enter__()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            return self._conn.__exit__(exc_type, exc_val, exc_tb)
+        finally:
+            self._lock.release()
+
     @property
     def row_factory(self):
         return self._conn.row_factory
@@ -85,7 +95,7 @@ class ThreadSafeStore(SQLiteStore):
     def __init__(self, db_path: str = ":memory:") -> None:
         import sqlite3
         import threading
-        lock = threading.Lock()
+        lock = threading.RLock()
         raw_conn = sqlite3.connect(db_path, check_same_thread=False)
         raw_conn.row_factory = sqlite3.Row
         raw_conn.execute("PRAGMA journal_mode=WAL")
