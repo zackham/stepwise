@@ -15,7 +15,7 @@
         },
         "outputs": ["result"],
         "inputs": [],
-        "sequencing": [],
+        "after": [],
         "exit_rules": [],
         "idempotency": "allow_restart",
         "limits": null
@@ -31,7 +31,7 @@
         },
         "outputs": ["response"],
         "inputs": [],
-        "sequencing": ["clarify"],
+        "after": ["clarify"],
         "exit_rules": [],
         "idempotency": "allow_restart",
         "limits": null
@@ -51,7 +51,7 @@
           {"local_name": "question", "source_step": "clarify", "source_field": "result"},
           {"local_name": "response", "source_step": "answer", "source_field": "response"}
         ],
-        "sequencing": ["answer"],
+        "after": ["answer"],
         "exit_rules": [
           {
             "name": "ready",
@@ -99,7 +99,7 @@
         "inputs": [
           {"local_name": "context", "source_step": "check", "source_field": "result"}
         ],
-        "sequencing": ["check"],
+        "after": ["check"],
         "exit_rules": [],
         "idempotency": "allow_restart",
         "limits": null
@@ -118,7 +118,7 @@
         "inputs": [
           {"local_name": "plan", "source_step": "plan", "source_field": "result"}
         ],
-        "sequencing": ["plan"],
+        "after": ["plan"],
         "exit_rules": [
           {
             "name": "passed",
@@ -161,7 +161,7 @@
         },
         "outputs": ["total_agent_words"],
         "inputs": [],
-        "sequencing": ["evaluate"],
+        "after": ["evaluate"],
         "exit_rules": [],
         "idempotency": "allow_restart",
         "limits": null
