@@ -4,6 +4,12 @@ export const JOB_STATUS_COLORS: Record<
   JobStatus,
   { bg: string; text: string; ring: string; dot: string }
 > = {
+  staged: {
+    bg: "bg-violet-500/10",
+    text: "text-violet-400",
+    ring: "ring-violet-500/30",
+    dot: "bg-violet-400",
+  },
   pending: {
     bg: "bg-zinc-500/10",
     text: "text-zinc-400",
