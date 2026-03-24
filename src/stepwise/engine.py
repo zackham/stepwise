@@ -843,11 +843,20 @@ class Engine:
                         not self.store.suspended_runs(job.id) and
                         not self.store.delegated_runs(job.id)):
                     self._settle_unstarted_steps(job)
-                    job.status = JobStatus.FAILED
-                    job.updated_at = _now()
-                    self.store.save_job(job)
-                    self._emit(job.id, JOB_FAILED, {"reason": "no_terminal_reached"})
-                    self._cleanup_job_sessions(job.id)
+                    # Re-check: settlement may have skipped when-blocked steps,
+                    # enabling job completion
+                    if self._job_complete(job):
+                        job.status = JobStatus.COMPLETED
+                        job.updated_at = _now()
+                        self.store.save_job(job)
+                        self._emit(job.id, JOB_COMPLETED)
+                        self._cleanup_job_sessions(job.id)
+                    else:
+                        job.status = JobStatus.FAILED
+                        job.updated_at = _now()
+                        self.store.save_job(job)
+                        self._emit(job.id, JOB_FAILED, {"reason": "no_terminal_reached"})
+                        self._cleanup_job_sessions(job.id)
                 return  # No progress possible, wait for next tick
 
     # ── Readiness ─────────────────────────────────────────────────────────
@@ -3194,11 +3203,20 @@ class AsyncEngine(Engine):
                     not self.store.delegated_runs(job.id) and
                     not self._find_ready(job)):
                 self._settle_unstarted_steps(job)
-                job.status = JobStatus.FAILED
-                job.updated_at = _now()
-                self.store.save_job(job)
-                self._emit(job.id, JOB_FAILED, {"reason": "no_terminal_reached"})
-                self._cleanup_job_sessions(job.id)
+                # Re-check: settlement may have skipped when-blocked steps,
+                # enabling job completion
+                if self._job_complete(job):
+                    job.status = JobStatus.COMPLETED
+                    job.updated_at = _now()
+                    self.store.save_job(job)
+                    self._emit(job.id, JOB_COMPLETED)
+                    self._cleanup_job_sessions(job.id)
+                else:
+                    job.status = JobStatus.FAILED
+                    job.updated_at = _now()
+                    self.store.save_job(job)
+                    self._emit(job.id, JOB_FAILED, {"reason": "no_terminal_reached"})
+                    self._cleanup_job_sessions(job.id)
 
         # Signal done if terminal
         job = self.store.load_job(job_id)
