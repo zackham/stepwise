@@ -82,6 +82,8 @@ class StepwiseClient:
         inputs: dict | None = None,
         name: str | None = None,
         metadata: dict | None = None,
+        status: str | None = None,
+        job_group: str | None = None,
     ) -> dict:
         """Create and optionally start a job."""
         body: dict = {
@@ -93,6 +95,10 @@ class StepwiseClient:
             body["name"] = name
         if metadata:
             body["metadata"] = metadata
+        if status:
+            body["status"] = status
+        if job_group:
+            body["job_group"] = job_group
         return self._request("POST", "/api/jobs", body)
 
     def status(self, job_id: str) -> dict:

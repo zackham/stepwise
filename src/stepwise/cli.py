@@ -4155,7 +4155,7 @@ def _cmd_job_create(args) -> int:
     from stepwise.flow_resolution import FlowResolutionError, resolve_flow
     from stepwise.runner import parse_inputs
     from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
-    from stepwise.models import Job, JobStatus, WorkflowDefinition, _now
+    from stepwise.models import Job, JobStatus, WorkflowDefinition, _now, _gen_id
 
     io = _io(args)
     project = _find_project_or_exit(args)
@@ -4188,22 +4188,19 @@ def _cmd_job_create(args) -> int:
         from stepwise.api_client import StepwiseClient, StepwiseAPIError
         client = StepwiseClient(server_url)
         try:
+            group = getattr(args, "group", None)
             result = client.create_job(
                 objective=getattr(args, "name", None) or workflow.name or args.flow,
                 workflow=workflow.to_dict(),
                 inputs=inputs or None,
                 name=getattr(args, "name", None),
+                status="staged",
+                job_group=group,
             )
-            # Transition to staged via API
             job_id = result.get("id")
-            # Set staged + group via direct store update through API
-            # Use the new staging endpoint
-            client._request("POST", f"/api/jobs/{job_id}/stage", {
-                "job_group": getattr(args, "group", None),
-            })
             if args.output == "json":
                 print(json.dumps({"id": job_id, "status": "staged",
-                                  "job_group": getattr(args, "group", None)}))
+                                  "job_group": group}))
             else:
                 io.log("success", f"Created staged job {job_id}")
             return EXIT_SUCCESS
@@ -4217,6 +4214,7 @@ def _cmd_job_create(args) -> int:
     try:
         now = _now()
         job = Job(
+            id=_gen_id("job"),
             objective=getattr(args, "name", None) or workflow.name or args.flow,
             name=getattr(args, "name", None),
             workflow=workflow,
