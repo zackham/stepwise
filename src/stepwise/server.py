@@ -750,13 +750,16 @@ app.add_middleware(
 
 # ── Dev crash handler: exit on first unhandled exception ──────────────
 
+# Log unhandled exceptions but keep the server running.
+# Crashing on API errors kills running agent jobs.
 @app.exception_handler(Exception)
-async def _crash_on_error(request, exc):
+async def _log_unhandled_error(request, exc):
     import traceback
     import logging as _logging
     traceback.print_exception(type(exc), exc, exc.__traceback__)
-    _logging.critical("Unhandled exception — exiting server for debugging")
-    os._exit(1)
+    _logging.error("Unhandled exception in API handler (server continues)")
+    from starlette.responses import JSONResponse
+    return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ── Jobs ──────────────────────────────────────────────────────────────
