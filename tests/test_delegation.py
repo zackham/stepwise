@@ -426,6 +426,64 @@ class TestDelegatedWsLoopHelpers:
             assert len(runs) == 1
         asyncio.run(_run())
 
+    def test_fetch_job_state_retries_on_404(self):
+        """_fetch_job_state retries up to 3 times when server returns 404."""
+        import httpx
+
+        call_count = 0
+
+        async def _get(url):
+            nonlocal call_count
+            if url == f"/api/jobs/j1":
+                call_count += 1
+                if call_count < 3:
+                    resp = _mock_response(status_code=404)
+                    resp.raise_for_status = MagicMock(
+                        side_effect=httpx.HTTPStatusError(
+                            "Not Found", request=MagicMock(), response=resp
+                        )
+                    )
+                    return resp
+                return _mock_response(json_data={"id": "j1", "status": "running"})
+            if url == f"/api/jobs/j1/runs":
+                return _mock_response(json_data=[])
+            raise ValueError(f"unexpected url: {url}")
+
+        client = MagicMock()
+        client.get = _get
+
+        async def _run():
+            job_data, runs = await _fetch_job_state(client, "j1")
+            assert job_data["id"] == "j1"
+            assert call_count == 3
+
+        with patch("stepwise.runner.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            asyncio.run(_run())
+            assert mock_sleep.await_count == 2
+
+    def test_fetch_job_state_raises_after_retries_exhausted(self):
+        """_fetch_job_state raises after 3 failed 404 attempts."""
+        import httpx
+
+        async def _get(url):
+            resp = _mock_response(status_code=404)
+            resp.raise_for_status = MagicMock(
+                side_effect=httpx.HTTPStatusError(
+                    "Not Found", request=MagicMock(), response=resp
+                )
+            )
+            return resp
+
+        client = MagicMock()
+        client.get = _get
+
+        async def _run():
+            with pytest.raises(httpx.HTTPStatusError):
+                await _fetch_job_state(client, "j1")
+
+        with patch("stepwise.runner.asyncio.sleep", new_callable=AsyncMock):
+            asyncio.run(_run())
+
     def test_suspension_detection(self):
         """_is_blocked_by_suspension_from_runs detects when job is blocked."""
         runs_blocked = [{"status": "suspended"}, {"status": "completed"}]
