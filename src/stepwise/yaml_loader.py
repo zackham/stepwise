@@ -32,6 +32,19 @@ from stepwise.models import (
 )
 
 # Safe builtins for exit rule expression evaluation
+
+
+def _regex_extract(pattern: str, text: str, default: str | None = None) -> str | None:
+    """Extract the first capture group from text using a regex pattern.
+
+    Returns the first captured group, or *default* if no match.
+    """
+    m = re.search(pattern, text)
+    if m and m.lastindex:
+        return m.group(1)
+    return default
+
+
 SAFE_BUILTINS = {
     "any": any,
     "all": all,
@@ -53,6 +66,8 @@ SAFE_BUILTINS = {
     "true": True,
     "false": False,
     "null": None,
+    # String / regex helpers
+    "regex_extract": _regex_extract,
 }
 
 
@@ -114,6 +129,31 @@ def evaluate_when_condition(condition: str, inputs: dict) -> bool:
             "when condition %r failed", condition, exc_info=True
         )
         return False
+
+
+def evaluate_derived_outputs(
+    derived: dict[str, str], artifact: dict
+) -> dict[str, Any]:
+    """Evaluate derived output expressions against a step's artifact.
+
+    Each expression can reference artifact fields by name and use
+    SAFE_BUILTINS (including ``regex_extract``).
+
+    Returns a dict of computed field name → value.
+    Raises ``ValueError`` if any expression fails.
+    """
+    namespace: dict = {"__builtins__": SAFE_BUILTINS}
+    for k, v in artifact.items():
+        namespace[k] = _DotDict(v) if isinstance(v, dict) else v
+    results: dict[str, Any] = {}
+    for field_name, expr in derived.items():
+        try:
+            results[field_name] = eval(expr, namespace)
+        except Exception as e:
+            raise ValueError(
+                f"Derived output '{field_name}' expression failed: {e}"
+            ) from e
+    return results
 
 
 def _parse_input_binding(local_name: str, source: str) -> InputBinding:
@@ -877,6 +917,13 @@ def _parse_step(
             f"(valid: 'fail', 'continue')"
         )
 
+    # Derived outputs
+    derived_outputs_raw = step_data.get("derived_outputs", {})
+    if derived_outputs_raw and not isinstance(derived_outputs_raw, dict):
+        raise ValueError(
+            f"Step '{step_name}': derived_outputs must be a mapping"
+        )
+
     return StepDefinition(
         name=step_name,
         description=step_data.get("description", ""),
@@ -896,6 +943,7 @@ def _parse_step(
         max_continuous_attempts=max_continuous_attempts,
         cache=cache_config,
         on_error=on_error_raw,
+        derived_outputs=derived_outputs_raw if derived_outputs_raw else {},
     )
 
 

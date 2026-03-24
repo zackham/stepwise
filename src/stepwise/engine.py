@@ -445,6 +445,7 @@ class Engine:
                 )
 
         job = self.store.load_job(run.job_id)
+        step_def = job.workflow.steps.get(run.step_name)
 
         # Create result from payload
         run.result = HandoffEnvelope(
@@ -453,6 +454,13 @@ class Engine:
             workspace=job.workspace_path,
             timestamp=_now(),
         )
+
+        # Apply derived outputs before completing
+        if step_def:
+            derived_error = self._apply_derived_outputs(step_def, run.result)
+            if derived_error:
+                raise ValueError(derived_error)
+
         run.status = StepRunStatus.COMPLETED
         run.completed_at = _now()
         run.watch = None
@@ -739,8 +747,9 @@ class Engine:
                                     workspace=job.workspace_path, timestamp=_now(),
                                 )
 
-                            # Validate artifact
-                            validation_error = self._validate_artifact(step_def, result_envelope)
+                            # Apply derived outputs then validate artifact
+                            derived_error = self._apply_derived_outputs(step_def, result_envelope)
+                            validation_error = derived_error or self._validate_artifact(step_def, result_envelope)
                             if validation_error:
                                 self._fail_run(
                                     job, run, step_def,
@@ -1496,7 +1505,8 @@ class Engine:
                                    error=error_msg or "Executor failed",
                                    error_category=error_cat)
                 else:
-                    validation_error = self._validate_artifact(step_def, result.envelope)
+                    derived_error = self._apply_derived_outputs(step_def, result.envelope)
+                    validation_error = derived_error or self._validate_artifact(step_def, result.envelope)
                     if not validation_error:
                         validation_error = self._check_artifact_size(step_def, result.envelope)
                     if validation_error:
@@ -2338,6 +2348,16 @@ class Engine:
                     workspace=job.workspace_path,
                     timestamp=_now(),
                 )
+
+                # Apply derived outputs
+                step_def = job.workflow.steps.get(run.step_name)
+                if step_def:
+                    derived_error = self._apply_derived_outputs(step_def, run.result)
+                    if derived_error:
+                        _engine_logger.warning("Derived output error in poll watch: %s", derived_error)
+                        self._update_watch_state(run, error=derived_error)
+                        return False
+
                 run.status = StepRunStatus.COMPLETED
                 run.completed_at = _now()
                 run.watch = None
@@ -2391,6 +2411,23 @@ class Engine:
                 f"Step '{step_def.name}' artifact too large: {mb:.1f}MB "
                 f"(limit: {limit_mb:.0f}MB). Reduce output size or split into smaller steps."
             )
+        return None
+
+    def _apply_derived_outputs(self, step_def: StepDefinition, envelope: HandoffEnvelope | None) -> str | None:
+        """Evaluate derived_outputs expressions and merge results into the artifact.
+
+        Returns an error string on failure, None on success.
+        """
+        if not step_def.derived_outputs:
+            return None
+        if not envelope or not envelope.artifact:
+            return None
+        try:
+            from stepwise.yaml_loader import evaluate_derived_outputs
+            computed = evaluate_derived_outputs(step_def.derived_outputs, envelope.artifact)
+            envelope.artifact.update(computed)
+        except ValueError as e:
+            return f"Step '{step_def.name}': {e}"
         return None
 
     def _validate_artifact(self, step_def: StepDefinition, envelope: HandoffEnvelope | None) -> str | None:
