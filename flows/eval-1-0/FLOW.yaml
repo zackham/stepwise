@@ -36,7 +36,7 @@ steps:
     description: "Collect project metadata and inventory"
     run: |
       python3 scripts/discover.py
-    sequencing: [preflight]
+    after: [preflight]
     inputs:
       stepwise_path: $job.stepwise_path
     outputs: [version, project_path, file_counts, python_loc, typescript_loc, flows, test_files, doc_files]
@@ -143,7 +143,7 @@ steps:
       doc_files: discover.doc_files
       confusion_points: new-user-test.confusion_points
       new_user_evidence: new-user-test.evidence
-    sequencing: [test-core, test-security, test-migration, test-data-integrity, test-quality, adversarial-probe]
+    after: [test-core, test-security, test-migration, test-data-integrity, test-quality, adversarial-probe]
     outputs: [rubric_results, qualitative_summary, score_pct]
     limits:
       max_cost_usd: 3.0
@@ -161,7 +161,7 @@ steps:
       security_has_blocker: test-security.has_blocker
       adversarial_results: adversarial-probe.adversarial_results
       adversarial_critical: adversarial-probe.critical_findings
-    sequencing: [test-core, test-migration, test-data-integrity, test-quality, new-user-test]
+    after: [test-core, test-migration, test-data-integrity, test-quality, new-user-test]
     outputs: [rubric_results, qualitative_summary, score_pct]
     limits:
       max_cost_usd: 3.0
@@ -177,7 +177,7 @@ steps:
       project_path: discover.project_path
       new_user_confusion: new-user-test.confusion_points
       new_user_success: new-user-test.success
-    sequencing: [test-core, test-security, test-migration, test-data-integrity, test-quality, adversarial-probe]
+    after: [test-core, test-security, test-migration, test-data-integrity, test-quality, adversarial-probe]
     outputs: [rubric_results, qualitative_summary, score_pct]
     limits:
       max_cost_usd: 3.0

@@ -39,7 +39,7 @@ steps:
     description: "Define the frontier model panel for council reviews"
     run: |
       printf '{"models": ["anthropic/claude-sonnet-4-20250514", "openai/gpt-4.1", "google/gemini-2.5-pro-preview-06-05", "deepseek/deepseek-r1"]}'
-    sequencing: [init]
+    after: [init]
     outputs: [models]
 
   # ═══ Phase 3: Council Round 1 ══════════════════════════════════════════

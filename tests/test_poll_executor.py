@@ -219,7 +219,7 @@ fi
                 }),
                 inputs=[InputBinding("pr_number", "create-pr", "pr_number")],
                 outputs=["decision"],
-                sequencing=["create-pr"],
+                after=["create-pr"],
             ),
         })
         job = async_engine.create_job(objective="test poll", workflow=wf)

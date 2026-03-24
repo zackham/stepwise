@@ -71,7 +71,7 @@ export interface StepDefinition {
   outputs: string[];
   executor: ExecutorRef;
   inputs: InputBinding[];
-  sequencing: string[];
+  after: string[];
   exit_rules: ExitRule[];
   idempotency: string;
   when?: string;

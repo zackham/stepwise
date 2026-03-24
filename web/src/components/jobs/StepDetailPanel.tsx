@@ -154,11 +154,11 @@ export function StepDetailPanel({
               <div className="text-foreground font-mono text-xs min-w-0 break-all">
                 {stepDef.outputs.join(", ") || "-"}
               </div>
-              {stepDef.sequencing.length > 0 && (
+              {stepDef.after.length > 0 && (
                 <>
-                  <div className="text-zinc-500">Sequencing</div>
+                  <div className="text-zinc-500">After</div>
                   <div className="text-foreground font-mono text-xs min-w-0 break-all">
-                    {stepDef.sequencing.join(", ")}
+                    {stepDef.after.join(", ")}
                   </div>
                 </>
               )}

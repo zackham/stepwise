@@ -97,7 +97,7 @@ steps:
     inputs:
       suggestions: review.suggestions
     outputs: [result]
-    sequencing: [decide]
+    after: [decide]
 ```
 
 `review` waits for `gather-context` because it needs its outputs. `decide` waits for `review`. Steps with no data dependencies run in parallel automatically.

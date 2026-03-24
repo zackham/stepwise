@@ -157,16 +157,29 @@ class TestWorkflowValidation:
         })
         assert w.validate() == []
 
-    def test_sequencing_missing_step(self):
+    def test_after_missing_step(self):
         w = WorkflowDefinition(steps={
             "a": StepDefinition(
                 name="a", outputs=["r"],
                 executor=ExecutorRef("script", {}),
-                sequencing=["nonexistent"],
+                after=["nonexistent"],
             ),
         })
         errors = w.validate()
         assert any("nonexistent" in e for e in errors)
+
+    def test_from_dict_sequencing_fallback(self):
+        """Old serialized data with 'sequencing' key deserializes to .after."""
+        d = {
+            "name": "x", "outputs": ["y"],
+            "executor": {"type": "script", "config": {}},
+            "sequencing": ["a"],
+        }
+        step = StepDefinition.from_dict(d)
+        assert step.after == ["a"]
+        # New serialization uses "after"
+        assert "after" in step.to_dict()
+        assert "sequencing" not in step.to_dict()
 
     def test_empty_workflow(self):
         w = WorkflowDefinition(steps={})
@@ -203,7 +216,7 @@ class TestEntryTerminalValidation:
         # For a non-cyclic "no terminal" case, we need something like
         # a → b, b → a which is cyclic. In practice, in a DAG, no terminal
         # steps can't happen without cycles. So let's test that terminal_steps()
-        # returns the right thing with sequencing.
+        # returns the right thing with after.
         w = WorkflowDefinition(steps={
             "a": StepDefinition(
                 name="a", outputs=["r"],
@@ -212,10 +225,10 @@ class TestEntryTerminalValidation:
             "b": StepDefinition(
                 name="b", outputs=["r"],
                 executor=ExecutorRef("script", {}),
-                sequencing=["a"],
+                after=["a"],
             ),
         })
-        # "a" is depended on by "b" via sequencing, so "b" is terminal
+        # "a" is depended on by "b" via after, so "b" is terminal
         assert w.terminal_steps() == ["b"]
         assert w.entry_steps() == ["a"]
         assert w.validate() == []

@@ -11,7 +11,7 @@ const minimalWorkflow: FlowDefinition = {
       outputs: [],
       executor: { type: "shell", config: {}, decorators: [] },
       inputs: [],
-      sequencing: [],
+      after: [],
       exit_rules: [],
       idempotency: "always",
       limits: null,

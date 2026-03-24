@@ -133,7 +133,7 @@ export function computeDagLayout(workflow: FlowDefinition): DagLayout {
     g.setNode(name, { width: NODE_WIDTH, height: h });
   }
 
-  // Add edges from input bindings and sequencing
+  // Add edges from input bindings and after
   const edgeSet = new Set<string>();
   const edgeLabels: Record<string, string[]> = {};
   for (const [name, step] of Object.entries(workflow.steps)) {
@@ -160,7 +160,7 @@ export function computeDagLayout(workflow: FlowDefinition): DagLayout {
         edgeLabels[key].push(binding.source_field);
       }
     }
-    for (const seq of step.sequencing) {
+    for (const seq of step.after) {
       const key = `${seq}->${name}`;
       if (!edgeSet.has(key)) {
         g.setEdge(seq, name);
@@ -494,7 +494,7 @@ export function computeHierarchicalLayout(
         edgeLabels[key].push(binding.source_field);
       }
     }
-    for (const seq of step.sequencing) {
+    for (const seq of step.after) {
       const key = `${seq}->${name}`;
       if (!edgeSet.has(key)) {
         g.setEdge(seq, name);
@@ -527,7 +527,7 @@ export function computeHierarchicalLayout(
         referencedAsSource.add(binding.source_step);
       }
     }
-    for (const seq of step.sequencing) referencedAsSource.add(seq);
+    for (const seq of step.after) referencedAsSource.add(seq);
   }
   for (const name of stepNames) {
     if (!referencedAsSource.has(name)) {

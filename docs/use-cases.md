@@ -87,7 +87,7 @@ steps:
         -d "{\"title\": \"$title\", \"body\": \"$body\"}" | jq '{url: .url, published: true}'
     inputs: { title: draft.title, body: draft.body }
     outputs: [url, published]
-    sequencing: [review]
+    after: [review]
 ```
 
 Content never publishes without human approval, but the LLM does the heavy lifting on research and drafting.
@@ -111,7 +111,7 @@ steps:
       cd $repo_path && make test && echo "{\"passed\": true}"
     inputs: { repo_path: $job.repo_path }
     outputs: [passed]
-    sequencing: [build]
+    after: [build]
 
   approve:
     executor: external

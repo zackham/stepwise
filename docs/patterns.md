@@ -49,7 +49,7 @@ steps:
     outputs: [result]
     inputs:
       project_path: $job.project_path
-    sequencing: [analyze]
+    after: [analyze]
 ```
 
 ### Using path-in-output (lighter variant)
@@ -90,7 +90,7 @@ steps:
     inputs:
       project_path: ingest.project_path
       plan_path: ingest.plan_path
-    sequencing: [plan]
+    after: [plan]
     outputs: [result]
 ```
 
@@ -248,7 +248,7 @@ steps:
       }))
       PYEOF
     outputs: [risk_summary, module_list, needs_review]
-    sequencing: [analyze]
+    after: [analyze]
 
   review:
     executor: llm
@@ -261,7 +261,7 @@ steps:
     when: "needs_review == true or needs_review == True"
 ```
 
-Note: `sequencing: [analyze]` on the `prepare` step creates ordering without data transfer — the script reads the file directly rather than receiving output through inputs. Use `sequencing` when a step depends on a prior step's **side effects** (files written) but doesn't consume its output fields.
+Note: `after: [analyze]` on the `prepare` step creates ordering without data transfer — the script reads the file directly rather than receiving output through inputs. Use `after` when a step depends on a prior step's **side effects** (files written) but doesn't consume its output fields.
 
 **When to use scripts:**
 - Parsing, filtering, or reformatting data between steps
@@ -534,7 +534,7 @@ See [flow-reference.md § Decorators](flow-reference.md#decorators) for full dec
 | Decomposition shape unknown until runtime | **Dynamic fan-out** — `emit_flow: true` with for_each (§2) |
 | Decomposition shape always the same | Static `for_each` in YAML ([flow-reference.md](flow-reference.md#for-each-fan-outfan-in)) |
 | Mechanical data transformation between steps | **Script step** — deterministic, no LLM needed (§3) |
-| Step depends on prior step's files, not its outputs | `sequencing: [step]` — ordering without data transfer (§3) |
+| Step depends on prior step's files, not its outputs | `after: [step]` — ordering without data transfer (§3) |
 | Agent may hit decisions outside its scope | **Escalation boundary** — `>>>ESCALATE:` + human step + loop (§4) |
 | Quality-gated iteration loop | **Progressive refinement** — `continue_session` + `loop_prompt` (§5) |
 | Same pattern used in multiple flows | **Flow composition** — extract sub-flow, reference via `flow:` (§6) |

@@ -120,7 +120,7 @@ The local name (`findings`) is what the executor sees. It decouples the executor
 
 Input bindings create **data dependencies**. The engine won't run a step until all its input sources have completed.
 
-### Sequencing — Pure Ordering
+### After — Pure Ordering
 
 Sometimes you need a step to wait for another without taking any data:
 
@@ -128,7 +128,7 @@ Sometimes you need a step to wait for another without taking any data:
 notify:
   run: scripts/send_notification.py
   outputs: [sent]
-  sequencing: [deploy]    # wait for deploy to finish, but don't use its output
+  after: [deploy]         # wait for deploy to finish, but don't use its output
 ```
 
 ### Parallel Execution
@@ -262,7 +262,7 @@ steps:
 When `classify` completes with `category == 'simple'`, `quick-path`'s `when` condition is satisfied so it activates. `deep-path`'s condition is false, so it stays not-ready. When no steps are in motion and nothing new can activate, the engine **settles** the job: never-started steps get SKIPPED runs, and the job completes if at least one terminal has a current completed run.
 
 **Key distinctions:**
-- `sequencing: [step-x]` = ordering only (wait for step-x to complete)
+- `after: [step-x]` = ordering only (wait for step-x to complete)
 - `inputs: { field: step-x.field }` = data dependency (also implies ordering)
 - `when: "expr"` = conditional gate on resolved inputs (evaluated after deps are satisfied)
 

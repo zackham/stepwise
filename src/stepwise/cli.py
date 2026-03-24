@@ -1103,7 +1103,7 @@ def _build_flow_graph(wf, fmt: str, name: str | None = None):
                         depended_on.add(src_step)
             elif binding.source_step != "$job":
                 depended_on.add(binding.source_step)
-        for seq in step.sequencing:
+        for seq in step.after:
             depended_on.add(seq)
         if step.for_each:
             depended_on.add(step.for_each.source_step)
@@ -1193,8 +1193,8 @@ def _build_flow_graph(wf, fmt: str, name: str | None = None):
                      label=step.for_each.source_field,
                      color="#c084fc", fontcolor="#c084fc")
 
-        # Sequencing edges
-        for dep in step.sequencing:
+        # After edges
+        for dep in step.after:
             if dep in wf.steps:
                 dot.edge(dep, step_name, style="dashed", color="#666")
 

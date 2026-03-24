@@ -802,7 +802,7 @@ stepwise diagram @alice:code-review              # registry flow
 ✓ my-flow.svg
 ```
 
-Renders a dark-themed DAG matching the web UI aesthetic. Node shapes indicate executor type (box for script, parallelogram for external, rounded box for LLM, double octagon for agent, hexagon for poll). Edges are color-coded: blue for data flow, gray dashed for sequencing, amber dotted for loops, green bold for conditional advance, purple bold for for-each.
+Renders a dark-themed DAG matching the web UI aesthetic. Node shapes indicate executor type (box for script, parallelogram for external, rounded box for LLM, double octagon for agent, hexagon for poll). Edges are color-coded: blue for data flow, gray dashed for `after` ordering, amber dotted for loops, green bold for conditional advance, purple bold for for-each.
 
 Requires the system `graphviz` package (`dot` binary). Install with `brew install graphviz` or `apt install graphviz`.
 

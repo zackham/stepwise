@@ -80,7 +80,7 @@ steps:
     inputs:
       content: draft.content
 
-    sequencing: [review]
+    after: [review]
 ```
 
 ## Format Reference
@@ -129,8 +129,8 @@ step_name:
     local_name: source_step.source_field
     job_data: $job.field_name       # from job-level inputs
 
-  # Sequencing (optional) — wait for steps without taking data
-  sequencing: [step_a, step_b]
+  # After (optional) — wait for steps without taking data
+  after: [step_a, step_b]
 
   # Activation condition (optional) — gate on resolved inputs
   when: "expression"               # Python expression against input names
@@ -509,7 +509,7 @@ steps:
 
 ### Gating a post-loop step
 
-Steps run as soon as their inputs or sequencing deps are satisfied — they don't wait for a loop to finish. This means a step sequenced after a looping step will fire after the **first iteration**, not after the loop exits.
+Steps run as soon as their inputs or `after` deps are satisfied — they don't wait for a loop to finish. This means a step ordered after a looping step will fire after the **first iteration**, not after the loop exits.
 
 **Bug (runs too early):**
 
@@ -539,7 +539,7 @@ steps:
   publish:
     run: './publish.sh "$content"'
     inputs: { content: draft.content }
-    sequencing: [review]              # BUG: runs after review's first completion
+    after: [review]                    # BUG: runs after review's first completion
     outputs: [url]
 ```
 
@@ -630,7 +630,7 @@ Requirements are checked by `stepwise validate`, `stepwise info`, and `stepwise 
 | `inputs: {x: step.field}` | `InputBinding("x", "step", "field")` |
 | `inputs: {x: $job.field}` | `InputBinding("x", "$job", "field")` |
 | `exits: [{when: "...", action: "loop", target: "s"}]` | `ExitRule("name", "expression", {"condition": "...", "action": "loop", "target": "s"})` |
-| `sequencing: [a, b]` | `StepDefinition.sequencing = ["a", "b"]` |
+| `after: [a, b]` | `StepDefinition.after = ["a", "b"]` |
 | `outputs: [x, y]` | `StepDefinition.outputs = ["x", "y"]` |
 | `for_each: step.field` + `flow:` | `ForEachSpec(source_step, source_field)` + `StepDefinition.sub_flow` |
 | `as: var_name` | `ForEachSpec.item_var` |

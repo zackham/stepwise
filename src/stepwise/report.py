@@ -117,7 +117,7 @@ def _compute_layers(workflow: WorkflowDefinition) -> list[list[str]]:
         for b in step.inputs:
             if b.source_step != "$job":
                 d.add(b.source_step)
-        d.update(step.sequencing)
+        d.update(step.after)
         deps[name] = d
 
     layer_of: dict[str, int] = {}
@@ -837,7 +837,7 @@ def _html_dag(
         for b in step.inputs:
             if b.source_step != "$job":
                 deps.add(b.source_step)
-        deps.update(step.sequencing)
+        deps.update(step.after)
 
         for dep in deps:
             if dep not in positions:

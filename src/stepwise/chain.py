@@ -112,11 +112,11 @@ def compile_chain(flow_paths: list[Path], var_names: list[str]) -> str:
         if inputs:
             step["inputs"] = inputs
 
-        # Add sequencing for ordering (inputs handle data deps, but if stage N
+        # Add after for ordering (inputs handle data deps, but if stage N
         # has no inputs from stage N-1 we still need ordering)
         if i > 0:
             prev_step = f"stage-{stages[i - 1].index}"
-            # sequencing is implicit via input binding, skip explicit
+            # after is implicit via input binding, skip explicit
 
         steps[step_name] = step
 

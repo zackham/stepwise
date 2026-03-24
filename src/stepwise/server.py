@@ -1595,11 +1595,11 @@ def _build_flow_graph(yaml_content: str) -> dict:
                         edges.append(edge)
                         seen_edges.add(edge_key)
 
-        # Sequencing edges
-        sequencing = step_def.get("sequencing", [])
-        if isinstance(sequencing, str):
-            sequencing = [sequencing]
-        for seq_dep in sequencing:
+        # After edges
+        after_deps = step_def.get("after") or step_def.get("sequencing") or []
+        if isinstance(after_deps, str):
+            after_deps = [after_deps]
+        for seq_dep in after_deps:
             if seq_dep in steps:
                 edge_key = (seq_dep, step_name, False)
                 if edge_key not in seen_edges:
@@ -2264,7 +2264,7 @@ def delete_step(req: DeleteStepRequest):
 
     del data["steps"][req.step_name]
 
-    # Cascade: remove input bindings and sequencing refs to the deleted step
+    # Cascade: remove input bindings and after/sequencing refs to the deleted step
     for other_name, other_step in data["steps"].items():
         if isinstance(other_step, dict):
             # Clean inputs
@@ -2277,12 +2277,13 @@ def delete_step(req: DeleteStepRequest):
                 for k in to_remove:
                     del inputs[k]
 
-            # Clean sequencing
-            seq = other_step.get("sequencing")
-            if isinstance(seq, list):
-                other_step["sequencing"] = [s for s in seq if s != req.step_name]
-                if not other_step["sequencing"]:
-                    del other_step["sequencing"]
+            # Clean after (and legacy sequencing)
+            for key in ("after", "sequencing"):
+                seq = other_step.get(key)
+                if isinstance(seq, list):
+                    other_step[key] = [s for s in seq if s != req.step_name]
+                    if not other_step[key]:
+                        del other_step[key]
 
     buf = StringIO()
     ryaml.dump(data, buf)

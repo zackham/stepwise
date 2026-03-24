@@ -128,7 +128,7 @@ steps:
               printf '{"passed": 4, "failed": 2, "status": "fail"}'
             fi
           outputs: [passed, failed, status]
-          sequencing: [task-implement]
+          after: [task-implement]
           exits:
             - name: pass
               when: "outputs.status == 'pass'"
@@ -166,7 +166,7 @@ steps:
         printf '{"passed": 19, "failed": 5, "status": "fail"}'
       fi
     outputs: [passed, failed, status]
-    sequencing: [write-code]
+    after: [write-code]
     exits:
       - name: pass
         when: "outputs.status == 'pass'"

@@ -333,7 +333,7 @@ steps:
   finish:
     run: 'echo "{\\"done\\": true}"'
     outputs: [done]
-    sequencing: [count]
+    after: [count]
 """
         project = init_project(tmp_path)
         flow = _write_flow(tmp_path, loop_flow)

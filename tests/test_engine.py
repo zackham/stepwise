@@ -430,8 +430,8 @@ class TestInflightSupersession:
 # ── Test 8: Sequencing freshness ─────────────────────────────────────
 
 
-class TestSequencingFreshness:
-    def test_sequencing_dep_must_rerun(self):
+class TestAfterFreshness:
+    def test_after_dep_must_rerun(self):
         impl_count = {"n": 0}
         test_count = {"n": 0}
 
@@ -456,7 +456,7 @@ class TestSequencingFreshness:
             "test": StepDefinition(
                 name="test", outputs=["report", "passed"],
                 executor=ExecutorRef("callable", {"fn_name": "seq_test"}),
-                sequencing=["implement"],
+                after=["implement"],
             ),
         })
 
