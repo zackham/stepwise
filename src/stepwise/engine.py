@@ -18,6 +18,7 @@ from stepwise.events import (
     FOR_EACH_COMPLETED,
     FOR_EACH_STARTED,
     EXTERNAL_RERUN,
+    JOB_CANCELLED,
     JOB_COMPLETED,
     JOB_FAILED,
     JOB_PAUSED,
@@ -917,6 +918,23 @@ class Engine:
         if latest and latest.status == StepRunStatus.COMPLETED:
             if self._is_current(job, latest):
                 return False
+
+            # Settled terminal guard: steps without loop exit rules don't
+            # relaunch UNLESS a dep has a genuinely newer completed run.
+            # Prevents infinite relaunch from cycle invalidation while
+            # allowing relaunch when deps produce new output (rerun_step).
+            has_loop_exit = any(
+                r.config.get("action") == "loop" for r in step_def.exit_rules
+            )
+            if not has_loop_exit and latest.dep_run_ids:
+                has_newer_dep = False
+                for dep_step, used_run_id in latest.dep_run_ids.items():
+                    dep_latest = self.store.latest_completed_run(job.id, dep_step)
+                    if dep_latest and dep_latest.id != used_run_id:
+                        has_newer_dep = True
+                        break
+                if not has_newer_dep:
+                    return False
 
             # Loop guard 1: unconditional loop rules targeting deps
             dep_step_names = set(self._dep_steps(step_def))
@@ -2940,6 +2958,8 @@ class AsyncEngine(Engine):
             if job.created_by != "server":
                 continue
             self._check_job_terminal(job.id)
+        # Reconcile pending jobs with deps — a dep may have completed while server was down
+        self._start_queued_jobs()
 
     def resume_job(self, job_id: str) -> None:
         job = self.store.load_job(job_id)
@@ -2963,6 +2983,29 @@ class AsyncEngine(Engine):
             self._cancel_poll_task(run.id)
         super().cancel_job(job_id)
         self._signal_job_done(job_id)
+        # Recursive cascade: cancel all STAGED/PENDING transitive dependents
+        visited: set[str] = set()
+        queue = list(self.store.get_job_dependents(job_id))
+        while queue:
+            dep_job_id = queue.pop(0)
+            if dep_job_id in visited:
+                continue
+            visited.add(dep_job_id)
+            try:
+                dep_job = self.store.load_job(dep_job_id)
+                if dep_job.status in (JobStatus.PENDING, JobStatus.STAGED):
+                    dep_job.status = JobStatus.CANCELLED
+                    dep_job.updated_at = _now()
+                    self.store.save_job(dep_job)
+                    self._emit(dep_job_id, JOB_CANCELLED, {
+                        "reason": "dependency_cancelled",
+                        "cancelled_dep": job_id,
+                    })
+                    self._signal_job_done(dep_job_id)
+                    # Recurse into this job's dependents
+                    queue.extend(self.store.get_job_dependents(dep_job_id))
+            except KeyError:
+                pass
         # A slot opened — start queued jobs
         self._start_queued_jobs()
 
@@ -3310,11 +3353,11 @@ class AsyncEngine(Engine):
             self._start_queued_jobs()
 
     def _start_queued_jobs(self) -> None:
-        """Start PENDING jobs if slots are available (FIFO order)."""
+        """Start PENDING jobs if slots are available and deps are met (FIFO order)."""
         active_count = len(self.store.active_jobs())
         if self.max_concurrent_jobs > 0 and active_count >= self.max_concurrent_jobs:
             return
-        for pending_job in self.store.pending_jobs():
+        for pending_job in self.store.pending_jobs_with_deps_met():
             if self.max_concurrent_jobs > 0 and active_count >= self.max_concurrent_jobs:
                 break
             # Only auto-start top-level pending jobs (sub-jobs are managed by parent)
