@@ -1600,8 +1600,8 @@ def cmd_check(args: argparse.Namespace) -> int:
         if exec_type != "llm":
             continue
 
-        config_block = executor.get("config", {}) if isinstance(executor, dict) else {}
-        model_ref = config_block.get("model") or cfg.default_model or "balanced"
+        config_block = executor.get("config", {}) if isinstance(executor, dict) else step_def.get("config", {})
+        model_ref = config_block.get("model") or step_def.get("model") or cfg.default_model or "balanced"
         resolved = cfg.resolve_model(model_ref)
 
         if model_ref in all_labels:
@@ -1760,8 +1760,8 @@ def cmd_preflight(args: argparse.Namespace) -> int:
         exec_type = executor.get("type") if isinstance(executor, dict) else executor
         if exec_type != "llm":
             continue
-        config_block = executor.get("config", {}) if isinstance(executor, dict) else {}
-        model_ref = config_block.get("model") or cfg.default_model or "balanced"
+        config_block = executor.get("config", {}) if isinstance(executor, dict) else step_def.get("config", {})
+        model_ref = config_block.get("model") or step_def.get("model") or cfg.default_model or "balanced"
         resolved = cfg.resolve_model(model_ref)
         llm_steps.append((step_name, model_ref, resolved))
         if "/" in resolved:
