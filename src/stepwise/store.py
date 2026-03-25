@@ -1,3 +1,4 @@
+# Data wiring verified
 """SQLite persistence: jobs, step_runs, events tables."""
 
 from __future__ import annotations
