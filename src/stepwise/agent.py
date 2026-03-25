@@ -953,6 +953,14 @@ class AgentExecutor(Executor):
         self.output_mode = output_mode
         self.output_path = output_path
         self.config = config
+        # Auto-promote output mode: when the engine injected output_fields but the
+        # user didn't explicitly write output_mode in YAML, upgrade from "effect" to
+        # "file" so the agent gets structured output instructions and env vars.
+        user_set = config.pop("_user_set_output_mode", False)
+        self._auto_promoted = False
+        if not user_set and self.output_mode == "effect" and self.config.get("output_fields"):
+            self.output_mode = "file"
+            self._auto_promoted = True
         # Session continuity fields (flow through from step definition via config)
         self.continue_session = config.get("continue_session", False)
         self.loop_prompt = config.get("loop_prompt")
