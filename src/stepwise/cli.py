@@ -907,6 +907,32 @@ def cmd_validate(args: argparse.Namespace) -> int:
             else:
                 io.log("warn", f"  {w}")
 
+        # Auto-fix mode
+        if getattr(args, "fix", False):
+            fixes = wf.fixable_warnings()
+            if not fixes:
+                io.log("info", "Nothing to fix.")
+            else:
+                from stepwise.yaml_loader import apply_fixes
+                updated_yaml = apply_fixes(str(flow_path), fixes)
+                flow_path.write_text(updated_yaml)
+
+                for fix in fixes:
+                    if fix["fix"] == "add_max_iterations":
+                        io.log("success", f"  Fixed: step '{fix['step']}' rule '{fix['rule_name']}' → max_iterations: {fix['value']}")
+
+                # Re-validate to show clean state
+                wf2 = load_workflow_yaml(str(flow_path))
+                remaining = wf2.warnings()
+                if remaining:
+                    for w in remaining:
+                        if w.startswith("\u2139"):
+                            io.log("info", f"  {w}")
+                        else:
+                            io.log("warn", f"  {w}")
+                else:
+                    io.log("success", "All warnings resolved.")
+
         # Check requirements
         if wf.requires:
             import subprocess
@@ -944,6 +970,39 @@ def cmd_validate(args: argparse.Namespace) -> int:
     except Exception as e:
         io.log("error", f"{flow_path}: {e}")
         return EXIT_JOB_FAILED
+
+
+def cmd_test_fixture(args: argparse.Namespace) -> int:
+    """Generate a pytest test harness for a flow."""
+    io = _io(args)
+    from pathlib import Path
+
+    from stepwise.flow_resolution import FlowResolutionError, resolve_flow
+    from stepwise.test_gen import generate_test_fixture
+    from stepwise.yaml_loader import YAMLLoadError, load_workflow_yaml
+
+    try:
+        flow_path = resolve_flow(args.flow, _project_dir(args))
+    except FlowResolutionError as e:
+        io.log("error", str(e))
+        return EXIT_USAGE_ERROR
+
+    try:
+        wf = load_workflow_yaml(str(flow_path))
+    except YAMLLoadError as e:
+        io.log("warn", f"Flow has validation errors: {e.errors}")
+        return EXIT_JOB_FAILED
+
+    flow_name = wf.metadata.name if wf.metadata and wf.metadata.name else flow_path.stem
+    code = generate_test_fixture(wf, flow_name)
+
+    if getattr(args, "output", None):
+        Path(args.output).write_text(code)
+        io.log("success", f"Wrote test fixture to {args.output}")
+    else:
+        print(code)
+
+    return EXIT_SUCCESS
 
 
 def cmd_diagram(args: argparse.Namespace) -> int:
@@ -3966,6 +4025,12 @@ def build_parser() -> argparse.ArgumentParser:
     # validate
     p_validate = sub.add_parser("validate", help="Validate a flow file")
     p_validate.add_argument("flow", help="Flow name or path to .flow.yaml file")
+    p_validate.add_argument("--fix", action="store_true", help="Auto-fix fixable warnings")
+
+    # test-fixture
+    p_tf = sub.add_parser("test-fixture", help="Generate a pytest test harness for a flow")
+    p_tf.add_argument("flow", help="Flow name or path to .flow.yaml file")
+    p_tf.add_argument("-o", "--output", help="Output file path (default: stdout)")
 
     # preflight
     p_preflight = sub.add_parser("preflight", help="Pre-run check: config + requirements + models")
@@ -5075,6 +5140,7 @@ def main(argv: list[str] | None = None) -> int:
         "run": cmd_run,
         "new": cmd_new,
         "validate": cmd_validate,
+        "test-fixture": cmd_test_fixture,
         "preflight": cmd_preflight,
         "diagram": cmd_diagram,
         "templates": cmd_templates,

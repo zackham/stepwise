@@ -779,6 +779,22 @@ class WorkflowDefinition:
 
         return errors
 
+    def fixable_warnings(self) -> list[dict]:
+        """Return structured descriptors for auto-fixable issues."""
+        fixes = []
+        for name, step in self.steps.items():
+            for i, rule in enumerate(step.exit_rules):
+                if (rule.config.get("action") == "loop"
+                        and not rule.config.get("max_iterations")):
+                    fixes.append({
+                        "step": name,
+                        "rule_name": rule.name,
+                        "rule_index": i,
+                        "fix": "add_max_iterations",
+                        "value": 10,
+                    })
+        return fixes
+
     def warnings(self) -> list[str]:
         """Generate advisory warnings about potential issues (non-blocking)."""
         from itertools import product as _product
