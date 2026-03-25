@@ -78,6 +78,7 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
         prompt=cfg.get("prompt", ""),
         output_mode=cfg.get("output_mode", "effect"),
         output_path=cfg.get("output_path"),
+        _user_set_output_mode=("output_mode" in cfg),
         **{k: v for k, v in cfg.items()
            if k not in ("prompt", "output_mode", "output_path")},
     ))
