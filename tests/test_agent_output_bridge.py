@@ -1,12 +1,20 @@
 """Tests for agent output bridge: auto-promote, env vars, prompt instructions, error messages."""
 
 import json
+import os
 import tempfile
 from pathlib import Path
 
 import pytest
 
-from stepwise.agent import AgentExecutor, MockAgentBackend, _build_agent_env
+from stepwise.agent import (
+    EMIT_FLOW_DIR,
+    EMIT_FLOW_FILENAME,
+    AgentExecutor,
+    AgentProcess,
+    MockAgentBackend,
+    _build_agent_env,
+)
 from stepwise.executors import ExecutionContext
 from stepwise.models import (
     ExecutorRef,
@@ -233,3 +241,160 @@ class TestPromptInstructions:
         emit_pos = prompt.find("Flow Emission") if "Flow Emission" in prompt else prompt.find("emit.flow.yaml")
         output_pos = prompt.find("<stepwise-output>")
         assert output_pos > emit_pos
+
+
+# ── Integration test helpers ──────────────────────────────────────────
+
+
+class OutputWritingBackend(MockAgentBackend):
+    """Mock backend that writes JSON output files on spawn."""
+
+    def __init__(self, output_data: dict | None = None):
+        super().__init__()
+        self._output_data = output_data or {}
+        self._files_to_write: dict[str, str] = {}
+
+    def set_output_data(self, data: dict):
+        self._output_data = data
+
+    def set_extra_file(self, rel_path: str, content: str):
+        self._files_to_write[rel_path] = content
+
+    def spawn(self, prompt: str, config: dict, context: ExecutionContext) -> AgentProcess:
+        process = super().spawn(prompt, config, context)
+        # Write output JSON to where the executor will look for it
+        output_filename = config.get("output_path") or f"{context.step_name}-output.json"
+        output_path = Path(process.working_dir) / output_filename
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if self._output_data:
+            output_path.write_text(json.dumps(self._output_data))
+        # Write any extra files (e.g. emit.flow.yaml)
+        for rel_path, content in self._files_to_write.items():
+            full_path = Path(process.working_dir) / rel_path
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(content)
+        return process
+
+
+def _register_agent(engine, backend):
+    """Register agent executor with auto-promote support (mirrors registry_factory)."""
+    engine.registry.register("agent", lambda cfg: AgentExecutor(
+        backend=backend,
+        prompt=cfg.get("prompt", ""),
+        output_mode=cfg.get("output_mode", "effect"),
+        output_path=cfg.get("output_path"),
+        _user_set_output_mode=("output_mode" in cfg),
+        **{k: v for k, v in cfg.items()
+           if k not in ("prompt", "output_mode", "output_path")},
+    ))
+
+
+# ── Step 6a: Single agent → downstream step ──────────────────────────
+
+
+def test_agent_output_bridge_end_to_end(async_engine):
+    """Agent step declares outputs, writes JSON file, downstream step consumes."""
+    workspace = tempfile.mkdtemp()
+
+    backend = OutputWritingBackend({"summary": "good", "score": 0.9})
+    backend.set_auto_complete()  # result={} → falsy → file reading proceeds
+    _register_agent(async_engine, backend)
+
+    register_step_fn("format", lambda inputs: {
+        "formatted": f"Summary: {inputs['summary']}, Score: {inputs['score']}"
+    })
+
+    wf = WorkflowDefinition(steps={
+        "analyze": StepDefinition(
+            name="analyze",
+            executor=ExecutorRef("agent", {"prompt": "Analyze data"}),
+            outputs=["summary", "score"],
+        ),
+        "format": StepDefinition(
+            name="format",
+            executor=ExecutorRef("callable", {"fn_name": "format"}),
+            inputs=[
+                InputBinding("summary", "analyze", "summary"),
+                InputBinding("score", "analyze", "score"),
+            ],
+            outputs=["formatted"],
+        ),
+    })
+
+    job = async_engine.create_job(objective="test", workflow=wf, workspace_path=workspace)
+    result = run_job_sync(async_engine, job.id)
+    assert result.status == JobStatus.COMPLETED
+
+    runs = async_engine.store.runs_for_job(job.id)
+    format_run = [r for r in runs if r.step_name == "format"][0]
+    assert "Summary: good" in format_run.result.artifact["formatted"]
+
+
+# ── Step 6c: emit_flow + outputs coexistence ──────────────────────────
+
+
+SIMPLE_EMIT_FLOW = """\
+name: emitted-flow
+steps:
+  do-work:
+    run: |
+      echo '{"result": "from-sub-flow"}'
+    outputs: [result]
+"""
+
+
+def test_emit_flow_takes_precedence_over_output_file(async_engine):
+    """Agent with emit_flow=True and outputs: emit_flow wins over output file."""
+    workspace = tempfile.mkdtemp()
+
+    backend = OutputWritingBackend({"result": "from-output-file"})
+    backend.set_extra_file(
+        os.path.join(EMIT_FLOW_DIR, EMIT_FLOW_FILENAME),
+        SIMPLE_EMIT_FLOW,
+    )
+    backend.set_auto_complete()
+    _register_agent(async_engine, backend)
+
+    wf = WorkflowDefinition(steps={
+        "implement": StepDefinition(
+            name="implement",
+            executor=ExecutorRef("agent", {"prompt": "Do work", "emit_flow": True}),
+            outputs=["result"],
+        ),
+    })
+
+    job = async_engine.create_job(objective="test", workflow=wf, workspace_path=workspace)
+    result = run_job_sync(async_engine, job.id)
+    assert result.status == JobStatus.COMPLETED
+
+    runs = async_engine.store.runs_for_job(job.id)
+    implement_run = [r for r in runs if r.step_name == "implement"][-1]
+    # The delegated sub-flow result should be used, not the output file
+    assert implement_run.result.artifact["result"] == "from-sub-flow"
+
+
+# ── Step 6d: Explicit output_mode overrides ───────────────────────────
+
+
+def test_explicit_effect_mode_not_promoted(async_engine):
+    """User explicitly sets output_mode: effect — no auto-promotion, step uses effect artifact."""
+    workspace = tempfile.mkdtemp()
+
+    backend = OutputWritingBackend({"result": "ignored"})
+    backend.set_auto_complete()
+    _register_agent(async_engine, backend)
+
+    wf = WorkflowDefinition(steps={
+        "analyze": StepDefinition(
+            name="analyze",
+            # Explicitly set output_mode in config → _user_set_output_mode=True
+            executor=ExecutorRef("agent", {"prompt": "Analyze", "output_mode": "effect"}),
+            outputs=["result"],
+        ),
+    })
+
+    job = async_engine.create_job(objective="test", workflow=wf, workspace_path=workspace)
+    result = run_job_sync(async_engine, job.id)
+    # Step fails artifact validation because effect mode returns status metadata,
+    # not the declared "result" output key.
+    assert result.status == JobStatus.FAILED
