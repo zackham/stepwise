@@ -8,6 +8,7 @@ import pytest
 from stepwise.models import (
     ExitRule,
     ExecutorRef,
+    ForEachSpec,
     InputBinding,
     OutputFieldSpec,
     StepDefinition,
@@ -329,3 +330,271 @@ class TestUngatedPostLoopWarning:
         warns = wf.warnings()
         post_loop_warns = [w for w in warns if "looping step" in w]
         assert len(post_loop_warns) == 0
+
+
+class TestPrematureLaunchWarning:
+    """Warn when a step depends on a loop body member but not the loop exit step."""
+
+    def _loop_warns(self, warns):
+        return [w for w in warns if "may launch before" in w]
+
+    def test_basic_premature_launch(self):
+        """Step depending on loop target (not exit step) gets warning."""
+        wf = WorkflowDefinition(steps={
+            "draft": _callable_step("draft", ["content"], []),
+            "review": StepDefinition(
+                name="review",
+                outputs=["score"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+                inputs=[InputBinding("content", "draft", "content")],
+                exit_rules=[
+                    ExitRule("good", "expression", {
+                        "condition": "float(outputs.get('score', 0)) >= 0.8",
+                        "action": "advance",
+                    }, priority=10),
+                    ExitRule("retry", "expression", {
+                        "condition": "True",
+                        "action": "loop", "target": "draft",
+                        "max_iterations": 3,
+                    }, priority=1),
+                ],
+            ),
+            "publish": StepDefinition(
+                name="publish",
+                outputs=["url"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+                inputs=[InputBinding("content", "draft", "content")],
+            ),
+        })
+        warns = self._loop_warns(wf.warnings())
+        assert len(warns) == 1
+        assert "publish" in warns[0]
+        assert "draft" in warns[0]
+        assert "review" in warns[0]
+
+    def test_no_warning_when_dep_on_exit_step(self):
+        """Step with data dep on the loop exit step gets no warning."""
+        wf = WorkflowDefinition(steps={
+            "draft": _callable_step("draft", ["content"], []),
+            "review": StepDefinition(
+                name="review",
+                outputs=["score"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+                inputs=[InputBinding("content", "draft", "content")],
+                exit_rules=[
+                    ExitRule("good", "expression", {
+                        "condition": "float(outputs.get('score', 0)) >= 0.8",
+                        "action": "advance",
+                    }, priority=10),
+                    ExitRule("retry", "expression", {
+                        "condition": "True",
+                        "action": "loop", "target": "draft",
+                        "max_iterations": 3,
+                    }, priority=1),
+                ],
+            ),
+            "publish": StepDefinition(
+                name="publish",
+                outputs=["url"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+                inputs=[
+                    InputBinding("content", "draft", "content"),
+                    InputBinding("score", "review", "score"),
+                ],
+            ),
+        })
+        warns = self._loop_warns(wf.warnings())
+        assert len(warns) == 0
+
+    def test_no_warning_when_after_on_exit_step(self):
+        """Step with after on the loop exit step gets no warning."""
+        wf = WorkflowDefinition(steps={
+            "draft": _callable_step("draft", ["content"], []),
+            "review": StepDefinition(
+                name="review",
+                outputs=["score"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+                inputs=[InputBinding("content", "draft", "content")],
+                exit_rules=[
+                    ExitRule("good", "expression", {
+                        "condition": "float(outputs.get('score', 0)) >= 0.8",
+                        "action": "advance",
+                    }, priority=10),
+                    ExitRule("retry", "expression", {
+                        "condition": "True",
+                        "action": "loop", "target": "draft",
+                        "max_iterations": 3,
+                    }, priority=1),
+                ],
+            ),
+            "publish": StepDefinition(
+                name="publish",
+                outputs=["url"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+                inputs=[InputBinding("content", "draft", "content")],
+                after=["review"],
+            ),
+        })
+        warns = self._loop_warns(wf.warnings())
+        assert len(warns) == 0
+
+    def test_no_warning_transitive_dep_on_exit_step(self):
+        """Step transitively depending on exit step via hard dep gets no warning."""
+        wf = WorkflowDefinition(steps={
+            "draft": _callable_step("draft", ["content"], []),
+            "review": StepDefinition(
+                name="review",
+                outputs=["score"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+                inputs=[InputBinding("content", "draft", "content")],
+                exit_rules=[
+                    ExitRule("good", "expression", {
+                        "condition": "float(outputs.get('score', 0)) >= 0.8",
+                        "action": "advance",
+                    }, priority=10),
+                    ExitRule("retry", "expression", {
+                        "condition": "True",
+                        "action": "loop", "target": "draft",
+                        "max_iterations": 3,
+                    }, priority=1),
+                ],
+            ),
+            "summarize": StepDefinition(
+                name="summarize",
+                outputs=["summary"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+                inputs=[InputBinding("score", "review", "score")],
+            ),
+            "publish": StepDefinition(
+                name="publish",
+                outputs=["url"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+                inputs=[
+                    InputBinding("content", "draft", "content"),
+                    InputBinding("summary", "summarize", "summary"),
+                ],
+            ),
+        })
+        warns = self._loop_warns(wf.warnings())
+        assert len(warns) == 0
+
+    def test_self_loop_no_premature_warning(self):
+        """Self-loop does not produce premature launch warning."""
+        wf = WorkflowDefinition(steps={
+            "retry_step": _callable_step("retry_step", ["result"], [
+                ExitRule("done", "expression", {
+                    "condition": "outputs.get('done', False)",
+                    "action": "advance",
+                }, priority=10),
+                ExitRule("retry", "expression", {
+                    "condition": "True",
+                    "action": "loop", "target": "retry_step",
+                    "max_iterations": 5,
+                }, priority=1),
+            ]),
+            "next_step": StepDefinition(
+                name="next_step",
+                outputs=["out"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+                after=["retry_step"],
+            ),
+        })
+        warns = self._loop_warns(wf.warnings())
+        assert len(warns) == 0
+
+    def test_no_warning_for_unrelated_steps(self):
+        """Steps with no deps on the loop body get no warning."""
+        wf = WorkflowDefinition(steps={
+            "draft": _callable_step("draft", ["content"], []),
+            "review": StepDefinition(
+                name="review",
+                outputs=["score"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+                inputs=[InputBinding("content", "draft", "content")],
+                exit_rules=[
+                    ExitRule("retry", "expression", {
+                        "condition": "True",
+                        "action": "loop", "target": "draft",
+                        "max_iterations": 3,
+                    }, priority=1),
+                ],
+            ),
+            "independent": _callable_step("independent", ["out"], []),
+        })
+        warns = self._loop_warns(wf.warnings())
+        assert len(warns) == 0
+
+    def test_intermediate_loop_body_step(self):
+        """Step depending on intermediate loop body step gets warning."""
+        wf = WorkflowDefinition(steps={
+            "fetch": _callable_step("fetch", ["raw"], []),
+            "transform": StepDefinition(
+                name="transform",
+                outputs=["data"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+                inputs=[InputBinding("raw", "fetch", "raw")],
+            ),
+            "validate": StepDefinition(
+                name="validate",
+                outputs=["valid"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+                inputs=[InputBinding("data", "transform", "data")],
+                exit_rules=[
+                    ExitRule("ok", "expression", {
+                        "condition": "outputs.get('valid', False)",
+                        "action": "advance",
+                    }, priority=10),
+                    ExitRule("retry", "expression", {
+                        "condition": "True",
+                        "action": "loop", "target": "fetch",
+                        "max_iterations": 3,
+                    }, priority=1),
+                ],
+            ),
+            "export": StepDefinition(
+                name="export",
+                outputs=["url"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+                inputs=[InputBinding("data", "transform", "data")],
+            ),
+        })
+        warns = self._loop_warns(wf.warnings())
+        assert len(warns) == 1
+        assert "export" in warns[0]
+        assert "transform" in warns[0]
+        assert "validate" in warns[0]
+
+    def test_optional_dep_on_exit_step_still_warns(self):
+        """Optional dep on exit step doesn't prevent premature launch."""
+        wf = WorkflowDefinition(steps={
+            "draft": _callable_step("draft", ["content"], []),
+            "review": StepDefinition(
+                name="review",
+                outputs=["score"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+                inputs=[InputBinding("content", "draft", "content")],
+                exit_rules=[
+                    ExitRule("good", "expression", {
+                        "condition": "float(outputs.get('score', 0)) >= 0.8",
+                        "action": "advance",
+                    }, priority=10),
+                    ExitRule("retry", "expression", {
+                        "condition": "True",
+                        "action": "loop", "target": "draft",
+                        "max_iterations": 3,
+                    }, priority=1),
+                ],
+            ),
+            "publish": StepDefinition(
+                name="publish",
+                outputs=["url"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+                inputs=[
+                    InputBinding("content", "draft", "content"),
+                    InputBinding("score", "review", "score", optional=True),
+                ],
+            ),
+        })
+        warns = self._loop_warns(wf.warnings())
+        assert len(warns) == 1
+        assert "publish" in warns[0]
