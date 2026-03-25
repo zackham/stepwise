@@ -18,6 +18,7 @@ from stepwise.agent import (
 from stepwise.executors import ExecutionContext
 from stepwise.models import (
     ExecutorRef,
+    ForEachSpec,
     InputBinding,
     JobStatus,
     StepDefinition,
@@ -328,6 +329,61 @@ def test_agent_output_bridge_end_to_end(async_engine):
     runs = async_engine.store.runs_for_job(job.id)
     format_run = [r for r in runs if r.step_name == "format"][0]
     assert "Summary: good" in format_run.result.artifact["formatted"]
+
+
+# ── Step 6b: For-each agent fan-out ───────────────────────────────────
+
+
+def test_for_each_agent_output_bridge(async_engine):
+    """For-each with 3 items, each agent sub-job writes structured output."""
+    workspace = tempfile.mkdtemp()
+
+    backend = OutputWritingBackend({"result": "processed"})
+    backend.set_auto_complete()
+    _register_agent(async_engine, backend)
+
+    register_step_fn("produce_list", lambda inputs: {
+        "items": ["a", "b", "c"]
+    })
+
+    # Sub-flow: agent step that produces structured output per item
+    sub_flow = WorkflowDefinition(steps={
+        "process": StepDefinition(
+            name="process",
+            executor=ExecutorRef("agent", {"prompt": "Process $item"}),
+            inputs=[InputBinding("item", "$job", "item")],
+            outputs=["result"],
+        ),
+    })
+
+    wf = WorkflowDefinition(steps={
+        "produce": StepDefinition(
+            name="produce",
+            executor=ExecutorRef("callable", {"fn_name": "produce_list"}),
+            outputs=["items"],
+        ),
+        "each_item": StepDefinition(
+            name="each_item",
+            executor=ExecutorRef("for_each", {}),
+            for_each=ForEachSpec(
+                source_step="produce",
+                source_field="items",
+                item_var="item",
+            ),
+            sub_flow=sub_flow,
+            outputs=["results"],
+        ),
+    })
+
+    job = async_engine.create_job(objective="test", workflow=wf, workspace_path=workspace)
+    result = run_job_sync(async_engine, job.id, timeout=15)
+    assert result.status == JobStatus.COMPLETED
+
+    runs = async_engine.store.runs_for_job(job.id)
+    fe_run = [r for r in runs if r.step_name == "each_item"][0]
+    results = fe_run.result.artifact["results"]
+    assert len(results) == 3
+    assert all(r["result"] == "processed" for r in results)
 
 
 # ── Step 6c: emit_flow + outputs coexistence ──────────────────────────
