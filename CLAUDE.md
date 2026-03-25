@@ -90,7 +90,7 @@ All registered in `src/stepwise/registry_factory.py:create_default_registry()`:
 | `poll` | `PollExecutor` | `executors.py` | Suspends with poll watch — engine runs `check_command` at `interval_seconds`; JSON dict on stdout = fulfilled |
 | `llm` | `LLMExecutor` | `executors.py` | OpenRouter API call (only registered if API key configured) |
 | `mock_llm` | `MockLLMExecutor` | `executors.py` | Test-only LLM stub with configurable failure/latency |
-| `agent` | `AgentExecutor` | `agent.py` | ACP agent via acpx — supports `emit_flow: true` for dynamic flow emission |
+| `agent` | `AgentExecutor` | `agent.py` | ACP agent via acpx — supports `emit_flow: true` for dynamic flow emission. Steps with declared `outputs` auto-promote to file-based output collection; the agent receives `STEPWISE_OUTPUT_FILE` env var and prompt instructions. Set `output_mode: effect` explicitly to opt out. |
 
 Decorators (`src/stepwise/decorators.py`): `TimeoutDecorator`, `RetryDecorator`, `FallbackDecorator` — applied via `ExecutorRef.decorators` list.
 
@@ -310,6 +310,22 @@ steps:
 ```
 
 Optional inputs skip readiness checks for their source dep. In prompts, `None` renders as empty string. In scripts, `None` means the `STEPWISE_INPUT_<name>` env var is unset. Cycles in the dependency graph are valid if every cycle contains at least one optional edge.
+
+Environment variables available in executor processes: `STEPWISE_INPUT_<name>` (resolved input values), `STEPWISE_STEP_NAME`, `STEPWISE_ATTEMPT`, `STEPWISE_STEP_IO` (step I/O directory). Agent processes with declared outputs also receive `STEPWISE_OUTPUT_FILE` (absolute path to write structured JSON output).
+
+Agent step with structured output (auto-bridged):
+
+```yaml
+steps:
+  analyze:
+    executor: agent
+    prompt: "Analyze $data and produce a summary with quality score"
+    inputs:
+      data: $job.data
+    outputs: [summary, score]    # agent auto-receives instructions to write these
+```
+
+When `outputs` is declared without explicit `output_mode`, the agent automatically receives: (1) `STEPWISE_OUTPUT_FILE` env var pointing to `{step_name}-output.json`, (2) prompt instructions with required JSON keys and example. The agent writes the JSON file; the engine reads and validates it.
 
 Agent step with dynamic flow emission:
 
