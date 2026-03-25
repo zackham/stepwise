@@ -690,6 +690,30 @@ class Engine:
             result["metadata"] = job.metadata
         return result
 
+    # ── Job dependency readiness ─────────────────────────────────────────
+
+    def _check_dependent_jobs(self, job_id: str) -> None:
+        """After a job completes, start any PENDING dependents whose deps are all met."""
+        for dep_job in self.store.job_dependents(job_id):
+            if dep_job.status != JobStatus.PENDING:
+                continue
+            # Check if ALL jobs in depends_on are COMPLETED
+            all_met = True
+            for req_id in dep_job.depends_on:
+                try:
+                    req_job = self.store.load_job(req_id)
+                    if req_job.status != JobStatus.COMPLETED:
+                        all_met = False
+                        break
+                except KeyError:
+                    all_met = False
+                    break
+            if all_met:
+                try:
+                    self.start_job(dep_job.id)
+                except ValueError:
+                    pass  # status changed between check and start
+
     # ── Tick Loop ─────────────────────────────────────────────────────────
 
     def tick(self) -> None:
@@ -845,6 +869,7 @@ class Engine:
                 self.store.save_job(job)
                 self._emit(job.id, JOB_COMPLETED)
                 self._cleanup_job_sessions(job.id)
+                self._check_dependent_jobs(job.id)
                 return
 
             if not made_progress:
@@ -861,6 +886,7 @@ class Engine:
                         self.store.save_job(job)
                         self._emit(job.id, JOB_COMPLETED)
                         self._cleanup_job_sessions(job.id)
+                        self._check_dependent_jobs(job.id)
                     else:
                         job.status = JobStatus.FAILED
                         job.updated_at = _now()
@@ -3319,6 +3345,7 @@ class AsyncEngine(Engine):
             self.store.save_job(job)
             self._emit(job.id, JOB_COMPLETED)
             self._cleanup_job_sessions(job.id)
+            self._check_dependent_jobs(job.id)
         elif job.status == JobStatus.RUNNING:
             # Check for settled-but-failed: nothing active, nothing ready, no terminal completed
             if (not self.store.running_runs(job.id) and
@@ -3334,6 +3361,7 @@ class AsyncEngine(Engine):
                     self.store.save_job(job)
                     self._emit(job.id, JOB_COMPLETED)
                     self._cleanup_job_sessions(job.id)
+                    self._check_dependent_jobs(job.id)
                 else:
                     job.status = JobStatus.FAILED
                     job.updated_at = _now()
