@@ -339,7 +339,7 @@ inputs:
 **None handling:**
 - **In prompt templates** (`$var` interpolation): `None` renders as empty string `""`
 - **In expression evaluation** (exit rules, `when`): `None` is first-class. Test with `score is None` / `score is not None`. Comparing `None` with `>`, `<`, `float()` raises an eval error (flow authoring bug).
-- **In script executors** (`run:`): environment variable is unset (not "None" or "null"). Use `if [ -z "$score" ]; then ...`
+- **In script executors** (`run:`): `STEPWISE_INPUT_<name>` env var is unset (not "None" or "null"). Use `if [ -z "$STEPWISE_INPUT_score" ]; then ...`
 - **`any_of` + `optional`:** Allowed. Means "try to get one of these, but if none are available, resolve to `None` and proceed."
 
 **Cycle detection:** A cycle in the dependency graph is valid if every cycle contains at least one `optional: true` edge.

@@ -16,7 +16,7 @@ fetch_data:
 
 **How it works:**
 - The `run` command executes in the job's workspace directory
-- Input values are passed as environment variables with the `STEPWISE_INPUT_` prefix (e.g., `$STEPWISE_INPUT_url`). Bare names (`$url`) are deprecated.
+- Input values are passed as environment variables with the `STEPWISE_INPUT_` prefix (e.g., `$STEPWISE_INPUT_url`). Inputs named `LD_PRELOAD`, `LD_LIBRARY_PATH`, `PYTHONPATH`, `PATH`, or `HOME` are rejected.
 - The script prints JSON to stdout — that's the output
 - Non-zero exit code = step failure
 
@@ -24,7 +24,7 @@ fetch_data:
 - `STEPWISE_PROJECT_DIR` — absolute path to the project root
 - `STEPWISE_FLOW_DIR` — absolute path to the flow directory (for directory flows)
 - `PYTHONPATH` — project root is prepended, so `import` works for project modules
-- All step inputs as `STEPWISE_INPUT_<name>` env vars (strings, or JSON for dicts/lists). Bare `<name>` vars are deprecated.
+- All step inputs as `STEPWISE_INPUT_<name>` env vars (strings, or JSON for dicts/lists)
 
 **When to use:** Data fetching, file processing, API calls, build commands, anything deterministic. If you can write it as a script, use a script. It's faster, cheaper, and easier to debug than an LLM call.
 
@@ -34,8 +34,7 @@ fetch_data:
 # scripts/fetch.py
 import json, os, requests
 
-url = os.environ["STEPWISE_INPUT_url"]  # recommended
-# url = os.environ["url"]  # deprecated
+url = os.environ["STEPWISE_INPUT_url"]
 resp = requests.get(url)
 data = resp.json()
 
