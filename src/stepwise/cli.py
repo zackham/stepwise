@@ -3109,7 +3109,7 @@ def _flow_get_url(url: str) -> int:
 def cmd_schema(args: argparse.Namespace) -> int:
     """Generate JSON tool contract from a flow file."""
     from stepwise.flow_resolution import FlowResolutionError, resolve_flow
-    from stepwise.schema import generate_schema
+    from stepwise.schema import generate_input_schema, generate_schema
     from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
 
     try:
@@ -3124,7 +3124,10 @@ def cmd_schema(args: argparse.Namespace) -> int:
         print(f"Error: {'; '.join(e.errors)}", file=sys.stderr)
         return EXIT_USAGE_ERROR
 
-    schema = generate_schema(wf)
+    if getattr(args, "input_schema", False):
+        schema = generate_input_schema(wf)
+    else:
+        schema = generate_schema(wf)
     print(json.dumps(schema, indent=2))
     return EXIT_SUCCESS
 
@@ -4044,6 +4047,8 @@ def build_parser() -> argparse.ArgumentParser:
     # schema
     p_schema = sub.add_parser("schema", help="Generate JSON tool contract from a flow file")
     p_schema.add_argument("flow", help="Flow name or path to .flow.yaml file")
+    p_schema.add_argument("--input-schema", action="store_true",
+                          help="Output JSON Schema for flow inputs instead of tool contract")
 
     # tail
     p_tail = sub.add_parser("tail", help="Stream live events for a job")
