@@ -1304,8 +1304,17 @@ class AgentExecutor(Executor):
                             artifact = json.loads(file_path.read_text())
                             if not isinstance(artifact, dict):
                                 artifact = {"result": artifact}
-                        except (FileNotFoundError, json.JSONDecodeError):
-                            artifact = {"status": "completed", "output_file_missing": True}
+                        except (FileNotFoundError, json.JSONDecodeError) as exc:
+                            expected_fields = self.config.get("output_fields", [])
+                            artifact = {
+                                "status": "completed",
+                                "output_file_missing": True,
+                                "_error": (
+                                    f"Agent did not write output file: {file_path}. "
+                                    f"Expected JSON with keys: {expected_fields}. "
+                                    f"Error: {type(exc).__name__}: {exc}"
+                                ),
+                            }
 
                 case "stream_result":
                     # Extract text from ACP agent_message_chunk events

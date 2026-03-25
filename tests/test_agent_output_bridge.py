@@ -79,3 +79,50 @@ class TestAutoPromote:
                             user_set_output_mode=True)
         assert ex.output_mode == "file"
         assert ex._auto_promoted is False
+
+
+# ── Step 4a: Error message tests ──────────────────────────────────────
+
+
+class TestErrorMessages:
+    def test_missing_output_file_error_includes_path_and_fields(self):
+        from stepwise.agent import AgentStatus
+        ex = _make_executor(output_fields=["result", "score"])
+        # Auto-promoted to file mode
+        assert ex.output_mode == "file"
+
+        workspace = tempfile.mkdtemp()
+        state = {
+            "working_dir": workspace,
+            "output_file": "test-step-output.json",
+            "output_path": f"{workspace}/fake.jsonl",
+        }
+        agent_status = AgentStatus(state="completed", exit_code=0)
+
+        envelope = ex._extract_output(state, "file", agent_status)
+        assert envelope.artifact["output_file_missing"] is True
+        assert "_error" in envelope.artifact
+        assert "test-step-output.json" in envelope.artifact["_error"]
+        assert "result" in envelope.artifact["_error"]
+        assert "score" in envelope.artifact["_error"]
+        assert "FileNotFoundError" in envelope.artifact["_error"]
+
+    def test_malformed_json_error_includes_context(self):
+        from stepwise.agent import AgentStatus
+        ex = _make_executor(output_fields=["result"])
+
+        workspace = tempfile.mkdtemp()
+        output_file = Path(workspace) / "test-step-output.json"
+        output_file.write_text("not valid json {{{")
+
+        state = {
+            "working_dir": workspace,
+            "output_file": "test-step-output.json",
+            "output_path": f"{workspace}/fake.jsonl",
+        }
+        agent_status = AgentStatus(state="completed", exit_code=0)
+
+        envelope = ex._extract_output(state, "file", agent_status)
+        assert envelope.artifact["output_file_missing"] is True
+        assert "_error" in envelope.artifact
+        assert "JSONDecodeError" in envelope.artifact["_error"]
