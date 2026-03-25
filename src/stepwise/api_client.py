@@ -189,3 +189,78 @@ class StepwiseClient:
                 return status
 
             time.sleep(0.5)
+
+    def wait_many(self, job_ids: list[str], mode: str = "all") -> dict:
+        """Poll until jobs reach terminal state or suspension.
+
+        Args:
+            job_ids: List of job IDs to wait on.
+            mode: 'all' (wait for all) or 'any' (wait for first).
+
+        Returns dict with keys: mode, status, jobs (list of per-job results), summary.
+        """
+        pending: dict[str, dict | None] = {jid: None for jid in job_ids}
+        not_found_counts: dict[str, int] = {jid: 0 for jid in job_ids}
+        max_retries = 8
+
+        while True:
+            for jid in list(pending):
+                if pending[jid] is not None:
+                    continue
+
+                try:
+                    status = self.status(jid)
+                except StepwiseAPIError as e:
+                    if e.status == 404 and not_found_counts[jid] < max_retries:
+                        not_found_counts[jid] += 1
+                        time.sleep(min(0.5 * (2 ** (not_found_counts[jid] - 1)), 8))
+                        continue
+                    if e.status == 404:
+                        pending[jid] = {"job_id": jid, "status": "error",
+                                        "error": f"Job {jid} not found after {max_retries} retries"}
+                        if mode == "any":
+                            return self._build_wait_many_result(mode, [pending[jid]])
+                        continue
+                    raise
+
+                not_found_counts[jid] = 0
+                job_status = status.get("status", "")
+
+                if job_status in ("completed", "failed", "cancelled"):
+                    pending[jid] = {**status, "job_id": jid, "status": job_status}
+                else:
+                    steps = status.get("steps", [])
+                    has_suspended = any(s["status"] == "suspended" for s in steps)
+                    has_active = any(s["status"] in ("running", "delegated") for s in steps)
+                    if has_suspended and not has_active:
+                        pending[jid] = {**status, "job_id": jid, "status": "suspended"}
+
+                if pending[jid] is not None and mode == "any":
+                    return self._build_wait_many_result(mode, [pending[jid]])
+
+            if mode == "all" and all(r is not None for r in pending.values()):
+                return self._build_wait_many_result(mode, list(pending.values()))
+
+            time.sleep(0.5)
+
+    def _build_wait_many_result(self, mode: str, results: list[dict]) -> dict:
+        """Build multi-job result dict."""
+        summary = {"total": len(results), "completed": 0, "failed": 0,
+                   "cancelled": 0, "suspended": 0, "error": 0}
+        for r in results:
+            s = r.get("status", "error")
+            if s in summary:
+                summary[s] += 1
+            else:
+                summary["error"] += 1
+
+        if summary["failed"] or summary["error"]:
+            overall = "failed"
+        elif summary["cancelled"]:
+            overall = "cancelled"
+        elif summary["suspended"]:
+            overall = "suspended"
+        else:
+            overall = "completed"
+
+        return {"mode": mode, "status": overall, "jobs": results, "summary": summary}

@@ -9,7 +9,8 @@ import logging
 import signal
 import sys
 import time
-from datetime import datetime
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -37,6 +38,7 @@ EXIT_SUCCESS = 0
 EXIT_JOB_FAILED = 1
 EXIT_USAGE_ERROR = 2
 EXIT_CONFIG_ERROR = 3
+EXIT_CANCELLED = 4
 EXIT_SUSPENDED = 5
 
 
@@ -1084,7 +1086,7 @@ async def _delegated_wait_ws_loop(
                         "job_id": job_id,
                         "duration_seconds": round(time.time() - start_time, 1),
                     })
-                    return 4  # EXIT_CANCELLED
+                    return EXIT_CANCELLED
 
                 if detach_requested:
                     sys.stderr.write(
@@ -1202,6 +1204,176 @@ async def _delegated_wait_ws_loop(
                         "duration_seconds": duration,
                     })
                     return EXIT_SUSPENDED
+        finally:
+            if ws_conn:
+                await ws_conn.close()
+
+
+async def _delegated_wait_multi_ws_loop(
+    server_url: str,
+    job_ids: list[str],
+    mode: str,  # "all" or "any"
+    project_dir: Path | None = None,
+) -> int:
+    """WebSocket-driven wait loop for multiple jobs."""
+    import json as json_mod
+
+    pending: dict[str, dict | None] = {jid: None for jid in job_ids}
+
+    shutdown_requested = False
+    detach_requested = False
+    loop = asyncio.get_running_loop()
+
+    def _set_shutdown():
+        nonlocal shutdown_requested
+        shutdown_requested = True
+
+    def _set_detach():
+        nonlocal detach_requested
+        detach_requested = True
+
+    loop.add_signal_handler(signal.SIGINT, _set_shutdown)
+    loop.add_signal_handler(signal.SIGTERM, _set_shutdown)
+
+    try:
+        loop.add_signal_handler(signal.SIGTSTP, _set_detach)
+    except (OSError, NotImplementedError):
+        pass
+
+    start_time = time.time()
+    base_url = server_url.rstrip("/")
+
+    async with httpx.AsyncClient(base_url=base_url, timeout=10) as client:
+        ws_url = _ws_url_from_server(server_url)
+        use_ws = True
+        try:
+            import websockets
+            ws_conn = await websockets.connect(ws_url)
+        except Exception:
+            use_ws = False
+            ws_conn = None
+
+        try:
+            while True:
+                if shutdown_requested:
+                    for jid in pending:
+                        if pending[jid] is None:
+                            try:
+                                await client.post(f"/api/jobs/{jid}/cancel")
+                            except Exception:
+                                pass
+                            pending[jid] = {"job_id": jid, "status": "cancelled",
+                                            "duration_seconds": round(time.time() - start_time, 1)}
+                            _write_sentinel(project_dir, jid, "cancelled")
+                    result = _build_multi_result(mode, list(pending.values()), time.time() - start_time)
+                    _json_stdout(result)
+                    return EXIT_CANCELLED
+
+                if detach_requested:
+                    unresolved = [jid for jid, r in pending.items() if r is None]
+                    sys.stderr.write(f"\nDetached. {len(unresolved)} job(s) still running.\n")
+                    sys.stderr.flush()
+                    return EXIT_SUCCESS
+
+                # Wait for WS event or poll
+                if use_ws and ws_conn:
+                    try:
+                        await asyncio.wait_for(ws_conn.recv(), timeout=2.0)
+                    except asyncio.TimeoutError:
+                        pass
+                    except Exception:
+                        use_ws = False
+                        ws_conn = None
+                else:
+                    await asyncio.sleep(2.0)
+
+                # Fetch state for all pending jobs concurrently
+                unresolved_ids = [jid for jid, r in pending.items() if r is None]
+                if not unresolved_ids:
+                    break
+
+                fetch_tasks = {jid: _fetch_job_state(client, jid) for jid in unresolved_ids}
+                results_or_errors = await asyncio.gather(
+                    *fetch_tasks.values(), return_exceptions=True
+                )
+
+                for jid, result_or_err in zip(fetch_tasks.keys(), results_or_errors):
+                    if isinstance(result_or_err, JobNotFoundError):
+                        pending[jid] = {"job_id": jid, "status": "error",
+                                        "error": str(result_or_err)}
+                        _write_sentinel(project_dir, jid, "error")
+                        if mode == "any":
+                            result = _build_multi_result(mode, [pending[jid]], time.time() - start_time)
+                            _json_stdout(result)
+                            return EXIT_JOB_FAILED
+                        continue
+                    if isinstance(result_or_err, Exception):
+                        continue  # transient error, retry next cycle
+
+                    job_data, runs = result_or_err
+                    job_status = job_data.get("status", "")
+                    duration = round(time.time() - start_time, 1)
+
+                    if job_status == "completed":
+                        try:
+                            out_resp = await client.get(f"/api/jobs/{jid}/output")
+                            outputs = out_resp.json()
+                        except Exception:
+                            outputs = {}
+                        try:
+                            cost_resp = await client.get(f"/api/jobs/{jid}/cost")
+                            cost_usd = cost_resp.json().get("cost_usd", 0)
+                        except Exception:
+                            cost_usd = 0
+                        pending[jid] = {"job_id": jid, "status": "completed",
+                                        "outputs": outputs, "cost_usd": cost_usd,
+                                        "duration_seconds": duration}
+                        _write_sentinel(project_dir, jid, "completed")
+
+                    elif job_status in ("failed", "cancelled"):
+                        failed_step = error_msg = None
+                        for run in runs:
+                            if run["status"] == "failed":
+                                failed_step = run["step_name"]
+                                error_msg = run.get("error")
+                                break
+                        try:
+                            cost_resp = await client.get(f"/api/jobs/{jid}/cost")
+                            cost_usd = cost_resp.json().get("cost_usd", 0)
+                        except Exception:
+                            cost_usd = 0
+                        pending[jid] = {"job_id": jid, "status": job_status,
+                                        "error": error_msg, "failed_step": failed_step,
+                                        "cost_usd": cost_usd, "duration_seconds": duration}
+                        _write_sentinel(project_dir, jid, job_status)
+
+                    elif _is_blocked_by_suspension_from_runs(runs):
+                        try:
+                            cost_resp = await client.get(f"/api/jobs/{jid}/cost")
+                            cost_usd = cost_resp.json().get("cost_usd", 0)
+                        except Exception:
+                            cost_usd = 0
+                        completed_steps = [r["step_name"] for r in runs if r["status"] == "completed"]
+                        pending[jid] = {"job_id": jid, "status": "suspended",
+                                        "completed_steps": completed_steps,
+                                        "cost_usd": cost_usd, "duration_seconds": duration}
+                        _write_sentinel(project_dir, jid, "suspended")
+
+                    # --any: return on first resolution
+                    if mode == "any" and pending[jid] is not None:
+                        result = _build_multi_result(mode, [pending[jid]], time.time() - start_time)
+                        _json_stdout(result)
+                        exit_map = {"completed": EXIT_SUCCESS, "failed": EXIT_JOB_FAILED,
+                                    "cancelled": EXIT_CANCELLED, "suspended": EXIT_SUSPENDED}
+                        return exit_map.get(pending[jid]["status"], EXIT_JOB_FAILED)
+
+                # --all: check if all resolved
+                if mode == "all" and all(r is not None for r in pending.values()):
+                    all_results = list(pending.values())
+                    result = _build_multi_result(mode, all_results, time.time() - start_time)
+                    _json_stdout(result)
+                    return _aggregate_exit_code(all_results)
+
         finally:
             if ws_conn:
                 await ws_conn.close()
@@ -1337,6 +1509,7 @@ def wait_for_job(
     engine: Engine,
     store: SQLiteStore,
     job_id: str,
+    project_dir: Path | None = None,
 ) -> int:
     """Block until a job reaches terminal state or suspension (legacy sync API).
 
@@ -1454,6 +1627,112 @@ def wait_for_job(
         signal.signal(signal.SIGTERM, original_sigterm)
 
 
+def wait_for_jobs(
+    engine: Engine,
+    store: SQLiteStore,
+    job_ids: list[str],
+    mode: str,
+    project_dir: Path | None = None,
+) -> int:
+    """Block until multiple jobs reach terminal/suspended state (legacy sync API).
+
+    mode='all': wait for all jobs. mode='any': wait for first job.
+    Returns aggregated exit code.
+    """
+    pending: dict[str, dict | None] = {jid: None for jid in job_ids}
+
+    shutdown_requested = False
+    original_sigint = signal.getsignal(signal.SIGINT)
+    original_sigterm = signal.getsignal(signal.SIGTERM)
+
+    def _shutdown_handler(signum, frame):
+        nonlocal shutdown_requested
+        shutdown_requested = True
+
+    signal.signal(signal.SIGINT, _shutdown_handler)
+    signal.signal(signal.SIGTERM, _shutdown_handler)
+
+    start_time = time.time()
+
+    try:
+        while True:
+            if shutdown_requested:
+                for jid in pending:
+                    if pending[jid] is None:
+                        engine.cancel_job(jid)
+                        pending[jid] = {"job_id": jid, "status": "cancelled",
+                                        "duration_seconds": round(time.time() - start_time, 1)}
+                        _write_sentinel(project_dir, jid, "cancelled")
+                result = _build_multi_result(mode, list(pending.values()), time.time() - start_time)
+                _json_stdout(result)
+                return EXIT_CANCELLED
+
+            for jid in list(pending):
+                if pending[jid] is not None:
+                    continue
+
+                job = engine.get_job(jid)
+                duration = round(time.time() - start_time, 1)
+
+                if job.status == JobStatus.COMPLETED:
+                    cost = engine.job_cost(jid)
+                    pending[jid] = {"job_id": jid, "status": "completed",
+                                    "outputs": engine.terminal_outputs(jid),
+                                    "cost_usd": round(cost, 4) if cost else 0,
+                                    "duration_seconds": duration}
+                    _write_sentinel(project_dir, jid, "completed")
+
+                elif job.status in (JobStatus.FAILED, JobStatus.CANCELLED):
+                    cost = engine.job_cost(jid)
+                    failed_step = error_msg = None
+                    for run in engine.get_runs(jid):
+                        if run.status == StepRunStatus.FAILED:
+                            failed_step = run.step_name
+                            error_msg = run.error
+                            break
+                    pending[jid] = {"job_id": jid, "status": job.status.value,
+                                    "error": error_msg or "Unknown error",
+                                    "failed_step": failed_step,
+                                    "cost_usd": round(cost, 4) if cost else 0,
+                                    "duration_seconds": duration}
+                    _write_sentinel(project_dir, jid, job.status.value)
+
+                elif _is_blocked_by_suspension(engine, jid):
+                    cost = engine.job_cost(jid)
+                    completed_steps = [r.step_name for r in engine.get_runs(jid)
+                                       if r.status == StepRunStatus.COMPLETED]
+                    pending[jid] = {"job_id": jid, "status": "suspended",
+                                    "completed_steps": completed_steps,
+                                    "cost_usd": round(cost, 4) if cost else 0,
+                                    "duration_seconds": duration}
+                    _write_sentinel(project_dir, jid, "suspended")
+
+                # --any: return on first resolution
+                if mode == "any" and pending[jid] is not None:
+                    result = _build_multi_result(mode, [pending[jid]], time.time() - start_time)
+                    _json_stdout(result)
+                    exit_map = {"completed": EXIT_SUCCESS, "failed": EXIT_JOB_FAILED,
+                                "cancelled": EXIT_CANCELLED, "suspended": EXIT_SUSPENDED}
+                    return exit_map.get(pending[jid]["status"], EXIT_JOB_FAILED)
+
+            # --all: check if all resolved
+            if mode == "all" and all(r is not None for r in pending.values()):
+                all_results = list(pending.values())
+                result = _build_multi_result(mode, all_results, time.time() - start_time)
+                _json_stdout(result)
+                return _aggregate_exit_code(all_results)
+
+            time.sleep(0.1)
+            try:
+                engine.tick()
+            except Exception:
+                pass
+
+    finally:
+        signal.signal(signal.SIGINT, original_sigint)
+        signal.signal(signal.SIGTERM, original_sigterm)
+
+
 def _is_blocked_by_suspension(engine: Engine | AsyncEngine, job_id: str) -> bool:
     """Check if all forward progress is blocked by suspended steps.
 
@@ -1495,6 +1774,19 @@ def wait_for_job_id(
     Returns exit code: 0=completed, 1=failed, 4=cancelled, 5=suspended.
     """
     return asyncio.run(_delegated_wait_ws_loop(server_url, job_id))
+
+
+def wait_for_job_ids(
+    server_url: str,
+    job_ids: list[str],
+    mode: str,
+    project_dir: Path | None = None,
+) -> int:
+    """Wait for multiple jobs on a running server. mode='all' or 'any'.
+
+    Returns exit code: 0=all completed, 1=any failed, 4=cancelled, 5=suspended.
+    """
+    return asyncio.run(_delegated_wait_multi_ws_loop(server_url, job_ids, mode, project_dir))
 
 
 def run_async(
@@ -1640,6 +1932,64 @@ def _json_error(exit_code: int, message: str) -> None:
         "error": message,
     }) + "\n")
     sys.stdout.flush()
+
+
+def _write_sentinel(project_dir: Path | None, job_id: str, status: str, extra: dict | None = None) -> None:
+    """Write a completion sentinel file for file-based watchers.
+
+    Writes atomically via tmp+rename to .stepwise/completed/{job_id}.json.
+    No-op if project_dir is None (e.g., no project context available).
+    """
+    if project_dir is None:
+        return
+    completed_dir = project_dir / "completed"
+    completed_dir.mkdir(exist_ok=True)
+    import json as json_mod
+    data = {"job_id": job_id, "status": status, "completed_at": datetime.now(timezone.utc).isoformat()}
+    if extra:
+        data.update(extra)
+    tmp = completed_dir / f".{job_id}.json.tmp"
+    final = completed_dir / f"{job_id}.json"
+    tmp.write_text(json_mod.dumps(data, default=str))
+    os.replace(tmp, final)
+
+
+def _aggregate_exit_code(job_results: list[dict]) -> int:
+    """Determine exit code from multiple job results. Worst status wins.
+
+    Priority: failed (1) > cancelled (4) > suspended (5) > completed (0).
+    """
+    statuses = {r["status"] for r in job_results}
+    if "failed" in statuses or "error" in statuses:
+        return EXIT_JOB_FAILED
+    if "cancelled" in statuses:
+        return EXIT_CANCELLED
+    if "suspended" in statuses:
+        return EXIT_SUSPENDED
+    return EXIT_SUCCESS
+
+
+def _build_multi_result(mode: str, job_results: list[dict], duration: float) -> dict:
+    """Build the multi-job JSON output envelope."""
+    summary = {"total": len(job_results), "completed": 0, "failed": 0, "cancelled": 0, "suspended": 0, "error": 0}
+    for r in job_results:
+        s = r.get("status", "error")
+        if s in summary:
+            summary[s] += 1
+        else:
+            summary["error"] += 1
+
+    exit_code = _aggregate_exit_code(job_results)
+    overall_status = {EXIT_SUCCESS: "completed", EXIT_JOB_FAILED: "failed",
+                      EXIT_CANCELLED: "cancelled", EXIT_SUSPENDED: "suspended"}[exit_code]
+
+    return {
+        "mode": mode,
+        "status": overall_status,
+        "jobs": job_results,
+        "summary": summary,
+        "duration_seconds": round(duration, 1),
+    }
 
 
 def _err(msg: str, stream: TextIO | None = None) -> None:
