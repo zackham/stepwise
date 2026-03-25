@@ -36,6 +36,7 @@ from stepwise.models import (
     _now,
 )
 from stepwise.store import SQLiteStore
+from stepwise.agent import verify_agent_pid
 from stepwise.events import JOB_AWAITING_APPROVAL
 from stepwise.hooks import build_event_envelope
 
@@ -449,19 +450,20 @@ def _cleanup_zombie_jobs(store: ThreadSafeStore) -> None:
         # Kill orphaned agent processes and fail running step runs
         running_runs = store.running_runs(job.id)
         for run in running_runs:
-            # Check if the agent process is still alive via PID
+            # Check if the agent process is still alive and belongs to an agent
             if run.pid:
-                try:
-                    os.kill(run.pid, 0)
-                    # Process is alive — leave it alone
-                    logger.info("Step run %s (job %s step %s) PID %d still alive, skipping", run.id, job.id, run.step_name, run.pid)
+                expected_pgid = (run.executor_state or {}).get("pgid")
+                if verify_agent_pid(run.pid, expected_pgid=expected_pgid):
+                    logger.info(
+                        "Step run %s (job %s step %s) PID %d verified alive, leaving for reattach",
+                        run.id, job.id, run.step_name, run.pid,
+                    )
                     continue
-                except ProcessLookupError:
-                    logger.info("Step run %s (job %s step %s) PID %d not found, marking failed", run.id, job.id, run.step_name, run.pid)
-                except PermissionError:
-                    # Process exists but we can't signal it — leave it alone
-                    logger.info("Step run %s (job %s step %s) PID %d permission denied, skipping", run.id, job.id, run.step_name, run.pid)
-                    continue
+                else:
+                    logger.info(
+                        "Step run %s (job %s step %s) PID %d dead or recycled, marking failed",
+                        run.id, job.id, run.step_name, run.pid,
+                    )
 
             # Kill the actual OS process group if we have its pgid
             if run.executor_state:
@@ -712,6 +714,11 @@ async def lifespan(app: FastAPI):
     _cleanup_zombie_jobs(store)
     # Re-evaluate surviving RUNNING jobs (settle any that completed pre-crash)
     _engine.recover_jobs()
+
+    # Reattach monitoring for agent steps that survived the restart
+    reattached = await _engine.reattach_surviving_runs()
+    if reattached:
+        logger.info("Reattached %d surviving step run(s) from previous server", reattached)
 
     # NOTE: Queue owner cleanup disabled. Queue owners manage their own lifecycle
     # via TTL (--ttl 0 = stay alive forever). Stepwise's cleanup routines were
