@@ -1267,7 +1267,11 @@ class AgentExecutor(Executor):
                 case "file":
                     output_file = state.get("output_file")
                     if output_file:
-                        file_path = Path(working_dir) / output_file
+                        file_path = (Path(working_dir) / output_file).resolve()
+                        if not file_path.is_relative_to(Path(working_dir).resolve()):
+                            raise ValueError(
+                                f"output_file escapes working directory: {output_file!r}"
+                            )
                     else:
                         # Look in workspace dir first (where agent writes), then .stepwise/step-io
                         file_path = Path(working_dir) / "output.json"
