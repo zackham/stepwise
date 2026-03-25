@@ -597,6 +597,11 @@ def build_emit_flow_instructions(
     lines.append("- The task is straightforward and you can complete it in one session")
     lines.append("- The task is purely exploratory/research\n")
 
+    lines.append("**Structured output:**")
+    lines.append("- If your step declares `outputs`, stepwise automatically sets `STEPWISE_OUTPUT_FILE`")
+    lines.append("- Write a JSON object with the declared output keys to this file before finishing")
+    lines.append("- If you emit a flow instead, the sub-flow's terminal step outputs are used (file is ignored)\n")
+
     # Available executor types — dynamic from registry
     lines.append("### Available executor types\n")
     executor_docs = {
@@ -638,7 +643,9 @@ def build_emit_flow_instructions(
     # Agent executor guidance
     lines.append("### Agent steps in emitted flows\n")
     lines.append("For `executor: agent` steps, do NOT specify `model:`. The agent "
-                 "uses the user's configured default (claude, codex, etc.).\n")
+                 "uses the user's configured default (claude, codex, etc.).")
+    lines.append("Agent sub-steps that declare `outputs` automatically receive "
+                 "`STEPWISE_OUTPUT_FILE` and prompt instructions for writing structured output.\n")
 
     # Flow format
     lines.append("### Flow format\n")
