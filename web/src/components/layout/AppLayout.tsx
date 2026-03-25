@@ -1,7 +1,7 @@
 import { Outlet, Link, useLocation } from "@tanstack/react-router";
 import { useStepwiseWebSocket } from "@/hooks/useStepwiseWebSocket";
 import { useEngineStatus } from "@/hooks/useStepwise";
-import { Workflow, LayoutGrid, FileCode, Settings2, Zap, FolderOpen } from "lucide-react";
+import { LayoutGrid, FileCode, Settings2, Zap, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export function AppLayout() {
@@ -20,7 +20,7 @@ export function AppLayout() {
       {/* Top nav */}
       <header className="h-12 border-b border-border flex items-center px-4 gap-6 shrink-0 bg-zinc-950/80">
         <Link to="/jobs" className="flex items-center gap-2">
-          <Workflow className="w-5 h-5 text-blue-400" />
+          <img src="/logo.png" alt="Stepwise" className="w-5 h-5" />
           <span className="font-semibold text-sm tracking-tight">
             Stepwise
           </span>
