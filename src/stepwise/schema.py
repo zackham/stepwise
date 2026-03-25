@@ -64,3 +64,53 @@ def generate_schema(workflow: WorkflowDefinition) -> dict:
         schema["requires"] = [r.to_dict() for r in workflow.requires]
 
     return schema
+
+
+# Map ConfigVar.type → JSON Schema type
+_TYPE_MAP: dict[str, str] = {
+    "str": "string",
+    "text": "string",
+    "number": "number",
+    "bool": "boolean",
+    "choice": "string",
+}
+
+
+def generate_input_schema(workflow: WorkflowDefinition) -> dict:
+    """Generate a JSON Schema describing the expected inputs for a flow.
+
+    Builds the schema from the flow's ``config_vars``.  Each variable
+    becomes a property with its JSON Schema type, description, default,
+    and example (where declared).  Variables with ``required=True`` and
+    no default are listed in the schema's ``required`` array.
+    """
+    properties: dict[str, dict] = {}
+    required: list[str] = []
+
+    for var in workflow.config_vars:
+        prop: dict = {
+            "type": _TYPE_MAP.get(var.type, "string"),
+        }
+        if var.description:
+            prop["description"] = var.description
+        if var.default is not None:
+            prop["default"] = var.default
+        if var.example:
+            prop["examples"] = [var.example]
+        if var.type == "choice" and var.options:
+            prop["enum"] = var.options
+        if var.required and var.default is None:
+            required.append(var.name)
+        properties[var.name] = prop
+
+    schema: dict = {
+        "type": "object",
+        "properties": properties,
+    }
+    if required:
+        schema["required"] = required
+    if workflow.metadata.name:
+        schema["title"] = workflow.metadata.name
+    if workflow.metadata.description:
+        schema["description"] = workflow.metadata.description
+    return schema

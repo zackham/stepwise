@@ -3,6 +3,7 @@
 import pytest
 
 from stepwise.models import (
+    ConfigVar,
     ExecutorRef,
     FlowMetadata,
     InputBinding,
@@ -12,7 +13,7 @@ from stepwise.models import (
     ForEachSpec,
     ChainConfig,
 )
-from stepwise.schema import generate_schema
+from stepwise.schema import generate_input_schema, generate_schema
 
 
 def _workflow(steps: dict[str, StepDefinition], **meta_kwargs) -> WorkflowDefinition:
@@ -326,3 +327,121 @@ class TestGenerateSchema:
         assert schema["outputs"].count("result") == 1
         assert "score" in schema["outputs"]
         assert "label" in schema["outputs"]
+
+
+class TestGenerateInputSchema:
+    """Tests for generate_input_schema()."""
+
+    def test_basic_config_vars(self):
+        """Config vars map to JSON Schema properties with correct types."""
+        wf = WorkflowDefinition(
+            steps={
+                "step": StepDefinition(
+                    name="step",
+                    outputs=["out"],
+                    executor=ExecutorRef("script", {}),
+                    inputs=[InputBinding("url", "$job", "url")],
+                ),
+            },
+            metadata=FlowMetadata(name="test-flow", description="A test flow"),
+            config_vars=[
+                ConfigVar(name="url", description="Target URL", type="str"),
+                ConfigVar(name="count", description="Number of items", type="number", default=10),
+                ConfigVar(name="verbose", type="bool", default=False),
+            ],
+        )
+
+        schema = generate_input_schema(wf)
+
+        assert schema["type"] == "object"
+        assert schema["title"] == "test-flow"
+        assert schema["description"] == "A test flow"
+        assert schema["properties"]["url"]["type"] == "string"
+        assert schema["properties"]["url"]["description"] == "Target URL"
+        assert schema["properties"]["count"]["type"] == "number"
+        assert schema["properties"]["count"]["default"] == 10
+        assert schema["properties"]["verbose"]["type"] == "boolean"
+        assert schema["properties"]["verbose"]["default"] is False
+        # url is required (no default), count and verbose are not
+        assert schema["required"] == ["url"]
+
+    def test_choice_type_with_options(self):
+        """Choice config vars produce enum in schema."""
+        wf = WorkflowDefinition(
+            config_vars=[
+                ConfigVar(name="env", type="choice", options=["dev", "staging", "prod"]),
+            ],
+        )
+
+        schema = generate_input_schema(wf)
+
+        assert schema["properties"]["env"]["type"] == "string"
+        assert schema["properties"]["env"]["enum"] == ["dev", "staging", "prod"]
+
+    def test_example_field(self):
+        """Example values appear in the schema."""
+        wf = WorkflowDefinition(
+            config_vars=[
+                ConfigVar(name="repo", type="str", example="https://github.com/org/repo"),
+            ],
+        )
+
+        schema = generate_input_schema(wf)
+
+        assert schema["properties"]["repo"]["examples"] == ["https://github.com/org/repo"]
+
+    def test_no_config_vars(self):
+        """Flow with no config vars produces empty properties."""
+        wf = WorkflowDefinition(
+            steps={
+                "step": StepDefinition(
+                    name="step",
+                    outputs=["out"],
+                    executor=ExecutorRef("script", {}),
+                ),
+            },
+        )
+
+        schema = generate_input_schema(wf)
+
+        assert schema["type"] == "object"
+        assert schema["properties"] == {}
+        assert "required" not in schema
+
+    def test_text_type_maps_to_string(self):
+        """Text type maps to JSON Schema string."""
+        wf = WorkflowDefinition(
+            config_vars=[
+                ConfigVar(name="prompt", type="text", description="The prompt"),
+            ],
+        )
+
+        schema = generate_input_schema(wf)
+
+        assert schema["properties"]["prompt"]["type"] == "string"
+
+    def test_all_optional(self):
+        """When all vars have defaults, required array is omitted."""
+        wf = WorkflowDefinition(
+            config_vars=[
+                ConfigVar(name="x", type="str", default="hello", required=False),
+                ConfigVar(name="y", type="number", default=42, required=False),
+            ],
+        )
+
+        schema = generate_input_schema(wf)
+
+        assert "required" not in schema
+
+    def test_sensitive_var_still_included(self):
+        """Sensitive vars are included in the schema (sensitivity is runtime concern)."""
+        wf = WorkflowDefinition(
+            config_vars=[
+                ConfigVar(name="api_key", type="str", sensitive=True),
+            ],
+        )
+
+        schema = generate_input_schema(wf)
+
+        assert "api_key" in schema["properties"]
+        assert schema["required"] == ["api_key"]
