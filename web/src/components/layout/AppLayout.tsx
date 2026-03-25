@@ -79,6 +79,11 @@ export function AppLayout() {
         {/* Engine status */}
         {status && (
           <div className="flex items-center gap-3 text-xs text-zinc-500">
+            {status.version && (
+              <span className="hidden md:inline text-zinc-600 font-mono">
+                v{status.version}
+              </span>
+            )}
             <div className="hidden md:flex items-center gap-1.5">
               <Zap className="w-3 h-3" />
               <span>
