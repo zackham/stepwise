@@ -9,6 +9,14 @@ export function useLocalFlows() {
   });
 }
 
+export function useFlowStats() {
+  return useQuery({
+    queryKey: ["flowStats"],
+    queryFn: api.fetchFlowStats,
+    staleTime: 30000,
+  });
+}
+
 export function useCreateFlow() {
   const queryClient = useQueryClient();
   return useMutation({

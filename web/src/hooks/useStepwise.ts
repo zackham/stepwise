@@ -127,6 +127,7 @@ export function useStepwiseMutations() {
     queryClient.invalidateQueries({ queryKey: ["events"] });
     queryClient.invalidateQueries({ queryKey: ["jobTree"] });
     queryClient.invalidateQueries({ queryKey: ["status"] });
+    queryClient.invalidateQueries({ queryKey: ["flowStats"] });
   };
 
   const createJobMutation = useMutation({
