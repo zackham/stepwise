@@ -611,7 +611,7 @@ def _server_start(args: argparse.Namespace) -> int:
         if str(Path(s["project_path"]).resolve()) != str(project.root.resolve()):
             io.log("warn", f"Another server active: {s['url']} ({s['project_path']})")
 
-    host = args.host or "127.0.0.1"
+    host = args.host or "0.0.0.0"
     port = args.port or 8340
 
     if not args.port and not _port_available(host, port):
@@ -3978,7 +3978,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_server = sub.add_parser("server", help="Manage the Stepwise server")
     p_server.add_argument("action", choices=["start", "stop", "restart", "status", "log"])
     p_server.add_argument("--port", type=int, help="Port (default: 8340)")
-    p_server.add_argument("--host", help="Bind address (default: 127.0.0.1)")
+    p_server.add_argument("--host", help="Bind address (default: 0.0.0.0)")
     p_server.add_argument("--detach", "-d", action="store_true", help="Run in background (default)")
     p_server.add_argument("--no-detach", action="store_true", help="Run in foreground")
     p_server.add_argument("--no-open", action="store_true", help="Don't auto-open browser")
