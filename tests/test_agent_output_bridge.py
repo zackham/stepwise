@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from stepwise.agent import AgentExecutor, MockAgentBackend
+from stepwise.agent import AgentExecutor, MockAgentBackend, _build_agent_env
 from stepwise.executors import ExecutionContext
 from stepwise.models import (
     ExecutorRef,
@@ -44,9 +44,11 @@ def _make_executor(backend=None, output_mode="effect", output_path=None,
 
 def _make_context(step_name="test-step", attempt=1, workspace=None):
     return ExecutionContext(
+        job_id="job-test-123",
         step_name=step_name,
         attempt=attempt,
         workspace_path=workspace or "/tmp/test-workspace",
+        idempotency=f"{step_name}-{attempt}",
     )
 
 
@@ -126,3 +128,57 @@ class TestErrorMessages:
         assert envelope.artifact["output_file_missing"] is True
         assert "_error" in envelope.artifact
         assert "JSONDecodeError" in envelope.artifact["_error"]
+
+
+# ── Step 2a: Env var injection tests ──────────────────────────────────
+
+
+class TestEnvVarInjection:
+    def test_env_has_stepwise_output_file_when_outputs_declared(self):
+        workspace = tempfile.mkdtemp()
+        ctx = _make_context(step_name="analyze", workspace=workspace)
+        env = _build_agent_env(
+            config={"output_fields": ["summary"]},
+            context=ctx,
+            step_io=Path(workspace) / ".stepwise" / "step-io",
+            working_dir=workspace,
+        )
+        assert "STEPWISE_OUTPUT_FILE" in env
+        assert env["STEPWISE_OUTPUT_FILE"].endswith("analyze-output.json")
+        assert Path(env["STEPWISE_OUTPUT_FILE"]).is_absolute()
+
+    def test_env_no_output_file_when_no_outputs(self):
+        workspace = tempfile.mkdtemp()
+        ctx = _make_context(workspace=workspace)
+        env = _build_agent_env(
+            config={},
+            context=ctx,
+            step_io=Path(workspace) / ".stepwise" / "step-io",
+            working_dir=workspace,
+        )
+        assert "STEPWISE_OUTPUT_FILE" not in env
+
+    def test_env_has_step_io_and_attempt(self):
+        workspace = tempfile.mkdtemp()
+        step_io = Path(workspace) / ".stepwise" / "step-io"
+        ctx = _make_context(step_name="my-step", attempt=3, workspace=workspace)
+        env = _build_agent_env(
+            config={},
+            context=ctx,
+            step_io=step_io,
+            working_dir=workspace,
+        )
+        assert env["STEPWISE_STEP_NAME"] == "my-step"
+        assert env["STEPWISE_ATTEMPT"] == "3"
+        assert env["STEPWISE_STEP_IO"] == str(step_io)
+
+    def test_env_output_file_uses_custom_output_path(self):
+        workspace = tempfile.mkdtemp()
+        ctx = _make_context(workspace=workspace)
+        env = _build_agent_env(
+            config={"output_fields": ["x"], "output_path": "custom.json"},
+            context=ctx,
+            step_io=Path(workspace) / ".stepwise" / "step-io",
+            working_dir=workspace,
+        )
+        assert env["STEPWISE_OUTPUT_FILE"].endswith("custom.json")
