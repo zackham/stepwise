@@ -370,7 +370,8 @@ def _build_agent_env(
     Mirrors ScriptExecutor's STEPWISE_* env vars and adds
     STEPWISE_OUTPUT_FILE when the step declares outputs.
     """
-    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("CLAUDECODE", "STEPWISE_OUTPUT_FILE")}
 
     # Stepwise env vars for agent processes (parity with ScriptExecutor)
     env["STEPWISE_STEP_NAME"] = context.step_name
