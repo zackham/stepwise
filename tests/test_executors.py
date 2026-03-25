@@ -235,27 +235,25 @@ class TestScriptExecutorAutoDetect:
 
 
 class TestScriptExecutorEnvNamespace:
-    """Input env var namespacing and system-name protection."""
+    """Input env var namespacing and blocklist rejection."""
 
     def test_prefixed_env_var_set(self):
         executor = ScriptExecutor(command="printenv STEPWISE_INPUT_url")
         result = executor.start({"url": "https://example.com"}, _ctx())
         assert result.envelope.artifact.get("stdout") == "https://example.com"
 
-    def test_bare_env_var_set_during_deprecation(self):
-        executor = ScriptExecutor(command="printenv url")
+    def test_bare_env_var_not_set(self):
+        executor = ScriptExecutor(command="printenv url || echo MISSING")
         result = executor.start({"url": "https://example.com"}, _ctx())
-        assert "https://example.com" in result.envelope.artifact.get("stdout", "")
+        assert result.envelope.artifact.get("stdout") == "MISSING"
 
-    def test_system_path_not_overridden(self):
-        executor = ScriptExecutor(command="which echo")
-        result = executor.start({"PATH": "/nonexistent"}, _ctx())
-        assert not (result.executor_state or {}).get("failed")
-
-    def test_system_path_available_prefixed(self):
-        executor = ScriptExecutor(command="printenv STEPWISE_INPUT_PATH")
-        result = executor.start({"PATH": "/custom"}, _ctx())
-        assert "/custom" in result.envelope.artifact.get("stdout", "")
+    @pytest.mark.parametrize("name", [
+        "LD_PRELOAD", "LD_LIBRARY_PATH", "PYTHONPATH", "PATH", "HOME",
+    ])
+    def test_blocklisted_input_rejected(self, name):
+        executor = ScriptExecutor(command="true")
+        with pytest.raises(ValueError, match="rejected by blocklist"):
+            executor.start({name: "/bad"}, _ctx())
 
 
 # ── ExternalExecutor ─────────────────────────────────────────────────────

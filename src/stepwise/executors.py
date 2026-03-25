@@ -219,17 +219,11 @@ def _is_simple_command(cmd: str) -> bool:
 # ── ScriptExecutor ─────────────────────────────────────────────────────
 
 
-# Env var names that must never be overridden by step inputs.
-_SYSTEM_ENV_BLOCKLIST = frozenset({
-    "PATH", "HOME", "USER", "SHELL", "LANG", "TERM",
-    "LD_PRELOAD", "LD_LIBRARY_PATH",
-    "PYTHONPATH", "PYTHONHOME",
-    "JOB_ENGINE_INPUTS", "JOB_ENGINE_WORKSPACE",
-    "STEPWISE_STEP_IO", "STEPWISE_PROJECT_DIR",
-    "STEPWISE_ATTEMPT", "STEPWISE_FLOW_DIR",
+# Input names that are rejected outright — these could hijack the child
+# process or shadow critical Stepwise env vars if allowed even prefixed.
+_INPUT_NAME_BLOCKLIST = frozenset({
+    "LD_PRELOAD", "LD_LIBRARY_PATH", "PYTHONPATH", "PATH", "HOME",
 })
-
-_bare_env_warned = False
 
 
 class ScriptExecutor(Executor):
@@ -331,9 +325,13 @@ class ScriptExecutor(Executor):
         # M10: Set STEPWISE_FLOW_DIR if flow_dir is available
         if self.flow_dir:
             env["STEPWISE_FLOW_DIR"] = self.flow_dir
-        # Pass inputs as namespaced env vars (STEPWISE_INPUT_ prefix).
-        # Bare names set as deprecated alias except for system-critical names.
-        global _bare_env_warned
+        # Reject blocklisted input names, then pass all inputs as
+        # STEPWISE_INPUT_<name> env vars (no bare aliases).
+        blocked = _INPUT_NAME_BLOCKLIST & inputs.keys()
+        if blocked:
+            raise ValueError(
+                f"Input names rejected by blocklist: {', '.join(sorted(blocked))}"
+            )
         for k, v in inputs.items():
             if v is None:
                 continue
@@ -341,14 +339,6 @@ class ScriptExecutor(Executor):
                 json.dumps(v) if isinstance(v, (dict, list)) else str(v)
             )
             env[f"STEPWISE_INPUT_{k}"] = str_val
-            if k not in _SYSTEM_ENV_BLOCKLIST:
-                env[k] = str_val
-                if not _bare_env_warned:
-                    _logging.getLogger("stepwise.executor").warning(
-                        "Bare input env vars are deprecated. "
-                        "Use $STEPWISE_INPUT_<name> instead."
-                    )
-                    _bare_env_warned = True
         cwd = self.working_dir or workspace
 
         # M10: Resolve script path relative to flow_dir

@@ -263,7 +263,7 @@ Scripts always execute with cwd set to the job workspace directory (not the flow
 - `STEPWISE_PROJECT_DIR` — absolute path to the project root
 - `STEPWISE_FLOW_DIR` — absolute path to the flow directory
 - `PYTHONPATH` — project root is prepended, so scripts can import project modules directly
-- All step inputs are passed as env vars (strings, or JSON-encoded for dicts/lists)
+- All step inputs are passed as `STEPWISE_INPUT_<name>` env vars (strings, or JSON-encoded for dicts/lists). Inputs named `LD_PRELOAD`, `LD_LIBRARY_PATH`, `PYTHONPATH`, `PATH`, or `HOME` are rejected.
 
 For single-file flows, `run:` paths resolve relative to cwd as before.
 

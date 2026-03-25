@@ -309,7 +309,7 @@ steps:
         target: generate
 ```
 
-Optional inputs skip readiness checks for their source dep. In prompts, `None` renders as empty string. In scripts, `None` means the env var is unset. Cycles in the dependency graph are valid if every cycle contains at least one optional edge.
+Optional inputs skip readiness checks for their source dep. In prompts, `None` renders as empty string. In scripts, `None` means the `STEPWISE_INPUT_<name>` env var is unset. Cycles in the dependency graph are valid if every cycle contains at least one optional edge.
 
 Agent step with dynamic flow emission:
 
