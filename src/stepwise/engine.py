@@ -1,3 +1,4 @@
+# test job staging
 """Tick-based workflow engine: readiness, currentness, launching, exit resolution."""
 
 from __future__ import annotations
