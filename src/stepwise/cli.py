@@ -5100,6 +5100,52 @@ def _io(args: argparse.Namespace) -> IOAdapter:
     return getattr(args, "_adapter", create_adapter())
 
 
+def _hoist_global_flags(argv: list[str]) -> list[str]:
+    """Move global flags (--server URL, --standalone) from after the subcommand to before it.
+
+    argparse only recognizes top-level flags before the subcommand.
+    Users naturally write 'stepwise jobs --server URL', so we relocate
+    these flags to the front so argparse can parse them.
+    """
+    # Flags that take a value argument
+    VALUE_FLAGS = {"--server", "--project-dir"}
+    # Flags that are boolean (no value)
+    BOOL_FLAGS = {"--standalone"}
+
+    hoisted: list[str] = []
+    rest: list[str] = []
+    i = 0
+    found_subcommand = False
+    while i < len(argv):
+        arg = argv[i]
+        if not found_subcommand and not arg.startswith("-"):
+            found_subcommand = True
+        if found_subcommand and arg in VALUE_FLAGS:
+            if i + 1 < len(argv):
+                hoisted.extend([arg, argv[i + 1]])
+                i += 2
+                continue
+        elif found_subcommand and arg in BOOL_FLAGS:
+            hoisted.append(arg)
+            i += 1
+            continue
+        rest.append(arg)
+        i += 1
+    # Insert hoisted flags before the first positional (subcommand)
+    if hoisted:
+        # Find insertion point: before the first non-flag token in rest
+        insert_at = 0
+        for j, tok in enumerate(rest):
+            if not tok.startswith("-"):
+                insert_at = j
+                break
+            # skip value for flags that take one
+            if tok in VALUE_FLAGS:
+                insert_at = j + 2
+        return rest[:insert_at] + hoisted + rest[insert_at:]
+    return rest
+
+
 def main(argv: list[str] | None = None) -> int:
     # Intercept "help" before argparse (conflicts with built-in -h/--help)
     raw = argv if argv is not None else sys.argv[1:]
@@ -5118,8 +5164,11 @@ def main(argv: list[str] | None = None) -> int:
                 args.project_dir = raw[i + 1]
         return cmd_help(args)
 
+    # Hoist global flags that may appear after the subcommand
+    raw = _hoist_global_flags(raw)
+
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw)
 
     # Create adapter early, attach to args for all commands
     args._adapter = create_adapter(
