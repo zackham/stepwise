@@ -229,6 +229,76 @@ class TestOutputParsing:
         assert result.envelope.executor_meta["parse_method"] == "json_content"
 
 
+# ── JSON Escape Sequence Unescaping ──────────────────────────────────
+
+
+class TestJsonUnescaping:
+    """LLMs sometimes double-escape newlines in JSON output (\\\\n instead of \\n).
+
+    After json.loads the values contain literal two-char \\n sequences instead
+    of real newline characters.  The executor should unescape these so
+    downstream consumers get clean markdown/text.
+    """
+
+    def test_tool_call_newlines_unescaped(self):
+        client = MockLLMClient(tool_calls=[
+            {"name": "step_output", "arguments": {
+                "summary": "# Heading\\n\\nParagraph one.\\n- bullet",
+                "score": "0.9",
+            }}
+        ])
+        ex = _executor(client, output_fields=["summary", "score"])
+        result = ex.start({}, _ctx())
+
+        assert result.envelope.artifact["summary"] == "# Heading\n\nParagraph one.\n- bullet"
+        assert result.envelope.artifact["score"] == "0.9"
+
+    def test_json_content_newlines_unescaped(self):
+        client = MockLLMClient(
+            content='{"result": "line one\\\\nline two\\\\n\\\\nline four"}'
+        )
+        ex = _executor(client, output_fields=["result"])
+        result = ex.start({}, _ctx())
+
+        assert result.envelope.artifact["result"] == "line one\nline two\n\nline four"
+
+    def test_single_field_raw_content_not_mangled(self):
+        """Raw text content (single-field shortcut) should NOT be unescaped."""
+        client = MockLLMClient(content="Show a literal backslash-n: \\n in text")
+        ex = _executor(client, output_fields=["response"])
+        result = ex.start({}, _ctx())
+
+        # Raw content preserved as-is
+        assert result.envelope.artifact["response"] == "Show a literal backslash-n: \\n in text"
+        assert result.envelope.executor_meta["parse_method"] == "single_field"
+
+    def test_tabs_and_quotes_unescaped(self):
+        client = MockLLMClient(tool_calls=[
+            {"name": "step_output", "arguments": {
+                "data": 'col1\\tcol2\\nval1\\tval2\\nShe said \\"hello\\"',
+            }}
+        ])
+        ex = _executor(client, output_fields=["data"])
+        result = ex.start({}, _ctx())
+
+        assert "col1\tcol2\nval1\tval2" in result.envelope.artifact["data"]
+        assert 'She said "hello"' in result.envelope.artifact["data"]
+
+    def test_no_backslashes_passes_through(self):
+        """Values without backslashes are not modified."""
+        client = MockLLMClient(tool_calls=[
+            {"name": "step_output", "arguments": {
+                "label": "positive",
+                "score": "0.95",
+            }}
+        ])
+        ex = _executor(client, output_fields=["label", "score"])
+        result = ex.start({}, _ctx())
+
+        assert result.envelope.artifact["label"] == "positive"
+        assert result.envelope.artifact["score"] == "0.95"
+
+
 # ── Missing Output Fields ────────────────────────────────────────────
 
 
