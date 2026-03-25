@@ -769,6 +769,66 @@ class SQLiteStore:
             results.append((row["rowid"], event, metadata))
         return results
 
+    # ── Cross-Job Data Resolution ────────────────────────────────────────
+
+    def get_job_output_field(self, job_id: str, field_path: str) -> tuple[Any, bool]:
+        """Resolve a field from a completed job's outputs.
+
+        Searches terminal steps (no downstream dependents) first, then all
+        completed runs. Supports nested field access via dot-path.
+
+        Returns (value, found).
+        """
+        job = self.load_job(job_id)
+        completed = self.completed_runs(job_id)
+        if not completed:
+            return None, False
+
+        # Identify terminal steps: steps with no downstream deps in the workflow
+        all_dep_targets = set()
+        for step_def in job.workflow.steps.values():
+            for inp in step_def.inputs:
+                if inp.source_step and inp.source_step != "$job":
+                    all_dep_targets.add(inp.source_step)
+        terminal_steps = {name for name in job.workflow.steps if name not in all_dep_targets}
+
+        def _extract_field(artifact: dict, path: str) -> tuple[Any, bool]:
+            """Navigate dot-path into artifact. Returns (value, found)."""
+            top_key = path.split(".")[0] if "." in path else path
+            value = artifact.get(top_key)
+            if value is not None or top_key in artifact:
+                if "." in path:
+                    parts = path.split(".")
+                    value = artifact
+                    for part in parts:
+                        if isinstance(value, dict):
+                            if part not in value:
+                                return None, False
+                            value = value[part]
+                        else:
+                            return None, False
+                return value, True
+            return None, False
+
+        # Search terminal steps first (latest completed_at wins)
+        terminal_runs = [r for r in completed if r.step_name in terminal_steps]
+        terminal_runs.sort(key=lambda r: r.completed_at or r.started_at, reverse=True)
+        for run in terminal_runs:
+            if run.result and run.result.artifact:
+                val, found = _extract_field(run.result.artifact, field_path)
+                if found:
+                    return val, True
+
+        # Fallback: scan all completed runs (latest first)
+        all_runs = sorted(completed, key=lambda r: r.completed_at or r.started_at, reverse=True)
+        for run in all_runs:
+            if run.result and run.result.artifact:
+                val, found = _extract_field(run.result.artifact, field_path)
+                if found:
+                    return val, True
+
+        return None, False
+
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
     def close(self) -> None:

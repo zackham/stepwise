@@ -4336,7 +4336,29 @@ def _cmd_job_create(args) -> int:
             created_at=now,
             updated_at=now,
         )
+
+        # Validate $job_ref inputs and auto-add dependencies
+        ref_job_ids = []
+        for key, value in job.inputs.items():
+            if isinstance(value, dict) and "$job_ref" in value:
+                ref_id = value["$job_ref"]
+                try:
+                    store.load_job(ref_id)
+                except KeyError:
+                    io.log("error", f"Referenced job not found: {ref_id} (from input '{key}')")
+                    return EXIT_USAGE_ERROR
+                ref_job_ids.append(ref_id)
+
         store.save_job(job)
+
+        # Auto-add dependency edges for referenced jobs
+        for ref_id in ref_job_ids:
+            if store.would_create_cycle(job.id, ref_id):
+                store.delete_job(job.id)
+                io.log("error", f"Adding dependency on {ref_id} would create a cycle")
+                return EXIT_USAGE_ERROR
+            store.add_job_dependency(job.id, ref_id)
+
         if args.output == "json":
             print(json.dumps({"id": job.id, "status": "staged",
                               "job_group": job.job_group}))
