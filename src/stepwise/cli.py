@@ -26,6 +26,7 @@ Usage:
     stepwise logs <job-id>                 Show full event history
     stepwise output <job-id> [step] [--step] [--run] Retrieve job/step outputs
     stepwise fulfill <run-id> '<json>'     Satisfy a suspended external step (or --stdin, --wait)
+    stepwise help "question"               Ask a question about Stepwise
     stepwise agent-help [--update <file>]  Generate agent instructions
     stepwise extensions [list] [--refresh] List discovered extensions
     stepwise login                          Log in to the Stepwise registry
@@ -3518,6 +3519,112 @@ def cmd_agent_help(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
+def cmd_help(args: argparse.Namespace) -> int:
+    """Interactive help assistant powered by LLM."""
+    import os
+
+    import httpx
+
+    question = " ".join(args.question) if args.question else ""
+    if not question.strip():
+        print("Usage: stepwise help \"your question here\"")
+        print("Example: stepwise help \"how do I create a flow?\"")
+        return EXIT_USAGE_ERROR
+
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key:
+        # Try loading from stepwise config
+        from stepwise.config import load_config
+
+        cfg = load_config()
+        api_key = cfg.openrouter_api_key or ""
+
+    if not api_key:
+        print("Error: No OpenRouter API key found.", file=sys.stderr)
+        print("Set OPENROUTER_API_KEY or run: stepwise config set openrouter_api_key <key>", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+
+    # Gather context
+    context_parts: list[str] = []
+
+    # 1. Docs: quickstart + concepts (first 2000 chars each)
+    from stepwise.project import get_docs_dir
+
+    docs_dir = get_docs_dir()
+    if docs_dir:
+        for name in ("quickstart", "concepts"):
+            doc_path = docs_dir / f"{name}.md"
+            if doc_path.exists():
+                text = doc_path.read_text()[:2000]
+                context_parts.append(f"## {name}.md\n{text}")
+
+    # 2. Agent-help output (flow catalog)
+    try:
+        from stepwise.agent_help import generate_agent_help
+
+        project_dir = Path(args.project_dir) if args.project_dir else Path.cwd()
+        agent_help = generate_agent_help(project_dir, fmt="compact")
+        context_parts.append(f"## Agent Instructions\n{agent_help}")
+    except Exception:
+        pass
+
+    # 3. List of available flows
+    try:
+        from stepwise.flow_resolution import discover_flows
+
+        project_dir = Path(args.project_dir) if args.project_dir else Path.cwd()
+        flows = discover_flows(project_dir)
+        if flows:
+            flow_names = [f.name for f in flows]
+            context_parts.append(f"## Available Flows\n{', '.join(flow_names)}")
+    except Exception:
+        pass
+
+    context = "\n\n".join(context_parts)
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a helpful assistant for Stepwise, a portable workflow orchestration tool "
+                "for agents and humans. Answer the user's question using the provided context. "
+                "Be concise and practical. Include CLI examples when relevant."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"Context:\n{context}\n\nQuestion: {question}",
+        },
+    ]
+
+    try:
+        resp = httpx.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "anthropic/claude-sonnet-4-6",
+                "messages": messages,
+                "temperature": 0.0,
+                "max_tokens": 2048,
+            },
+            timeout=60.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        answer = data["choices"][0]["message"]["content"]
+        print(answer)
+        return EXIT_SUCCESS
+    except httpx.HTTPStatusError as exc:
+        print(f"Error: OpenRouter API returned {exc.response.status_code}", file=sys.stderr)
+        return EXIT_JOB_FAILED
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return EXIT_JOB_FAILED
+
+
 def _detect_install_method() -> str:
     """Detect how stepwise was installed: 'uv', 'pipx', or 'pip'."""
     import shutil
@@ -4816,6 +4923,23 @@ def _io(args: argparse.Namespace) -> IOAdapter:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Intercept "help" before argparse (conflicts with built-in -h/--help)
+    raw = argv if argv is not None else sys.argv[1:]
+    # Find the first positional arg (skip --flags)
+    positionals = [a for a in raw if not a.startswith("-")]
+    if positionals and positionals[0] == "help":
+        # Build a minimal namespace with the fields cmd_help needs
+        question_words = raw[raw.index("help") + 1:]
+        args = argparse.Namespace(
+            question=question_words,
+            project_dir=None,
+        )
+        # Check for --project-dir before "help"
+        for i, a in enumerate(raw):
+            if a == "--project-dir" and i + 1 < len(raw):
+                args.project_dir = raw[i + 1]
+        return cmd_help(args)
+
     parser = build_parser()
     args = parser.parse_args(argv)
 
