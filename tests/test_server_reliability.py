@@ -13,6 +13,7 @@ from stepwise.engine import AsyncEngine, MAX_ARTIFACT_BYTES
 from stepwise.events import JOB_QUEUED
 from stepwise.executors import ExecutorRegistry
 from stepwise.models import (
+    ExitRule,
     ExecutorRef,
     HandoffEnvelope,
     InputBinding,
@@ -418,6 +419,114 @@ class TestH8ConcurrentJobLimit:
         result = store.pending_jobs()
         assert len(result) == 3
         assert [j.id for j in result] == pending_ids
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Pause releases concurrency slot for queued jobs
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestPauseReleasesSlot:
+    """Pausing a job (API or escalate) should free a concurrency slot for queued jobs."""
+
+    def test_pause_job_starts_queued(self):
+        """When a running job is paused via API, a pending queued job starts."""
+        store = SQLiteStore(":memory:")
+        registry = _make_registry()
+
+        import threading
+        gate = threading.Event()
+
+        def blocking(inputs):
+            gate.wait(timeout=5)
+            return {"result": "ok"}
+
+        register_step_fn("block", blocking)
+        register_step_fn("echo", lambda inputs: {"result": "ok"})
+
+        engine = AsyncEngine(store=store, registry=registry, max_concurrent_jobs=1)
+
+        wf_block = _simple_workflow(fn_name="block")
+        wf_fast = _simple_workflow(fn_name="echo")
+
+        job1 = engine.create_job(objective="blocking-job", workflow=wf_block)
+        job2 = engine.create_job(objective="queued-job", workflow=wf_fast)
+
+        async def run_test():
+            engine_task = asyncio.create_task(engine.run())
+            try:
+                engine.start_job(job1.id)
+                engine.start_job(job2.id)
+
+                # job2 should be queued
+                await asyncio.sleep(0.1)
+                assert store.load_job(job2.id).status == JobStatus.PENDING
+
+                # Pause job1 — should release the slot
+                engine.pause_job(job1.id)
+                assert store.load_job(job1.id).status == JobStatus.PAUSED
+
+                # job2 should now start and complete
+                await asyncio.wait_for(engine.wait_for_job(job2.id), timeout=10)
+                assert store.load_job(job2.id).status == JobStatus.COMPLETED
+            finally:
+                gate.set()
+                engine_task.cancel()
+                try:
+                    await engine_task
+                except asyncio.CancelledError:
+                    pass
+
+        asyncio.run(run_test())
+
+    def test_escalate_starts_queued(self):
+        """When a step escalates (pausing the job), a pending queued job starts."""
+        store = SQLiteStore(":memory:")
+        registry = _make_registry()
+
+        register_step_fn("will_escalate", lambda inputs: {"status": "stuck"})
+        register_step_fn("echo", lambda inputs: {"result": "ok"})
+
+        engine = AsyncEngine(store=store, registry=registry, max_concurrent_jobs=1)
+
+        wf_escalate = WorkflowDefinition(steps={
+            "step-a": StepDefinition(
+                name="step-a",
+                executor=ExecutorRef(type="callable", config={"fn_name": "will_escalate"}),
+                outputs=["status"],
+                exit_rules=[
+                    ExitRule("escalate-always", "expression", {
+                        "condition": "True",
+                        "action": "escalate",
+                    }, priority=10),
+                ],
+            ),
+        })
+        wf_fast = _simple_workflow(fn_name="echo")
+
+        job1 = engine.create_job(objective="escalate-job", workflow=wf_escalate)
+        job2 = engine.create_job(objective="queued-job", workflow=wf_fast)
+
+        async def run_test():
+            engine_task = asyncio.create_task(engine.run())
+            try:
+                engine.start_job(job1.id)
+                engine.start_job(job2.id)
+
+                # job1 should escalate → PAUSED, freeing the slot for job2
+                await asyncio.wait_for(engine.wait_for_job(job1.id), timeout=10)
+                assert store.load_job(job1.id).status == JobStatus.PAUSED
+
+                await asyncio.wait_for(engine.wait_for_job(job2.id), timeout=10)
+                assert store.load_job(job2.id).status == JobStatus.COMPLETED
+            finally:
+                engine_task.cancel()
+                try:
+                    await engine_task
+                except asyncio.CancelledError:
+                    pass
+
+        asyncio.run(run_test())
 
 
 # ══════════════════════════════════════════════════════════════════════
