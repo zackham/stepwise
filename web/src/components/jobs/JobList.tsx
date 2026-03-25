@@ -156,9 +156,32 @@ export function JobList({ selectedJobId, onSelectJob }: JobListProps) {
               Loading...
             </div>
           ) : filteredJobs.length === 0 ? (
-            <div className="text-zinc-500 text-sm text-center py-8">
-              {hasActiveFilter ? "No matching jobs" : "No jobs found"}
-            </div>
+            hasActiveFilter ? (
+              <div className="text-zinc-500 text-sm text-center py-8">
+                No matching jobs
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-12 px-4 text-center space-y-4">
+                <img src="/logo.png" alt="Stepwise" className="w-10 h-10 opacity-60" />
+                <div className="space-y-1">
+                  <p className="text-sm font-medium text-zinc-400">No jobs yet</p>
+                  <p className="text-xs text-zinc-600">
+                    Run your first workflow from the terminal:
+                  </p>
+                </div>
+                <code className="text-[11px] bg-zinc-800/80 text-zinc-400 px-3 py-1.5 rounded-md border border-zinc-700/50">
+                  stepwise run &lt;flow&gt; --watch
+                </code>
+                <a
+                  href="https://github.com/zackham/stepwise#readme"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[11px] text-zinc-600 hover:text-zinc-400 underline underline-offset-2 transition-colors"
+                >
+                  View docs
+                </a>
+              </div>
+            )
           ) : (
             filteredJobs.map((job) => (
               <button
