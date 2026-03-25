@@ -1293,6 +1293,25 @@ class AgentExecutor(Executor):
             # like "explore-output.json". Match when preceded by whitespace, backtick, or quote.
             prompt = re.sub(r'(?<=[\s`"\'])output\.json(?=[\s`"\',)])', step_output_file, prompt)
 
+        # Append structured output instructions when step declares outputs and
+        # mode is "file" (whether explicit or auto-promoted).
+        output_fields = self.config.get("output_fields", [])
+        if output_fields and self.output_mode == "file":
+            output_file = self.output_path or f"{context.step_name}-output.json"
+            field_list = ", ".join(f'"{f}"' for f in output_fields)
+            example = {f: f"<{f} value>" for f in output_fields}
+            prompt += (
+                f"\n\n<stepwise-output>\n"
+                f"When you have completed your task, write your structured output "
+                f"as a JSON file to: {output_file}\n\n"
+                f"Required JSON keys: {field_list}\n"
+                f"Example:\n```json\n"
+                f"{json.dumps(example, indent=2)}\n```\n"
+                f"\nThe file path is also available as $STEPWISE_OUTPUT_FILE.\n"
+                f"Write this file as one of your final actions.\n"
+                f"</stepwise-output>"
+            )
+
         return prompt
 
     def _extract_output(self, state: dict, output_mode: str,
