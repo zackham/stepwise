@@ -34,6 +34,7 @@ from stepwise.models import (
     _now,
 )
 from stepwise.store import SQLiteStore
+from stepwise.events import JOB_AWAITING_APPROVAL
 from stepwise.hooks import build_event_envelope
 
 
@@ -821,7 +822,10 @@ def create_job(req: CreateJobRequest):
             metadata=req.metadata,
         )
         needs_save = False
-        if req.status == "staged":
+        if req.status == "awaiting_approval":
+            job.status = JobStatus.AWAITING_APPROVAL
+            needs_save = True
+        elif req.status == "staged":
             job.status = JobStatus.STAGED
             needs_save = True
         if req.job_group:
@@ -833,6 +837,8 @@ def create_job(req: CreateJobRequest):
             needs_save = True
         if needs_save:
             engine.store.save_job(job)
+        if req.status == "awaiting_approval":
+            engine._emit(job.id, JOB_AWAITING_APPROVAL)
         _notify_change(job.id)
         return _serialize_job(job)
     except ValueError as e:
@@ -1016,6 +1022,20 @@ def run_staged_job(job_id: str):
     return {"status": "pending", "job_id": job_id}
 
 
+@app.post("/api/jobs/{job_id}/approve")
+def approve_job_route(job_id: str):
+    """Approve a job awaiting approval → PENDING."""
+    engine = _get_engine()
+    try:
+        engine.approve_job(job_id)
+        _notify_change(job_id)
+        return {"status": "approved", "job_id": job_id}
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.post("/api/jobs/run-group")
 def run_group(req: RunGroupRequest):
     """Transition all staged jobs in a group to PENDING."""
@@ -1039,8 +1059,8 @@ def add_dependency(job_id: str, req: AddDepRequest):
         engine.store.load_job(req.depends_on_job_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Dependency target not found: {req.depends_on_job_id}")
-    if job.status != JobStatus.STAGED:
-        raise HTTPException(status_code=400, detail=f"Can only add deps to STAGED jobs (job is {job.status.value})")
+    if job.status not in (JobStatus.STAGED, JobStatus.AWAITING_APPROVAL):
+        raise HTTPException(status_code=400, detail=f"Can only add deps to STAGED/AWAITING_APPROVAL jobs (job is {job.status.value})")
     if engine.store.would_create_cycle(job_id, req.depends_on_job_id):
         raise HTTPException(status_code=409, detail="Cannot add dependency: would create a cycle")
     engine.store.add_job_dependency(job_id, req.depends_on_job_id)
@@ -1056,8 +1076,8 @@ def remove_dependency(job_id: str, dep_job_id: str):
         job = engine.store.load_job(job_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
-    if job.status != JobStatus.STAGED:
-        raise HTTPException(status_code=400, detail=f"Can only remove deps from STAGED jobs (job is {job.status.value})")
+    if job.status not in (JobStatus.STAGED, JobStatus.AWAITING_APPROVAL):
+        raise HTTPException(status_code=400, detail=f"Can only remove deps from STAGED/AWAITING_APPROVAL jobs (job is {job.status.value})")
     engine.store.remove_job_dependency(job_id, dep_job_id)
     _notify_change(job_id)
     return {"job_id": job_id, "depends_on": dep_job_id, "action": "removed"}

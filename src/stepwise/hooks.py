@@ -8,6 +8,8 @@ Events:
   - step-complete: A step has completed successfully
   - complete: A job has completed successfully
   - fail: A job or step has failed
+  - approval-needed: A job is awaiting human approval
+  - approved: A job has been approved and is now pending
 """
 
 from __future__ import annotations
@@ -56,6 +58,8 @@ EVENT_MAP = {
     "job.completed": "complete",
     "job.failed": "fail",
     "step.failed": "fail",
+    "job.awaiting_approval": "approval-needed",
+    "job.approved": "approved",
 }
 
 
@@ -183,6 +187,10 @@ def fire_hook_for_event(
         payload["fulfill_command"] = (
             f"stepwise fulfill {event_data['run_id']} '<json>'"
         )
+
+    # Add approve_command for approval-needed events
+    if hook_name == "approval-needed":
+        payload["approve_command"] = f"stepwise job approve {job_id}"
 
     return fire_hook(hook_name, payload, project_dir, envelope=envelope)
 
