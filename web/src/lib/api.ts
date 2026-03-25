@@ -243,6 +243,18 @@ export function deleteTemplate(name: string): Promise<{ status: string }> {
   });
 }
 
+// ── Flow Stats ──────────────────────────────────────────────────────
+
+export interface FlowStats {
+  flow_dir: string;
+  job_count: number;
+  last_run_at: string | null;
+}
+
+export function fetchFlowStats(): Promise<FlowStats[]> {
+  return request<FlowStats[]>("/flow-stats");
+}
+
 // ── Editor / Local Flows ─────────────────────────────────────────────
 
 export function fetchLocalFlows(): Promise<LocalFlow[]> {

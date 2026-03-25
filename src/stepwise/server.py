@@ -1775,6 +1775,31 @@ def _build_flow_graph(yaml_content: str) -> dict:
     return {"nodes": nodes, "edges": edges}
 
 
+@app.get("/api/flow-stats")
+def get_flow_stats():
+    """Return job_count and last_run_at per flow source_dir."""
+    engine = _get_engine()
+    rows = engine.store._conn.execute(
+        """SELECT json_extract(workflow, '$.source_dir') as source_dir,
+                  COUNT(*) as job_count,
+                  MAX(updated_at) as last_run_at
+           FROM jobs
+           WHERE json_extract(workflow, '$.source_dir') IS NOT NULL
+           GROUP BY source_dir"""
+    ).fetchall()
+    result = []
+    project_prefix = str(_project_dir) + "/"
+    for row in rows:
+        sd = row["source_dir"]
+        rel = sd[len(project_prefix):] if sd.startswith(project_prefix) else sd
+        result.append({
+            "flow_dir": rel,
+            "job_count": row["job_count"],
+            "last_run_at": row["last_run_at"],
+        })
+    return result
+
+
 @app.get("/api/local-flows")
 def list_local_flows():
     """List all flows discoverable in the project directory."""

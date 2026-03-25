@@ -12,6 +12,7 @@ import {
   useRegistryFlow,
   useInstallFlow,
   usePatchFlowMetadata,
+  useFlowStats,
 } from "@/hooks/useEditor";
 import { useStepwiseMutations } from "@/hooks/useStepwise";
 import {
@@ -24,6 +25,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import { cn } from "@/lib/utils";
 import type { LocalFlow, RegistryFlow } from "@/lib/types";
@@ -31,17 +39,36 @@ import type { LocalFlow, RegistryFlow } from "@/lib/types";
 const EMPTY_RUNS: never[] = [];
 
 type Tab = "local" | "registry";
+type SortBy = "name" | "most-used" | "recent";
+
+function flowDirKey(flowPath: string): string {
+  const lastSlash = flowPath.lastIndexOf("/");
+  return lastSlash >= 0 ? flowPath.substring(0, lastSlash) : flowPath;
+}
+
+function formatRelativeTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
 
 export function FlowsPage() {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const [tab, setTab] = useState<Tab>("local");
   const [filter, setFilter] = useState("");
+  const [sortBy, setSortBy] = useState<SortBy>("name");
   const [showNewFlowInput, setShowNewFlowInput] = useState(false);
   const [newFlowName, setNewFlowName] = useState("");
 
   // Data
   const { data: flows = [] } = useLocalFlows();
+  const { data: flowStats = [] } = useFlowStats();
   const createFlowMutation = useCreateFlow();
   const deleteFlowMutation = useDeleteFlow();
   const mutations = useStepwiseMutations();
@@ -75,13 +102,37 @@ export function FlowsPage() {
     });
   }, []);
 
-  const filtered = useMemo(
-    () =>
-      filter
-        ? flows.filter((f) => f.name.toLowerCase().includes(filter.toLowerCase()))
-        : flows,
-    [flows, filter]
+  const statsMap = useMemo(
+    () => new Map(flowStats.map((s) => [s.flow_dir, s])),
+    [flowStats]
   );
+
+  const filtered = useMemo(() => {
+    const result = filter
+      ? flows.filter((f) => f.name.toLowerCase().includes(filter.toLowerCase()))
+      : [...flows];
+
+    result.sort((a, b) => {
+      if (sortBy === "name") {
+        return a.name.localeCompare(b.name);
+      }
+      const sa = statsMap.get(flowDirKey(a.path));
+      const sb = statsMap.get(flowDirKey(b.path));
+      if (sortBy === "most-used") {
+        const diff = (sb?.job_count ?? 0) - (sa?.job_count ?? 0);
+        return diff !== 0 ? diff : a.name.localeCompare(b.name);
+      }
+      // "recent"
+      const ta = sa?.last_run_at ?? "";
+      const tb = sb?.last_run_at ?? "";
+      if (ta === tb) return a.name.localeCompare(b.name);
+      if (!ta) return 1;
+      if (!tb) return -1;
+      return tb.localeCompare(ta);
+    });
+
+    return result;
+  }, [flows, filter, sortBy, statsMap]);
 
   const handleEdit = useCallback(
     (flow: LocalFlow) => {
@@ -242,8 +293,8 @@ export function FlowsPage() {
         <div className="flex-1 flex min-h-0">
           {/* Flow list */}
           <div className="w-full md:w-72 md:border-r border-border md:shrink-0 flex flex-col">
-            <div className="p-3 border-b border-border">
-              <div className="relative">
+            <div className="p-3 border-b border-border flex gap-2">
+              <div className="relative flex-1">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" />
                 <Input
                   value={filter}
@@ -252,6 +303,16 @@ export function FlowsPage() {
                   className="pl-8 h-8 text-sm bg-zinc-900 border-zinc-700"
                 />
               </div>
+              <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortBy)}>
+                <SelectTrigger className="w-28 h-8 text-xs bg-zinc-900 border-zinc-700">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="name">Name</SelectItem>
+                  <SelectItem value="most-used">Most Used</SelectItem>
+                  <SelectItem value="recent">Recent</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="flex-1 overflow-y-auto py-1">
               {filtered.length === 0 ? (
@@ -315,7 +376,13 @@ export function FlowsPage() {
                       )}
                     </div>
                     <span className="ml-auto text-xs text-zinc-600 shrink-0">
-                      {flow.steps_count}
+                      {sortBy === "most-used"
+                        ? `${statsMap.get(flowDirKey(flow.path))?.job_count ?? 0} jobs`
+                        : sortBy === "recent"
+                          ? statsMap.get(flowDirKey(flow.path))?.last_run_at
+                            ? formatRelativeTime(statsMap.get(flowDirKey(flow.path))!.last_run_at!)
+                            : "never"
+                          : flow.steps_count}
                     </span>
                   </button>
                 ))
