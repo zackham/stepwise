@@ -1619,10 +1619,10 @@ def cmd_config(args: argparse.Namespace) -> int:
 
 
 def cmd_check(args: argparse.Namespace) -> int:
-    """Verify model resolution for every LLM step in a flow."""
-    from stepwise.config import load_config_with_sources, label_model_id
+    """Validate flow structure and model resolution."""
+    from stepwise.config import load_config_with_sources
     from stepwise.flow_resolution import FlowResolutionError, resolve_flow
-    import yaml
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
 
     project_dir = Path(args.project_dir).resolve() if args.project_dir else Path.cwd().resolve()
 
@@ -1632,34 +1632,59 @@ def cmd_check(args: argparse.Namespace) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return EXIT_USAGE_ERROR
 
-    with open(flow_path) as f:
-        data = yaml.safe_load(f)
+    io = _io(args)
 
-    steps = data.get("steps", {})
+    # Phase 1: Structural validation
+    try:
+        wf = load_workflow_yaml(str(flow_path))
+        errors = wf.validate()
+        if errors:
+            io.log("error", f"Validation failed: {flow_path.name}")
+            for err in errors:
+                io.log("info", f"  ✗ {err}")
+            return EXIT_JOB_FAILED
+
+        step_count = len(wf.steps)
+        loop_count = sum(
+            1 for s in wf.steps.values()
+            for r in s.exit_rules
+            if r.config.get("action") == "loop"
+        )
+        parts = [f"{step_count} steps"]
+        if loop_count:
+            parts.append(f"{loop_count} loops")
+        io.log("success", f"Structure OK ({', '.join(parts)})")
+
+        flow_warnings = wf.warnings()
+        for w in flow_warnings:
+            if w.startswith("\u2139"):
+                io.log("info", f"  {w}")
+            else:
+                io.log("warn", f"  {w}")
+    except YAMLLoadError as e:
+        io.log("error", f"{flow_path.name}:")
+        for err in e.errors:
+            io.log("info", f"  - {err}")
+        return EXIT_JOB_FAILED
+    except Exception as e:
+        io.log("error", f"{flow_path}: {e}")
+        return EXIT_JOB_FAILED
+
+    # Phase 2: Model resolution
     cws = load_config_with_sources(project_dir)
     cfg = cws.config
 
-    # Build label source map from proper config hierarchy
     all_labels = dict(cfg.labels)
     label_sources: dict[str, str] = {
         li.name: li.source for li in cws.label_info
     }
 
-    io = _io(args)
-    io.log("info", f"Flow: {flow_path.name}")
-
     rows = []
-    providers_needed: set[str] = set()
-    for step_name, step_def in steps.items():
-        if not isinstance(step_def, dict):
-            continue
-        executor = step_def.get("executor", {})
-        exec_type = executor.get("type") if isinstance(executor, dict) else executor
-        if exec_type != "llm":
+    for step_name, step_def in wf.steps.items():
+        if step_def.executor.type not in ("llm", "agent"):
             continue
 
-        config_block = executor.get("config", {}) if isinstance(executor, dict) else step_def.get("config", {})
-        model_ref = config_block.get("model") or step_def.get("model") or cfg.default_model or "balanced"
+        model_ref = step_def.executor.config.get("model") or cfg.default_model or "balanced"
         resolved = cfg.resolve_model(model_ref)
 
         if model_ref in all_labels:
@@ -1668,22 +1693,19 @@ def cmd_check(args: argparse.Namespace) -> int:
         else:
             rows.append([step_name, resolved, resolved, "pinned"])
 
-        if "/" in resolved:
-            providers_needed.add(resolved.split("/")[0])
-
     if rows:
         io.table(["STEP", "MODEL", "RESOLVED", "SOURCE"], rows)
 
     # Check API keys
     key_parts = []
     if cfg.openrouter_api_key:
-        key_parts.append("openrouter ✓")
+        key_parts.append("openrouter \u2713")
     else:
-        key_parts.append("openrouter ✗")
+        key_parts.append("openrouter \u2717")
     if cfg.anthropic_api_key:
-        key_parts.append("anthropic ✓")
+        key_parts.append("anthropic \u2713")
     else:
-        key_parts.append("anthropic ✗")
+        key_parts.append("anthropic \u2717")
     io.log("info", f"Provider keys: {' | '.join(key_parts)}")
 
     return EXIT_SUCCESS
@@ -4057,7 +4079,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Set job metadata (dot notation: sys.origin=cli, app.project=foo)")
 
     # check
-    p_check = sub.add_parser("check", help="Verify model resolution for a flow")
+    p_check = sub.add_parser("check", help="Validate flow structure and model resolution")
     p_check.add_argument("flow", help="Flow name or path to .flow.yaml file")
 
     # validate

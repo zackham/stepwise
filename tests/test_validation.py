@@ -598,3 +598,218 @@ class TestPrematureLaunchWarning:
         warns = self._loop_warns(wf.warnings())
         assert len(warns) == 1
         assert "publish" in warns[0]
+
+
+class TestCycleDetectionEdgeDetail:
+    """Tests for enhanced cycle detection with edge-level reporting."""
+
+    def test_cycle_detected_with_edges(self):
+        """Cycle error message includes specific edges with arrow notation."""
+        wf = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a",
+                inputs=[InputBinding("x", "c", "out")],
+                outputs=["out"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+            ),
+            "b": StepDefinition(
+                name="b",
+                inputs=[InputBinding("x", "a", "out")],
+                outputs=["out"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+            ),
+            "c": StepDefinition(
+                name="c",
+                inputs=[InputBinding("x", "b", "out")],
+                outputs=["out"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+            ),
+        })
+        errors = wf.validate()
+        assert len(errors) == 1
+        assert "\u2192" in errors[0]  # edge-level detail with arrows
+        assert "a" in errors[0] and "b" in errors[0] and "c" in errors[0]
+        assert "optional" in errors[0].lower()  # actionable suggestion
+
+    def test_cycle_shows_input_name(self):
+        """Cycle edges include the input binding name."""
+        wf = WorkflowDefinition(steps={
+            "x": StepDefinition(
+                name="x",
+                inputs=[InputBinding("data", "y", "result")],
+                outputs=["result"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+            ),
+            "y": StepDefinition(
+                name="y",
+                inputs=[InputBinding("data", "x", "result")],
+                outputs=["result"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+            ),
+        })
+        errors = wf.validate()
+        assert len(errors) == 1
+        assert "input: data" in errors[0]
+
+    def test_valid_loop_not_flagged_as_cycle(self):
+        """Loop back-edges are not reported as cycles."""
+        wf = WorkflowDefinition(steps={
+            "generate": StepDefinition(
+                name="generate",
+                outputs=["content"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+            ),
+            "review": StepDefinition(
+                name="review",
+                inputs=[InputBinding("content", "generate", "content")],
+                outputs=["score"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+                exit_rules=[ExitRule("retry", "expression", {
+                    "condition": "attempt < 3",
+                    "action": "loop", "target": "generate",
+                    "max_iterations": 3,
+                }, priority=1)],
+            ),
+        })
+        errors = wf.validate()
+        assert not errors
+
+    def test_optional_edge_breaks_cycle(self):
+        """Cycles broken by optional edges are not flagged."""
+        wf = WorkflowDefinition(steps={
+            "generate": StepDefinition(
+                name="generate",
+                inputs=[InputBinding("score", "review", "score", optional=True)],
+                outputs=["content"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+            ),
+            "review": StepDefinition(
+                name="review",
+                inputs=[InputBinding("content", "generate", "content")],
+                outputs=["score"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+            ),
+        })
+        errors = wf.validate()
+        assert not errors
+
+
+class TestUnreachableStepDetection:
+    """Tests for unreachable step detection."""
+
+    def test_unreachable_step_missing_dep(self):
+        """Step referencing unknown step is caught by input validation."""
+        wf = WorkflowDefinition(steps={
+            "root": StepDefinition(
+                name="root", outputs=["out"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+            ),
+            "island": StepDefinition(
+                name="island",
+                inputs=[InputBinding("x", "phantom", "out")],
+                outputs=["z"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+            ),
+        })
+        errors = wf.validate()
+        assert any("unknown step 'phantom'" in e for e in errors)
+
+    def test_multiple_entry_points_valid(self):
+        """Multiple disconnected entry points are valid (both are reachable)."""
+        wf = WorkflowDefinition(steps={
+            "root-a": StepDefinition(
+                name="root-a", outputs=["out"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+            ),
+            "child-a": StepDefinition(
+                name="child-a",
+                inputs=[InputBinding("x", "root-a", "out")],
+                outputs=["y"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+            ),
+            "root-b": StepDefinition(
+                name="root-b", outputs=["out"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+            ),
+            "child-b": StepDefinition(
+                name="child-b",
+                inputs=[InputBinding("x", "root-b", "out")],
+                outputs=["z"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+            ),
+        })
+        errors = wf.validate()
+        assert not errors
+
+    def test_unreachable_step_with_after(self):
+        """Step reachable only via 'after' from root is reachable."""
+        wf = WorkflowDefinition(steps={
+            "root": StepDefinition(
+                name="root", outputs=["out"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+            ),
+            "sequenced": StepDefinition(
+                name="sequenced", outputs=["out"],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+                after=["root"],
+            ),
+        })
+        errors = wf.validate()
+        assert not errors
+
+
+class TestCheckCLIIntegration:
+    """Integration tests for stepwise check with structural validation."""
+
+    def test_check_returns_nonzero_on_cycle(self, tmp_path):
+        """stepwise check exits 1 on structural errors."""
+        import subprocess
+        flow = tmp_path / "bad.flow.yaml"
+        flow.write_text("""\
+name: bad-cycle
+steps:
+  a:
+    run: echo hi
+    inputs: { x: "c.out" }
+    outputs: [out]
+  b:
+    run: echo hi
+    inputs: { x: "a.out" }
+    outputs: [out]
+  c:
+    run: echo hi
+    inputs: { x: "b.out" }
+    outputs: [out]
+""")
+        result = subprocess.run(
+            ["uv", "run", "stepwise", "check", str(flow)],
+            capture_output=True, text=True,
+            cwd=str(tmp_path),
+        )
+        assert result.returncode == 1
+        combined = result.stderr + result.stdout
+        assert "ycle" in combined
+
+    def test_check_returns_zero_on_valid(self, tmp_path):
+        """stepwise check exits 0 on valid flow."""
+        import subprocess
+        flow = tmp_path / "good.flow.yaml"
+        flow.write_text("""\
+name: good-flow
+steps:
+  a:
+    run: echo hi
+    outputs: [out]
+  b:
+    run: echo hi
+    inputs: { x: "a.out" }
+    outputs: [result]
+""")
+        result = subprocess.run(
+            ["uv", "run", "stepwise", "check", str(flow)],
+            capture_output=True, text=True,
+            cwd=str(tmp_path),
+        )
+        assert result.returncode == 0
+        combined = result.stderr + result.stdout
+        assert "Structure OK" in combined

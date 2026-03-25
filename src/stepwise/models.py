@@ -777,6 +777,30 @@ class WorkflowDefinition:
         if not terminal and not errors:
             errors.append("Workflow has no terminal steps")
 
+        # Check for unreachable steps (no path from any entry step)
+        if not errors and entry:
+            reachable: set[str] = set(entry)
+            frontier = set(entry)
+            # Build forward adjacency from all dependency edges
+            fwd_adj: dict[str, set[str]] = {n: set() for n in self.steps}
+            for name, step in self.steps.items():
+                for dep in self._get_step_deps(name):
+                    if dep in fwd_adj:
+                        fwd_adj[dep].add(name)
+                if step.for_each and step.for_each.source_step in fwd_adj:
+                    fwd_adj[step.for_each.source_step].add(name)
+            while frontier:
+                node = frontier.pop()
+                for child in fwd_adj.get(node, set()):
+                    if child not in reachable:
+                        reachable.add(child)
+                        frontier.add(child)
+            unreachable = set(self.steps.keys()) - reachable
+            for name in sorted(unreachable):
+                errors.append(
+                    f"Step '{name}' is unreachable — no path from any entry step"
+                )
+
         return errors
 
     def fixable_warnings(self) -> list[dict]:
@@ -1204,9 +1228,78 @@ class WorkflowDefinition:
                     queue.append(neighbor)
 
         if visited != len(self.steps):
-            remaining = [n for n, d in in_degree.items() if d > 0]
+            remaining = {n for n, d in in_degree.items() if d > 0}
+            cycle_path = self._find_cycle_path(remaining, adj)
+            if cycle_path:
+                # Format: "a →(input: x) b →(input: y) c →(input: z) a"
+                parts = []
+                for i in range(len(cycle_path)):
+                    src = cycle_path[i]
+                    dst = cycle_path[(i + 1) % len(cycle_path)]
+                    edge_type = self._classify_edge(src, dst)
+                    parts.append(f"{src} \u2192({edge_type})")
+                parts.append(cycle_path[0])
+                cycle_str = " ".join(parts)
+                return [
+                    f"Cycle detected: {cycle_str}. "
+                    f"Consider adding 'optional: true' to one input binding to break the cycle."
+                ]
             return [f"Cycle detected involving steps: {', '.join(sorted(remaining))}"]
         return []
+
+    def _find_cycle_path(self, remaining: set[str], adj: dict[str, list[str]]) -> list[str] | None:
+        """Find one concrete cycle path within the remaining nodes via DFS."""
+        WHITE, GRAY, BLACK = 0, 1, 2
+        color: dict[str, int] = {n: WHITE for n in remaining}
+        parent: dict[str, str | None] = {}
+
+        def dfs(node: str) -> list[str] | None:
+            color[node] = GRAY
+            for neighbor in adj.get(node, []):
+                if neighbor not in remaining:
+                    continue
+                if color[neighbor] == GRAY:
+                    # Back edge — extract cycle
+                    path = [neighbor]
+                    cur = node
+                    while cur != neighbor:
+                        path.append(cur)
+                        cur = parent.get(cur, neighbor)
+                    path.reverse()
+                    return path
+                if color[neighbor] == WHITE:
+                    parent[neighbor] = node
+                    result = dfs(neighbor)
+                    if result:
+                        return result
+            color[node] = BLACK
+            return None
+
+        for node in sorted(remaining):
+            if color[node] == WHITE:
+                parent[node] = None
+                result = dfs(node)
+                if result:
+                    return result
+        return None
+
+    def _classify_edge(self, src: str, dst: str) -> str:
+        """Classify the edge type between two steps."""
+        dst_step = self.steps.get(dst)
+        if not dst_step:
+            return "dep"
+        for binding in dst_step.inputs:
+            if binding.any_of_sources:
+                for src_step, _ in binding.any_of_sources:
+                    if src_step == src:
+                        return f"input: {binding.local_name}"
+            elif binding.source_step == src:
+                return f"input: {binding.local_name}"
+        if src in dst_step.after:
+            return "after"
+        if dst_step.for_each and dst_step.for_each.source_step == src:
+            return "for_each"
+        return "dep"
 
     def to_dict(self) -> dict:
         d: dict = {
