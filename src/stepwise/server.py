@@ -1320,6 +1320,16 @@ def get_job_output(
     return outputs or {}
 
 
+@app.get("/api/jobs/{job_id}/outputs")
+def get_job_outputs_alias(
+    job_id: str,
+    step: str | None = Query(default=None, description="Comma-separated step names"),
+    inputs: bool = Query(default=False),
+):
+    """Alias for /api/jobs/{job_id}/output (plural form)."""
+    return get_job_output(job_id, step=step, inputs=inputs)
+
+
 def list_suspended_jobs(
     since: str | None = None,
     flow: str | None = None,
