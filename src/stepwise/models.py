@@ -910,6 +910,93 @@ class WorkflowDefinition:
                         f"the first iteration, not after the loop exits"
                     )
 
+        # Premature launch detection: steps downstream of a loop body
+        # without a dependency on the loop exit step.
+        #
+        # For loop S → T (step S has exit rule looping to target T):
+        # - Loop body = steps on any path from T to S in the dep graph
+        # - Step D outside the loop body that depends on a loop body member
+        #   (but not transitively on S via hard deps) may launch mid-loop.
+        _all_fwd: dict[str, set[str]] = {n: set() for n in self.steps}
+        _all_rev: dict[str, set[str]] = {n: set() for n in self.steps}
+        _hard_fwd: dict[str, set[str]] = {n: set() for n in self.steps}
+        for _sn, _sd in self.steps.items():
+            for _b in _sd.inputs:
+                _src = _b.source_step
+                if _src != "$job" and _src in self.steps:
+                    _all_fwd[_src].add(_sn)
+                    _all_rev[_sn].add(_src)
+                    if not _b.optional:
+                        _hard_fwd[_src].add(_sn)
+            for _a in _sd.after:
+                if _a in self.steps:
+                    _all_fwd[_a].add(_sn)
+                    _all_rev[_sn].add(_a)
+                    _hard_fwd[_a].add(_sn)
+            if _sd.for_each and _sd.for_each.source_step in self.steps:
+                _fe = _sd.for_each.source_step
+                _all_fwd[_fe].add(_sn)
+                _all_rev[_sn].add(_fe)
+                _hard_fwd[_fe].add(_sn)
+
+        def _reachable(start: str, graph: dict[str, set[str]]) -> set[str]:
+            visited: set[str] = set()
+            q = [start]
+            while q:
+                cur = q.pop()
+                if cur in visited:
+                    continue
+                visited.add(cur)
+                q.extend(graph.get(cur, set()))
+            return visited
+
+        _premature_warned: set[str] = set()
+        for name, step in self.steps.items():
+            for rule in step.exit_rules:
+                if rule.config.get("action") != "loop":
+                    continue
+                target = rule.config.get("target", name)
+                if target == name:
+                    continue  # self-loop — covered by ungated post-loop
+
+                # Loop body: steps on any path from target → name
+                fwd_from_target = _reachable(target, _all_fwd)
+                rev_from_name = _reachable(name, _all_rev)
+                body = fwd_from_target & rev_from_name
+
+                # Hard descendants of S (the loop exit step)
+                hard_desc = _reachable(name, _hard_fwd)
+
+                for dn, ds in self.steps.items():
+                    if dn in body or dn in _premature_warned:
+                        continue
+                    direct: set[str] = set()
+                    for _b in ds.inputs:
+                        if _b.source_step != "$job" and _b.source_step in self.steps:
+                            direct.add(_b.source_step)
+                    for _a in ds.after:
+                        if _a in self.steps:
+                            direct.add(_a)
+                    if ds.for_each and ds.for_each.source_step in self.steps:
+                        direct.add(ds.for_each.source_step)
+
+                    body_deps = direct & (body - {name})
+                    if not body_deps:
+                        continue
+                    if dn in hard_desc:
+                        continue
+
+                    _premature_warned.add(dn)
+                    dep_list = ", ".join(
+                        f"'{d}'" for d in sorted(body_deps)
+                    )
+                    warns.append(
+                        f"\u26a0 Step '{dn}': depends on {dep_list} inside "
+                        f"the '{name}' \u2192 '{target}' loop but has no "
+                        f"dependency on '{name}' \u2014 may launch before "
+                        f"the loop completes"
+                    )
+
         # Config variable cross-checks
         job_fields = {
             b.source_field
