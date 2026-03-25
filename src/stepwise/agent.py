@@ -1058,6 +1058,23 @@ class AgentExecutor(Executor):
         agent_status = self.backend.wait(process)
         logger.info(f"[{step_id}] executor done ({time.monotonic() - t0:.1f}s total, status={agent_status.state})")
 
+        return self._finalize_after_wait(process, agent_status, inputs, context, output_file)
+
+    def _finalize_after_wait(
+        self,
+        process: AgentProcess,
+        agent_status: AgentStatus,
+        inputs: dict,
+        context: ExecutionContext | None,
+        output_file: str | None = None,
+    ) -> ExecutorResult:
+        """Shared post-wait logic: cleanup, emit_flow, output extraction, _session_id.
+
+        Used by both start() (normal path) and finalize_surviving() (reattach path).
+        """
+        step_id = f"{context.step_name}@{context.job_id or 'local'}" if context else "reattach"
+        workspace_path = context.workspace_path if context else process.working_dir
+
         # Clean up lingering queue owner process for this completed session.
         # Skip cleanup when continue_session is set — the queue owner and session
         # must stay alive for downstream steps that reuse this session.
@@ -1103,7 +1120,7 @@ class AgentExecutor(Executor):
 
         # Check for emitted flow (only if emit_flow enabled in config)
         if self.config.get("emit_flow"):
-            working_dir = state.get("working_dir", context.workspace_path)
+            working_dir = state.get("working_dir", workspace_path)
             emit_path = os.path.join(working_dir, EMIT_FLOW_DIR, EMIT_FLOW_FILENAME)
             if os.path.exists(emit_path):
                 step_outputs = self.config.get("output_fields", [])
