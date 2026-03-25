@@ -4259,6 +4259,9 @@ def build_parser() -> argparse.ArgumentParser:
     # update
     sub.add_parser("update", help="Upgrade stepwise to the latest version")
 
+    # version
+    sub.add_parser("version", help="Print version and exit")
+
     # welcome
     sub.add_parser("welcome", help="Try the interactive welcome demo")
 
@@ -5168,6 +5171,7 @@ def main(argv: list[str] | None = None) -> int:
         "cache": cmd_cache,
         "job": cmd_job,
         "update": cmd_self_update,
+        "version": lambda args: (print(f"stepwise {_get_version()}"), EXIT_SUCCESS)[1],
         "welcome": cmd_welcome,
         "uninstall": cmd_uninstall,
         "extensions": cmd_extensions,
