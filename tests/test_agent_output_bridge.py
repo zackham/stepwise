@@ -182,3 +182,54 @@ class TestEnvVarInjection:
             working_dir=workspace,
         )
         assert env["STEPWISE_OUTPUT_FILE"].endswith("custom.json")
+
+
+# ── Step 3a: Prompt instruction tests ─────────────────────────────────
+
+
+class TestPromptInstructions:
+    def test_prompt_includes_output_instructions(self):
+        ex = _make_executor(output_fields=["summary", "score"])
+        ctx = _make_context(step_name="analyze")
+        prompt = ex._render_prompt({}, ctx)
+        assert "<stepwise-output>" in prompt
+        assert "</stepwise-output>" in prompt
+        assert '"summary"' in prompt
+        assert '"score"' in prompt
+        assert "STEPWISE_OUTPUT_FILE" in prompt
+        assert "analyze-output.json" in prompt
+        # JSON example block
+        assert '"summary": "<summary value>"' in prompt
+
+    def test_prompt_no_instructions_for_effect_mode(self):
+        ex = _make_executor(output_fields=["x"], user_set_output_mode=True)
+        # Stays effect because user explicitly set it
+        assert ex.output_mode == "effect"
+        ctx = _make_context()
+        prompt = ex._render_prompt({}, ctx)
+        assert "<stepwise-output>" not in prompt
+
+    def test_prompt_no_instructions_without_outputs(self):
+        ex = _make_executor()
+        ctx = _make_context()
+        prompt = ex._render_prompt({}, ctx)
+        assert "<stepwise-output>" not in prompt
+
+    def test_prompt_uses_custom_output_path(self):
+        ex = _make_executor(output_fields=["x"], output_path="results.json")
+        ctx = _make_context(step_name="analyze")
+        prompt = ex._render_prompt({}, ctx)
+        assert "results.json" in prompt
+        assert "analyze-output.json" not in prompt
+
+    def test_prompt_output_instructions_after_emit_flow(self):
+        ex = _make_executor(output_fields=["result"], emit_flow=True)
+        ctx = _make_context()
+        prompt = ex._render_prompt({}, ctx)
+        # Both emit_flow and output instructions present
+        assert "emit.flow.yaml" in prompt or "Flow Emission" in prompt
+        assert "<stepwise-output>" in prompt
+        # Output instructions come after emit_flow instructions
+        emit_pos = prompt.find("Flow Emission") if "Flow Emission" in prompt else prompt.find("emit.flow.yaml")
+        output_pos = prompt.find("<stepwise-output>")
+        assert output_pos > emit_pos
