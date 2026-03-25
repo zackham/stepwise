@@ -652,7 +652,8 @@ def _server_start(args: argparse.Namespace) -> int:
 
     # Write pidfile for CLI server detection
     from stepwise.server_detect import write_pidfile, remove_pidfile
-    write_pidfile(project.dot_dir, port)
+    log_file = str(project.logs_dir / "server.log")
+    write_pidfile(project.dot_dir, port, log_file=log_file)
     try:
         uvicorn.run(
             "stepwise.server:app",

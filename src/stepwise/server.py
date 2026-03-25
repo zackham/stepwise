@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import signal
 from contextlib import asynccontextmanager
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
@@ -655,6 +657,30 @@ async def _periodic_queue_owner_cleanup() -> None:
             await asyncio.sleep(60)
 
 
+def _setup_file_logging(dot_dir: Path) -> None:
+    """Add a RotatingFileHandler to the root logger for server.log.
+
+    Skips if a file handler is already attached (e.g. server_bg.py --detach).
+    """
+    root = logging.getLogger()
+    if any(isinstance(h, (logging.FileHandler, RotatingFileHandler)) for h in root.handlers):
+        return
+
+    log_dir = dot_dir / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "server.log"
+
+    handler = RotatingFileHandler(
+        str(log_path), maxBytes=5 * 1024 * 1024, backupCount=3
+    )
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(name)s %(levelname)s: %(message)s"
+    ))
+    root.addHandler(handler)
+    if root.level == logging.NOTSET or root.level > logging.WARNING:
+        root.setLevel(logging.WARNING)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _engine, _engine_task, _event_loop, _templates_dir, _project_dir
@@ -674,6 +700,12 @@ async def lifespan(app: FastAPI):
     registry = create_default_registry(config)
 
     dot_dir = _project_dir / ".stepwise"
+
+    # Ensure server.log exists regardless of how the server was started
+    # (foreground, systemd, etc.).  server_bg.py already sets up a handler
+    # for --detach mode, so skip if one is already present.
+    _setup_file_logging(dot_dir)
+
     _engine = AsyncEngine(store, registry, jobs_dir=jobs_dir, project_dir=dot_dir if dot_dir.is_dir() else None, billing_mode=config.billing, config=config, max_concurrent_jobs=config.max_concurrent_jobs)
 
     # Fail zombie jobs: server-owned jobs left in running/pending from a dead process
