@@ -542,7 +542,8 @@ class AcpxBackend:
         if process.session_name:
             try:
                 agent = self.default_agent
-                env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+                env = {k: v for k, v in os.environ.items()
+                       if k not in ("CLAUDECODE", "STEPWISE_OUTPUT_FILE")}
                 subprocess.run(
                     [self.acpx_path, agent, "cancel", "-s", process.session_name],
                     cwd=process.working_dir,
@@ -575,7 +576,8 @@ class AcpxBackend:
         # Try cooperative close via acpx first
         if session_name:
             try:
-                env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+                env = {k: v for k, v in os.environ.items()
+                       if k not in ("CLAUDECODE", "STEPWISE_OUTPUT_FILE")}
                 result = subprocess.run(
                     [self.acpx_path, self.default_agent, "sessions", "close",
                      "--name", session_name],
@@ -731,7 +733,8 @@ class AcpxBackend:
         if not process.session_name:
             return None
         try:
-            env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+            env = {k: v for k, v in os.environ.items()
+                   if k not in ("CLAUDECODE", "STEPWISE_OUTPUT_FILE")}
             result = subprocess.run(
                 [self.acpx_path, "--format", "json",
                  self.default_agent, "sessions", "show",

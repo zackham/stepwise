@@ -1357,7 +1357,8 @@ class Engine:
             return
 
         acpx_path = shutil.which("acpx") or "acpx"
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("CLAUDECODE", "STEPWISE_OUTPUT_FILE")}
 
         def _close_sessions(
             sess: dict[str, tuple[str, str | None]],

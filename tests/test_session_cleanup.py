@@ -314,12 +314,15 @@ class TestSessionCleanupEnvStripping:
         job = async_engine.store.load_job(job.id)
         try:
             os.environ["CLAUDECODE"] = "/tmp/fake"
+            os.environ["STEPWISE_OUTPUT_FILE"] = "/tmp/fake-output"
             captured = _call_cleanup_directly(async_engine, job.id, job)
         finally:
             os.environ.pop("CLAUDECODE", None)
+            os.environ.pop("STEPWISE_OUTPUT_FILE", None)
 
         clean_env = captured["args"][2]
         assert "CLAUDECODE" not in clean_env
+        assert "STEPWISE_OUTPUT_FILE" not in clean_env
 
 
 class TestCloseSessionsFallback:
