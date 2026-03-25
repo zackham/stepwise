@@ -651,10 +651,16 @@ class WorkflowDefinition:
                         f"Step '{name}': after references unknown step '{seq_step}'"
                     )
 
-            # Check duplicate local names
+            # Check duplicate local names and identifier validity
+            import re
+            _id_re = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
             local_names = [b.local_name for b in step.inputs]
             seen_locals: set[str] = set()
             for ln in local_names:
+                if not _id_re.match(ln):
+                    errors.append(
+                        f"Step '{name}': input name '{ln}' is not a valid identifier"
+                    )
                 if ln in seen_locals:
                     errors.append(
                         f"Step '{name}': duplicate local_name '{ln}' in inputs"

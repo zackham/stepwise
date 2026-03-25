@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 from string import Template
+import logging as _logging
 from typing import Any, Callable
 
 from stepwise.llm_client import LLMClient, LLMResponse
@@ -218,6 +219,19 @@ def _is_simple_command(cmd: str) -> bool:
 # ── ScriptExecutor ─────────────────────────────────────────────────────
 
 
+# Env var names that must never be overridden by step inputs.
+_SYSTEM_ENV_BLOCKLIST = frozenset({
+    "PATH", "HOME", "USER", "SHELL", "LANG", "TERM",
+    "LD_PRELOAD", "LD_LIBRARY_PATH",
+    "PYTHONPATH", "PYTHONHOME",
+    "JOB_ENGINE_INPUTS", "JOB_ENGINE_WORKSPACE",
+    "STEPWISE_STEP_IO", "STEPWISE_PROJECT_DIR",
+    "STEPWISE_ATTEMPT", "STEPWISE_FLOW_DIR",
+})
+
+_bare_env_warned = False
+
+
 class ScriptExecutor(Executor):
     """Run a shell command or inline script. Synchronous in M1.
 
@@ -317,14 +331,24 @@ class ScriptExecutor(Executor):
         # M10: Set STEPWISE_FLOW_DIR if flow_dir is available
         if self.flow_dir:
             env["STEPWISE_FLOW_DIR"] = self.flow_dir
-        # Pass inputs as environment variables for convenience
+        # Pass inputs as namespaced env vars (STEPWISE_INPUT_ prefix).
+        # Bare names set as deprecated alias except for system-critical names.
+        global _bare_env_warned
         for k, v in inputs.items():
-            if isinstance(v, str):
-                env[k] = v
-            elif isinstance(v, (dict, list)):
-                env[k] = json.dumps(v)
-            elif v is not None:
-                env[k] = str(v)
+            if v is None:
+                continue
+            str_val = v if isinstance(v, str) else (
+                json.dumps(v) if isinstance(v, (dict, list)) else str(v)
+            )
+            env[f"STEPWISE_INPUT_{k}"] = str_val
+            if k not in _SYSTEM_ENV_BLOCKLIST:
+                env[k] = str_val
+                if not _bare_env_warned:
+                    _logging.getLogger("stepwise.executor").warning(
+                        "Bare input env vars are deprecated. "
+                        "Use $STEPWISE_INPUT_<name> instead."
+                    )
+                    _bare_env_warned = True
         cwd = self.working_dir or workspace
 
         # M10: Resolve script path relative to flow_dir
@@ -476,10 +500,10 @@ class PollExecutor(Executor):
         self.prompt = prompt
 
     def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
-        # Interpolate $var placeholders in check_command and prompt
-        str_inputs = {k: str(v) if v is not None else "" for k, v in inputs.items()}
-        check_command = Template(self.check_command).safe_substitute(str_inputs)
-        prompt = Template(self.prompt).safe_substitute(str_inputs) if self.prompt else ""
+        # check_command and prompt are already interpolated by
+        # engine._interpolate_config() before executor creation.
+        check_command = self.check_command
+        prompt = self.prompt
 
         config: dict[str, Any] = {
             "check_command": check_command,

@@ -234,6 +234,30 @@ class TestScriptExecutorAutoDetect:
         assert result.envelope.executor_meta.get("shell_mode") == "shell"
 
 
+class TestScriptExecutorEnvNamespace:
+    """Input env var namespacing and system-name protection."""
+
+    def test_prefixed_env_var_set(self):
+        executor = ScriptExecutor(command="printenv STEPWISE_INPUT_url")
+        result = executor.start({"url": "https://example.com"}, _ctx())
+        assert result.envelope.artifact.get("stdout") == "https://example.com"
+
+    def test_bare_env_var_set_during_deprecation(self):
+        executor = ScriptExecutor(command="printenv url")
+        result = executor.start({"url": "https://example.com"}, _ctx())
+        assert "https://example.com" in result.envelope.artifact.get("stdout", "")
+
+    def test_system_path_not_overridden(self):
+        executor = ScriptExecutor(command="which echo")
+        result = executor.start({"PATH": "/nonexistent"}, _ctx())
+        assert not (result.executor_state or {}).get("failed")
+
+    def test_system_path_available_prefixed(self):
+        executor = ScriptExecutor(command="printenv STEPWISE_INPUT_PATH")
+        result = executor.start({"PATH": "/custom"}, _ctx())
+        assert "/custom" in result.envelope.artifact.get("stdout", "")
+
+
 # ── ExternalExecutor ─────────────────────────────────────────────────────
 
 

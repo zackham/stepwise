@@ -48,18 +48,20 @@ class TestPollExecutorStart:
         assert result.watch.config["check_command"] == "gh pr view --json state"
         assert result.watch.config["interval_seconds"] == 30
 
-    def test_interpolates_inputs_in_check_command(self):
+    def test_passes_through_preinterpolated_command(self):
+        """PollExecutor.start() passes command through as-is (engine interpolates upstream)."""
         executor = PollExecutor(
-            check_command="gh pr view $pr_number --json state",
+            check_command="gh pr view 42 --json state",
             interval_seconds=10,
         )
         result = executor.start({"pr_number": "42"}, self._make_context())
         assert result.watch.config["check_command"] == "gh pr view 42 --json state"
 
-    def test_interpolates_inputs_in_prompt(self):
+    def test_passes_through_preinterpolated_prompt(self):
+        """PollExecutor.start() passes prompt through as-is (engine interpolates upstream)."""
         executor = PollExecutor(
             check_command="echo",
-            prompt="Waiting for PR #$pr_number",
+            prompt="Waiting for PR #7",
         )
         result = executor.start({"pr_number": "7"}, self._make_context())
         assert result.watch.config["prompt"] == "Waiting for PR #7"

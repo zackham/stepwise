@@ -7,6 +7,8 @@ import copy
 import json
 import logging
 import os
+import shlex
+import shlex
 import subprocess
 import threading
 from datetime import datetime, timezone
@@ -75,11 +77,19 @@ _engine_logger = logging.getLogger("stepwise.engine")
 MAX_ARTIFACT_BYTES = 5 * 1024 * 1024
 
 
+# Config keys whose values are passed to subprocess.run(shell=True).
+# Values interpolated into these keys must be shell-quoted.
+_SHELL_COMMAND_KEYS = frozenset({"command", "check_command"})
+
+
 def _interpolate_config(config: dict, inputs: dict) -> dict:
     """Substitute $variable references in executor config string values.
 
     Supports dotted access for dict inputs: if inputs has reviewer={model: "x"},
     then $reviewer.model resolves to "x" in config values.
+
+    Values substituted into shell-executed fields (command, check_command) are
+    automatically shell-quoted via shlex.quote() to prevent injection.
     """
     str_inputs = {}
     for k, v in inputs.items():
@@ -103,17 +113,21 @@ def _interpolate_config(config: dict, inputs: dict) -> dict:
             str_inputs[k] = str(v)
     if not str_inputs:
         return config
+    # Build a shell-safe copy for command fields
+    quoted_inputs = {k: shlex.quote(v) for k, v in str_inputs.items()}
     result = {}
     changed = False
     for k, v in config.items():
         if isinstance(v, str) and "$" in v:
+            # Use quoted values for shell-executed fields, raw for others
+            effective = quoted_inputs if k in _SHELL_COMMAND_KEYS else str_inputs
             # First pass: replace dotted vars ($var.field) before Template,
             # since Template only handles simple $var names.
             new_v = v
-            for sk in sorted(str_inputs, key=len, reverse=True):
+            for sk in sorted(effective, key=len, reverse=True):
                 if "." in sk and ("$" + sk) in new_v:
-                    new_v = new_v.replace("$" + sk, str_inputs[sk])
-            new_v = Template(new_v).safe_substitute(str_inputs)
+                    new_v = new_v.replace("$" + sk, effective[sk])
+            new_v = Template(new_v).safe_substitute(effective)
             if new_v != v:
                 changed = True
             result[k] = new_v
