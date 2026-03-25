@@ -1033,6 +1033,7 @@ def _delegated_run_wait(
 async def _delegated_wait_ws_loop(
     server_url: str,
     job_id: str,
+    project_dir: Path | None = None,
 ) -> int:
     """WebSocket-driven wait loop for delegated --wait mode."""
     import json as json_mod
@@ -1146,6 +1147,7 @@ async def _delegated_wait_ws_loop(
                     except Exception:
                         cost_usd = 0
 
+                    _write_sentinel(project_dir, job_id, "completed")
                     _json_stdout({
                         "status": "completed",
                         "job_id": job_id,
@@ -1169,6 +1171,7 @@ async def _delegated_wait_ws_loop(
                     except Exception:
                         cost_usd = 0
 
+                    _write_sentinel(project_dir, job_id, job_status)
                     _json_stdout({
                         "status": "failed",
                         "job_id": job_id,
@@ -1195,6 +1198,7 @@ async def _delegated_wait_ws_loop(
                     completed_steps = [
                         r["step_name"] for r in runs if r["status"] == "completed"
                     ]
+                    _write_sentinel(project_dir, job_id, "suspended")
                     _json_stdout({
                         "status": "suspended",
                         "job_id": job_id,
@@ -1556,6 +1560,7 @@ def wait_for_job(
                     "cost_usd": round(cost, 4) if cost else 0,
                     "duration_seconds": duration,
                 }
+                _write_sentinel(project_dir, job_id, "completed")
                 _json_stdout(result)
                 return EXIT_SUCCESS
 
@@ -1579,6 +1584,7 @@ def wait_for_job(
                     "cost_usd": round(cost, 4) if cost else 0,
                     "duration_seconds": duration,
                 }
+                _write_sentinel(project_dir, job_id, job.status.value)
                 _json_stdout(result)
                 return EXIT_JOB_FAILED
 
@@ -1604,6 +1610,7 @@ def wait_for_job(
                     "cost_usd": round(cost, 4) if cost else 0,
                     "duration_seconds": duration,
                 }
+                _write_sentinel(project_dir, job_id, "suspended")
                 _json_stdout(result)
                 return EXIT_SUSPENDED
 
@@ -1765,6 +1772,7 @@ def _is_blocked_by_suspension_from_runs(runs: list[dict]) -> bool:
 def wait_for_job_id(
     server_url: str,
     job_id: str,
+    project_dir: Path | None = None,
 ) -> int:
     """Re-attach to a running job on the server and block until completion.
 
@@ -1773,7 +1781,7 @@ def wait_for_job_id(
     Outputs JSON to stdout on completion/failure/suspension.
     Returns exit code: 0=completed, 1=failed, 4=cancelled, 5=suspended.
     """
-    return asyncio.run(_delegated_wait_ws_loop(server_url, job_id))
+    return asyncio.run(_delegated_wait_ws_loop(server_url, job_id, project_dir=project_dir))
 
 
 def wait_for_job_ids(
