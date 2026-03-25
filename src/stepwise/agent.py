@@ -269,6 +269,42 @@ def find_zombie_queue_owners(
     return result
 
 
+def verify_agent_pid(pid: int, expected_pgid: int | None = None) -> bool:
+    """Verify a PID belongs to an acpx/claude-agent process.
+
+    Checks /proc/{pid}/cmdline for known agent markers (same set as
+    _scan_acpx_processes: "acpx", "claude-agent-acp", "__queue-owner")
+    and optionally validates PGID matches expected_pgid via /proc/{pid}/stat.
+
+    Returns False if: process dead, cmdline doesn't match, PGID mismatch.
+    Falls back to os.kill(pid, 0) on non-Linux (no cmdline check).
+    """
+    proc_cmdline = Path(f"/proc/{pid}/cmdline")
+    if not proc_cmdline.parent.is_dir():
+        # Non-Linux fallback: can only detect dead PIDs, not identity
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+
+    try:
+        cmdline = proc_cmdline.read_bytes().decode("utf-8", errors="replace")
+    except (FileNotFoundError, PermissionError):
+        return False  # dead or inaccessible
+
+    if not ("acpx" in cmdline or "claude-agent-acp" in cmdline
+            or "__queue-owner" in cmdline):
+        return False  # PID recycled into unrelated process
+
+    if expected_pgid is not None:
+        actual_pgid = _get_process_pgid(pid)
+        if actual_pgid is not None and actual_pgid != expected_pgid:
+            return False  # PID recycled into different process group
+
+    return True
+
+
 def _scan_acpx_processes() -> list[tuple[int, str]]:
     """Scan /proc for acpx-related processes (queue owners and claude agents).
 
@@ -512,6 +548,9 @@ class AcpxBackend:
             while self._is_process_alive(process.pid):
                 time.sleep(0.5)
             exit_code = 0
+            elapsed = time.monotonic() - t0
+            logger.info(f"[pid={process.pid}] wait done exit_code={exit_code} (non-child, {elapsed:.1f}s)")
+            return self._completed_status(process, exit_code, exit_code_reliable=False)
         elapsed = time.monotonic() - t0
         logger.info(f"[pid={process.pid}] wait done exit_code={exit_code} ({elapsed:.1f}s)")
         return self._completed_status(process, exit_code)
@@ -624,7 +663,10 @@ class AcpxBackend:
         except FileNotFoundError:
             return False
 
-    def _completed_status(self, process: AgentProcess, exit_code: int) -> AgentStatus:
+    def _completed_status(
+        self, process: AgentProcess, exit_code: int,
+        exit_code_reliable: bool = True,
+    ) -> AgentStatus:
         session_id = self._extract_session_id(process.output_path)
         cost = self._extract_cost(process.output_path)
 
@@ -637,6 +679,18 @@ class AcpxBackend:
                 error=error or f"Exit code {exit_code}",
                 cost_usd=cost,
             )
+
+        # For non-child PIDs, exit_code=0 is synthetic — check output for errors.
+        if not exit_code_reliable:
+            error = self._read_last_error(process.output_path)
+            if error:
+                return AgentStatus(
+                    state="failed",
+                    exit_code=-1,
+                    session_id=session_id,
+                    error=f"Agent failed (non-child): {error}",
+                    cost_usd=cost,
+                )
 
         # M7a: Capture session transcript for chain context (non-blocking)
         # P7 fix: transcript capture was blocking the thread pool worker,
@@ -1151,6 +1205,25 @@ class AgentExecutor(Executor):
             envelope=envelope,
             executor_state=state,
         )
+
+    def finalize_surviving(self, executor_state: dict) -> ExecutorResult:
+        """Finalize a surviving agent process after server restart.
+
+        Reconstructs AgentProcess from executor_state, calls backend.wait(),
+        then runs the shared _finalize_after_wait() path.
+        """
+        process = AgentProcess(
+            pid=executor_state["pid"],
+            pgid=executor_state["pgid"],
+            output_path=executor_state["output_path"],
+            working_dir=executor_state["working_dir"],
+            session_id=executor_state.get("session_id"),
+            session_name=executor_state.get("session_name"),
+            capture_transcript=executor_state.get("capture_transcript", True),
+        )
+        agent_status = self.backend.wait(process)
+        output_file = executor_state.get("output_file")
+        return self._finalize_after_wait(process, agent_status, inputs={}, context=None, output_file=output_file)
 
     def _build_delegate_result(
         self, flow_path: str, state: dict, context: ExecutionContext,
