@@ -2973,6 +2973,19 @@ class _SessionLockManager:
         return lock is not None and lock.locked()
 
 
+def _unwrap_executor(executor: "Executor") -> "Executor":
+    """Unwrap decorator chain to reach the inner executor.
+
+    Decorators (TimeoutDecorator, RetryDecorator, FallbackDecorator) store the
+    inner executor as self._executor but do NOT implement __getattr__. Calling
+    finalize_surviving() on a decorated executor raises AttributeError. Walk
+    until we reach a non-decorator (no _executor attr).
+    """
+    while hasattr(executor, "_executor"):
+        executor = executor._executor
+    return executor
+
+
 class AsyncEngine(Engine):
     """Event-driven async workflow engine.
 
@@ -3117,6 +3130,128 @@ class AsyncEngine(Engine):
             self._check_job_terminal(job.id)
         # Reconcile pending jobs with deps — a dep may have completed while server was down
         self._start_queued_jobs()
+
+    # ── Restart resilience: reattach surviving runs ─────────────────────
+
+    def _get_exec_ref_for_run(self, job: Job, run: StepRun) -> ExecutorRef:
+        """Reconstruct ExecutorRef for a surviving run, replaying config enrichment.
+
+        Mirrors the config injection from _prepare_step_run() so that
+        registry.create(exec_ref) produces an executor with the same
+        config as the original launch.
+        """
+        step_def = job.workflow.steps[run.step_name]
+        exec_ref = step_def.executor
+        if step_def.outputs and "output_fields" not in exec_ref.config:
+            exec_ref = exec_ref.with_config({"output_fields": step_def.outputs})
+        if exec_ref.type == "agent":
+            session_ctx: dict = {}
+            if step_def.continue_session:
+                session_ctx["continue_session"] = True
+            if step_def.loop_prompt is not None:
+                session_ctx["loop_prompt"] = step_def.loop_prompt
+            if step_def.max_continuous_attempts is not None:
+                session_ctx["max_continuous_attempts"] = step_def.max_continuous_attempts
+            if session_ctx:
+                exec_ref = exec_ref.with_config(session_ctx)
+            if exec_ref.config.get("emit_flow"):
+                emit_ctx: dict = {"_registry": self.registry, "_config": self.config}
+                depth = self._get_job_depth(job)
+                max_depth = job.config.max_sub_job_depth
+                emit_ctx["_depth_remaining"] = max(0, max_depth - depth - 1)
+                if self.project_dir:
+                    emit_ctx["_project_dir"] = self.project_dir.parent
+                exec_ref = exec_ref.with_config(emit_ctx)
+        return exec_ref
+
+    async def _monitor_surviving_run(
+        self,
+        job_id: str,
+        step_name: str,
+        run_id: str,
+        executor_state: dict,
+        exec_ref: ExecutorRef,
+    ) -> None:
+        """Monitor a surviving agent process from a previous server instance.
+
+        Creates the executor via registry.create (preserving custom registries),
+        unwraps the decorator chain, calls finalize_surviving() in the thread
+        pool, then pushes the result to the engine queue for normal processing.
+
+        Does NOT acquire the agent semaphore (process already running).
+        Does NOT acquire session lock (no prompt being sent).
+        """
+        try:
+            executor = self.registry.create(exec_ref)
+            inner = _unwrap_executor(executor)
+            if not hasattr(inner, "finalize_surviving"):
+                raise TypeError(
+                    f"Executor type {exec_ref.type} does not support finalize_surviving"
+                )
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                self._executor_pool,
+                inner.finalize_surviving,
+                executor_state,
+            )
+            await self._queue.put(("step_result", job_id, step_name, run_id, result))
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            _async_logger.error(
+                "Reattach failed for step %s (job %s, run %s): %s",
+                step_name, job_id, run_id, e, exc_info=True,
+            )
+            await self._queue.put(("step_error", job_id, step_name, run_id, e))
+
+    async def reattach_surviving_runs(self) -> int:
+        """Reattach monitoring tasks for agent steps that survived server restart.
+
+        MUST be called after _cleanup_zombie_jobs() and recover_jobs(), but
+        before run(). Runs inside the lifespan async context.
+
+        For RUNNING step runs with live PIDs:
+        - Creates _monitor_surviving_run() coroutine
+        - Registers in self._tasks to prevent _poll_external_changes kill
+
+        For SUSPENDED step runs with poll watches:
+        - Re-schedules poll watch timers (skips if already exists)
+
+        Returns the number of runs reattached.
+        """
+        reattached = 0
+        for job in self.store.active_jobs():
+            if job.created_by != "server":
+                continue
+
+            for run in self.store.running_runs(job.id):
+                if not run.executor_state or not run.pid:
+                    await self._queue.put(("step_error", job.id, run.step_name, run.id,
+                        RuntimeError("No executor_state for reattach")))
+                    continue
+                exec_ref = self._get_exec_ref_for_run(job, run)
+                task = asyncio.create_task(
+                    self._monitor_surviving_run(
+                        job.id, run.step_name, run.id, run.executor_state, exec_ref)
+                )
+                self._tasks[run.id] = task
+                reattached += 1
+                _async_logger.info(
+                    "Reattaching surviving run %s (job %s step %s, PID %d)",
+                    run.id, job.id, run.step_name, run.pid,
+                )
+
+            for run in self.store.suspended_runs(job.id):
+                if (run.watch and run.watch.mode == "poll"
+                        and run.id not in self._poll_tasks):
+                    self._schedule_poll_watch(job.id, run.id, run.watch)
+                    reattached += 1
+                    _async_logger.info(
+                        "Rescheduled poll watch for run %s (job %s step %s)",
+                        run.id, job.id, run.step_name,
+                    )
+
+        return reattached
 
     def resume_job(self, job_id: str) -> None:
         job = self.store.load_job(job_id)
