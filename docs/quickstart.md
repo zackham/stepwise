@@ -172,6 +172,29 @@ stepwise run code-review --wait --input repo_path="/path/to/repo"
 
 See [Agent Integration](agent-integration.md) for the full guide.
 
+## Stage and batch jobs
+
+For multi-job workflows, stage jobs before running them. This lets you build a batch, wire data between jobs, review the plan, and release everything at once.
+
+```bash
+# Create two staged jobs in a group
+stepwise job create my-flow --input task="Build API" --group sprint-1
+stepwise job create my-flow --input task="Write tests" --group sprint-1
+
+# Wire data: second job uses first job's output
+stepwise job create my-flow \
+  --input spec=job-<first-id>.result \
+  --group sprint-1
+
+# Review staged jobs
+stepwise job show --group sprint-1
+
+# Release the batch — engine executes in dependency order
+stepwise job run --group sprint-1
+```
+
+Jobs auto-start when their dependencies complete. See [Concepts: Job Staging](concepts.md#job-staging) for the full mental model and [CLI: Job Staging](cli.md#job-staging-commands) for all commands.
+
 ## What's next
 
 - [Concepts](concepts.md) — understand the full mental model (jobs, steps, runs, currency)

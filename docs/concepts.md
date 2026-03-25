@@ -14,6 +14,10 @@ Stepwise has three runtime concepts, a dependency system, and a control flow mec
 | **For-each** | Iterates over a list with embedded sub-flows | Items execute in parallel |
 | **Branching** | Conditional activation via step-level `when` | `when` condition, `any_of` merge |
 | **Context chain** | Session continuity across agent steps | Prior transcripts compiled into context |
+| **Job staging** | Stage, review, and release jobs before execution | STAGED → PENDING lifecycle |
+| **Groups** | Batch label for organizing staged jobs | `--group wave-1` |
+| **Job dependencies** | Ordering between jobs (not steps) | `depends_on`, auto-start cascade |
+| **Data wiring** | Cross-job output references | `--input plan=job-abc.field` |
 
 ## Jobs
 
@@ -25,7 +29,63 @@ stepwise run code-review --input repo="/path/to/repo" --input branch="feature-x"
 
 Jobs track their own lifecycle: created → running → completed/failed. They persist to SQLite — if the process restarts, the job resumes where it left off.
 
+Jobs can also be **staged** — created in a holding state before execution. Staged jobs let you build a batch, add dependencies, wire data between jobs, review the plan, and then release everything at once. See [Job Staging](#job-staging) below.
+
 Jobs can spawn **sub-jobs**. A planning step might decompose a large objective into smaller pieces, each running its own workflow. The parent step waits for the sub-job to complete, then collects its output. This recurses to any depth — jobs all the way down.
+
+## Job Staging
+
+Job staging lets you create jobs in a **STAGED** state, build up a batch with dependencies and data wiring, review the plan, and then release everything for execution.
+
+### Lifecycle
+
+```
+STAGED → (add deps, wire data, review) → job run → PENDING → RUNNING → COMPLETED/FAILED
+```
+
+Staged jobs don't execute until explicitly released. This gives you a review checkpoint between planning and execution.
+
+### Groups
+
+Groups are string labels for batch operations. Assign a job to a group at creation time:
+
+```bash
+stepwise job create my-flow --input task="Build API" --group wave-1
+stepwise job create my-flow --input task="Write tests" --group wave-1
+```
+
+Then operate on the entire group:
+
+```bash
+stepwise job show --group wave-1       # review staged jobs
+stepwise job run --group wave-1        # atomically transition all to PENDING
+```
+
+### Job Dependencies
+
+Job dependencies create ordering between jobs (not steps). A job won't start until all its dependencies have completed:
+
+```bash
+stepwise job dep job-impl-123 --after job-plan-456
+```
+
+The engine auto-starts dependents when a job completes. Cycle detection prevents deadlocks — `job dep` rejects edges that would create a cycle.
+
+### Data Wiring
+
+Data wiring references another job's output fields as inputs to a new job:
+
+```bash
+stepwise job create impl-flow --input plan=job-plan-456.plan --group batch
+```
+
+The `job-plan-456.plan` syntax means "the `plan` output field from job `job-plan-456`". This auto-creates a dependency edge — no separate `job dep` call needed. Nested paths work too: `job-abc123.hero.headline`.
+
+When the upstream job completes, the engine resolves the reference to the actual value before starting the downstream job.
+
+### Auto-Start Cascade
+
+When a job completes, the engine checks all its dependents. If a dependent is PENDING and all its dependencies are now COMPLETED, it auto-starts. This cascades through the full dependency graph — releasing a group of staged jobs with dependencies triggers a wave of execution in dependency order.
 
 ## Steps
 

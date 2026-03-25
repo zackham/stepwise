@@ -546,6 +546,59 @@ See [flow-reference.md § Decorators](flow-reference.md#decorators) for full dec
 
 ---
 
+## 8. Plan-Light to Implement
+
+**Problem:** Complex tasks need a planning phase that determines the implementation shape. Static flows can't adapt — the number and nature of implementation jobs emerges from planning. `for_each` requires the list shape to be known at author time. `emit_flow` keeps decomposition inside a single job. Sometimes you want a human to review the decomposition before execution begins.
+
+**Pattern:** Run a planning job, then stage implementation jobs that reference the plan's outputs via data wiring. Review the staged batch, then release.
+
+```bash
+# 1. Run the planning flow — blocks until complete
+stepwise run plan-task --wait --input spec="Build auth system"
+# Returns job-plan-abc with outputs: {plan, tasks}
+
+# 2. Stage implementation jobs referencing the plan
+stepwise job create implement.flow.yaml \
+  --input spec="Implement auth middleware" \
+  --input plan=job-plan-abc.plan \
+  --group auth-batch
+
+stepwise job create implement.flow.yaml \
+  --input spec="Implement auth tests" \
+  --input plan=job-plan-abc.plan \
+  --group auth-batch
+
+# 3. Add ordering between implementation jobs if needed
+stepwise job dep job-tests-456 --after job-middleware-123
+
+# 4. Review what's staged
+stepwise job show --group auth-batch
+
+# 5. Release the batch
+stepwise job run --group auth-batch
+# Engine cascades execution based on dependency graph
+```
+
+**Key mechanics:**
+- `--input plan=job-plan-abc.plan` wires data from the planning job's output and auto-creates a dependency
+- `--group auth-batch` organizes related jobs for batch review and release
+- `job run --group` atomically transitions all staged jobs to PENDING
+- The engine auto-starts jobs as their dependencies complete
+
+**When to use vs alternatives:**
+
+| Situation | Approach |
+|-----------|----------|
+| Decomposition known at author time | Static `for_each` in YAML |
+| Agent decides decomposition at runtime | `emit_flow: true` (dynamic, single job) |
+| Human reviews decomposition before execution | **Plan-light to implement** (staged, multi-job) |
+
+The plan-light pattern is most valuable when the cost of execution is high (agent steps that take minutes, deploy steps that are hard to reverse) and you want a human checkpoint between planning and doing.
+
+See [Concepts: Job Staging](concepts.md#job-staging) for the full mental model and [CLI: Job Staging](cli.md#job-staging-commands) for command reference.
+
+---
+
 ## Summary: When to Use What
 
 | Situation | Pattern |
@@ -561,4 +614,5 @@ See [flow-reference.md § Decorators](flow-reference.md#decorators) for full dec
 | Same pattern used in multiple flows | **Flow composition** — extract sub-flow, reference via `flow:` (§6) |
 | Agent step may fail transiently | **Retry decorator** — `max_retries` + `backoff` (§7) |
 | Expensive step needs a cheaper fallback | **Fallback decorator** — simpler executor as backup (§7) |
+| Planning determines implementation shape | **Plan-light to implement** — stage jobs referencing plan outputs (§8) |
 | Short output (scores, booleans, paths) | Inline `$variable` substitution — simple and direct |

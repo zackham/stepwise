@@ -10,6 +10,7 @@ See [Quickstart](quickstart.md) for installation and first-run instructions.
 |-------|----------|
 | [Core](#core-commands) | `run`, `new`, `validate`, `check`, `preflight` |
 | [Jobs](#job-commands) | `jobs`, `status`, `output`, `tail`, `logs`, `wait`, `cancel`, `fulfill`, `list` |
+| [Job Staging](#job-staging-commands) | `job create`, `job show`, `job run`, `job dep`, `job cancel`, `job rm` |
 | [Server](#server-commands) | `server start`, `server stop`, `server restart`, `server status` |
 | [Registry](#registry-commands) | `share`, `get`, `search`, `info`, `login`, `logout` |
 | [Configuration](#configuration-commands) | `config`, `init`, `templates`, `schema`, `diagram` |
@@ -442,6 +443,120 @@ Each item includes: `job_id`, `flow_name`, `run_id`, `step_name`, `prompt`, `exp
 | `--output {table,json}` | Output format (default: table) |
 | `--since DURATION` | Filter by age (e.g., `24h`, `7d`, `30m`) |
 | `--flow NAME` | Filter by flow name |
+
+---
+
+## Job Staging Commands
+
+Stage, review, and release jobs before execution. Wire data between jobs and organize them into groups. See [Concepts: Job Staging](concepts.md#job-staging) for the mental model.
+
+### `stepwise job create`
+
+Create a STAGED job from a flow file. The job won't execute until explicitly released with `job run`.
+
+```bash
+stepwise job create my-flow --input task="Build API"
+stepwise job create my-flow --input task="Build API" --group wave-1
+stepwise job create my-flow --input plan=job-abc123.plan --group wave-1
+```
+
+Data wiring: `--input key=job-id.field` references another job's output. This auto-creates a dependency edge.
+
+```
+Created job-def456 (staged, group: wave-1)
+  Auto-dependency: job-def456 → job-abc123 (via input "plan")
+```
+
+| Flag | Description |
+|------|-------------|
+| `--input KEY=VALUE` | Pass input variable (repeatable). Use `KEY=job-id.field` for cross-job data wiring |
+| `--group NAME` | Assign to a group for batch operations |
+| `--name STR` | Human-friendly job name |
+| `--objective STR` | Set job objective (default: flow filename) |
+
+---
+
+### `stepwise job show`
+
+List staged/pending jobs, or show detail for a single job.
+
+```bash
+stepwise job show                          # all staged/pending jobs
+stepwise job show --group wave-1           # jobs in a specific group
+stepwise job show job-def456               # detail for one job
+stepwise job show job-def456 --output json # JSON detail
+```
+
+```
+GROUP     ID               FLOW        STATUS    DEPS         INPUTS
+wave-1    job-abc123       plan-flow   staged    —            task="Build API"
+wave-1    job-def456       impl-flow   staged    job-abc123   plan=job-abc123.plan
+```
+
+| Flag | Description |
+|------|-------------|
+| `--group NAME` | Filter by group |
+| `--output {table,json}` | Output format (default: table) |
+
+---
+
+### `stepwise job run`
+
+Transition STAGED jobs to PENDING, making them eligible for execution. Jobs start automatically when their dependencies are met.
+
+```bash
+stepwise job run job-abc123                # release a single job
+stepwise job run --group wave-1            # release all jobs in a group
+```
+
+```
+✓ Transitioned 2 jobs to pending (group: wave-1)
+  job-abc123 → pending (no deps, starting immediately)
+  job-def456 → pending (waiting for job-abc123)
+```
+
+| Flag | Description |
+|------|-------------|
+| `--group NAME` | Transition all staged jobs in this group |
+
+---
+
+### `stepwise job dep`
+
+Add, remove, or list job dependencies.
+
+```bash
+stepwise job dep job-def456 --after job-abc123    # add dependency
+stepwise job dep job-def456 --rm job-abc123       # remove dependency
+stepwise job dep job-def456                       # list dependencies
+```
+
+Cycle detection: if adding the dependency would create a cycle, the command fails with an error.
+
+| Flag | Description |
+|------|-------------|
+| `--after JOB_ID` | Add a dependency (this job waits for the specified job) |
+| `--rm JOB_ID` | Remove a dependency |
+
+---
+
+### `stepwise job cancel`
+
+Cancel a staged or pending job.
+
+```bash
+stepwise job cancel job-def456
+```
+
+---
+
+### `stepwise job rm`
+
+Delete a staged job. Cascade-deletes its dependency edges.
+
+```bash
+stepwise job rm job-def456
+```
 
 ---
 
