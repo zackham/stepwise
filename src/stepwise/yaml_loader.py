@@ -6,6 +6,7 @@ See docs/yaml-format.md for the format specification.
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 from typing import Any
@@ -71,6 +72,29 @@ SAFE_BUILTINS = {
 }
 
 
+def _validate_expression_ast(expr: str) -> None:
+    """Reject dangerous AST patterns before eval().
+
+    Raises ValueError if the expression contains:
+    - Attribute access starting with _ (blocks __class__, __bases__, etc.)
+    - f-strings (can embed arbitrary expressions)
+    - Lambda expressions
+    """
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError as e:
+        raise ValueError(f"Invalid expression syntax: {e}") from e
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr.startswith("_"):
+            raise ValueError(
+                f"Access to '{node.attr}' is not allowed in expressions"
+            )
+        if isinstance(node, ast.JoinedStr):
+            raise ValueError("f-strings are not allowed in expressions")
+        if isinstance(node, ast.Lambda):
+            raise ValueError("Lambda expressions are not allowed")
+
+
 class YAMLLoadError(Exception):
     """Raised when a YAML workflow file is invalid."""
 
@@ -105,6 +129,7 @@ def evaluate_exit_condition(condition: str, outputs: dict, attempt: int,
         "max_attempts": max_attempts,
     }
     try:
+        _validate_expression_ast(condition)
         return bool(eval(condition, namespace))
     except Exception as e:
         raise ValueError(f"Exit condition '{condition}' failed: {e}") from e
@@ -119,6 +144,14 @@ def evaluate_when_condition(condition: str, inputs: dict) -> bool:
     namespace: dict = {"__builtins__": SAFE_BUILTINS}
     for k, v in inputs.items():
         namespace[k] = _DotDict(v) if isinstance(v, dict) else v
+    try:
+        _validate_expression_ast(condition)
+    except ValueError:
+        import logging
+        logging.getLogger("stepwise.engine").warning(
+            "when condition %r rejected by AST validator", condition
+        )
+        return False
     try:
         return bool(eval(condition, namespace))
     except (NameError, AttributeError, TypeError):
@@ -148,12 +181,16 @@ def evaluate_derived_outputs(
     results: dict[str, Any] = {}
     for field_name, expr in derived.items():
         try:
+            _validate_expression_ast(expr)
             results[field_name] = eval(expr, namespace)
         except Exception as e:
             raise ValueError(
                 f"Derived output '{field_name}' expression failed: {e}"
             ) from e
     return results
+
+
+_IDENTIFIER_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 
 
 def _parse_input_binding(local_name: str, source: str) -> InputBinding:
@@ -175,6 +212,11 @@ def _parse_inputs(inputs_data: Any, step_name: str) -> list[InputBinding]:
     if not isinstance(inputs_data, dict):
         return bindings
     for local_name, source in inputs_data.items():
+        if not _IDENTIFIER_RE.match(local_name):
+            raise ValueError(
+                f"Step '{step_name}': input name '{local_name}' is not a valid "
+                f"identifier (must match [A-Za-z_][A-Za-z0-9_]*)"
+            )
         if isinstance(source, str):
             try:
                 bindings.append(_parse_input_binding(local_name, source))

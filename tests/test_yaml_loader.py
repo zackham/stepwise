@@ -6,6 +6,8 @@ from stepwise.yaml_loader import (
     YAMLLoadError,
     _DotDict,
     evaluate_exit_condition,
+    evaluate_when_condition,
+    evaluate_derived_outputs,
     load_workflow_string,
 )
 
@@ -116,6 +118,141 @@ class TestDotDict:
         d = _DotDict({"x": 1})
         with pytest.raises(AttributeError):
             _ = d.missing
+
+
+class TestExpressionSecurity:
+    """AST validator blocks dunder traversal while preserving safe patterns."""
+
+    # ── Blocked patterns ────────────────────────────────────────
+
+    def test_class_traversal_blocked(self):
+        with pytest.raises(ValueError, match="__class__"):
+            evaluate_exit_condition(
+                "().__class__.__bases__[0].__subclasses__()", {}, attempt=1
+            )
+
+    def test_dunder_on_outputs(self):
+        with pytest.raises(ValueError, match="__class__"):
+            evaluate_exit_condition("outputs.__class__", {"x": 1}, attempt=1)
+
+    def test_dunder_globals(self):
+        with pytest.raises(ValueError, match="__globals__"):
+            evaluate_exit_condition("float.__globals__", {}, attempt=1)
+
+    def test_fstring_blocked(self):
+        with pytest.raises(ValueError, match="f-string"):
+            evaluate_exit_condition("f'{True}'", {}, attempt=1)
+
+    def test_lambda_blocked(self):
+        with pytest.raises(ValueError, match="Lambda"):
+            evaluate_exit_condition("(lambda: 1)()", {}, attempt=1)
+
+    def test_import_blocked(self):
+        """__import__ is not in SAFE_BUILTINS — eval raises NameError → ValueError."""
+        with pytest.raises(ValueError):
+            evaluate_exit_condition("__import__('os')", {}, attempt=1)
+
+    def test_derived_blocks_dunder(self):
+        with pytest.raises(ValueError, match="__name__"):
+            evaluate_derived_outputs(
+                {"evil": "val.__class__.__name__"}, {"val": "hello"}
+            )
+
+    # ── when collapses to False (not raise) ─────────────────────
+
+    def test_when_dunder_returns_false(self):
+        result = evaluate_when_condition("x.__class__.__bases__", {"x": "hi"})
+        assert result is False
+
+    def test_when_fstring_returns_false(self):
+        result = evaluate_when_condition("f'{x}'", {"x": "hi"})
+        assert result is False
+
+    def test_when_missing_var_returns_false(self):
+        result = evaluate_when_condition("undefined > 5", {})
+        assert result is False
+
+    # ── Backward-compatible patterns that MUST still work ───────
+
+    def test_generator_with_any(self):
+        assert evaluate_exit_condition(
+            "any(s < 0.5 for s in outputs.scores)",
+            {"scores": [0.3, 0.7]}, attempt=1,
+        )
+
+    def test_generator_with_all(self):
+        assert evaluate_exit_condition(
+            "all(s > 0.1 for s in outputs.scores)",
+            {"scores": [0.3, 0.7]}, attempt=1,
+        )
+
+    def test_dict_get_method(self):
+        assert evaluate_exit_condition(
+            "outputs.get('missing', 'fallback') == 'fallback'",
+            {}, attempt=1,
+        )
+
+    def test_dict_get_with_float_cast(self):
+        """Real pattern from examples/report-test-loop.flow.yaml:18."""
+        assert evaluate_exit_condition(
+            "float(outputs.get('quality_score', 0)) >= 0.8",
+            {"quality_score": "0.9"}, attempt=1,
+        )
+
+    def test_delegated_get_pattern(self):
+        """Real pattern from CLAUDE.md:343 — dict .get() with underscore key."""
+        assert evaluate_exit_condition(
+            "outputs.get('_delegated', False)",
+            {"_delegated": True}, attempt=1,
+        )
+
+    def test_is_comparison(self):
+        """Real pattern from test_yaml_loader.py:88."""
+        assert evaluate_exit_condition(
+            "max_attempts is not None and attempt >= max_attempts",
+            {}, attempt=5, max_attempts=5,
+        )
+
+    def test_sorted_indexing(self):
+        assert evaluate_exit_condition(
+            "sorted(outputs.scores)[0] == 1",
+            {"scores": [3, 1, 2]}, attempt=1,
+        )
+
+
+class TestInputNameValidation:
+    def test_valid_identifier_accepted(self):
+        wf = load_workflow_string("""
+steps:
+  s:
+    run: echo ok
+    outputs: [x]
+    inputs:
+      my_url: $job.url
+""")
+        assert wf.steps["s"].inputs[0].local_name == "my_url"
+
+    def test_hyphenated_name_rejected(self):
+        with pytest.raises(Exception, match="not a valid identifier"):
+            load_workflow_string("""
+steps:
+  s:
+    run: echo ok
+    outputs: [x]
+    inputs:
+      foo-bar: $job.val
+""")
+
+    def test_numeric_prefix_rejected(self):
+        with pytest.raises(Exception, match="not a valid identifier"):
+            load_workflow_string("""
+steps:
+  s:
+    run: echo ok
+    outputs: [x]
+    inputs:
+      123abc: $job.val
+""")
 
 
 # ── YAML Loading ─────────────────────────────────────────────────────

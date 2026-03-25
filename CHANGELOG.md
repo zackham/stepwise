@@ -5,6 +5,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic V
 
 ## [Unreleased]
 
+### Security
+- Add AST validation to exit rule, `when`, and derived output expressions — blocks
+  `__class__`/`__bases__`/`__globals__` attribute traversal
+- Shell-escape user input values interpolated into `command` and `check_command`
+  config fields via `shlex.quote()` — prevents shell injection through crafted inputs
+- Namespace user step inputs under `STEPWISE_INPUT_` prefix in environment variables
+
+### Deprecated
+- Bare input environment variables (`$url`, `os.environ["url"]`). Use
+  `$STEPWISE_INPUT_url` / `os.environ["STEPWISE_INPUT_url"]` instead. Bare names
+  still exported during deprecation (except system-critical names like PATH, HOME).
+
+### Changed
+- Input names must be valid identifiers (`[A-Za-z_][A-Za-z0-9_]*`). Use underscores
+  instead of hyphens.
+- `$var` placeholders in `command`/`check_command` fields are now automatically
+  shell-quoted. Do not pre-quote placeholders.
+
 ### Changed
 - **Rename `executor: human` → `executor: external`** — The "human" executor type is now called "external" across the entire codebase. This is a breaking change: update `executor: human` to `executor: external` in all `.flow.yaml` files. The underlying suspend/fulfill mechanism is unchanged. Class `HumanExecutor` → `ExternalExecutor`, event `human.rerun` → `external.rerun`, schema key `humanSteps` → `externalSteps`, web component `HumanInputPanel` → `ExternalInputPanel`.
 
