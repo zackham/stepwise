@@ -150,8 +150,8 @@ class TestDeadPIDDetectedOnRestart:
         # Import and call the cleanup function
         from stepwise.server import _cleanup_zombie_jobs
 
-        # Mock os.kill to raise ProcessLookupError (PID dead)
-        with patch("stepwise.server.os.kill", side_effect=ProcessLookupError):
+        # Mock verify_agent_pid to return False (PID dead or recycled)
+        with patch("stepwise.server.verify_agent_pid", return_value=False):
             # Also mock os.killpg to avoid side effects
             with patch("stepwise.server.os.killpg"):
                 _cleanup_zombie_jobs(store)
@@ -172,8 +172,8 @@ class TestDeadPIDDetectedOnRestart:
 
         from stepwise.server import _cleanup_zombie_jobs
 
-        # Mock os.kill to succeed (PID alive)
-        with patch("stepwise.server.os.kill"):
+        # Mock verify_agent_pid to return True (PID alive and verified)
+        with patch("stepwise.server.verify_agent_pid", return_value=True):
             _cleanup_zombie_jobs(store)
 
         loaded = store.load_run(run.id)
