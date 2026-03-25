@@ -8,7 +8,8 @@ import json
 import logging
 import os
 import shlex
-import shlex
+import shutil
+import signal
 import subprocess
 import threading
 from datetime import datetime, timezone
@@ -370,6 +371,7 @@ class Engine:
         job.status = JobStatus.CANCELLED
         job.updated_at = _now()
         self.store.save_job(job)
+        self._cleanup_job_sessions(job.id, job)
 
     # ── Step Control ──────────────────────────────────────────────────────
 
@@ -947,7 +949,7 @@ class Engine:
                 job.updated_at = _now()
                 self.store.save_job(job)
                 self._emit(job.id, JOB_COMPLETED)
-                self._cleanup_job_sessions(job.id)
+                self._cleanup_job_sessions(job.id, job)
                 self._check_dependent_jobs(job.id)
                 return
 
@@ -964,14 +966,14 @@ class Engine:
                         job.updated_at = _now()
                         self.store.save_job(job)
                         self._emit(job.id, JOB_COMPLETED)
-                        self._cleanup_job_sessions(job.id)
+                        self._cleanup_job_sessions(job.id, job)
                         self._check_dependent_jobs(job.id)
                     else:
                         job.status = JobStatus.FAILED
                         job.updated_at = _now()
                         self.store.save_job(job)
                         self._emit(job.id, JOB_FAILED, {"reason": "no_terminal_reached"})
-                        self._cleanup_job_sessions(job.id)
+                        self._cleanup_job_sessions(job.id, job)
                 return  # No progress possible, wait for next tick
 
     # ── Readiness ─────────────────────────────────────────────────────────
@@ -1326,34 +1328,81 @@ class Engine:
                 self.store.save_run(run)
                 self._emit(job.id, STEP_SKIPPED, {"step": step_name, "reason": "settlement"})
 
-    def _cleanup_job_sessions(self, job_id: str) -> None:
+    def _cleanup_job_sessions(self, job_id: str, job: Job | None = None) -> None:
         """Close acpx queue owners for all agent sessions used by this job.
 
         Runs in a daemon thread so it doesn't block the engine.
         """
+        if job is None:
+            try:
+                job = self.store.load_job(job_id)
+            except Exception:
+                return
+
         runs = self.store.runs_for_job(job_id)
-        session_names: set[str] = set()
+        # Collect (session_name, agent_name, session_id) tuples, deduped by name
+        sessions: dict[str, tuple[str, str | None]] = {}  # name → (agent, session_id)
         for run in runs:
             es = run.executor_state or {}
             name = es.get("session_name")
-            if name:
-                session_names.add(name)
+            if name and name not in sessions:
+                step_def = job.workflow.steps.get(run.step_name)
+                agent = "claude"
+                if step_def and step_def.executor and step_def.executor.config:
+                    agent = step_def.executor.config.get("agent", "claude")
+                session_id = es.get("session_id")
+                sessions[name] = (agent, session_id)
 
-        if not session_names:
+        if not sessions:
             return
 
-        def _close_sessions(names: set[str]) -> None:
-            for name in names:
-                try:
-                    subprocess.run(
-                        ["acpx", "claude", "sessions", "close", "--name", name],
-                        capture_output=True, timeout=10,
-                    )
-                    _engine_logger.debug("Closed session queue owner: %s", name)
-                except Exception as exc:
-                    _engine_logger.warning("Failed to close session %s: %s", name, exc)
+        acpx_path = shutil.which("acpx") or "acpx"
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
-        t = threading.Thread(target=_close_sessions, args=(session_names,), daemon=True)
+        def _close_sessions(
+            sess: dict[str, tuple[str, str | None]],
+            acpx: str,
+            clean_env: dict[str, str],
+        ) -> None:
+            from stepwise.agent import _find_queue_owners, _is_pid_alive
+
+            for name, (agent, session_id) in sess.items():
+                closed = False
+                try:
+                    result = subprocess.run(
+                        [acpx, agent, "sessions", "close", "--name", name],
+                        capture_output=True, timeout=10, env=clean_env,
+                    )
+                    if result.returncode == 0:
+                        _engine_logger.debug("Closed session queue owner: %s", name)
+                        closed = True
+                    else:
+                        _engine_logger.debug(
+                            "acpx sessions close failed (rc=%d) for %s, falling back to kill",
+                            result.returncode, name,
+                        )
+                except Exception as exc:
+                    _engine_logger.debug("acpx sessions close failed for %s: %s", name, exc)
+
+                if not closed and session_id:
+                    try:
+                        for info in _find_queue_owners():
+                            if info.session_id == session_id:
+                                if _is_pid_alive(info.pid):
+                                    os.kill(info.pid, signal.SIGTERM)
+                                    _engine_logger.debug(
+                                        "Killed queue owner pid=%d for session %s",
+                                        info.pid, session_id,
+                                    )
+                                break
+                    except Exception as exc:
+                        _engine_logger.warning(
+                            "Failed to kill queue owner for session %s: %s", name, exc,
+                        )
+
+        t = threading.Thread(
+            target=_close_sessions, args=(sessions, acpx_path, env), daemon=True,
+        )
         t.start()
 
     # ── Launching ─────────────────────────────────────────────────────────
@@ -2815,7 +2864,7 @@ class Engine:
                                 "step": run.step_name,
                                 "rule": rule.name,
                             })
-                            self._cleanup_job_sessions(job.id)
+                            self._cleanup_job_sessions(job.id, job)
                             return
                         case "advance":
                             return  # Move past the failure
@@ -2836,7 +2885,7 @@ class Engine:
             "step": run.step_name,
             "error": run.error,
         })
-        self._cleanup_job_sessions(job.id)
+        self._cleanup_job_sessions(job.id, job)
 
     # ── Events ────────────────────────────────────────────────────────────
 
@@ -3425,7 +3474,7 @@ class AsyncEngine(Engine):
             job.updated_at = _now()
             self.store.save_job(job)
             self._emit(job.id, JOB_COMPLETED)
-            self._cleanup_job_sessions(job.id)
+            self._cleanup_job_sessions(job.id, job)
             self._check_dependent_jobs(job.id)
         elif job.status == JobStatus.RUNNING:
             # Check for settled-but-failed: nothing active, nothing ready, no terminal completed
@@ -3441,14 +3490,14 @@ class AsyncEngine(Engine):
                     job.updated_at = _now()
                     self.store.save_job(job)
                     self._emit(job.id, JOB_COMPLETED)
-                    self._cleanup_job_sessions(job.id)
+                    self._cleanup_job_sessions(job.id, job)
                     self._check_dependent_jobs(job.id)
                 else:
                     job.status = JobStatus.FAILED
                     job.updated_at = _now()
                     self.store.save_job(job)
                     self._emit(job.id, JOB_FAILED, {"reason": "no_terminal_reached"})
-                    self._cleanup_job_sessions(job.id)
+                    self._cleanup_job_sessions(job.id, job)
 
         # Signal done if terminal
         job = self.store.load_job(job_id)
