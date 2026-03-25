@@ -246,6 +246,7 @@ export interface EngineStatus {
   total_jobs: number;
   registered_executors: string[];
   cwd?: string;
+  version?: string;
 }
 
 // ── Agent Streaming ───────────────────────────────────────────────────

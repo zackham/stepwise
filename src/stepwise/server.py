@@ -1165,6 +1165,8 @@ def get_step_events(
 def get_run_cost(run_id: str):
     """Get accumulated cost for a run from step events."""
     engine = _get_engine()
+    if engine.billing_mode == "subscription":
+        return {"run_id": run_id, "cost_usd": 0}
     cost = engine.store.accumulated_cost(run_id)
     return {"run_id": run_id, "cost_usd": cost}
 
@@ -1264,6 +1266,8 @@ def get_job_cost(job_id: str):
         engine.get_job(job_id)  # validate job exists
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    if engine.billing_mode == "subscription":
+        return {"job_id": job_id, "cost_usd": 0}
     cost = engine.job_cost(job_id)
     return {"job_id": job_id, "cost_usd": round(cost, 4) if cost else 0}
 
@@ -1361,9 +1365,15 @@ def list_suspended_jobs(
 @app.get("/api/health")
 def health_check():
     """Health check endpoint for server detection and identity verification."""
+    from importlib.metadata import version
     engine = _get_engine()
+    try:
+        ver = version("stepwise-run")
+    except Exception:
+        ver = "unknown"
     return {
         "status": "ok",
+        "version": ver,
         "active_jobs": len(engine.store.active_jobs()),
         "project_path": str(_project_dir) if _project_dir else None,
     }
@@ -1390,11 +1400,17 @@ def engine_status():
     engine = _get_engine()
     active = engine.store.active_jobs()
     all_jobs = engine.store.all_jobs()
+    from importlib.metadata import version
+    try:
+        ver = version("stepwise-run")
+    except Exception:
+        ver = "unknown"
     return {
         "active_jobs": len(active),
         "total_jobs": len(all_jobs),
         "registered_executors": list(engine.registry._factories.keys()),
         "cwd": os.getcwd(),
+        "version": ver,
     }
 
 
