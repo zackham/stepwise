@@ -898,6 +898,28 @@ class LLMExecutor(Executor):
         }]
 
     @staticmethod
+    def _unescape_artifact_strings(artifact: dict) -> dict:
+        """Unescape JSON escape sequences in string values of a parsed artifact.
+
+        LLMs frequently produce double-escaped sequences like ``\\\\n`` in JSON
+        or tool-call output when they intend actual newlines.  After
+        ``json.loads`` these survive as literal two-char ``\\n`` sequences
+        instead of real newline characters, corrupting markdown and other
+        formatted text for downstream consumers.
+        """
+        out: dict = {}
+        for k, v in artifact.items():
+            if isinstance(v, str) and "\\" in v:
+                v = (
+                    v.replace("\\n", "\n")
+                    .replace("\\t", "\t")
+                    .replace("\\r", "\r")
+                    .replace('\\"', '"')
+                )
+            out[k] = v
+        return out
+
+    @staticmethod
     def _strip_code_fences(content: str) -> str:
         """Strip markdown code fences from content, returning inner text."""
         fence_start = content.find("```")
@@ -939,7 +961,7 @@ class LLMExecutor(Executor):
                 try:
                     parsed = json.loads(stripped)
                     if isinstance(parsed, dict) and field in parsed:
-                        return parsed, "json_content"
+                        return self._unescape_artifact_strings(parsed), "json_content"
                 except (json.JSONDecodeError, ValueError):
                     pass
                 # Otherwise use raw content as the field value
@@ -950,7 +972,7 @@ class LLMExecutor(Executor):
                     if tc.get("name") == "step_output":
                         args = tc.get("arguments", {})
                         if isinstance(args, dict) and field in args:
-                            return args, "tool_call"
+                            return self._unescape_artifact_strings(args), "tool_call"
             return None, "none"
 
         # ── Multi-field extraction ───────────────────────────────────────
@@ -999,14 +1021,14 @@ class LLMExecutor(Executor):
             ct_has_fields = all(f in content_result for f in output_fields)
             if ct_has_fields and ct_total > tc_total * 3:
                 logger.info(f"Preferring content ({ct_total} chars) over tool_call ({tc_total} chars)")
-                return content_result, "json_content_preferred"
-            return tool_call_result, "tool_call"
+                return self._unescape_artifact_strings(content_result), "json_content_preferred"
+            return self._unescape_artifact_strings(tool_call_result), "tool_call"
 
         if tool_call_result:
-            return tool_call_result, "tool_call"
+            return self._unescape_artifact_strings(tool_call_result), "tool_call"
 
         if content_result:
-            return content_result, "json_content"
+            return self._unescape_artifact_strings(content_result), "json_content"
 
         return None, "none"
 
