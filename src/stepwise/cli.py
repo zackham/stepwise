@@ -3514,6 +3514,34 @@ def _list_doc_topics(docs_dir: Path) -> None:
     print(f"\nUse 'stepwise docs <topic>' to read a specific topic.")
 
 
+def _search_doc_content(candidates: list, query: str) -> list:
+    """Search doc file content for query string, return matching sections."""
+    query_lower = query.lower()
+    results = []
+    for md_file in candidates:
+        text = md_file.read_text()
+        if query_lower not in text.lower():
+            continue
+        # Split into sections by markdown headers
+        sections = []
+        current_title = md_file.stem
+        current_lines: list[str] = []
+        for line in text.splitlines():
+            if line.startswith("#"):
+                if current_lines:
+                    sections.append((current_title, "\n".join(current_lines)))
+                current_title = line.lstrip("#").strip()
+                current_lines = [line]
+            else:
+                current_lines.append(line)
+        if current_lines:
+            sections.append((current_title, "\n".join(current_lines)))
+        for title, body in sections:
+            if query_lower in body.lower():
+                results.append((md_file.stem, title, body))
+    return results
+
+
 def cmd_docs(args: argparse.Namespace) -> int:
     """Print reference documentation."""
     from stepwise.project import get_docs_dir
@@ -3546,7 +3574,16 @@ def cmd_docs(args: argparse.Namespace) -> int:
                 match = c
                 break
 
+    # Content search fallback: find sections containing the query
     if match is None:
+        results = _search_doc_content(candidates, topic)
+        if results:
+            print(f"No exact topic match for '{topic}'. Showing matching sections:\n")
+            for file_stem, section_title, section_text in results:
+                print(f"── {file_stem} > {section_title} ──\n")
+                print(section_text.strip())
+                print()
+            return EXIT_SUCCESS
         print(f"No documentation found for '{topic}'.", file=sys.stderr)
         print("Run 'stepwise docs' to see available topics.", file=sys.stderr)
         return EXIT_USAGE_ERROR
