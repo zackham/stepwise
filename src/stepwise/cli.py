@@ -16,7 +16,9 @@ Usage:
     stepwise status <job-id>               Show job detail
     stepwise cancel <job-id> [--output]     Cancel running job
     stepwise list --suspended [--output]   List suspended steps across jobs
-    stepwise wait <job-id>                 Block until job completes or suspends
+    stepwise wait <job-id> [...]           Block until job(s) complete or suspend
+    stepwise wait --all <id1> <id2> ...    Wait for all jobs
+    stepwise wait --any <id1> <id2> ...    Wait for first job
     stepwise validate <flow>               Validate flow syntax
     stepwise flows                         List flows in this project
     stepwise templates                     List templates
@@ -3457,19 +3459,13 @@ def cmd_fulfill(args: argparse.Namespace) -> int:
         store.close()
 
 
-def cmd_wait(args: argparse.Namespace) -> int:
-    """Block until a job reaches terminal state or suspension.
-
-    Uses the same WebSocket-driven wait loop as --wait mode.
-    Supports SIGTSTP (ctrl-z) to detach without cancelling the job.
-    """
-    # Server routing: use WS-driven wait loop (same as --wait mode)
+def _wait_single(args: argparse.Namespace, job_id: str) -> int:
+    """Single-job wait — backward-compatible path (original cmd_wait logic)."""
     server_url = _detect_server_url(args)
     if server_url:
         from stepwise.runner import wait_for_job_id
-        return wait_for_job_id(server_url, args.job_id)
+        return wait_for_job_id(server_url, job_id)
 
-    # Direct (no server): fall back to local engine path
     project = _find_project_or_exit(args)
 
     from stepwise.engine import Engine
@@ -3480,13 +3476,50 @@ def cmd_wait(args: argparse.Namespace) -> int:
     store = SQLiteStore(str(project.db_path))
     try:
         try:
-            store.load_job(args.job_id)
+            store.load_job(job_id)
         except KeyError:
-            print(json.dumps({"status": "error", "error": f"Job not found: {args.job_id}"}))
+            print(json.dumps({"status": "error", "error": f"Job not found: {job_id}"}))
             return EXIT_JOB_FAILED
 
         engine = Engine(store, create_default_registry(), jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir)
-        return wait_for_job(engine, store, args.job_id)
+        return wait_for_job(engine, store, job_id, project_dir=project.dot_dir)
+    finally:
+        store.close()
+
+
+def cmd_wait(args: argparse.Namespace) -> int:
+    """Block until job(s) reach terminal state or suspension."""
+    job_ids = args.job_ids
+    wait_mode = getattr(args, "wait_mode", None)
+
+    # Multiple jobs without --all/--any is ambiguous
+    if len(job_ids) > 1 and not wait_mode:
+        print(json.dumps({"status": "error",
+                          "error": "Multiple job IDs require --all or --any flag"}))
+        return EXIT_USAGE_ERROR
+
+    # Single job without flags → backward-compatible single-job path
+    if len(job_ids) == 1 and not wait_mode:
+        return _wait_single(args, job_ids[0])
+
+    # Multi-job path (or single job with explicit --all/--any)
+    project = _find_project_or_exit(args)
+    server_url = _detect_server_url(args)
+    if server_url:
+        from stepwise.runner import wait_for_job_ids
+        return wait_for_job_ids(server_url, job_ids, wait_mode, project_dir=project.dot_dir)
+
+    # Local (no-server) multi-job wait
+    from stepwise.engine import Engine
+    from stepwise.registry_factory import create_default_registry
+    from stepwise.runner import wait_for_jobs
+    from stepwise.store import SQLiteStore
+
+    store = SQLiteStore(str(project.db_path))
+    try:
+        engine = Engine(store, create_default_registry(), jobs_dir=str(project.jobs_dir),
+                        project_dir=project.dot_dir)
+        return wait_for_jobs(engine, store, job_ids, wait_mode, project_dir=project.dot_dir)
     finally:
         store.close()
 
@@ -4204,8 +4237,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_list.add_argument("--flow", help="Filter by flow name")
 
     # wait
-    p_wait = sub.add_parser("wait", help="Block until job completes or suspends")
-    p_wait.add_argument("job_id", help="Job ID to wait on")
+    p_wait = sub.add_parser("wait", help="Block until job(s) complete or suspend")
+    p_wait.add_argument("job_ids", nargs="+", metavar="JOB_ID", help="Job ID(s) to wait on")
+    wait_mode = p_wait.add_mutually_exclusive_group()
+    wait_mode.add_argument("--all", dest="wait_mode", action="store_const", const="all",
+                           help="Wait for all jobs to reach terminal state")
+    wait_mode.add_argument("--any", dest="wait_mode", action="store_const", const="any",
+                           help="Wait for first job to reach terminal state")
 
     # fulfill
     p_fulfill = sub.add_parser("fulfill", help="Satisfy a suspended external step")
