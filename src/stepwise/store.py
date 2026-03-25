@@ -318,6 +318,19 @@ class SQLiteStore:
             queue.extend(self.get_job_dependencies(current))
         return False
 
+    def jobs_in_group(self, group: str) -> list[Job]:
+        """Return all jobs belonging to a group."""
+        rows = self._conn.execute(
+            "SELECT * FROM jobs WHERE job_group = ? ORDER BY created_at",
+            (group,),
+        ).fetchall()
+        return [self._row_to_job(r) for r in rows]
+
+    def job_dependents(self, job_id: str) -> list[Job]:
+        """Return Job objects that depend on the given job."""
+        dep_ids = self.get_job_dependents(job_id)
+        return [self.load_job(jid) for jid in dep_ids]
+
     def pending_jobs_with_deps_met(self) -> list[Job]:
         """Return PENDING jobs whose dependencies are all COMPLETED (or have no deps).
 

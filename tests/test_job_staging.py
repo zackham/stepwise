@@ -134,6 +134,33 @@ class TestPendingJobsWithDepsMet:
         assert jobs == []
 
 
+class TestJobsInGroup:
+    def test_returns_jobs_in_group(self, store):
+        j1 = _make_job(store, "a", group="g1")
+        j2 = _make_job(store, "b", group="g1")
+        _make_job(store, "c", group="g2")
+        jobs = store.jobs_in_group("g1")
+        assert {j.id for j in jobs} == {j1.id, j2.id}
+
+    def test_empty_group(self, store):
+        assert store.jobs_in_group("nonexistent") == []
+
+
+class TestJobDependents:
+    def test_returns_dependent_jobs(self, store):
+        j1 = _make_job(store, "a")
+        j2 = _make_job(store, "b")
+        j3 = _make_job(store, "c")
+        store.add_job_dependency(j2.id, j1.id)
+        store.add_job_dependency(j3.id, j1.id)
+        dependents = store.job_dependents(j1.id)
+        assert {j.id for j in dependents} == {j2.id, j3.id}
+
+    def test_no_dependents(self, store):
+        j1 = _make_job(store, "a")
+        assert store.job_dependents(j1.id) == []
+
+
 class TestTransitionGroup:
     def test_transitions_staged_to_pending(self, store):
         j1 = _make_job(store, "a", status=JobStatus.STAGED, group="g1")
