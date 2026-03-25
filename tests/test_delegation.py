@@ -428,7 +428,7 @@ class TestDelegatedWsLoopHelpers:
         asyncio.run(_run())
 
     def test_fetch_job_state_retries_on_404(self):
-        """_fetch_job_state retries up to 3 times when server returns 404."""
+        """_fetch_job_state retries on 404 with exponential backoff."""
         call_count = 0
 
         async def _get(url):
@@ -459,10 +459,13 @@ class TestDelegatedWsLoopHelpers:
         with patch("stepwise.runner.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             asyncio.run(_run())
             assert mock_sleep.await_count == 2
-            mock_sleep.assert_awaited_with(1)
+            # Exponential backoff: 0.5 * 2^0, 0.5 * 2^1
+            mock_sleep.assert_any_await(0.5)
+            mock_sleep.assert_any_await(1.0)
 
     def test_fetch_job_state_raises_after_retries_exhausted(self):
-        """_fetch_job_state raises after 3 failed 404 attempts."""
+        """_fetch_job_state raises JobNotFoundError after 8 failed 404 attempts."""
+        from stepwise.runner import JobNotFoundError
         call_count = 0
 
         async def _get(url):
@@ -481,13 +484,13 @@ class TestDelegatedWsLoopHelpers:
         client.get = _get
 
         async def _run():
-            with pytest.raises(httpx.HTTPStatusError):
+            with pytest.raises(JobNotFoundError, match="not found after 8 retries"):
                 await _fetch_job_state(client, "j1")
 
         with patch("stepwise.runner.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             asyncio.run(_run())
-            assert call_count == 3
-            assert mock_sleep.await_count == 2
+            assert call_count == 8
+            assert mock_sleep.await_count == 7
 
     def test_suspension_detection(self):
         """_is_blocked_by_suspension_from_runs detects when job is blocked."""

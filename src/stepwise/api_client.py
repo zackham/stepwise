@@ -6,6 +6,7 @@ Used by CLI when a server is running, instead of direct SQLite access.
 from __future__ import annotations
 
 import json
+import time
 import urllib.request
 import urllib.error
 from typing import Any
@@ -160,10 +161,21 @@ class StepwiseClient:
         Note: The server doesn't have a native wait endpoint yet,
         so this polls status until terminal/suspended.
         """
-        import time
+
+        max_retries = 8
+        not_found_count = 0
 
         while True:
-            status = self.status(job_id)
+            try:
+                status = self.status(job_id)
+            except StepwiseAPIError as e:
+                if e.status == 404 and not_found_count < max_retries:
+                    not_found_count += 1
+                    time.sleep(min(0.5 * (2 ** (not_found_count - 1)), 8))
+                    continue
+                raise
+
+            not_found_count = 0  # reset on success
             job_status = status.get("status", "")
 
             if job_status in ("completed", "failed", "cancelled"):
