@@ -160,26 +160,46 @@ def _ws_url_from_server(server_url: str) -> str:
     return url.replace("http://", "ws://", 1) + "/ws"
 
 
+class JobNotFoundError(Exception):
+    """Raised when a job is not found after exhausting retries."""
+    pass
+
+
 async def _fetch_job_state(
     client, job_id: str,
 ) -> tuple[dict, list[dict]]:
     """Fetch job and runs from the server. Returns (job_dict, runs_list).
 
-    Both GETs retry on 404 up to 3 times with 1s backoff — the server may not
+    Both GETs retry on 404 with exponential backoff — the server may not
     have indexed the job yet immediately after creation.
     """
-    for attempt in range(3):
+    max_retries = 8
+    backoff = 0.5
+
+    for attempt in range(max_retries):
         job_resp = await client.get(f"/api/jobs/{job_id}")
-        if job_resp.status_code != 404 or attempt == 2:
+        if job_resp.status_code != 404:
             break
-        await asyncio.sleep(1)
+        if attempt == max_retries - 1:
+            raise JobNotFoundError(
+                f"Job {job_id} not found after {max_retries} retries (~30s). "
+                f"The job may still be running — check with: stepwise wait {job_id}"
+            )
+        await asyncio.sleep(backoff * (2 ** attempt))
     job_resp.raise_for_status()
-    for attempt in range(3):
+
+    for attempt in range(max_retries):
         runs_resp = await client.get(f"/api/jobs/{job_id}/runs")
-        if runs_resp.status_code != 404 or attempt == 2:
+        if runs_resp.status_code != 404:
             break
-        await asyncio.sleep(1)
+        if attempt == max_retries - 1:
+            raise JobNotFoundError(
+                f"Job {job_id} runs not found after {max_retries} retries (~30s). "
+                f"The job may still be running — check with: stepwise wait {job_id}"
+            )
+        await asyncio.sleep(backoff * (2 ** attempt))
     runs_resp.raise_for_status()
+
     return job_resp.json(), runs_resp.json()
 
 
@@ -1093,6 +1113,13 @@ async def _delegated_wait_ws_loop(
                 # Fetch state
                 try:
                     job_data, runs = await _fetch_job_state(client, job_id)
+                except JobNotFoundError as e:
+                    _json_stdout({
+                        "status": "error",
+                        "exit_code": EXIT_JOB_FAILED,
+                        "error": str(e),
+                    })
+                    return EXIT_JOB_FAILED
                 except Exception as e:
                     _json_stdout({
                         "status": "error",
