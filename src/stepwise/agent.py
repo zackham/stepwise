@@ -356,6 +356,37 @@ def cleanup_orphaned_acpx(active_pids: set[int] | None = None) -> list[tuple[int
     return killed
 
 
+# ── Agent environment builder ─────────────────────────────────────
+
+
+def _build_agent_env(
+    config: dict,
+    context: ExecutionContext,
+    step_io: Path,
+    working_dir: str,
+) -> dict[str, str]:
+    """Build environment variables for an agent subprocess.
+
+    Mirrors ScriptExecutor's STEPWISE_* env vars and adds
+    STEPWISE_OUTPUT_FILE when the step declares outputs.
+    """
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+
+    # Stepwise env vars for agent processes (parity with ScriptExecutor)
+    env["STEPWISE_STEP_NAME"] = context.step_name
+    env["STEPWISE_ATTEMPT"] = str(context.attempt)
+    env["STEPWISE_STEP_IO"] = str(step_io)
+
+    # Output file for structured output bridging
+    output_fields = config.get("output_fields")
+    if output_fields:
+        output_filename = config.get("output_path") or f"{context.step_name}-output.json"
+        output_file_abs = str((Path(working_dir) / output_filename).resolve())
+        env["STEPWISE_OUTPUT_FILE"] = output_file_abs
+
+    return env
+
+
 # ── ACP Backend (via acpx) ──────────────────────────────────────────
 
 
@@ -398,7 +429,7 @@ class AcpxBackend:
         # Output file for NDJSON stream
         output_file = step_io / f"{context.step_name}-{context.attempt}.output.jsonl"
 
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        env = _build_agent_env(config, context, step_io, working_dir)
 
         # Ensure named session exists (acpx requires it before prompting).
         # Short timeout + non-fatal: if ensure fails, acpx prompt will fail
