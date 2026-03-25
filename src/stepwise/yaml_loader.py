@@ -1348,30 +1348,3 @@ def load_workflow_string(yaml_str: str) -> WorkflowDefinition:
         raise YAMLLoadError(validation_errors)
 
     return workflow
-
-
-def apply_fixes(file_path: str, fixes: list[dict]) -> str:
-    """Apply auto-fixes to a flow YAML file using ruamel.yaml round-trip.
-
-    Returns the updated YAML string. Does NOT write to disk (caller decides).
-    """
-    from io import StringIO
-
-    from ruamel.yaml import YAML
-
-    ryaml = YAML()
-    ryaml.preserve_quotes = True
-
-    with open(file_path) as f:
-        data = ryaml.load(f)
-
-    for fix in fixes:
-        if fix["fix"] == "add_max_iterations":
-            step = data["steps"][fix["step"]]
-            exits = step.get("exits", [])
-            if fix["rule_index"] < len(exits):
-                exits[fix["rule_index"]]["max_iterations"] = fix["value"]
-
-    buf = StringIO()
-    ryaml.dump(data, buf)
-    return buf.getvalue()
