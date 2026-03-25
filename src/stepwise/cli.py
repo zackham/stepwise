@@ -3461,12 +3461,11 @@ def cmd_fulfill(args: argparse.Namespace) -> int:
 
 def _wait_single(args: argparse.Namespace, job_id: str) -> int:
     """Single-job wait — backward-compatible path (original cmd_wait logic)."""
+    project = _find_project_or_exit(args)
     server_url = _detect_server_url(args)
     if server_url:
         from stepwise.runner import wait_for_job_id
-        return wait_for_job_id(server_url, job_id)
-
-    project = _find_project_or_exit(args)
+        return wait_for_job_id(server_url, job_id, project_dir=project.dot_dir)
 
     from stepwise.engine import Engine
     from stepwise.registry_factory import create_default_registry
