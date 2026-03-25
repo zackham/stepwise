@@ -145,6 +145,46 @@ class Engine:
         self._injected_contexts: dict[str, list[str]] = {}  # job_id -> contexts
         self._rerun_steps: dict[str, set[str]] = {}  # job_id -> step names to bypass cache
 
+    # ── Cross-Job Data Wiring ────────────────────────────────────────────
+
+    def _process_job_ref_inputs(self, job: Job) -> list[str]:
+        """Validate $job_ref inputs and return list of referenced job IDs.
+
+        Raises ValueError if a referenced job doesn't exist.
+        """
+        ref_job_ids = []
+        for key, value in job.inputs.items():
+            if isinstance(value, dict) and "$job_ref" in value:
+                ref_id = value["$job_ref"]
+                try:
+                    self.store.load_job(ref_id)
+                except KeyError:
+                    raise ValueError(f"Referenced job not found: {ref_id} (from input '{key}')")
+                ref_job_ids.append(ref_id)
+        return ref_job_ids
+
+    def _resolve_job_ref_inputs(self, job: Job) -> None:
+        """Resolve all $job_ref inputs to actual values. Mutates job.inputs in place.
+
+        Raises ValueError if a referenced job is not COMPLETED.
+        """
+        for key, value in list(job.inputs.items()):
+            if isinstance(value, dict) and "$job_ref" in value:
+                ref_id = value["$job_ref"]
+                field_path = value["field"]
+                ref_job = self.store.load_job(ref_id)
+                if ref_job.status != JobStatus.COMPLETED:
+                    raise ValueError(
+                        f"Referenced job {ref_id} is {ref_job.status.value}, expected COMPLETED"
+                    )
+                resolved, found = self.store.get_job_output_field(ref_id, field_path)
+                if not found:
+                    _engine_logger.warning(
+                        "Job %s input '%s': field '%s' not found in job %s outputs, resolving to None",
+                        job.id, key, field_path, ref_id,
+                    )
+                job.inputs[key] = resolved
+
     # ── Job Lifecycle ─────────────────────────────────────────────────────
 
     def create_job(
@@ -207,13 +247,30 @@ class Engine:
             config=config or JobConfig(),
             metadata=metadata,
         )
+
+        # Validate $job_ref inputs before saving
+        ref_job_ids = self._process_job_ref_inputs(job)
+
         self.store.save_job(job)
+
+        # Auto-add dependency edges for referenced jobs
+        for ref_id in ref_job_ids:
+            if self.store.would_create_cycle(job.id, ref_id):
+                # Roll back: delete the job we just saved
+                self.store.delete_job(job.id)
+                raise ValueError(
+                    f"Adding dependency on {ref_id} would create a cycle"
+                )
+            self.store.add_job_dependency(job.id, ref_id)
+
         return job
 
     def start_job(self, job_id: str) -> None:
         job = self.store.load_job(job_id)
         if job.status != JobStatus.PENDING:
             raise ValueError(f"Cannot start job in status {job.status.value}")
+        # Resolve cross-job data references before running
+        self._resolve_job_ref_inputs(job)
         # Extract rerun_steps from job metadata
         rerun = job.config.metadata.get("rerun_steps", [])
         if rerun:
@@ -2967,6 +3024,8 @@ class AsyncEngine(Engine):
                 job_id, self.max_concurrent_jobs,
             )
             return  # stays PENDING, started later by _start_queued_jobs
+        # Resolve cross-job data references before running
+        self._resolve_job_ref_inputs(job)
         job.status = JobStatus.RUNNING
         job.updated_at = _now()
         self.store.save_job(job)

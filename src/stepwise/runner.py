@@ -41,13 +41,21 @@ EXIT_SUSPENDED = 5
 
 
 
-def parse_inputs(input_list: list[str] | None) -> dict[str, str]:
+import re
+
+_JOB_REF_RE = re.compile(r'^(job-[a-zA-Z0-9]+)\.(.+)$')
+
+
+def parse_inputs(input_list: list[str] | None) -> dict[str, str | dict]:
     """Parse --input KEY=VALUE flags. Splits on first = only.
 
     Values starting with @ are treated as file paths — the file contents
     become the value (replaces the old --var-file flag).
+
+    Values matching job-{id}.{field} are parsed as cross-job data references:
+    {"$job_ref": "job-abc123", "field": "result"}
     """
-    result: dict[str, str] = {}
+    result: dict[str, str | dict] = {}
     if not input_list:
         return result
     for item in input_list:
@@ -61,7 +69,11 @@ def parse_inputs(input_list: list[str] | None) -> dict[str, str]:
             except FileNotFoundError:
                 raise ValueError(f"Input file not found: {fpath} (from --input {key}=@{fpath})")
         else:
-            result[key] = value
+            m = _JOB_REF_RE.match(value)
+            if m:
+                result[key] = {"$job_ref": m.group(1), "field": m.group(2)}
+            else:
+                result[key] = value
     return result
 
 
