@@ -371,8 +371,26 @@ class SQLiteStore:
         """Transition a single STAGED job to PENDING. Raises ValueError if not STAGED."""
         from stepwise.models import _now
         job = self.load_job(job_id)
+        if job.status == JobStatus.AWAITING_APPROVAL:
+            raise ValueError(
+                f"Job {job_id} requires approval first (use 'stepwise job approve {job_id}')"
+            )
         if job.status != JobStatus.STAGED:
             raise ValueError(f"Cannot run job in status {job.status.value} (must be STAGED)")
+        with self._conn:
+            self._conn.execute(
+                "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?",
+                (JobStatus.PENDING.value, _now().isoformat(), job_id),
+            )
+
+    def transition_job_to_approved(self, job_id: str) -> None:
+        """Approve a job: AWAITING_APPROVAL → PENDING. Raises ValueError if not AWAITING_APPROVAL."""
+        from stepwise.models import _now
+        job = self.load_job(job_id)
+        if job.status != JobStatus.AWAITING_APPROVAL:
+            raise ValueError(
+                f"Cannot approve job in status {job.status.value} (must be awaiting_approval)"
+            )
         with self._conn:
             self._conn.execute(
                 "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?",

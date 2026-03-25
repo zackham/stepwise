@@ -21,6 +21,8 @@ from stepwise.events import (
     FOR_EACH_COMPLETED,
     FOR_EACH_STARTED,
     EXTERNAL_RERUN,
+    JOB_APPROVED,
+    JOB_AWAITING_APPROVAL,
     JOB_CANCELLED,
     JOB_COMPLETED,
     JOB_FAILED,
@@ -305,6 +307,11 @@ class Engine:
         job.updated_at = _now()
         self.store.save_job(job)
         self._emit(job_id, JOB_PAUSED)
+
+    def approve_job(self, job_id: str) -> None:
+        """Approve job: AWAITING_APPROVAL → PENDING."""
+        self.store.transition_job_to_approved(job_id)
+        self._emit(job_id, JOB_APPROVED)
 
     def resume_job(self, job_id: str) -> None:
         job = self.store.load_job(job_id)
@@ -3093,7 +3100,7 @@ class AsyncEngine(Engine):
             visited.add(dep_job_id)
             try:
                 dep_job = self.store.load_job(dep_job_id)
-                if dep_job.status in (JobStatus.PENDING, JobStatus.STAGED):
+                if dep_job.status in (JobStatus.PENDING, JobStatus.STAGED, JobStatus.AWAITING_APPROVAL):
                     dep_job.status = JobStatus.CANCELLED
                     dep_job.updated_at = _now()
                     self.store.save_job(dep_job)

@@ -127,6 +127,10 @@ class StepwiseClient:
         """Cancel a job."""
         return self._request("POST", f"/api/jobs/{job_id}/cancel")
 
+    def approve(self, job_id: str) -> dict:
+        """Approve a job awaiting approval."""
+        return self._request("POST", f"/api/jobs/{job_id}/approve")
+
     def fulfill(self, run_id: str, payload: dict) -> dict:
         """Fulfill a suspended step."""
         return self._request("POST", f"/api/runs/{run_id}/fulfill", {

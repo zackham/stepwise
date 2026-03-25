@@ -31,6 +31,8 @@ STEP_SKIPPED = "step.skipped"
 
 # Job staging
 JOB_STAGED = "job.staged"
+JOB_AWAITING_APPROVAL = "job.awaiting_approval"
+JOB_APPROVED = "job.approved"
 JOB_CANCELLED = "job.cancelled"
 JOB_DEPS_CHANGED = "job.deps_changed"
 
