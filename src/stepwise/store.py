@@ -211,7 +211,8 @@ class SQLiteStore:
         job.depends_on = self.get_job_dependencies(job_id)
         return job
 
-    def _row_to_job(self, row: sqlite3.Row) -> Job:
+    def _row_to_job(self, row: sqlite3.Row) -> "Job":
+        from stepwise.models import _now
         return Job(
             id=row["id"],
             objective=row["objective"] or "",
