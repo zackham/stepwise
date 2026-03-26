@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useParams, useNavigate } from "@tanstack/react-router";
+import { useParams, useNavigate, Link } from "@tanstack/react-router";
 import { YamlEditor } from "@/components/editor/YamlEditor";
 import { EditorToolbar } from "@/components/editor/EditorToolbar";
 import { FlowDagView } from "@/components/dag/FlowDagView";
@@ -103,7 +103,7 @@ export function EditorPage() {
   }, []);
 
   // Fetch local flows to resolve path from name
-  const { data: flows = [] } = useLocalFlows();
+  const { data: flows = [], isLoading: flowsLoading } = useLocalFlows();
   const selectedFlow = useMemo(
     () => (flowName ? flows.find((f) => f.name === flowName) : undefined),
     [flowName, flows]
@@ -308,6 +308,21 @@ export function EditorPage() {
   if (!flowName) {
     navigate({ to: "/flows" });
     return null;
+  }
+
+  if (!flowsLoading && flowName && !selectedFlow) {
+    return (
+      <div className="h-full flex items-center justify-center">
+        <div className="text-center space-y-3">
+          <p className="text-zinc-400 text-lg">
+            Flow <span className="text-foreground font-medium">"{flowName}"</span> not found
+          </p>
+          <Link to="/flows" className="text-sm text-blue-400 hover:text-blue-300">
+            Back to flows
+          </Link>
+        </div>
+      </div>
+    );
   }
 
   return (
