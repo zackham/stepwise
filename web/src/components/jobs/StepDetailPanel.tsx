@@ -27,12 +27,14 @@ import {
   Minimize2,
   Copy,
   Check,
+  ArrowLeftRight,
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { useAgentOutput } from "@/hooks/useStepwise";
 import { FulfillWatchDialog } from "./FulfillWatchDialog";
 import { cn, formatDuration } from "@/lib/utils";
 import { executorIcon } from "@/lib/executor-utils";
+import { ArtifactDiffPanel } from "./ArtifactDiffPanel";
 
 interface StepDetailPanelProps {
   jobId: string;
@@ -194,6 +196,7 @@ export function StepDetailPanel({
   const [fulfillDialogOpen, setFulfillDialogOpen] = useState(false);
   const [agentViewMode, setAgentViewMode] = useState<"stream" | "raw">("stream");
   const [copiedErrorRunId, setCopiedErrorRunId] = useState<string | null>(null);
+  const [diffRunId, setDiffRunId] = useState<string | null>(null);
 
   const { data: configData } = useConfig();
   const isSubscription = configData?.billing_mode === "subscription";
@@ -497,6 +500,25 @@ export function StepDetailPanel({
                             → {exitResolutions[run.attempt].rule}
                           </span>
                         )}
+                        {(() => {
+                          if (run.attempt <= 1 || !run.result?.artifact) return null;
+                          const prevRun = sortedRuns.find(
+                            (r) => r.attempt === run.attempt - 1 && r.result?.artifact
+                          );
+                          if (!prevRun) return null;
+                          const changed =
+                            JSON.stringify(prevRun.result!.artifact) !==
+                            JSON.stringify(run.result.artifact);
+                          return changed ? (
+                            <span className="text-[10px] text-blue-400 bg-blue-500/10 px-1 rounded">
+                              changed
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-zinc-600 px-1">
+                              unchanged
+                            </span>
+                          );
+                        })()}
                       </div>
                     </AccordionTrigger>
                     <AccordionContent>
@@ -663,13 +685,48 @@ export function StepDetailPanel({
                         {/* Result */}
                         {run.result && (
                           <div>
-                            <div className="text-xs text-zinc-500 mb-1">
-                              Output
+                            <div className="flex items-center justify-between mb-1">
+                              <div className="text-xs text-zinc-500">
+                                Output
+                              </div>
+                              {run.attempt > 1 &&
+                                sortedRuns.some(
+                                  (r) =>
+                                    r.attempt < run.attempt &&
+                                    r.result?.artifact != null
+                                ) && (
+                                  <button
+                                    onClick={() =>
+                                      setDiffRunId(
+                                        diffRunId === run.id ? null : run.id
+                                      )
+                                    }
+                                    className={cn(
+                                      "flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border transition-colors",
+                                      diffRunId === run.id
+                                        ? "border-blue-500/30 text-blue-400 bg-blue-500/10"
+                                        : "border-zinc-700 text-zinc-500 hover:text-zinc-300"
+                                    )}
+                                  >
+                                    <ArrowLeftRight className="w-3 h-3" />
+                                    {diffRunId === run.id
+                                      ? "Hide Diff"
+                                      : "Diff vs Previous"}
+                                  </button>
+                                )}
                             </div>
-                            <HandoffEnvelopeView
-                              envelope={run.result}
-                              isLatest={run.id === sortedRuns[0]?.id}
-                            />
+                            {diffRunId === run.id ? (
+                              <ArtifactDiffPanel
+                                runs={sortedRuns}
+                                currentRun={run}
+                                outputs={stepDef.outputs}
+                              />
+                            ) : (
+                              <HandoffEnvelopeView
+                                envelope={run.result}
+                                isLatest={run.id === sortedRuns[0]?.id}
+                              />
+                            )}
                           </div>
                         )}
 
