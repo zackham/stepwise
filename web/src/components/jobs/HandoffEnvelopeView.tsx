@@ -7,7 +7,7 @@ import {
 } from "@/components/ui/collapsible";
 import { ChevronRight } from "lucide-react";
 import { useState } from "react";
-import { cn } from "@/lib/utils";
+import { cn, tryParseJsonValue } from "@/lib/utils";
 
 interface HandoffEnvelopeViewProps {
   envelope: HandoffEnvelope;
@@ -25,12 +25,13 @@ function Section({
 }) {
   const [open, setOpen] = useState(defaultOpen);
 
-  // Skip empty sections
-  if (data === null || data === undefined) return null;
-  if (typeof data === "object" && !Array.isArray(data) && Object.keys(data as object).length === 0)
+  // Skip empty sections — parse JSON strings before checking
+  const resolved = tryParseJsonValue(data);
+  if (resolved === null || resolved === undefined) return null;
+  if (typeof resolved === "object" && !Array.isArray(resolved) && Object.keys(resolved as object).length === 0)
     return null;
-  if (Array.isArray(data) && data.length === 0) return null;
-  if (typeof data === "string" && data === "") return null;
+  if (Array.isArray(resolved) && resolved.length === 0) return null;
+  if (typeof resolved === "string" && resolved === "") return null;
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
@@ -53,11 +54,16 @@ function Section({
 }
 
 export function HandoffEnvelopeView({ envelope, isLatest }: HandoffEnvelopeViewProps) {
-  const hasSidecar =
-    envelope.sidecar.decisions_made.length > 0 ||
-    envelope.sidecar.assumptions.length > 0 ||
-    envelope.sidecar.open_questions.length > 0 ||
-    envelope.sidecar.constraints_discovered.length > 0;
+  const sidecarFields = [
+    envelope.sidecar.decisions_made,
+    envelope.sidecar.assumptions,
+    envelope.sidecar.open_questions,
+    envelope.sidecar.constraints_discovered,
+  ];
+  const hasSidecar = sidecarFields.some((field) => {
+    const parsed = tryParseJsonValue(field);
+    return Array.isArray(parsed) ? parsed.length > 0 : parsed && String(parsed).length > 0;
+  });
 
   return (
     <div className="space-y-1">
