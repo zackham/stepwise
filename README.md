@@ -26,11 +26,11 @@ curl -fsSL https://raw.githubusercontent.com/zackham/stepwise/master/install.sh 
 Try the interactive demo or a real-world code review flow:
 
 ```bash
-stepwise run @stepwise:welcome --watch
+stepwise welcome
 stepwise run @stepwise:code-review --watch
 ```
 
-`--watch` opens a browser with a real-time DAG visualization. Steps execute automatically — agents stream output live, external steps pause and wait for your input. Drop `--watch` to run headless in the terminal.
+`stepwise welcome` walks through a sample flow interactively. `--watch` on other commands opens a browser with a real-time DAG visualization. Steps execute automatically — agents stream output live, external steps pause and wait for your input. Drop `--watch` to run headless in the terminal.
 
 ## Flows your agents can call
 
@@ -120,7 +120,6 @@ steps:
 - **`--input` flag** — pass job inputs from the command line (`--input key=value`)
 - **Human-in-the-loop** — stdin prompts in headless mode, schema-driven web forms in watch mode
 - **Real-time streaming** — agent output (text + tool calls) streamed live via WebSocket
-- **Context chains** — session continuity across agent steps via compiled transcripts
 - **Expression exit rules** — `outputs.score >= 0.8`, `attempt < 5`, branch on any output value
 - **Job completion cleanup** — automatic resource cleanup when jobs complete or fail
 - **Agent step reliability** — retry logic, session continuity, and circuit breakers for agent steps
@@ -157,10 +156,9 @@ See [`docs/cli.md`](docs/cli.md) for the full reference with all flags, examples
 | [API Reference](docs/api.md) | REST endpoints, WebSocket protocol, error handling |
 | [Flow Sharing](docs/flow-sharing.md) | Registry commands (`get`, `share`, `search`, `info`) |
 | [Flows vs Skills](docs/flows-vs-skills.md) | When to use a flow vs a skill/prompt |
-| [How Stepwise Is Different](docs/how-stepwise-is-different.md) | Comparison with other orchestration tools |
+| [Comparison](docs/comparison.md) | How stepwise compares to other orchestration tools |
 | [How-To: Build Extensions](docs/how-to-plugins.md) | Write custom executor plugins |
 | [How-To: Create Agent Skills](docs/how-to-skills.md) | Wrap flows as agent-callable skills |
-| [How-To: Tool Comparison](docs/how-to-comparison.md) | Choosing between executor types |
 | [How-To: Non-Claude Agents](docs/how-to-generic-agents.md) | Using Stepwise with non-Claude agents |
 
 ## Development

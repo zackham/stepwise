@@ -102,8 +102,6 @@ requires:                    # optional, external tool dependencies
     check: "command"         # shell command to verify availability
     install: "command"       # shown when check fails
     url: "https://..."       # docs link shown when check fails
-chains:                      # optional, context chain definitions (M7a)
-  chain_name: { ... }
 steps:                       # required, map of step definitions
   step_name: { ... }
 ```
@@ -384,65 +382,6 @@ steps:
 - Steps that never ran get SKIPPED runs
 - Job completes if at least one terminal has a current completed run; fails otherwise
 
-### Context Chains
-
-Context chains give agent steps session continuity across a workflow. Prior chain members' conversations are compiled into an XML context block and prepended to the agent's prompt. This lets multi-step agent workflows build on prior reasoning without sharing mutable state.
-
-```yaml
-name: iterative-research
-chains:
-  research:
-    max_tokens: 80000       # token budget for prior context (default: 80000)
-    overflow: drop_oldest    # "drop_oldest" (default) or "drop_middle"
-    include_thinking: false  # include thinking blocks (default: false)
-    accumulation: full       # "full" (all attempts) or "latest" (most recent only)
-
-steps:
-  gather:
-    executor: agent
-    prompt: "Research $topic thoroughly"
-    outputs: [findings]
-    chain: research
-    chain_label: Research Phase
-    inputs:
-      topic: $job.topic
-
-  analyze:
-    executor: agent
-    prompt: "Analyze the findings and identify key patterns"
-    outputs: [analysis]
-    chain: research
-    chain_label: Analysis Phase
-    inputs:
-      findings: gather.findings
-
-  synthesize:
-    executor: agent
-    prompt: "Synthesize the analysis into a final report"
-    outputs: [report]
-    chain: research
-    chain_label: Synthesis Phase
-    inputs:
-      analysis: analyze.analysis
-```
-
-**Key concepts:**
-- `chains:` defines named chain configurations at the workflow level
-- `chain: name` on a step assigns it to a chain
-- `chain_label: "..."` provides a human-readable label in the context XML (defaults to step name)
-- Steps in a chain receive prior members' conversations as `<prior_context>` XML prepended to their prompt
-- Chains require at least 2 members
-- The first step in a chain gets no prior context (nothing before it)
-- Overflow drops whole transcripts, never truncates mid-conversation
-
-**Overflow strategies:**
-- `drop_oldest`: Remove oldest transcripts first until under budget
-- `drop_middle`: Keep first and last transcripts, remove from the middle
-
-**Accumulation modes:**
-- `full`: Include all completed attempts for each prior step (useful with loops)
-- `latest`: Only include the most recent completed attempt per step
-
 ### Session Continuity
 
 Agent and LLM steps with `continue_session: true` reuse the same agent session across loop iterations, continuing the conversation instead of starting fresh.
@@ -466,13 +405,12 @@ implement:
 |---|---|---|---|
 | `continue_session` | bool | `false` | Reuse agent session across loop iterations |
 | `loop_prompt` | string | — | Alternate prompt template on attempt > 1 (falls back to `prompt`) |
-| `max_continuous_attempts` | int | — | After N iterations, force fresh session with chain context backfill |
+| `max_continuous_attempts` | int | — | After N iterations, force a fresh session |
 
 **Behavior:**
 - First run: creates session, sends `prompt`
 - Loop-back (attempt > 1): continues session, sends `loop_prompt` (or `prompt` if not set)
-- Chain context (M7a) injection is skipped for continued sessions
-- If session crashes or `max_continuous_attempts` exceeded, falls back to fresh session + chain context
+- If session crashes or `max_continuous_attempts` exceeded, falls back to a fresh session
 
 **Cross-step session sharing:** Agent steps with `continue_session: true` auto-emit `_session_id`. Downstream steps continue the same conversation via optional input:
 
@@ -658,9 +596,6 @@ Requirements are checked by `stepwise validate`, `stepwise info`, and `stepwise 
 | `for_each: step.field` + `flow:` | `ForEachSpec(source_step, source_field)` + `StepDefinition.sub_flow` |
 | `as: var_name` | `ForEachSpec.item_var` |
 | `on_error: continue` | `ForEachSpec.on_error` |
-| `chains: {name: {...}}` | `WorkflowDefinition.chains = {name: ChainConfig(...)}` |
-| `chain: chain_name` | `StepDefinition.chain = "chain_name"` |
-| `chain_label: "Label"` | `StepDefinition.chain_label = "Label"` |
 | `prompt_file: path/to/file` | Resolved at parse time → `ExecutorRef.config["prompt"]` |
 | `inputs: {x: {any_of: [a.f, b.f]}}` | `InputBinding("x", "", "", any_of_sources=[("a","f"),("b","f")])` |
 | `inputs: {x: {from: "a.f", optional: true}}` | `InputBinding("x", "a", "f", optional=True)` |
