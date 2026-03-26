@@ -1417,9 +1417,11 @@ class Engine:
                 return self._launch_for_each(job, step_def)
             except (ValueError, KeyError) as e:
                 import logging
+                import traceback as tb_mod
                 logging.getLogger("stepwise.engine").error(
                     f"For-each step '{step_name}' failed to launch: {e}", exc_info=True
                 )
+                tb_str = "".join(tb_mod.format_exception(type(e), e, e.__traceback__))
                 run = StepRun(
                     id=_gen_id("run"),
                     job_id=job.id,
@@ -1427,6 +1429,7 @@ class Engine:
                     attempt=self.store.next_attempt(job.id, step_name),
                     status=StepRunStatus.FAILED,
                     error=str(e),
+                    traceback=tb_str,
                     started_at=_now(),
                     completed_at=_now(),
                 )
@@ -1675,15 +1678,18 @@ class Engine:
     ) -> None:
         """Handle exception from executor creation or start()."""
         import logging
+        import traceback as tb_mod
         logging.getLogger("stepwise.engine").error(
             f"Step '{step_name}' executor crashed: {type(error).__name__}: {error}",
             exc_info=True,
         )
         step_def = job.workflow.steps.get(step_name)
         error_msg = f"Executor crash: {type(error).__name__}: {error}"
+        tb_str = "".join(tb_mod.format_exception(type(error), error, error.__traceback__))
         if step_def:
             self._fail_run(job, run, step_def,
-                           error=error_msg, error_category="executor_crash")
+                           error=error_msg, error_category="executor_crash",
+                           traceback_str=tb_str)
         else:
             run.status = StepRunStatus.FAILED
             run.error = error_msg
@@ -1801,8 +1807,10 @@ class Engine:
                 try:
                     sub = self._create_sub_job(job, run, sub_def)
                 except Exception as e:
+                    import traceback as tb_mod
                     run.status = StepRunStatus.FAILED
                     run.error = f"Failed to create sub-job for emitted flow: {e}"
+                    run.traceback = "".join(tb_mod.format_exception(type(e), e, e.__traceback__))
                     run.completed_at = _now()
                     self.store.save_run(run)
                     self._halt_job(job, run)
@@ -2781,13 +2789,15 @@ class Engine:
     # ── Failure Handling ──────────────────────────────────────────────────
 
     def _fail_run(self, job: Job, run: StepRun, step_def: StepDefinition,
-                  error: str, error_category: str | None = None) -> None:
+                  error: str, error_category: str | None = None,
+                  traceback_str: str | None = None) -> None:
         """Fail a step run and evaluate exit rules for error routing.
         If no exit rule handles the failure, halt the job (unless on_error: continue).
         """
         run.status = StepRunStatus.FAILED
         run.error = error
         run.error_category = error_category
+        run.traceback = traceback_str
         run.pid = None
         if run.result is None:
             run.result = HandoffEnvelope(
@@ -3368,9 +3378,11 @@ class AsyncEngine(Engine):
             try:
                 return self._launch_for_each(job, step_def)
             except (ValueError, KeyError) as e:
+                import traceback as tb_mod
                 _async_logger.error(
                     f"For-each step '{step_name}' failed to launch: {e}", exc_info=True
                 )
+                tb_str = "".join(tb_mod.format_exception(type(e), e, e.__traceback__))
                 run = StepRun(
                     id=_gen_id("run"),
                     job_id=job.id,
@@ -3378,6 +3390,7 @@ class AsyncEngine(Engine):
                     attempt=self.store.next_attempt(job.id, step_name),
                     status=StepRunStatus.FAILED,
                     error=str(e),
+                    traceback=tb_str,
                     started_at=_now(),
                     completed_at=_now(),
                 )

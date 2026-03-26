@@ -1496,6 +1496,7 @@ class StepRun:
     result: HandoffEnvelope | None = None
     error: str | None = None
     error_category: str | None = None  # M4: typed failure classification
+    traceback: str | None = None
     executor_state: dict | None = None
     watch: WatchSpec | None = None
     sub_job_id: str | None = None
@@ -1515,6 +1516,7 @@ class StepRun:
             "result": self.result.to_dict() if self.result else None,
             "error": self.error,
             "error_category": self.error_category,
+            "traceback": self.traceback,
             "executor_state": self.executor_state,
             "watch": self.watch.to_dict() if self.watch else None,
             "sub_job_id": self.sub_job_id,
@@ -1536,6 +1538,7 @@ class StepRun:
             result=HandoffEnvelope.from_dict(d["result"]) if d.get("result") else None,
             error=d.get("error"),
             error_category=d.get("error_category"),
+            traceback=d.get("traceback"),
             executor_state=d.get("executor_state"),
             watch=WatchSpec.from_dict(d["watch"]) if d.get("watch") else None,
             sub_job_id=d.get("sub_job_id"),

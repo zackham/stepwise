@@ -27,6 +27,7 @@ import {
   Minimize2,
   Copy,
   Check,
+  ChevronDown,
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { useAgentOutput } from "@/hooks/useStepwise";
@@ -194,6 +195,7 @@ export function StepDetailPanel({
   const [fulfillDialogOpen, setFulfillDialogOpen] = useState(false);
   const [agentViewMode, setAgentViewMode] = useState<"stream" | "raw">("stream");
   const [copiedErrorRunId, setCopiedErrorRunId] = useState<string | null>(null);
+  const [expandedTracebackRunId, setExpandedTracebackRunId] = useState<string | null>(null);
 
   const { data: configData } = useConfig();
   const isSubscription = configData?.billing_mode === "subscription";
@@ -547,6 +549,31 @@ export function StepDetailPanel({
                             <div className="text-red-300/80 text-xs font-mono whitespace-pre-wrap break-words">
                               {run.error}
                             </div>
+                          </div>
+                        )}
+
+                        {/* Stack Trace */}
+                        {run.traceback && (
+                          <div className="bg-red-500/5 border border-red-500/15 rounded text-sm">
+                            <button
+                              onClick={() => setExpandedTracebackRunId(
+                                expandedTracebackRunId === run.id ? null : run.id
+                              )}
+                              className="flex items-center gap-1.5 w-full p-2 text-red-400/80 hover:text-red-300 transition-colors"
+                            >
+                              <ChevronDown className={cn(
+                                "w-3.5 h-3.5 transition-transform",
+                                expandedTracebackRunId === run.id && "rotate-180"
+                              )} />
+                              <span className="text-xs font-medium">Stack Trace</span>
+                            </button>
+                            {expandedTracebackRunId === run.id && (
+                              <div className="px-2 pb-2">
+                                <pre className="text-red-300/60 text-[11px] font-mono whitespace-pre-wrap break-words overflow-x-auto max-h-80 overflow-y-auto">
+                                  {run.traceback}
+                                </pre>
+                              </div>
+                            )}
                           </div>
                         )}
 
