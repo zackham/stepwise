@@ -21,7 +21,8 @@ export function useFlowStats() {
 export function useCreateFlow() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (name: string) => api.createLocalFlow(name),
+    mutationFn: ({ name, template }: { name: string; template?: string }) =>
+      api.createLocalFlow(name, template),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["localFlows"] });
     },

@@ -1923,6 +1923,95 @@ def list_local_flows():
 
 class CreateFlowRequest(BaseModel):
     name: str
+    template: str = "blank"
+
+
+def _flow_template_yaml(name: str, template: str) -> str:
+    """Generate FLOW.yaml content for a given template type."""
+    if template == "simple-llm":
+        return (
+            f"name: {name}\n"
+            f"description: Single LLM step\n"
+            f"\n"
+            f"steps:\n"
+            f"  generate:\n"
+            f"    executor: llm\n"
+            f"    config:\n"
+            f"      prompt: \"$prompt\"\n"
+            f"    inputs:\n"
+            f"      prompt: $job.prompt\n"
+            f"    outputs: [response]\n"
+        )
+    elif template == "agent-task":
+        return (
+            f"name: {name}\n"
+            f"description: Agent task with validation\n"
+            f"\n"
+            f"steps:\n"
+            f"  implement:\n"
+            f"    executor: agent\n"
+            f"    prompt: \"Implement: $spec\"\n"
+            f"    inputs:\n"
+            f"      spec: $job.spec\n"
+            f"    outputs: [result]\n"
+            f"\n"
+            f"  validate:\n"
+            f"    run: |\n"
+            f"      echo '{{\"status\": \"pass\"}}'\n"
+            f"    inputs:\n"
+            f"      result: implement.result\n"
+            f"    outputs: [status]\n"
+            f"    exits:\n"
+            f"      - name: success\n"
+            f"        when: \"outputs.status == 'pass'\"\n"
+            f"        action: advance\n"
+            f"      - name: retry\n"
+            f"        when: \"attempt < 3\"\n"
+            f"        action: loop\n"
+            f"        target: implement\n"
+        )
+    elif template == "human-approval":
+        return (
+            f"name: {name}\n"
+            f"description: Agent task with human approval loop\n"
+            f"\n"
+            f"steps:\n"
+            f"  draft:\n"
+            f"    executor: agent\n"
+            f"    prompt: \"Draft: $request\"\n"
+            f"    inputs:\n"
+            f"      request: $job.request\n"
+            f"      feedback:\n"
+            f"        from: approve.feedback\n"
+            f"        optional: true\n"
+            f"    outputs: [result]\n"
+            f"\n"
+            f"  approve:\n"
+            f"    executor: external\n"
+            f"    prompt: \"Review the draft and approve or request changes\"\n"
+            f"    inputs:\n"
+            f"      result: draft.result\n"
+            f"    outputs: [decision, feedback]\n"
+            f"    exits:\n"
+            f"      - name: approved\n"
+            f"        when: \"outputs.decision == 'approve'\"\n"
+            f"        action: advance\n"
+            f"      - name: revise\n"
+            f"        when: \"attempt < 5\"\n"
+            f"        action: loop\n"
+            f"        target: draft\n"
+        )
+    else:
+        # blank / default
+        return (
+            f"name: {name}\n"
+            f'description: ""\n'
+            f"\n"
+            f"steps:\n"
+            f"  hello:\n"
+            f"    run: 'echo \"{{\\\"message\\\": \\\"hello from {name}\\\"}}\"'\n"
+            f"    outputs: [message]\n"
+        )
 
 
 @app.post("/api/local-flows")
@@ -1946,17 +2035,7 @@ def create_local_flow(req: CreateFlowRequest):
         raise HTTPException(status_code=409, detail=f"Flow '{name}' already exists")
 
     flow_dir.mkdir(parents=True, exist_ok=True)
-
-    template = (
-        f"name: {name}\n"
-        f'description: ""\n'
-        f"\n"
-        f"steps:\n"
-        f"  hello:\n"
-        f"    run: 'echo \"{{\\\"message\\\": \\\"hello from {name}\\\"}}\"'\n"
-        f"    outputs: [message]\n"
-    )
-    flow_file.write_text(template)
+    flow_file.write_text(_flow_template_yaml(name, req.template))
 
     return {
         "path": str(flow_dir.relative_to(_project_dir)),
