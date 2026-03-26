@@ -27,59 +27,14 @@ import {
   Minimize2,
   Copy,
   Check,
-  ChevronDown,
+  ArrowLeftRight,
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { useAgentOutput } from "@/hooks/useStepwise";
 import { FulfillWatchDialog } from "./FulfillWatchDialog";
 import { cn, formatDuration } from "@/lib/utils";
 import { executorIcon } from "@/lib/executor-utils";
-import { Skeleton } from "@/components/ui/skeleton";
-
-export function StepDetailSkeleton() {
-  return (
-    <div className="flex flex-col h-full animate-fade-in" data-testid="step-detail-skeleton">
-      {/* Header */}
-      <div className="flex items-start justify-between p-4 border-b border-border">
-        <div className="flex items-center gap-2">
-          <Skeleton className="w-5 h-5 rounded" />
-          <Skeleton className="h-5 w-32" />
-        </div>
-        <Skeleton className="w-4 h-4 rounded" />
-      </div>
-      {/* Body */}
-      <div className="p-4 space-y-4">
-        {/* Definition section */}
-        <div className="space-y-2">
-          <Skeleton className="h-3 w-20" />
-          <div className="grid grid-cols-2 gap-2">
-            <Skeleton className="h-4 w-16" />
-            <Skeleton className="h-4 w-24" />
-            <Skeleton className="h-4 w-16" />
-            <Skeleton className="h-4 w-32" />
-          </div>
-          {/* Command block */}
-          <Skeleton className="h-16 w-full rounded mt-2" />
-        </div>
-        {/* Separator */}
-        <div className="border-t border-border" />
-        {/* Run history section */}
-        <div className="space-y-2">
-          <Skeleton className="h-3 w-28" />
-          <div className="space-y-2">
-            {Array.from({ length: 2 }).map((_, i) => (
-              <div key={i} className="flex items-center gap-2 py-2">
-                <Skeleton className="h-5 w-16 rounded-full" />
-                <Skeleton className="h-4 w-20" />
-                <Skeleton className="h-3 w-16" />
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
+import { ArtifactDiffPanel } from "./ArtifactDiffPanel";
 
 interface StepDetailPanelProps {
   jobId: string;
@@ -241,7 +196,7 @@ export function StepDetailPanel({
   const [fulfillDialogOpen, setFulfillDialogOpen] = useState(false);
   const [agentViewMode, setAgentViewMode] = useState<"stream" | "raw">("stream");
   const [copiedErrorRunId, setCopiedErrorRunId] = useState<string | null>(null);
-  const [expandedTracebackRunId, setExpandedTracebackRunId] = useState<string | null>(null);
+  const [diffRunId, setDiffRunId] = useState<string | null>(null);
 
   const { data: configData } = useConfig();
   const isSubscription = configData?.billing_mode === "subscription";
@@ -290,7 +245,7 @@ export function StepDetailPanel({
     latestRun?.status === "suspended" && latestRun?.watch?.mode === "external";
 
   return (
-    <div className="flex flex-col h-full animate-fade-in">
+    <div className="flex flex-col h-full">
       {/* Header */}
       <div className="flex items-start justify-between p-4 border-b border-border">
         <div className="flex items-center gap-2">
@@ -545,6 +500,25 @@ export function StepDetailPanel({
                             → {exitResolutions[run.attempt].rule}
                           </span>
                         )}
+                        {(() => {
+                          if (run.attempt <= 1 || !run.result?.artifact) return null;
+                          const prevRun = sortedRuns.find(
+                            (r) => r.attempt === run.attempt - 1 && r.result?.artifact
+                          );
+                          if (!prevRun) return null;
+                          const changed =
+                            JSON.stringify(prevRun.result!.artifact) !==
+                            JSON.stringify(run.result.artifact);
+                          return changed ? (
+                            <span className="text-[10px] text-blue-400 bg-blue-500/10 px-1 rounded">
+                              changed
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-zinc-600 px-1">
+                              unchanged
+                            </span>
+                          );
+                        })()}
                       </div>
                     </AccordionTrigger>
                     <AccordionContent>
@@ -595,31 +569,6 @@ export function StepDetailPanel({
                             <div className="text-red-300/80 text-xs font-mono whitespace-pre-wrap break-words">
                               {run.error}
                             </div>
-                          </div>
-                        )}
-
-                        {/* Stack Trace */}
-                        {run.traceback && (
-                          <div className="bg-red-500/5 border border-red-500/15 rounded text-sm">
-                            <button
-                              onClick={() => setExpandedTracebackRunId(
-                                expandedTracebackRunId === run.id ? null : run.id
-                              )}
-                              className="flex items-center gap-1.5 w-full p-2 text-red-400/80 hover:text-red-300 transition-colors"
-                            >
-                              <ChevronDown className={cn(
-                                "w-3.5 h-3.5 transition-transform",
-                                expandedTracebackRunId === run.id && "rotate-180"
-                              )} />
-                              <span className="text-xs font-medium">Stack Trace</span>
-                            </button>
-                            {expandedTracebackRunId === run.id && (
-                              <div className="px-2 pb-2">
-                                <pre className="text-red-300/60 text-[11px] font-mono whitespace-pre-wrap break-words overflow-x-auto max-h-80 overflow-y-auto">
-                                  {run.traceback}
-                                </pre>
-                              </div>
-                            )}
                           </div>
                         )}
 
@@ -736,13 +685,48 @@ export function StepDetailPanel({
                         {/* Result */}
                         {run.result && (
                           <div>
-                            <div className="text-xs text-zinc-500 mb-1">
-                              Output
+                            <div className="flex items-center justify-between mb-1">
+                              <div className="text-xs text-zinc-500">
+                                Output
+                              </div>
+                              {run.attempt > 1 &&
+                                sortedRuns.some(
+                                  (r) =>
+                                    r.attempt < run.attempt &&
+                                    r.result?.artifact != null
+                                ) && (
+                                  <button
+                                    onClick={() =>
+                                      setDiffRunId(
+                                        diffRunId === run.id ? null : run.id
+                                      )
+                                    }
+                                    className={cn(
+                                      "flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border transition-colors",
+                                      diffRunId === run.id
+                                        ? "border-blue-500/30 text-blue-400 bg-blue-500/10"
+                                        : "border-zinc-700 text-zinc-500 hover:text-zinc-300"
+                                    )}
+                                  >
+                                    <ArrowLeftRight className="w-3 h-3" />
+                                    {diffRunId === run.id
+                                      ? "Hide Diff"
+                                      : "Diff vs Previous"}
+                                  </button>
+                                )}
                             </div>
-                            <HandoffEnvelopeView
-                              envelope={run.result}
-                              isLatest={run.id === sortedRuns[0]?.id}
-                            />
+                            {diffRunId === run.id ? (
+                              <ArtifactDiffPanel
+                                runs={sortedRuns}
+                                currentRun={run}
+                                outputs={stepDef.outputs}
+                              />
+                            ) : (
+                              <HandoffEnvelopeView
+                                envelope={run.result}
+                                isLatest={run.id === sortedRuns[0]?.id}
+                              />
+                            )}
                           </div>
                         )}
 
