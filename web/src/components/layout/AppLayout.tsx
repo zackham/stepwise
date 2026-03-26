@@ -76,7 +76,7 @@ export function AppLayout() {
       {/* Top nav */}
       <header className="h-12 border-b border-border flex items-center px-4 gap-6 shrink-0 bg-zinc-950/80">
         <Link to="/jobs" className="flex items-center gap-2">
-          <img src="/logo.png" alt="Stepwise" className="w-5 h-5" />
+          <img src="/stepwise-icon-64.png" alt="Stepwise" className="w-5 h-5" />
           <span className="font-semibold text-sm tracking-tight">
             Stepwise
           </span>
