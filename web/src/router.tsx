@@ -13,6 +13,7 @@ import { JobTimelinePage } from "@/pages/JobTimelinePage";
 import { FlowsPage } from "@/pages/FlowsPage";
 import { EditorPage } from "@/pages/EditorPage";
 import { SettingsPage } from "@/pages/SettingsPage";
+import { CanvasPage } from "@/pages/CanvasPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
 
 // Root route
@@ -103,6 +104,13 @@ const editorFlowRedirectRoute = createRoute({
   },
 });
 
+// Canvas (orchestrator overview)
+const canvasRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/canvas",
+  component: CanvasPage,
+});
+
 // Settings
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -122,6 +130,7 @@ const routeTree = rootRoute.addChildren([
   flowEditorRoute,
   editorRedirectRoute,
   editorFlowRedirectRoute,
+  canvasRoute,
   settingsRoute,
 ]);
 
