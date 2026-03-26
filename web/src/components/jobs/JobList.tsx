@@ -3,15 +3,73 @@ import { useJobs, useStepwiseMutations } from "@/hooks/useStepwise";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import { AlertTriangle, Briefcase, Clock, Hand, Monitor, Terminal, Trash2, Search, X, MoreVertical, XCircle, RefreshCw } from "lucide-react";
+import { AlertTriangle, Briefcase, Clock, Hand, Monitor, Terminal, Trash2, Search, X, MoreVertical, XCircle, RefreshCw, ArrowUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { Job, JobStatus } from "@/lib/types";
+import type { Job } from "@/lib/types";
+
+type SortOption = "recent" | "oldest" | "name" | "duration" | "status";
+
+const SORT_OPTIONS: { value: SortOption; label: string }[] = [
+  { value: "recent", label: "Recent" },
+  { value: "oldest", label: "Oldest" },
+  { value: "name", label: "Name A-Z" },
+  { value: "duration", label: "Duration" },
+  { value: "status", label: "Status" },
+];
+
+const STATUS_ORDER: Record<string, number> = {
+  running: 0,
+  awaiting_input: 1,
+  paused: 2,
+  pending: 3,
+  completed: 4,
+  failed: 5,
+  cancelled: 6,
+};
+
+function getSavedSort(): SortOption {
+  try {
+    const saved = localStorage.getItem("stepwise-job-sort");
+    if (saved && SORT_OPTIONS.some((o) => o.value === saved)) return saved as SortOption;
+  } catch {}
+  return "recent";
+}
+
+function sortJobs(jobs: Job[], sort: SortOption): Job[] {
+  return [...jobs].sort((a, b) => {
+    switch (sort) {
+      case "recent":
+        return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+      case "oldest":
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      case "name": {
+        const nameA = (a.name || a.objective || "").toLowerCase();
+        const nameB = (b.name || b.objective || "").toLowerCase();
+        return nameA.localeCompare(nameB);
+      }
+      case "duration": {
+        const durA = new Date(a.updated_at).getTime() - new Date(a.created_at).getTime();
+        const durB = new Date(b.updated_at).getTime() - new Date(b.created_at).getTime();
+        return durB - durA;
+      }
+      case "status":
+        return (STATUS_ORDER[a.status] ?? 99) - (STATUS_ORDER[b.status] ?? 99);
+    }
+  });
+}
 
 interface JobListProps {
   selectedJobId: string | null;
@@ -117,40 +175,31 @@ function JobActions({
 export function JobList({ selectedJobId, onSelectJob }: JobListProps) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
+  const [sortBy, setSortBy] = useState<SortOption>(getSavedSort);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const { data: jobs = [], isLoading } = useJobs();
   const mutations = useStepwiseMutations();
 
-  // Derive unique workflow names from objectives
-  const workflowNames = useMemo(() => {
-    const names = new Set<string>();
-    for (const job of jobs) {
-      if (job.objective) names.add(job.objective);
-    }
-    return [...names].sort();
-  }, [jobs]);
-
-  // Filter jobs by query (matches name or objective) and status toggle
+  // Filter jobs by query (matches name or objective) and status toggle, then sort
   const filteredJobs = useMemo(() => {
     const q = query.toLowerCase().trim();
-    return jobs
-      .filter((job) => {
-        if (statusFilter) {
-          if (statusFilter === "awaiting_input") {
-            if (!job.has_suspended_steps) return false;
-          } else if (job.status !== statusFilter) {
-            return false;
-          }
+    const filtered = jobs.filter((job) => {
+      if (statusFilter) {
+        if (statusFilter === "awaiting_input") {
+          if (!job.has_suspended_steps) return false;
+        } else if (job.status !== statusFilter) {
+          return false;
         }
-        if (q) {
-          const nameMatch = (job.name || "").toLowerCase().includes(q);
-          const objMatch = (job.objective || "").toLowerCase().includes(q);
-          if (!nameMatch && !objMatch) return false;
-        }
-        return true;
-      })
-      .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
-  }, [jobs, query, statusFilter]);
+      }
+      if (q) {
+        const nameMatch = (job.name || "").toLowerCase().includes(q);
+        const objMatch = (job.objective || "").toLowerCase().includes(q);
+        if (!nameMatch && !objMatch) return false;
+      }
+      return true;
+    });
+    return sortJobs(filtered, sortBy);
+  }, [jobs, query, statusFilter, sortBy]);
 
   const hasActiveFilter = !!query || !!statusFilter;
 
@@ -208,22 +257,44 @@ export function JobList({ selectedJobId, onSelectJob }: JobListProps) {
           )}
         </div>
 
-        {/* Status pills */}
-        <div className="flex flex-wrap gap-1">
-          {STATUS_OPTIONS.map((opt) => (
-            <button
-              key={opt.value}
-              onClick={() => setStatusFilter(statusFilter === opt.value ? null : opt.value)}
-              className={cn(
-                "px-1.5 py-0.5 rounded text-[10px] transition-colors",
-                statusFilter === opt.value
-                  ? "bg-zinc-700 text-foreground"
-                  : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50",
-              )}
-            >
-              {opt.label}
-            </button>
-          ))}
+        {/* Status pills + sort */}
+        <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap gap-1 flex-1">
+            {STATUS_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setStatusFilter(statusFilter === opt.value ? null : opt.value)}
+                className={cn(
+                  "px-1.5 py-0.5 rounded text-[10px] transition-colors",
+                  statusFilter === opt.value
+                    ? "bg-zinc-700 text-foreground"
+                    : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50",
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <Select
+            value={sortBy}
+            onValueChange={(v) => {
+              const val = v as SortOption;
+              setSortBy(val);
+              try { localStorage.setItem("stepwise-job-sort", val); } catch {}
+            }}
+          >
+            <SelectTrigger className="h-5 w-auto gap-1 px-1.5 border-none bg-transparent text-[10px] text-zinc-500 hover:text-zinc-300 focus:ring-0 shadow-none">
+              <ArrowUpDown className="w-2.5 h-2.5 shrink-0" />
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SORT_OPTIONS.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value} className="text-xs">
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
