@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { type KeyboardEvent, useState } from "react";
 import {
   Hand,
   RotateCw,
@@ -134,6 +134,14 @@ export function StepNode({
   height,
 }: StepNodeProps) {
   const [showTooltip, setShowTooltip] = useState(false);
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onClick();
+    }
+  };
+
   const status: StepRunStatus | "pending" = latestRun?.status ?? "pending";
   const subJobId = latestRun?.sub_job_id ?? null;
   const colors =
@@ -156,13 +164,14 @@ export function StepNode({
         colors.bg,
         colors.border,
         isSelected && `ring-2 ${colors.ring} shadow-lg`,
-        !isSelected && "hover:shadow-md",
+        !isSelected && "hover:shadow-md focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:shadow-lg",
         status === "running" && "shadow-blue-500/20 shadow-md"
       )}
       role="button"
       tabIndex={0}
       style={{ left: x, top: y, width, height }}
       onClick={onClick}
+      onKeyDown={handleKeyDown}
       onMouseEnter={() => stepDef.exit_rules.length > 0 && setShowTooltip(true)}
       onMouseLeave={() => setShowTooltip(false)}
     >
