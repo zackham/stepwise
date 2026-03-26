@@ -23,7 +23,7 @@ This downloads and runs a multi-step code review workflow, opening a browser wit
 No API keys? Try the welcome tour instead:
 
 ```bash
-stepwise run @stepwise:welcome --watch
+stepwise welcome
 ```
 
 ## Create your own flow
