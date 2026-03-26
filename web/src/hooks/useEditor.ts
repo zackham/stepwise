@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import * as api from "@/lib/api";
 
 export function useLocalFlows() {
@@ -59,6 +60,10 @@ export function useSaveFlow() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["localFlows"] });
       queryClient.invalidateQueries({ queryKey: ["localFlow"] });
+      toast.success("Flow saved");
+    },
+    onError: (error) => {
+      toast.error("Failed to save flow", { description: error.message });
     },
   });
 }
