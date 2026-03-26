@@ -84,7 +84,7 @@ interface JobListProps {
 
 const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "running", label: "Running" },
-  { value: "awaiting_input", label: "Awaiting Input" },
+  { value: "awaiting_input", label: "Awaiting Fulfillment" },
   { value: "paused", label: "Paused" },
   { value: "completed", label: "Completed" },
   { value: "failed", label: "Failed" },
@@ -293,7 +293,7 @@ function VirtualJobList({
                       {job.has_suspended_steps && (
                         <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 ring-1 ring-amber-500/30">
                           <CirclePause className="w-2.5 h-2.5" />
-                          Awaiting Input
+                          Awaiting Fulfillment
                         </span>
                       )}
                     </div>
@@ -474,7 +474,7 @@ export function JobList({
           )}
         </div>
 
-        {/* Awaiting Input priority filter */}
+        {/* Awaiting Fulfillment priority filter */}
         {(statusCounts["awaiting_input"] ?? 0) > 0 && (
           <button
             data-testid="awaiting-input-filter"
@@ -487,7 +487,7 @@ export function JobList({
             )}
           >
             <CirclePause className="w-3.5 h-3.5 shrink-0" />
-            <span>Awaiting Input</span>
+            <span>Awaiting Fulfillment</span>
             <span className={cn(
               "ml-auto tabular-nums rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
               statusFilter === "awaiting_input"
