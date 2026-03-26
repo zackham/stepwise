@@ -404,6 +404,13 @@ class ScriptExecutor(Executor):
         stdout = result.stdout.strip()
         stderr = result.stderr.strip()
 
+        # Build base executor_meta with raw output for log viewing
+        base_meta: dict = {"shell_mode": shell_mode, "return_code": result.returncode}
+        if stdout:
+            base_meta["stdout"] = stdout
+        if stderr:
+            base_meta["stderr"] = stderr
+
         if result.returncode != 0:
             # Failure
             return ExecutorResult(
@@ -413,11 +420,7 @@ class ScriptExecutor(Executor):
                     sidecar=Sidecar(),
                     workspace=workspace,
                     timestamp=_now(),
-                    executor_meta={
-                        "return_code": result.returncode,
-                        "failed": True,
-                        "shell_mode": shell_mode,
-                    },
+                    executor_meta={**base_meta, "failed": True},
                 ),
                 executor_state={"failed": True, "error": stderr or f"Exit code {result.returncode}"},
             )
@@ -453,7 +456,7 @@ class ScriptExecutor(Executor):
                 sidecar=Sidecar(),
                 workspace=workspace,
                 timestamp=_now(),
-                executor_meta={"shell_mode": shell_mode},
+                executor_meta=base_meta,
             ),
         )
 
