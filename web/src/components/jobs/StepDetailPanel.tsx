@@ -31,7 +31,8 @@ import {
 import { useState, useEffect, useRef } from "react";
 import { useAgentOutput } from "@/hooks/useStepwise";
 import { FulfillWatchDialog } from "./FulfillWatchDialog";
-import { cn, formatDuration } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { LiveDuration } from "@/components/LiveDuration";
 import { executorIcon } from "@/lib/executor-utils";
 
 interface StepDetailPanelProps {
@@ -484,7 +485,7 @@ export function StepDetailPanel({
                         </span>
                         <span className="text-zinc-600 text-xs flex items-center gap-1">
                           <Clock className="w-3 h-3" />
-                          {formatDuration(run.started_at, run.completed_at)}
+                          <LiveDuration startTime={run.started_at} endTime={run.completed_at} />
                         </span>
                         {exitResolutions[run.attempt] && (
                           <span className={cn(
