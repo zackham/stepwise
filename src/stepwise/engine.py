@@ -1624,7 +1624,7 @@ class Engine:
             run.result = cached_envelope
             run.status = StepRunStatus.COMPLETED
             run.completed_at = _now()
-            run.executor_state = {"from_cache": True}
+            run.executor_state = {**(run.executor_state or {}), "from_cache": True}
             self.store.save_run(run)
             self._emit(job.id, STEP_COMPLETED, {
                 "step": step_name,
