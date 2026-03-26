@@ -33,7 +33,7 @@ import {
   Copy,
   Check,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAgentOutput } from "@/hooks/useStepwise";
 import { FulfillWatchDialog } from "./FulfillWatchDialog";
 import { cn } from "@/lib/utils";
@@ -156,6 +156,14 @@ export function StepDetailPanel({
 
   const sortedRuns = [...runs].sort((a, b) => b.attempt - a.attempt);
   const latestRun = sortedRuns[0] ?? null;
+  const runHistoryRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to Run History when a failed step is selected
+  useEffect(() => {
+    if (latestRun?.status === "failed" && runHistoryRef.current) {
+      runHistoryRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [stepDef.name, latestRun?.status]);
 
   const canRerun =
     !latestRun ||
@@ -386,7 +394,7 @@ export function StepDetailPanel({
           <Separator />
 
           {/* Run History */}
-          <div>
+          <div ref={runHistoryRef}>
             <h4 className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2">
               Run History ({sortedRuns.length})
             </h4>
