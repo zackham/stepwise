@@ -56,6 +56,9 @@ export function AppLayout() {
   const isFlowsActive = currentPath.startsWith("/flows");
   const isSettingsActive = currentPath.startsWith("/settings");
 
+  // Derive a route key for page transition animation — changes on top-level route switches
+  const routeKey = isJobsActive ? "jobs" : isFlowsActive ? "flows" : isSettingsActive ? "settings" : currentPath;
+
   // Dynamic tab title
   const { data: suspendedJobs } = useJobs("suspended");
   const pendingCount = suspendedJobs?.length ?? 0;
@@ -213,7 +216,9 @@ export function AppLayout() {
       {/* Main content */}
       <main className="flex-1 overflow-hidden">
         <ErrorBoundary FallbackComponent={ErrorFallback} onReset={handleReset}>
-          <Outlet />
+          <div key={routeKey} className="h-full animate-fade-in">
+            <Outlet />
+          </div>
         </ErrorBoundary>
       </main>
       <Toaster theme={theme} richColors position="bottom-right" />
