@@ -1112,9 +1112,48 @@ class WorkflowDefinition:
         Also excludes steps that are targeted by exit rules (escalation targets,
         loop targets) — these are control flow participants, not outputs.
         Self-deps and optional deps are excluded from the "depended on" set.
+
+        Loop-internal steps (steps that unconditionally loop back to a dependency)
+        are identified first. Their dependencies and exit targets don't count
+        toward excluding other steps — they're loop machinery, not real consumers.
         """
+        # First pass: identify loop-internal steps — steps that exist purely
+        # to serve a loop cycle. A step is loop-internal only if:
+        # 1. ALL its exit rules are loops (no advance/escalate/abandon exits)
+        # 2. At least one loop target is one of its own dependencies
+        # This excludes steps like external-checkpoint that have both advance
+        # and loop exits — those are decision points, not pure loop machinery.
+        loop_internal: set[str] = set()
+        for name, step_def in self.steps.items():
+            if not step_def.exit_rules:
+                continue
+            # Check that every exit is a loop
+            all_loops = all(
+                rule.config.get("action") == "loop"
+                for rule in step_def.exit_rules
+            )
+            if not all_loops:
+                continue
+            own_deps: set[str] = set()
+            for b in step_def.inputs:
+                if b.any_of_sources:
+                    for src, _ in b.any_of_sources:
+                        own_deps.add(src)
+                elif b.source_step != "$job":
+                    own_deps.add(b.source_step)
+            own_deps.update(step_def.after)
+            loops_to_dep = any(
+                rule.config.get("target", name) in own_deps
+                for rule in step_def.exit_rules
+            )
+            if loops_to_dep:
+                loop_internal.add(name)
+
+        # Second pass: build depended_on, ignoring loop-internal steps
         depended_on: set[str] = set()
         for step in self.steps.values():
+            if step.name in loop_internal:
+                continue
             for binding in step.inputs:
                 if binding.any_of_sources:
                     for src_step, _ in binding.any_of_sources:
@@ -1130,11 +1169,12 @@ class WorkflowDefinition:
             if step.for_each:
                 depended_on.add(step.for_each.source_step)
 
-        # Steps targeted by exit rules (loop, escalate) from *other* steps are
-        # control flow participants, not terminals. Self-loops don't disqualify
-        # a step from being terminal.
+        # Steps targeted by exit rules (loop, escalate) from *other* non-loop-internal
+        # steps are control flow participants, not terminals.
         targeted_by_exits: set[str] = set()
         for step in self.steps.values():
+            if step.name in loop_internal:
+                continue
             for rule in step.exit_rules:
                 target = rule.config.get("target")
                 if target and target != step.name and rule.config.get("action") in ("loop", "escalate"):
@@ -1146,24 +1186,9 @@ class WorkflowDefinition:
                 continue
             if name in targeted_by_exits:
                 continue
-            # Exclude loop-internal steps (loop back to own dep)
-            step_def = self.steps[name]
-            own_deps: set[str] = set()
-            for b in step_def.inputs:
-                if b.any_of_sources:
-                    for src, _ in b.any_of_sources:
-                        own_deps.add(src)
-                elif b.source_step != "$job":
-                    own_deps.add(b.source_step)
-            own_deps.update(step_def.after)
-            is_loop_internal = any(
-                rule.config.get("action") == "loop"
-                and rule.type == "always"  # Only unconditional loops
-                and rule.config.get("target", name) in own_deps
-                for rule in step_def.exit_rules
-            )
-            if not is_loop_internal:
-                terminals.append(name)
+            if name in loop_internal:
+                continue
+            terminals.append(name)
         return terminals
 
     def _detect_cycles(self) -> list[str]:
