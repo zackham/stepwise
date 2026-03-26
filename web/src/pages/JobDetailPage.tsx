@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
 import { useJob, useRuns, useJobTree, useJobOutput, useJobCost, useStepwiseMutations } from "@/hooks/useStepwise";
 import { useConfig } from "@/hooks/useConfig";
@@ -12,6 +12,7 @@ import { JobStatusBadge } from "@/components/StatusBadge";
 import { JsonView } from "@/components/JsonView";
 import type { DagSelection } from "@/lib/dag-layout";
 import { useAutoSelectSuspended } from "@/hooks/useAutoSelectSuspended";
+import { useAutoExpand } from "@/hooks/useAutoExpand";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import {
@@ -66,10 +67,10 @@ export function JobDetailPage() {
   const { data: configData } = useConfig();
   const [selection, setSelection] = useState<DagSelection>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
   const [rightPanelOpen, setRightPanelOpen] = useState<boolean | null>(null);
   const [expandedStep, setExpandedStep] = useState(false);
   const mutations = useStepwiseMutations();
+  const { expandedSteps, toggleExpand } = useAutoExpand(jobId, runs, job, jobTree ?? null);
 
   const isTerminal =
     job?.status === "completed" || job?.status === "failed" || job?.status === "cancelled";
@@ -103,95 +104,11 @@ export function JobDetailPage() {
     setSelection(sel);
   }, []);
 
-  const toggleExpand = useCallback((stepName: string) => {
-    setExpandedSteps((prev) => {
-      const next = new Set(prev);
-      if (next.has(stepName)) next.delete(stepName);
-      else next.add(stepName);
-      return next;
-    });
-  }, []);
-
   // Auto-select newly suspended external steps
   useAutoSelectSuspended(runs, selection, handleSelectStep);
 
-  // Auto-expand steps that have sub-jobs (runtime or design-time)
-  // Walks the full job tree recursively so sub-sub-jobs also auto-expand
-  const prevSubJobKeysRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    const stepsToExpand: string[] = [];
-    const currentKeys = new Set<string>();
-
-    function scanTree(treeNode: JobTreeNode | null) {
-      if (!treeNode) return;
-      const nodeRuns = treeNode.runs;
-      const workflow = treeNode.job.workflow;
-
-      // Runtime sub-jobs: runs with sub_job_id or for_each sub_job_ids
-      for (const run of nodeRuns) {
-        if (run.sub_job_id) {
-          const key = `run:${run.id}`;
-          currentKeys.add(key);
-          if (!prevSubJobKeysRef.current.has(key)) {
-            stepsToExpand.push(run.step_name);
-          }
-        }
-        if (run.executor_state?.for_each === true) {
-          const key = `fe:${run.id}`;
-          currentKeys.add(key);
-          if (!prevSubJobKeysRef.current.has(key)) {
-            stepsToExpand.push(run.step_name);
-          }
-        }
-      }
-
-      // Design-time sub-flows: steps with sub_flow that have started running
-      for (const [name, step] of Object.entries(workflow.steps)) {
-        if (step.sub_flow) {
-          const hasRun = nodeRuns.some((r) => r.step_name === name);
-          if (hasRun) {
-            const key = `def:${treeNode.job.id}:${name}`;
-            currentKeys.add(key);
-            if (!prevSubJobKeysRef.current.has(key)) {
-              stepsToExpand.push(name);
-            }
-          }
-        }
-      }
-
-      // Recurse into sub-jobs
-      for (const child of treeNode.sub_jobs) {
-        scanTree(child);
-      }
-    }
-
-    scanTree(jobTree ?? null);
-    // Also scan top-level runs/job for the case where jobTree hasn't loaded yet
-    if (!jobTree && job) {
-      for (const run of runs) {
-        if (run.sub_job_id) {
-          const key = `run:${run.id}`;
-          currentKeys.add(key);
-          if (!prevSubJobKeysRef.current.has(key)) {
-            stepsToExpand.push(run.step_name);
-          }
-        }
-      }
-    }
-
-    prevSubJobKeysRef.current = currentKeys;
-    if (stepsToExpand.length > 0) {
-      setExpandedSteps((prev) => {
-        const next = new Set(prev);
-        for (const name of stepsToExpand) next.add(name);
-        return next;
-      });
-    }
-  }, [runs, job, jobTree]);
-
   // Reset state when switching jobs
   useEffect(() => {
-    setExpandedSteps(new Set());
     setSelection(null);
     setRightPanelOpen(null);
     setExpandedStep(false);
