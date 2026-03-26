@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
-import { useJob, useRuns, useJobTree, useJobOutput, useJobCost, useConfig, useStepwiseMutations } from "@/hooks/useStepwise";
+import { useJob, useRuns, useJobTree, useJobOutput, useJobCost, useStepwiseMutations } from "@/hooks/useStepwise";
+import { useConfig } from "@/hooks/useConfig";
 import { JobList } from "@/components/jobs/JobList";
 import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
 import { FlowDagView } from "@/components/dag/FlowDagView";

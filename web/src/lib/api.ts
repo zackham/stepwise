@@ -453,10 +453,6 @@ export function fetchConfig(): Promise<ConfigResponse> {
   return request<ConfigResponse>("/config");
 }
 
-export function fetchLabels(): Promise<{ labels: LabelInfo[]; default_model: string }> {
-  return request("/config/labels");
-}
-
 export function createLabel(name: string, model: string): Promise<{ status: string }> {
   return request("/config/labels", {
     method: "POST",
