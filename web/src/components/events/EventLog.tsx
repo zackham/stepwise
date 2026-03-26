@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { useEvents } from "@/hooks/useStepwise";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
@@ -17,6 +17,7 @@ import {
   ArrowDownToLine,
   GitBranch,
   ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { StepwiseEvent } from "@/lib/types";
@@ -109,7 +110,20 @@ export function EventLog({ jobId }: EventLogProps) {
   const [activeFilters, setActiveFilters] = useState<
     Set<keyof typeof EVENT_CATEGORIES>
   >(new Set(Object.keys(EVENT_CATEGORIES) as Array<keyof typeof EVENT_CATEGORIES>));
+  const [expandedEvents, setExpandedEvents] = useState<Set<string>>(new Set());
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  const toggleExpanded = useCallback((eventId: string) => {
+    setExpandedEvents((prev) => {
+      const next = new Set(prev);
+      if (next.has(eventId)) {
+        next.delete(eventId);
+      } else {
+        next.add(eventId);
+      }
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     if (autoScroll && bottomRef.current) {
@@ -175,62 +189,94 @@ export function EventLog({ jobId }: EventLogProps) {
           {filteredEvents.map((evt) => {
             const cat = categorize(evt);
             const catStyle = EVENT_CATEGORIES[cat];
+            const hasData = Object.keys(evt.data).length > 0;
+            const isExpanded = expandedEvents.has(evt.id);
             return (
               <div
                 key={evt.id}
                 className={cn(
-                  "flex items-start gap-2 px-2 py-1.5 rounded text-sm",
-                  "hover:bg-zinc-800/50 group"
+                  "rounded text-sm",
+                  "hover:bg-zinc-800/50 group",
+                  isExpanded && "bg-zinc-800/30"
                 )}
               >
-                <span
+                <button
+                  type="button"
+                  onClick={() => hasData && toggleExpanded(evt.id)}
                   className={cn(
-                    "shrink-0 mt-0.5",
-                    cat === "step" &&
-                      (evt.type.includes("failed")
-                        ? "text-red-400"
-                        : evt.type.includes("completed")
-                        ? "text-emerald-400"
-                        : "text-emerald-400/70"),
-                    cat === "job" && "text-blue-400",
-                    cat === "external" && "text-amber-400",
-                    cat === "engine" && "text-purple-400",
-                    cat === "effector" && "text-pink-400"
+                    "flex items-start gap-2 px-2 py-1.5 w-full text-left",
+                    hasData && "cursor-pointer"
                   )}
                 >
-                  {eventIcon(evt.type, evt.is_effector)}
-                </span>
-
-                <span className="text-zinc-600 text-xs font-mono shrink-0 mt-0.5">
-                  {formatTime(evt.timestamp)}
-                </span>
-
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    <Badge
-                      variant="outline"
-                      className={cn(
-                        "text-[9px] font-mono border-transparent",
-                        catStyle.color
+                  {hasData ? (
+                    <span className="shrink-0 mt-0.5 text-zinc-600">
+                      {isExpanded ? (
+                        <ChevronDown className="w-3.5 h-3.5" />
+                      ) : (
+                        <ChevronRight className="w-3.5 h-3.5" />
                       )}
-                    >
-                      {evt.type}
-                    </Badge>
-                    {evt.is_effector && (
+                    </span>
+                  ) : (
+                    <span className="shrink-0 mt-0.5 w-3.5" />
+                  )}
+
+                  <span
+                    className={cn(
+                      "shrink-0 mt-0.5",
+                      cat === "step" &&
+                        (evt.type.includes("failed")
+                          ? "text-red-400"
+                          : evt.type.includes("completed")
+                          ? "text-emerald-400"
+                          : "text-emerald-400/70"),
+                      cat === "job" && "text-blue-400",
+                      cat === "external" && "text-amber-400",
+                      cat === "engine" && "text-purple-400",
+                      cat === "effector" && "text-pink-400"
+                    )}
+                  >
+                    {eventIcon(evt.type, evt.is_effector)}
+                  </span>
+
+                  <span className="text-zinc-600 text-xs font-mono shrink-0 mt-0.5">
+                    {formatTime(evt.timestamp)}
+                  </span>
+
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
                       <Badge
                         variant="outline"
-                        className="text-[9px] font-mono bg-pink-500/10 text-pink-400 border-pink-500/30"
+                        className={cn(
+                          "text-[9px] font-mono border-transparent",
+                          catStyle.color
+                        )}
                       >
-                        effector
+                        {evt.type}
                       </Badge>
+                      {evt.is_effector && (
+                        <Badge
+                          variant="outline"
+                          className="text-[9px] font-mono bg-pink-500/10 text-pink-400 border-pink-500/30"
+                        >
+                          effector
+                        </Badge>
+                      )}
+                    </div>
+                    {hasData && !isExpanded && (
+                      <div className="text-xs text-zinc-500 mt-0.5 font-mono truncate">
+                        {dataPreview(evt.data)}
+                      </div>
                     )}
                   </div>
-                  {Object.keys(evt.data).length > 0 && (
-                    <div className="text-xs text-zinc-500 mt-0.5 font-mono truncate">
-                      {dataPreview(evt.data)}
-                    </div>
-                  )}
-                </div>
+                </button>
+
+                {hasData && isExpanded && (
+                  <div className="mx-2 mb-2 ml-8 p-2 rounded bg-zinc-900 border border-zinc-800">
+                    <pre className="text-xs font-mono text-zinc-300 whitespace-pre-wrap break-all">
+                      {JSON.stringify(evt.data, null, 2)}
+                    </pre>
+                  </div>
+                )}
               </div>
             );
           })}
