@@ -403,11 +403,11 @@ export function JobDetailPage() {
             <div className="min-w-0">
               <span className="text-red-300 font-medium">
                 {failureReason.reason === "step_failed" && failureReason.step
-                  ? `Step "${failureReason.step}" failed`
+                  ? <>Step "<button type="button" className="underline underline-offset-2 hover:text-red-200 cursor-pointer" onClick={() => handleSelectStep(failureReason.step!)}>{failureReason.step}</button>" failed</>
                   : failureReason.reason === "no_terminal_reached"
                     ? "No terminal step reached — all branches were gated"
                     : failureReason.reason === "abandoned" && failureReason.step
-                      ? `Step "${failureReason.step}" abandoned (rule: ${failureReason.rule})`
+                      ? <>Step "<button type="button" className="underline underline-offset-2 hover:text-red-200 cursor-pointer" onClick={() => handleSelectStep(failureReason.step!)}>{failureReason.step}</button>" abandoned (rule: {failureReason.rule})</>
                       : `Job failed: ${failureReason.reason}`}
               </span>
               {failureReason.error && (
