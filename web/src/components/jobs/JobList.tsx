@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { useJobs, useStepwiseMutations } from "@/hooks/useStepwise";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { AlertTriangle, Briefcase, Clock, Monitor, Terminal, Trash2, Search, X } from "lucide-react";
+import { AlertTriangle, Briefcase, Clock, Hand, Monitor, Terminal, Trash2, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Job, JobStatus } from "@/lib/types";
 
@@ -13,6 +13,7 @@ interface JobListProps {
 
 const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "running", label: "Running" },
+  { value: "awaiting_input", label: "Awaiting Input" },
   { value: "paused", label: "Paused" },
   { value: "completed", label: "Completed" },
   { value: "failed", label: "Failed" },
@@ -62,7 +63,13 @@ export function JobList({ selectedJobId, onSelectJob }: JobListProps) {
     const q = query.toLowerCase().trim();
     return jobs
       .filter((job) => {
-        if (statusFilter && job.status !== statusFilter) return false;
+        if (statusFilter) {
+          if (statusFilter === "awaiting_input") {
+            if (!job.has_suspended_steps) return false;
+          } else if (job.status !== statusFilter) {
+            return false;
+          }
+        }
         if (q) {
           const nameMatch = (job.name || "").toLowerCase().includes(q);
           const objMatch = (job.objective || "").toLowerCase().includes(q);
@@ -220,6 +227,12 @@ export function JobList({ selectedJobId, onSelectJob }: JobListProps) {
                         <AlertTriangle className="w-3 h-3 text-amber-500" />
                       )}
                       <JobStatusBadge status={job.status} />
+                      {job.has_suspended_steps && (
+                        <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 ring-1 ring-amber-500/30">
+                          <Hand className="w-2.5 h-2.5" />
+                          Awaiting Input
+                        </span>
+                      )}
                     </div>
                     <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
                       {isCliOwned(job.created_by) ? (

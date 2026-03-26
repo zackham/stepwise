@@ -209,6 +209,7 @@ export interface Job {
   created_by: string;
   runner_pid: number | null;
   heartbeat_at: string | null;
+  has_suspended_steps?: boolean;
 }
 
 // ── Event ──────────────────────────────────────────────────────────────

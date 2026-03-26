@@ -320,6 +320,8 @@ def _get_engine() -> AsyncEngine:
 
 def _serialize_job(job: Job, summary: bool = False) -> dict:
     if summary:
+        engine = _get_engine()
+        has_suspended = bool(engine.store.suspended_runs(job.id))
         return {
             "id": job.id,
             "name": job.name,
@@ -331,6 +333,7 @@ def _serialize_job(job: Job, summary: bool = False) -> dict:
             "created_by": job.created_by,
             "flow_file": getattr(job.workflow, "source_dir", None),
             "metadata": job.metadata,
+            "has_suspended_steps": has_suspended,
         }
     return job.to_dict()
 
