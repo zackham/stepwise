@@ -374,6 +374,19 @@ export function JobDetailPage() {
             </div>
             <button
               type="button"
+              className="text-amber-400 hover:text-amber-300 text-xs font-medium whitespace-nowrap shrink-0"
+              onClick={() =>
+                mutations.rerunStep.mutate({
+                  jobId: job.id,
+                  stepName: failedRun.step_name,
+                })
+              }
+              disabled={mutations.rerunStep.isPending}
+            >
+              Retry Step
+            </button>
+            <button
+              type="button"
               className="text-red-400 hover:text-red-300 underline underline-offset-2 whitespace-nowrap shrink-0"
               onClick={() => handleSelectStep(failedRun.step_name)}
             >
@@ -411,6 +424,7 @@ export function JobDetailPage() {
           resolvedStep ? (
             <StepDetailPanel
               jobId={resolvedStep.jobId}
+              job={job}
               stepDef={resolvedStep.stepDef}
               onClose={() => setSelection(null)}
               onExpand={() => setExpandedStep(true)}
@@ -564,6 +578,7 @@ export function JobDetailPage() {
           {resolvedStep && (
             <StepDetailPanel
               jobId={resolvedStep.jobId}
+              job={job}
               stepDef={resolvedStep.stepDef}
               onClose={() => { setExpandedStep(false); setSelection(null); }}
               onExpand={() => setExpandedStep(false)}
