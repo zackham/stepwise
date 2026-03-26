@@ -120,6 +120,11 @@ export function AppLayout() {
           >
             <LayoutGrid className="w-4 h-4 md:w-3.5 md:h-3.5 md:mr-1.5" />
             <span className="hidden md:inline">Jobs</span>
+            {pendingCount > 0 && (
+              <span className="ml-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[11px] font-semibold leading-none rounded-full bg-amber-500 text-white">
+                {pendingCount}
+              </span>
+            )}
           </Link>
           <Link
             to="/flows"
