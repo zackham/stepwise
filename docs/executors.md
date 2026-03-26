@@ -209,7 +209,7 @@ review:
       action: abandon
 ```
 
-This creates an iterative human-in-the-loop review cycle: the LLM drafts, the human scores, and if it's not good enough, the LLM revises with the feedback. Up to 3 attempts before abandoning.
+This creates an iterative external review cycle: the LLM drafts, a reviewer scores, and if it's not good enough, the LLM revises with the feedback. Up to 3 attempts before abandoning.
 
 ## Decorators
 

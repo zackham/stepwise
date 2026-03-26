@@ -108,7 +108,7 @@ stepwise search "code review agent"
 
 ```
 NAME                 AUTHOR     STEPS  DOWNLOADS  TAGS
-code-review          zack       3      1,247      agent, human-in-the-loop
+code-review          zack       3      1,247      agent, external-fulfillment
 pr-review-lite       sarah      2      892        script, code-review
 security-audit       mike       5      634        agent, security
 ```
@@ -132,7 +132,7 @@ Name:        code-review
 Author:      zack
 Version:     1.2
 Description: AI-powered code review with human approval gate
-Tags:        agent, human-in-the-loop, code-review
+Tags:        agent, external-fulfillment, code-review
 Downloads:   1,247
 Published:   2026-03-15
 URL:         https://stepwise.run/flows/code-review
@@ -175,7 +175,7 @@ Response:
   "author": "zack",
   "version": "1.0",
   "description": "AI-powered code review with human approval gate",
-  "tags": ["agent", "human-in-the-loop"],
+  "tags": ["agent", "external-fulfillment"],
   "steps": 3,
   "loops": 1,
   "url": "https://stepwise.run/flows/code-review",
@@ -213,7 +213,7 @@ Response:
   "author": "zack",
   "version": "1.2",
   "description": "AI-powered code review with human approval gate",
-  "tags": ["agent", "human-in-the-loop"],
+  "tags": ["agent", "external-fulfillment"],
   "steps": 3,
   "loops": 1,
   "downloads": 1247,
@@ -247,7 +247,7 @@ Response:
       "name": "code-review",
       "author": "zack",
       "description": "AI-powered code review with human approval gate",
-      "tags": ["agent", "human-in-the-loop"],
+      "tags": ["agent", "external-fulfillment"],
       "steps": 3,
       "downloads": 1247
     }
@@ -352,7 +352,7 @@ Shared flows must be **self-contained**. This means:
 name: code-review
 description: AI-powered PR review with human approval gate
 author: zack
-tags: [agent, human-in-the-loop, code-review]
+tags: [agent, external-fulfillment, code-review]
 
 steps:
   analyze:
