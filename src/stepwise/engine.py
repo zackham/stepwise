@@ -3136,15 +3136,129 @@ class AsyncEngine(Engine):
         """Re-evaluate all RUNNING server-owned jobs after startup.
 
         Catches jobs whose steps all completed but the job wasn't settled
-        before the server crashed. Safe to call multiple times —
-        _check_job_terminal is idempotent.
+        before the server crashed. Also recovers script steps whose
+        subprocess completed but whose pipe output was lost (issue #4).
+
+        Safe to call multiple times — _check_job_terminal is idempotent.
         """
         for job in self.store.active_jobs():
             if job.created_by != "server":
                 continue
+            self._recover_dead_script_runs(job)
             self._check_job_terminal(job.id)
         # Reconcile pending jobs with deps — a dep may have completed while server was down
         self._start_queued_jobs()
+
+    def _recover_dead_script_runs(self, job: Job) -> None:
+        """Recover RUNNING script step runs whose process died but left output files.
+
+        On server restart, script steps that were mid-flight have lost their
+        stdout pipe. If the subprocess wrote its output to the step-io file
+        before dying, we can recover the result. If not, the run is failed.
+
+        Only handles script-type executors. Agent reattach is handled separately
+        by reattach_surviving_runs().
+        """
+        from pathlib import Path
+        from stepwise.agent import _is_pid_alive
+
+        for run in self.store.running_runs(job.id):
+            step_def = job.workflow.steps.get(run.step_name)
+            if not step_def or step_def.executor.type != "script":
+                continue
+
+            if not run.pid:
+                # No PID stored — can't determine process state, fail the run
+                _async_logger.warning(
+                    "Script run %s (step %s) has no PID — failing as unrecoverable",
+                    run.id, run.step_name,
+                )
+                self._fail_run(
+                    job, run, step_def,
+                    error="Script process lost on restart (no PID stored, no stdout file)",
+                )
+                continue
+
+            if _is_pid_alive(run.pid):
+                continue  # Still running — will be handled by normal engine flow
+
+            # PID is dead — attempt file-based recovery
+            workspace = job.workspace_path or "."
+            step_io_dir = Path(workspace) / ".stepwise" / "step-io"
+            stdout_path = step_io_dir / f"{run.step_name}-{run.attempt}.stdout"
+            exitcode_path = step_io_dir / f"{run.step_name}-{run.attempt}.exitcode"
+            stderr_path = step_io_dir / f"{run.step_name}-{run.attempt}.stderr"
+
+            if not stdout_path.exists():
+                _async_logger.warning(
+                    "Script run %s (step %s, PID %d) died with no stdout file — failing",
+                    run.id, run.step_name, run.pid,
+                )
+                self._fail_run(
+                    job, run, step_def,
+                    error="Script process died on restart (PID gone, no stdout file for recovery)",
+                )
+                continue
+
+            # Read recovered output
+            stdout = stdout_path.read_text().strip()
+            stderr = stderr_path.read_text().strip() if stderr_path.exists() else ""
+            exitcode = 0
+            if exitcode_path.exists():
+                try:
+                    exitcode = int(exitcode_path.read_text().strip())
+                except ValueError:
+                    pass
+
+            _async_logger.info(
+                "Recovering script run %s (step %s, PID %d) from stdout file (exitcode=%d)",
+                run.id, run.step_name, run.pid, exitcode,
+            )
+
+            # Build ExecutorResult as ScriptExecutor would, then process it
+            base_meta: dict = {
+                "shell_mode": "recovered",
+                "return_code": exitcode,
+                "recovered": True,
+            }
+            if stdout:
+                base_meta["stdout"] = stdout
+            if stderr:
+                base_meta["stderr"] = stderr
+
+            if exitcode != 0:
+                result = ExecutorResult(
+                    type="data",
+                    envelope=HandoffEnvelope(
+                        artifact={"stdout": stdout} if stdout else {"stdout": ""},
+                        sidecar=Sidecar(),
+                        workspace=workspace,
+                        timestamp=_now(),
+                        executor_meta={**base_meta, "failed": True},
+                    ),
+                    executor_state={"failed": True, "error": stderr or f"Exit code {exitcode}"},
+                )
+            else:
+                # Parse stdout as JSON (same logic as ScriptExecutor)
+                artifact: dict
+                try:
+                    parsed = json.loads(stdout) if stdout else {}
+                    artifact = parsed if isinstance(parsed, dict) else {"stdout": stdout}
+                except (json.JSONDecodeError, ValueError):
+                    artifact = {"stdout": stdout} if stdout else {"stdout": ""}
+
+                result = ExecutorResult(
+                    type="data",
+                    envelope=HandoffEnvelope(
+                        artifact=artifact,
+                        sidecar=Sidecar(),
+                        workspace=workspace,
+                        timestamp=_now(),
+                        executor_meta=base_meta,
+                    ),
+                )
+
+            self._process_launch_result(job, run, result)
 
     # ── Restart resilience: reattach surviving runs ─────────────────────
 
