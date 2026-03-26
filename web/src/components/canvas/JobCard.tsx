@@ -62,12 +62,21 @@ export const JobCard = memo(function JobCard({ job, runs, width, height }: JobCa
 
       {/* Mini DAG */}
       <div className="flex justify-center px-2">
-        <MiniDag
-          workflow={job.workflow}
-          runs={runs}
-          width={dagW}
-          height={dagH}
-        />
+        {job.workflow?.steps ? (
+          <MiniDag
+            workflow={job.workflow}
+            runs={runs}
+            width={dagW}
+            height={dagH}
+          />
+        ) : (
+          <div
+            className="flex items-center justify-center text-zinc-600 text-[10px]"
+            style={{ width: dagW, height: dagH }}
+          >
+            {runs.length > 0 ? `${runs.length} runs` : "No workflow data"}
+          </div>
+        )}
       </div>
 
       {/* Footer */}
