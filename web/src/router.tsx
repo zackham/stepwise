@@ -12,10 +12,12 @@ import { JobTreePage } from "@/pages/JobTreePage";
 import { FlowsPage } from "@/pages/FlowsPage";
 import { EditorPage } from "@/pages/EditorPage";
 import { SettingsPage } from "@/pages/SettingsPage";
+import { NotFoundPage } from "@/pages/NotFoundPage";
 
 // Root route
 const rootRoute = createRootRoute({
   component: AppLayout,
+  notFoundComponent: NotFoundPage,
 });
 
 // Index route (redirect to /jobs)
