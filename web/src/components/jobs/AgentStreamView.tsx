@@ -11,6 +11,10 @@ import {
   Check,
   Loader2,
 } from "lucide-react";
+import { useLogSearch } from "@/hooks/useLogSearch";
+import { LogSearchBar } from "@/components/logs/LogSearchBar";
+import { highlightMatches, countMatches } from "@/lib/log-search";
+import { cn } from "@/lib/utils";
 
 interface AgentStreamViewProps {
   runId: string;
@@ -68,7 +72,17 @@ function ToolCard({ tool }: { tool: { id: string; title: string; kind: string; s
   );
 }
 
-function SegmentRenderer({ segments, showCursor }: { segments: StreamSegment[]; showCursor: boolean }) {
+function SegmentRenderer({
+  segments,
+  showCursor,
+  searchRegex,
+  hasActiveSearch,
+}: {
+  segments: StreamSegment[];
+  showCursor: boolean;
+  searchRegex?: RegExp | null;
+  hasActiveSearch?: boolean;
+}) {
   const hasRunningTool = segments.some(
     (s) => s.type === "tool" && s.tool.status === "running"
   );
@@ -77,12 +91,16 @@ function SegmentRenderer({ segments, showCursor }: { segments: StreamSegment[]; 
     <>
       {segments.map((seg, i) => {
         if (seg.type === "text") {
+          const matches = searchRegex ? countMatches(seg.text, searchRegex) > 0 : true;
           return (
             <span
               key={i}
-              className="whitespace-pre-wrap text-sm font-mono text-zinc-300 leading-relaxed"
+              className={cn(
+                "whitespace-pre-wrap text-sm font-mono text-zinc-300 leading-relaxed",
+                hasActiveSearch && !matches && "opacity-40"
+              )}
             >
-              {seg.text}
+              {searchRegex ? highlightMatches(seg.text, searchRegex) : seg.text}
             </span>
           );
         }
@@ -114,7 +132,9 @@ function UsageBar({ usage }: { usage: { used: number; size: number } }) {
 
 export function AgentStreamView({ runId, isLive, startedAt, costUsd, billingMode }: AgentStreamViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
+  const search = useLogSearch(containerRef);
 
   // Live stream
   const { streamState, version } = useAgentStream(isLive ? runId : undefined);
@@ -130,6 +150,21 @@ export function AgentStreamView({ runId, isLive, startedAt, costUsd, billingMode
   const state = isLive ? streamState : replayState;
   const segments = state?.segments ?? [];
   const usage = state?.usage ?? null;
+
+  // Compute match count from text segments
+  const totalMatches = useMemo(() => {
+    if (!search.compiledRegex) return 0;
+    return segments.reduce((sum, seg) => {
+      if (seg.type === "text") return sum + countMatches(seg.text, search.compiledRegex);
+      return sum;
+    }, 0);
+  }, [segments, search.compiledRegex]);
+
+  useEffect(() => {
+    search.setMatchCount(totalMatches);
+  }, [totalMatches]);
+
+  const hasActiveSearch = search.query.length > 0 && !search.regexError;
 
   // Auto-scroll
   useEffect(() => {
@@ -177,13 +212,19 @@ export function AgentStreamView({ runId, isLive, startedAt, costUsd, billingMode
   }
 
   return (
-    <div className="bg-zinc-950/50 border border-zinc-800/50 rounded-lg overflow-hidden">
+    <div ref={containerRef} tabIndex={-1} className="bg-zinc-950/50 border border-zinc-800/50 rounded-lg overflow-hidden">
+      <LogSearchBar search={search} />
       <div
         ref={scrollRef}
         onScroll={handleScroll}
         className="max-h-96 overflow-y-auto p-3"
       >
-        <SegmentRenderer segments={segments} showCursor={isLive} />
+        <SegmentRenderer
+          segments={segments}
+          showCursor={isLive}
+          searchRegex={search.compiledRegex}
+          hasActiveSearch={hasActiveSearch}
+        />
       </div>
       {usage && <UsageBar usage={usage} />}
     </div>
