@@ -25,6 +25,21 @@ stepwise share my.flow.yaml
                                                           ← prints matches
 ```
 
+## Authentication
+
+Publishing flows requires registry authentication via GitHub OAuth.
+
+```bash
+stepwise login      # opens browser for GitHub OAuth, stores token locally
+stepwise logout     # removes stored authentication token
+```
+
+`stepwise login` is a prerequisite for `stepwise share`. Reading and downloading flows (`get`, `search`, `info`) do not require authentication.
+
+See [CLI Reference: login/logout](cli.md#stepwise-login) for details.
+
+---
+
 ## CLI Commands
 
 ### `stepwise share <file>`
