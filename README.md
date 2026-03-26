@@ -156,10 +156,9 @@ See [`docs/cli.md`](docs/cli.md) for the full reference with all flags, examples
 | [API Reference](docs/api.md) | REST endpoints, WebSocket protocol, error handling |
 | [Flow Sharing](docs/flow-sharing.md) | Registry commands (`get`, `share`, `search`, `info`) |
 | [Flows vs Skills](docs/flows-vs-skills.md) | When to use a flow vs a skill/prompt |
-| [How Stepwise Is Different](docs/how-stepwise-is-different.md) | Comparison with other orchestration tools |
+| [Comparison](docs/comparison.md) | How stepwise compares to other orchestration tools |
 | [How-To: Build Extensions](docs/how-to-plugins.md) | Write custom executor plugins |
 | [How-To: Create Agent Skills](docs/how-to-skills.md) | Wrap flows as agent-callable skills |
-| [How-To: Tool Comparison](docs/how-to-comparison.md) | Choosing between executor types |
 | [How-To: Non-Claude Agents](docs/how-to-generic-agents.md) | Using Stepwise with non-Claude agents |
 
 ## Development
