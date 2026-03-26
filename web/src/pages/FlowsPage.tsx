@@ -467,7 +467,7 @@ export function FlowsPage() {
                 if (!open) setSelectedRegistryFlow(null);
               }}
             >
-              <SheetContent side="right" showCloseButton={false} className="w-[85vw] sm:max-w-sm p-0 overflow-y-auto">
+              <SheetContent side="right" showCloseButton={false} className="w-[90vw] sm:max-w-sm p-0 overflow-y-auto">
                 {selectedRegistryFlow && (
                   <FlowInfoPanel
                     flow={selectedRegistryFlow}

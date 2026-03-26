@@ -154,7 +154,7 @@ function JobActions({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        className="p-1 rounded hover:bg-zinc-700/50 text-zinc-500 hover:text-zinc-300 transition-colors"
+        className="p-1 rounded hover:bg-zinc-700/50 text-zinc-500 hover:text-zinc-300 transition-colors min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center"
         onClick={(e) => e.stopPropagation()}
       >
         <MoreVertical className="w-3.5 h-3.5" />
@@ -437,7 +437,7 @@ export function JobList({
             {hasActiveFilter && (
               <button
                 onClick={() => { setQuery(""); setStatusFilter(null); }}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-400"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-400 p-1"
               >
                 <X className="w-3 h-3" />
               </button>
@@ -466,7 +466,7 @@ export function JobList({
           ) : (
             <button
               onClick={() => setConfirmDelete(true)}
-              className="text-zinc-600 hover:text-red-400 p-1 rounded hover:bg-zinc-800/50 transition-colors shrink-0"
+              className="text-zinc-600 hover:text-red-400 p-1 rounded hover:bg-zinc-800/50 transition-colors shrink-0 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center"
               title="Delete all jobs"
             >
               <Trash2 className="w-3.5 h-3.5" />
@@ -501,13 +501,13 @@ export function JobList({
 
         {/* Status pills + sort */}
         <div className="flex items-center gap-1.5">
-          <div className="flex flex-wrap gap-1 flex-1">
+          <div className="flex gap-1 flex-1 overflow-x-auto md:flex-wrap md:overflow-x-visible scrollbar-none">
             {STATUS_OPTIONS.map((opt) => (
               <button
                 key={opt.value}
                 onClick={() => setStatusFilter(statusFilter === opt.value ? null : opt.value)}
                 className={cn(
-                  "px-1.5 py-0.5 rounded text-[10px] transition-colors",
+                  "px-1.5 py-0.5 rounded text-[10px] transition-colors shrink-0 min-h-[44px] md:min-h-0",
                   statusFilter === opt.value
                     ? "bg-zinc-700 text-foreground"
                     : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50",
@@ -528,7 +528,7 @@ export function JobList({
               try { localStorage.setItem("stepwise-job-sort", val); } catch {}
             }}
           >
-            <SelectTrigger className="h-5 w-auto gap-1 px-1.5 border-none bg-transparent text-[10px] text-zinc-500 hover:text-zinc-300 focus:ring-0 shadow-none">
+            <SelectTrigger className="h-5 w-auto gap-1 px-1.5 border-none bg-transparent text-[10px] text-zinc-500 hover:text-zinc-300 focus:ring-0 shadow-none min-h-[44px] md:min-h-0">
               <ArrowUpDown className="w-2.5 h-2.5 shrink-0" />
               <SelectValue />
             </SelectTrigger>
