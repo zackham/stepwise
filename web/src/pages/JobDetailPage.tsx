@@ -7,7 +7,7 @@ import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
 import { FlowDagView } from "@/components/dag/FlowDagView";
 import { StepDetailPanel, StepDetailSkeleton } from "@/components/jobs/StepDetailPanel";
 import { DataFlowPanel } from "@/components/dag/DataFlowPanel";
-import { HumanControls } from "@/components/jobs/HumanControls";
+import { JobControls } from "@/components/jobs/JobControls";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { JsonView } from "@/components/JsonView";
 import type { DagSelection } from "@/lib/dag-layout";
@@ -341,7 +341,7 @@ export function JobDetailPage() {
         </div>
 
         {/* Controls */}
-        <HumanControls job={job} selectedStep={selectedStep} runs={runs} />
+        <JobControls job={job} selectedStep={selectedStep} runs={runs} />
 
         {/* Error summary banner */}
         {failedRun && (
