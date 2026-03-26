@@ -21,6 +21,9 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { StepwiseEvent } from "@/lib/types";
+import { useLogSearch } from "@/hooks/useLogSearch";
+import { LogSearchBar } from "@/components/logs/LogSearchBar";
+import { highlightMatches, countMatches } from "@/lib/log-search";
 
 interface EventLogProps {
   jobId: string;
@@ -112,6 +115,8 @@ export function EventLog({ jobId }: EventLogProps) {
   >(new Set(Object.keys(EVENT_CATEGORIES) as Array<keyof typeof EVENT_CATEGORIES>));
   const [expandedEvents, setExpandedEvents] = useState<Set<string>>(new Set());
   const bottomRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const search = useLogSearch(containerRef);
 
   const toggleExpanded = useCallback((eventId: string) => {
     setExpandedEvents((prev) => {
@@ -131,10 +136,29 @@ export function EventLog({ jobId }: EventLogProps) {
     }
   }, [events, autoScroll]);
 
-  const filteredEvents = useMemo(
-    () => events.filter((evt) => activeFilters.has(categorize(evt))),
-    [events, activeFilters]
-  );
+  const filteredEvents = useMemo(() => {
+    let result = events.filter((evt) => activeFilters.has(categorize(evt)));
+    if (search.compiledRegex) {
+      result = result.filter((evt) => {
+        const text = evt.type + " " + dataPreview(evt.data);
+        return countMatches(text, search.compiledRegex) > 0;
+      });
+    }
+    return result;
+  }, [events, activeFilters, search.compiledRegex]);
+
+  // Update match count
+  const totalMatches = useMemo(() => {
+    if (!search.compiledRegex) return 0;
+    return filteredEvents.reduce((sum, evt) => {
+      const text = evt.type + " " + dataPreview(evt.data);
+      return sum + countMatches(text, search.compiledRegex);
+    }, 0);
+  }, [filteredEvents, search.compiledRegex]);
+
+  useEffect(() => {
+    search.setMatchCount(totalMatches);
+  }, [totalMatches]);
 
   const toggleFilter = (cat: keyof typeof EVENT_CATEGORIES) => {
     setActiveFilters((prev) => {
@@ -149,7 +173,7 @@ export function EventLog({ jobId }: EventLogProps) {
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div ref={containerRef} tabIndex={-1} className="flex flex-col h-full">
       {/* Filters */}
       <div className="flex items-center gap-2 p-3 border-b border-border">
         {(
@@ -182,6 +206,8 @@ export function EventLog({ jobId }: EventLogProps) {
           Auto-scroll
         </button>
       </div>
+
+      <LogSearchBar search={search} />
 
       {/* Events */}
       <ScrollArea className="flex-1">
@@ -251,7 +277,7 @@ export function EventLog({ jobId }: EventLogProps) {
                           catStyle.color
                         )}
                       >
-                        {evt.type}
+                        {highlightMatches(evt.type, search.compiledRegex)}
                       </Badge>
                       {evt.is_effector && (
                         <Badge
@@ -264,7 +290,7 @@ export function EventLog({ jobId }: EventLogProps) {
                     </div>
                     {hasData && !isExpanded && (
                       <div className="text-xs text-zinc-500 mt-0.5 font-mono truncate">
-                        {dataPreview(evt.data)}
+                        {highlightMatches(dataPreview(evt.data), search.compiledRegex)}
                       </div>
                     )}
                   </div>
@@ -273,7 +299,7 @@ export function EventLog({ jobId }: EventLogProps) {
                 {hasData && isExpanded && (
                   <div className="mx-2 mb-2 ml-8 p-2 rounded bg-zinc-900 border border-zinc-800">
                     <pre className="text-xs font-mono text-zinc-300 whitespace-pre-wrap break-all">
-                      {JSON.stringify(evt.data, null, 2)}
+                      {highlightMatches(JSON.stringify(evt.data, null, 2), search.compiledRegex)}
                     </pre>
                   </div>
                 )}
