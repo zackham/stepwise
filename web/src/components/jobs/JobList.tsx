@@ -354,9 +354,10 @@ export function JobList({
     return sortJobs(filtered, sortBy);
   }, [jobs, query, statusFilter, sortBy]);
 
-  // Reset focused index when filtered list changes
+  // Reset focused index and scroll position when filtered list changes
   useEffect(() => {
     setFocusedIndex(-1);
+    scrollRef.current?.scrollTo({ top: 0 });
   }, [filteredJobs.length, query, statusFilter, sortBy]);
 
   const handleKeyDown = useCallback(
