@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import * as api from "@/lib/api";
 
 // ── Query hooks ──────────────────────────────────────────────────────
@@ -132,7 +133,13 @@ export function useStepwiseMutations() {
 
   const createJobMutation = useMutation({
     mutationFn: api.createJob,
-    onSuccess: invalidateAll,
+    onSuccess: () => {
+      invalidateAll();
+      toast.success("Job created");
+    },
+    onError: (error) => {
+      toast.error("Failed to create job", { description: error.message });
+    },
   });
 
   const startJobMutation = useMutation({
@@ -152,13 +159,25 @@ export function useStepwiseMutations() {
 
   const cancelJobMutation = useMutation({
     mutationFn: api.cancelJob,
-    onSuccess: invalidateAll,
+    onSuccess: () => {
+      invalidateAll();
+      toast.success("Job cancelled");
+    },
+    onError: (error) => {
+      toast.error("Failed to cancel job", { description: error.message });
+    },
   });
 
   const rerunStepMutation = useMutation({
     mutationFn: ({ jobId, stepName }: { jobId: string; stepName: string }) =>
       api.rerunStep(jobId, stepName),
-    onSuccess: invalidateAll,
+    onSuccess: () => {
+      invalidateAll();
+      toast.success("Step rerun started");
+    },
+    onError: (error) => {
+      toast.error("Failed to rerun step", { description: error.message });
+    },
   });
 
   const fulfillWatchMutation = useMutation({

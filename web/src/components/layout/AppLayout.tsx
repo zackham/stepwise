@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Outlet, Link, useLocation } from "@tanstack/react-router";
 import { ErrorBoundary, type FallbackProps } from "react-error-boundary";
+import { Toaster } from "sonner";
 import { useStepwiseWebSocket } from "@/hooks/useStepwiseWebSocket";
 import { useEngineStatus, useJobs, useJob } from "@/hooks/useStepwise";
 import { LayoutGrid, FileCode, Settings2, Zap, FolderOpen, AlertTriangle, Sun, Moon } from "lucide-react";
@@ -189,6 +190,7 @@ export function AppLayout() {
           <Outlet />
         </ErrorBoundary>
       </main>
+      <Toaster theme={theme} richColors position="bottom-right" />
     </div>
   );
 }
