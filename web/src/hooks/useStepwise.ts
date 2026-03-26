@@ -83,6 +83,14 @@ export function useJobCost(jobId: string | undefined) {
   });
 }
 
+export function useRecentFlows(limit: number = 5) {
+  return useQuery({
+    queryKey: ["recentFlows", limit],
+    queryFn: () => api.fetchRecentFlows(limit),
+    staleTime: 10_000,
+  });
+}
+
 export function useEngineStatus() {
   return useQuery({
     queryKey: ["status"],
@@ -134,6 +142,7 @@ export function useStepwiseMutations() {
     queryClient.invalidateQueries({ queryKey: ["jobTree"] });
     queryClient.invalidateQueries({ queryKey: ["status"] });
     queryClient.invalidateQueries({ queryKey: ["flowStats"] });
+    queryClient.invalidateQueries({ queryKey: ["recentFlows"] });
   };
 
   const createJobMutation = useMutation({

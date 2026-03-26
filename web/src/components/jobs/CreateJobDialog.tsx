@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useStepwiseMutations, useTemplates } from "@/hooks/useStepwise";
 import { useLocalFlows } from "@/hooks/useEditor";
 import { fetchLocalFlow } from "@/lib/api";
@@ -40,12 +40,23 @@ function extractJobInputs(flow: FlowDefinition): string[] {
   return [...fields].sort();
 }
 
-interface CreateJobDialogProps {
-  onCreated?: (jobId: string) => void;
+export interface CreateJobPrefill {
+  workflow: FlowDefinition;
+  inputs: Record<string, unknown>;
+  name?: string;
 }
 
-export function CreateJobDialog({ onCreated }: CreateJobDialogProps) {
-  const [open, setOpen] = useState(false);
+interface CreateJobDialogProps {
+  onCreated?: (jobId: string) => void;
+  prefill?: CreateJobPrefill;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}
+
+export function CreateJobDialog({ onCreated, prefill, open: controlledOpen, onOpenChange }: CreateJobDialogProps) {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = onOpenChange ?? setInternalOpen;
   const [selectedItem, setSelectedItem] = useState<string>("");
   const [workflow, setWorkflow] = useState<FlowDefinition | null>(null);
   const [workflowJson, setWorkflowJson] = useState("");
@@ -59,6 +70,22 @@ export function CreateJobDialog({ onCreated }: CreateJobDialogProps) {
   const { data: templates = [] } = useTemplates();
   const { data: localFlows = [] } = useLocalFlows();
   const mutations = useStepwiseMutations();
+
+  // Apply prefill when dialog opens with prefill data
+  useEffect(() => {
+    if (open && prefill) {
+      setWorkflow(prefill.workflow);
+      setWorkflowJson(JSON.stringify(prefill.workflow, null, 2));
+      const mapped: Record<string, string> = {};
+      for (const [k, v] of Object.entries(prefill.inputs)) {
+        mapped[k] = String(v ?? "");
+      }
+      setInputValues(mapped);
+      setJobName(prefill.name ?? "");
+      setSelectedItem("prefill");
+      setMode("flow");
+    }
+  }, [open, prefill]);
 
   // Derive required inputs from the selected flow
   const jobInputFields = useMemo(
@@ -149,12 +176,14 @@ export function CreateJobDialog({ onCreated }: CreateJobDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger
-        className="inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow-xs hover:bg-primary/90 h-8 px-3 cursor-pointer"
-      >
-        <Plus className="w-3.5 h-3.5" />
-        New Job
-      </DialogTrigger>
+      {controlledOpen === undefined && (
+        <DialogTrigger
+          className="inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow-xs hover:bg-primary/90 h-8 px-3 cursor-pointer"
+        >
+          <Plus className="w-3.5 h-3.5" />
+          New Job
+        </DialogTrigger>
+      )}
       <DialogContent className="sm:max-w-md max-h-[80vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Create Job</DialogTitle>

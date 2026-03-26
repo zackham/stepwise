@@ -888,6 +888,25 @@ def create_job(req: CreateJobRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.get("/api/jobs/recent-flows")
+def recent_flows(limit: int = 5):
+    engine = _get_engine()
+    jobs = engine.store.recent_flows(limit=limit)
+    return [
+        {
+            "flow_name": (job.workflow.metadata.name if job.workflow.metadata else None) or job.name or job.objective,
+            "flow_path": getattr(job.workflow, "source_dir", None),
+            "last_inputs": job.inputs,
+            "last_job_id": job.id,
+            "last_job_name": job.name,
+            "last_run_at": job.updated_at.isoformat(),
+            "last_status": job.status.value,
+            "workflow": job.workflow.to_dict(),
+        }
+        for job in jobs
+    ]
+
+
 @app.get("/api/jobs/suspended")
 def list_suspended_jobs_route(
     since: str | None = Query(default=None, description="Duration like '24h', '7d'"),

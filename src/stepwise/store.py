@@ -402,6 +402,28 @@ class SQLiteStore:
                 (JobStatus.PENDING.value, _now().isoformat(), job_id),
             )
 
+    def recent_flows(self, limit: int = 5) -> list[Job]:
+        """Return the most recent job for each distinct flow, ordered by recency."""
+        rows = self._conn.execute("""
+            WITH ranked AS (
+                SELECT *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY COALESCE(
+                            json_extract(workflow, '$.metadata.name'),
+                            json_extract(workflow, '$.source_dir'),
+                            objective
+                        )
+                        ORDER BY created_at DESC
+                    ) AS rn
+                FROM jobs
+                WHERE parent_job_id IS NULL
+            )
+            SELECT * FROM ranked WHERE rn = 1
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+        return [self._row_to_job(r) for r in rows]
+
     def all_jobs(self, status: JobStatus | None = None, top_level_only: bool = False, limit: int = 0, meta_filters: dict[str, str] | None = None) -> list[Job]:
         clauses = []
         params: list = []

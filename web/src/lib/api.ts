@@ -15,6 +15,7 @@ import type {
   ParseResult,
   RegistryFlow,
   RegistrySearchResult,
+  QuickLaunchItem,
 } from "./types";
 
 const BASE_URL = "/api";
@@ -92,6 +93,10 @@ export function cancelJob(jobId: string): Promise<{ status: string }> {
 
 export function adoptJob(jobId: string): Promise<{ status: string; job_id: string }> {
   return request(`/jobs/${jobId}/adopt`, { method: "POST" });
+}
+
+export function fetchRecentFlows(limit: number = 5): Promise<QuickLaunchItem[]> {
+  return request<QuickLaunchItem[]>(`/jobs/recent-flows?limit=${limit}`);
 }
 
 export function fetchStaleJobs(): Promise<Job[]> {
