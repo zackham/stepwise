@@ -310,6 +310,11 @@ class ScriptExecutor(Executor):
         input_file = step_io_dir / f"{context.step_name}-{context.attempt}.input.json"
         input_file.write_text(json.dumps(inputs, default=str))
 
+        # Output file paths for crash recovery (issue #4)
+        stdout_path = step_io_dir / f"{context.step_name}-{context.attempt}.stdout"
+        stderr_path = step_io_dir / f"{context.step_name}-{context.attempt}.stderr"
+        exitcode_path = step_io_dir / f"{context.step_name}-{context.attempt}.exitcode"
+
         project_dir = str(Path(workspace).resolve())
         env = {
             **os.environ,
@@ -356,39 +361,49 @@ class ScriptExecutor(Executor):
         run_arg: str | list[str] = command if use_shell else shlex.split(command)
 
         try:
-            result = subprocess.run(
-                run_arg,
-                shell=use_shell,
-                capture_output=True,
-                text=True,
-                env=env,
-                cwd=cwd,
-            )
-        except FileNotFoundError:
-            # The first token looked like a simple command but is not a real
-            # binary (e.g. a shell builtin).  Fall back to shell execution.
-            use_shell = True
-            shell_mode = "shell"
+            stdout_fh = open(stdout_path, "w")
+            stderr_fh = open(stderr_path, "w")
             try:
-                result = subprocess.run(
-                    command,
-                    shell=True,
-                    capture_output=True,
+                proc = subprocess.Popen(
+                    run_arg,
+                    shell=use_shell,
+                    stdout=stdout_fh,
+                    stderr=stderr_fh,
                     text=True,
                     env=env,
                     cwd=cwd,
                 )
-            except Exception as e:
-                return ExecutorResult(
-                    type="data",
-                    envelope=HandoffEnvelope(
-                        artifact={"stdout": ""},
-                        sidecar=Sidecar(),
-                        workspace=workspace,
-                        timestamp=_now(),
-                        executor_meta={"error": str(e), "shell_mode": shell_mode},
-                    ),
-                )
+            except FileNotFoundError:
+                stdout_fh.close()
+                stderr_fh.close()
+                # Fall back to shell execution
+                use_shell = True
+                shell_mode = "shell"
+                stdout_fh = open(stdout_path, "w")
+                stderr_fh = open(stderr_path, "w")
+                try:
+                    proc = subprocess.Popen(
+                        command,
+                        shell=True,
+                        stdout=stdout_fh,
+                        stderr=stderr_fh,
+                        text=True,
+                        env=env,
+                        cwd=cwd,
+                    )
+                except Exception as e:
+                    stdout_fh.close()
+                    stderr_fh.close()
+                    return ExecutorResult(
+                        type="data",
+                        envelope=HandoffEnvelope(
+                            artifact={"stdout": ""},
+                            sidecar=Sidecar(),
+                            workspace=workspace,
+                            timestamp=_now(),
+                            executor_meta={"error": str(e), "shell_mode": shell_mode},
+                        ),
+                    )
         except Exception as e:
             return ExecutorResult(
                 type="data",
@@ -401,17 +416,30 @@ class ScriptExecutor(Executor):
                 ),
             )
 
-        stdout = result.stdout.strip()
-        stderr = result.stderr.strip()
+        # Store PID in DB for crash recovery (issue #4)
+        if context.state_update_fn:
+            context.state_update_fn({"pid": proc.pid})
+
+        # Wait for process to complete (file handles stay open for the subprocess)
+        proc.wait()
+        stdout_fh.close()
+        stderr_fh.close()
+
+        # Write exit code for crash recovery
+        exitcode_path.write_text(str(proc.returncode))
+
+        # Read output from files
+        stdout = stdout_path.read_text().strip()
+        stderr = stderr_path.read_text().strip()
 
         # Build base executor_meta with raw output for log viewing
-        base_meta: dict = {"shell_mode": shell_mode, "return_code": result.returncode}
+        base_meta: dict = {"shell_mode": shell_mode, "return_code": proc.returncode}
         if stdout:
             base_meta["stdout"] = stdout
         if stderr:
             base_meta["stderr"] = stderr
 
-        if result.returncode != 0:
+        if proc.returncode != 0:
             # Failure
             return ExecutorResult(
                 type="data",
@@ -422,7 +450,7 @@ class ScriptExecutor(Executor):
                     timestamp=_now(),
                     executor_meta={**base_meta, "failed": True},
                 ),
-                executor_state={"failed": True, "error": stderr or f"Exit code {result.returncode}"},
+                executor_state={"failed": True, "error": stderr or f"Exit code {proc.returncode}"},
             )
 
         # Parse stdout
