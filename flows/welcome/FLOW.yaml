@@ -1,7 +1,7 @@
 name: welcome
 description: "From issue to deploy — a real dev workflow with AI review, config, and escalation"
 author: stepwise
-tags: [demo, human-in-the-loop, for-each, branching, loops, config, mock-llm, optional-inputs, escalate]
+tags: [demo, external-fulfillment, for-each, branching, loops, config, mock-llm, optional-inputs, escalate]
 
 config:
   team_name:
