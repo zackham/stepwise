@@ -208,6 +208,13 @@ export interface JobConfig {
 
 // ── Job ────────────────────────────────────────────────────────────────
 
+export interface JobCurrentStep {
+  name: string;
+  status: string;
+  started_at: string | null;
+  completed_at?: string | null;
+}
+
 export interface Job {
   id: string;
   objective: string;
@@ -225,6 +232,7 @@ export interface Job {
   runner_pid: number | null;
   heartbeat_at: string | null;
   has_suspended_steps?: boolean;
+  current_step?: JobCurrentStep | null;
 }
 
 // ── Event ──────────────────────────────────────────────────────────────
