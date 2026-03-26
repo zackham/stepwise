@@ -40,7 +40,7 @@ function ErrorFallback({ error, resetErrorBoundary }: FallbackProps) {
 }
 
 export function AppLayout() {
-  useStepwiseWebSocket();
+  const wsStatus = useStepwiseWebSocket();
   const location = useLocation();
   const { data: status } = useEngineStatus();
   const [theme, setTheme] = useState<"dark" | "light">(getInitialTheme);
@@ -147,6 +147,27 @@ export function AppLayout() {
         </nav>
 
         <div className="flex-1" />
+
+        {/* WebSocket status indicator */}
+        <div
+          className="flex items-center gap-1.5"
+          title={
+            wsStatus === "connected"
+              ? "WebSocket connected"
+              : wsStatus === "reconnecting"
+                ? "Reconnecting…"
+                : "Disconnected"
+          }
+        >
+          <span
+            className={cn(
+              "inline-block h-2 w-2 rounded-full",
+              wsStatus === "connected" && "bg-emerald-500",
+              wsStatus === "reconnecting" && "bg-amber-500 animate-pulse",
+              wsStatus === "disconnected" && "bg-red-500"
+            )}
+          />
+        </div>
 
         {/* Theme toggle */}
         <button
