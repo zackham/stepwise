@@ -4,6 +4,7 @@
 @import "@fontsource-variable/geist";
 
 @custom-variant dark (&:is(.dark *));
+@custom-variant hover-capable (@media (hover: hover));
 
 :root {
     --background: oklch(1 0 0);

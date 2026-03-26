@@ -38,7 +38,7 @@ export function Breadcrumb({ segments, className }: BreadcrumbProps) {
               to={seg.to}
               params={seg.params}
               className={cn(
-                "truncate max-w-[200px] text-zinc-400 hover:text-foreground transition-colors",
+                "truncate max-w-[200px] text-zinc-400 hover:text-foreground transition-colors min-h-[44px] md:min-h-0 flex items-center",
               )}
               title={seg.label}
             >
