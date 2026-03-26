@@ -489,7 +489,7 @@ Other patterns:
 6. **Push to master = immediate user release** via `stepwise update`. Tests must pass first: `uv run pytest tests/`
 7. **No ORM or repository abstraction** — the store uses raw SQL intentionally.
 8. **No CSS files or inline styles in web** — Tailwind classes and shadcn/ui components only.
-9. **Dark mode only** — no light/color theme toggle.
+9. **Light/dark theme** — toggle in header, persists to localStorage, respects system preference on first load.
 10. **Register production executors in `registry_factory.py`** only — test code uses its own registry in `conftest.py`.
 11. **Web routes go in `web/src/router.tsx`** — no file-based routing.
 

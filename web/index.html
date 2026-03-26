@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/favicon.png" />
@@ -7,6 +7,13 @@
     <title>Stepwise</title>
   </head>
   <body>
+    <script>
+      (function() {
+        var t = localStorage.getItem('stepwise-theme');
+        if (t === 'light') document.documentElement.classList.remove('dark');
+        else if (!t && !window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.classList.remove('dark');
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
