@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { AlertTriangle, Briefcase, CirclePause, Clock, Monitor, Terminal, Trash2, Search, X, MoreVertical, XCircle, RefreshCw, ArrowUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { LiveDuration } from "@/components/LiveDuration";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Job } from "@/lib/types";
 
@@ -271,16 +272,32 @@ function VirtualJobList({
                     <div className="text-sm text-foreground truncate">
                       {job.name || job.objective || "Untitled Job"}
                     </div>
-                    {job.name && job.objective && (
+                    {job.current_step ? (
+                      <div className="text-[11px] text-zinc-500 truncate mt-0.5">
+                        {job.name && job.objective && (
+                          <span>{job.objective} · </span>
+                        )}
+                        <span className={cn(
+                          job.current_step.status === "running" && "text-blue-400",
+                          job.current_step.status === "failed" && "text-red-400",
+                        )}>
+                          {job.current_step.name}
+                        </span>
+                        {job.current_step.started_at && (
+                          <span className="text-zinc-600">
+                            {" · "}
+                            <LiveDuration
+                              startTime={job.current_step.started_at}
+                              endTime={job.current_step.completed_at ?? null}
+                            />
+                          </span>
+                        )}
+                      </div>
+                    ) : job.name && job.objective ? (
                       <div className="text-[11px] text-zinc-500 truncate">
                         {job.objective}
                       </div>
-                    )}
-                    <div className="flex items-center gap-1.5 mt-1">
-                      <span className="text-[10px] font-mono text-zinc-600">
-                        {job.id}
-                      </span>
-                    </div>
+                    ) : null}
                   </div>
                 </div>
                 <div className="flex items-start gap-1 shrink-0">

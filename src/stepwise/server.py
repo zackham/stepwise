@@ -323,6 +323,28 @@ def _serialize_job(job: Job, summary: bool = False) -> dict:
     if summary:
         engine = _get_engine()
         has_suspended = bool(engine.store.suspended_runs(job.id))
+        # Include current/last step info for list view context
+        current_step = None
+        if job.status == JobStatus.RUNNING:
+            running = engine.store.running_runs(job.id)
+            if running:
+                r = running[0]
+                current_step = {
+                    "name": r.step_name,
+                    "status": r.status.value,
+                    "started_at": r.started_at.isoformat() if r.started_at else None,
+                }
+        elif job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.PAUSED):
+            runs = engine.store.runs_for_job(job.id)
+            terminal = [r for r in runs if r.completed_at]
+            if terminal:
+                last = max(terminal, key=lambda r: r.completed_at)
+                current_step = {
+                    "name": last.step_name,
+                    "status": last.status.value,
+                    "started_at": last.started_at.isoformat() if last.started_at else None,
+                    "completed_at": last.completed_at.isoformat() if last.completed_at else None,
+                }
         return {
             "id": job.id,
             "name": job.name,
@@ -335,6 +357,7 @@ def _serialize_job(job: Job, summary: bool = False) -> dict:
             "flow_file": getattr(job.workflow, "source_dir", None),
             "metadata": job.metadata,
             "has_suspended_steps": has_suspended,
+            "current_step": current_step,
         }
     return job.to_dict()
 
