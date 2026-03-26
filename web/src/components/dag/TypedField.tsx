@@ -1,4 +1,5 @@
 import type { OutputFieldSchema } from "@/lib/types";
+import { tryParseJsonValue } from "@/lib/utils";
 
 interface TypedFieldProps {
   name: string;
@@ -205,7 +206,8 @@ function ChoiceMultipleField({
   schema: OutputFieldSchema;
 }) {
   const options = schema.options ?? [];
-  const selected = Array.isArray(value) ? (value as string[]) : [];
+  const parsed = tryParseJsonValue(value);
+  const selected = Array.isArray(parsed) ? (parsed as string[]) : [];
 
   const toggle = (opt: string) => {
     if (selected.includes(opt)) {

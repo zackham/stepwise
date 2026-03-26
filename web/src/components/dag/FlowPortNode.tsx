@@ -1,7 +1,7 @@
 import { ArrowDown, CheckCircle2 } from "lucide-react";
 import type { FlowPortNode as FlowPortNodeType, DagSelection } from "@/lib/dag-layout";
 import type { StepRun } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { cn, tryParseJsonValue } from "@/lib/utils";
 
 interface FlowPortNodeProps {
   port: FlowPortNodeType;
@@ -10,7 +10,8 @@ interface FlowPortNodeProps {
   latestRuns?: Record<string, StepRun>;
 }
 
-function formatPreview(value: unknown, maxLen: number = 20): string {
+function formatPreview(rawValue: unknown, maxLen: number = 20): string {
+  const value = tryParseJsonValue(rawValue);
   if (value === null || value === undefined) return "null";
   if (typeof value === "boolean") return String(value);
   if (typeof value === "number") return String(value);
