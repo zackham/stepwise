@@ -11,14 +11,6 @@ export function useConfig() {
   });
 }
 
-export function useLabels() {
-  return useQuery({
-    queryKey: ["config", "labels"],
-    queryFn: api.fetchLabels,
-    staleTime: 10000,
-  });
-}
-
 export function useOpenRouterSearch(query: string) {
   const [debouncedQuery, setDebouncedQuery] = useState(query);
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);

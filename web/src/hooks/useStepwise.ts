@@ -83,14 +83,6 @@ export function useJobCost(jobId: string | undefined) {
   });
 }
 
-export function useConfig() {
-  return useQuery({
-    queryKey: ["config"],
-    queryFn: api.fetchConfig,
-    staleTime: 60000,
-  });
-}
-
 export function useEngineStatus() {
   return useQuery({
     queryKey: ["status"],
