@@ -1,6 +1,7 @@
+import { useEffect } from "react";
 import { Outlet, Link, useLocation } from "@tanstack/react-router";
 import { useStepwiseWebSocket } from "@/hooks/useStepwiseWebSocket";
-import { useEngineStatus } from "@/hooks/useStepwise";
+import { useEngineStatus, useJobs, useJob } from "@/hooks/useStepwise";
 import { LayoutGrid, FileCode, Settings2, Zap, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -14,6 +15,34 @@ export function AppLayout() {
     currentPath === "/jobs" || currentPath.startsWith("/jobs/");
   const isFlowsActive = currentPath.startsWith("/flows");
   const isSettingsActive = currentPath.startsWith("/settings");
+
+  // Dynamic tab title
+  const { data: suspendedJobs } = useJobs("suspended");
+  const pendingCount = suspendedJobs?.length ?? 0;
+  const jobIdMatch = currentPath.match(/^\/jobs\/([^/]+)/);
+  const detailJobId = jobIdMatch?.[1] ?? undefined;
+  const { data: detailJob } = useJob(detailJobId);
+
+  useEffect(() => {
+    let title = "Stepwise";
+
+    if (isJobsActive && detailJobId) {
+      const jobName = detailJob?.name || detailJob?.objective;
+      title = jobName ? `${jobName} — Stepwise` : "Stepwise";
+    } else if (isJobsActive) {
+      title = "Jobs — Stepwise";
+    } else if (isFlowsActive) {
+      title = "Flows — Stepwise";
+    } else if (isSettingsActive) {
+      title = "Settings — Stepwise";
+    }
+
+    if (pendingCount > 0) {
+      title = `(${pendingCount}) ${title}`;
+    }
+
+    document.title = title;
+  }, [currentPath, isJobsActive, isFlowsActive, isSettingsActive, detailJobId, detailJob, pendingCount]);
 
   return (
     <div className="h-screen flex flex-col bg-background text-foreground dark">
