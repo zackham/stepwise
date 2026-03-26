@@ -74,6 +74,7 @@ class SQLiteStore:
                 result TEXT,
                 error TEXT,
                 error_category TEXT,
+                traceback TEXT,
                 executor_state TEXT,
                 watch TEXT,
                 sub_job_id TEXT,
@@ -129,6 +130,9 @@ class SQLiteStore:
             self._conn.commit()
         if "pid" not in run_columns:
             self._conn.execute("ALTER TABLE step_runs ADD COLUMN pid INTEGER")
+            self._conn.commit()
+        if "traceback" not in run_columns:
+            self._conn.execute("ALTER TABLE step_runs ADD COLUMN traceback TEXT")
             self._conn.commit()
 
         cursor = self._conn.execute("PRAGMA table_info(jobs)")
@@ -424,9 +428,9 @@ class SQLiteStore:
         self._conn.execute(
             """INSERT INTO step_runs
                 (id, job_id, step_name, attempt, status, inputs, dep_run_ids,
-                 result, error, error_category, executor_state, watch, sub_job_id,
+                 result, error, error_category, traceback, executor_state, watch, sub_job_id,
                  pid, started_at, completed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 status = excluded.status,
                 inputs = excluded.inputs,
@@ -434,6 +438,7 @@ class SQLiteStore:
                 result = excluded.result,
                 error = excluded.error,
                 error_category = excluded.error_category,
+                traceback = excluded.traceback,
                 executor_state = excluded.executor_state,
                 watch = excluded.watch,
                 sub_job_id = excluded.sub_job_id,
@@ -452,6 +457,7 @@ class SQLiteStore:
                 _dumps(run.result.to_dict()) if run.result else None,
                 run.error,
                 run.error_category,
+                run.traceback,
                 _dumps(run.executor_state) if run.executor_state is not None else None,
                 _dumps(run.watch.to_dict()) if run.watch else None,
                 run.sub_job_id,
@@ -484,6 +490,7 @@ class SQLiteStore:
             result=HandoffEnvelope.from_dict(result_data) if result_data else None,
             error=row["error"],
             error_category=row["error_category"] if "error_category" in row.keys() else None,
+            traceback=row["traceback"] if "traceback" in row.keys() else None,
             executor_state=json.loads(row["executor_state"]) if row["executor_state"] else None,
             watch=WatchSpec.from_dict(watch_data) if watch_data else None,
             sub_job_id=row["sub_job_id"],

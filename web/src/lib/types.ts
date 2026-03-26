@@ -180,6 +180,7 @@ export interface StepRun {
   result: HandoffEnvelope | null;
   error: string | null;
   error_category: string | null;
+  traceback: string | null;
   executor_state: Record<string, unknown> | null;
   watch: WatchSpec | null;
   sub_job_id: string | null;
