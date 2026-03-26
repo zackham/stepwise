@@ -252,6 +252,7 @@ export function ExpandedStepContainer({
                 <StepNode
                   stepDef={stepDef}
                   latestRun={latestRuns[childNode.id] ?? null}
+                  latestRuns={latestRuns}
                   maxAttempts={maxAttemptsMap[childNode.id] ?? null}
                   isSelected={selectedStep === childNode.id}
                   onClick={() =>
