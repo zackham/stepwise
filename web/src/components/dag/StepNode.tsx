@@ -1,20 +1,15 @@
 import { useState } from "react";
 import {
-  Terminal,
-  User,
-  Brain,
-  Cog,
   Hand,
   RotateCw,
-  Layers,
   ChevronDown,
-  Bot,
   Clock,
 } from "lucide-react";
 import { StepStatusBadge } from "@/components/StatusBadge";
 import { STEP_STATUS_COLORS, STEP_PENDING_COLORS } from "@/lib/status-colors";
 import type { ExitRule, StepDefinition, StepRun, StepRunStatus } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { cn, formatDuration } from "@/lib/utils";
+import { executorIcon } from "@/lib/executor-utils";
 
 interface StepNodeProps {
   stepDef: StepDefinition;
@@ -30,24 +25,6 @@ interface StepNodeProps {
   y: number;
   width: number;
   height: number;
-}
-
-function executorIcon(type: string) {
-  switch (type) {
-    case "script":
-      return <Terminal className="w-3.5 h-3.5" />;
-    case "external":
-      return <User className="w-3.5 h-3.5" />;
-    case "mock_llm":
-    case "llm":
-      return <Brain className="w-3.5 h-3.5" />;
-    case "agent":
-      return <Bot className="w-3.5 h-3.5" />;
-    case "sub_flow":
-      return <Layers className="w-3.5 h-3.5" />;
-    default:
-      return <Cog className="w-3.5 h-3.5" />;
-  }
 }
 
 function executorSubtitle(stepDef: StepDefinition): string {
@@ -96,16 +73,6 @@ function executorSubtitle(stepDef: StepDefinition): string {
     default:
       return type;
   }
-}
-
-function formatDuration(startedAt: string | null, completedAt: string | null): string | null {
-  if (!startedAt) return null;
-  const start = new Date(startedAt).getTime();
-  const end = completedAt ? new Date(completedAt).getTime() : Date.now();
-  const ms = end - start;
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${(ms / 60000).toFixed(1)}m`;
 }
 
 const ACTION_COLORS: Record<string, string> = {
@@ -206,7 +173,7 @@ export function StepNode({
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-1.5 min-w-0">
           <span className={cn("shrink-0", colors.text)}>
-            {executorIcon(stepDef.executor.type)}
+            {executorIcon(stepDef.executor.type, "w-3.5 h-3.5")}
           </span>
           <span className="text-sm font-medium truncate text-foreground">
             {stepDef.name}

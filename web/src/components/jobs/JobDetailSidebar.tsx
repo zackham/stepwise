@@ -4,21 +4,11 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { X, Package } from "lucide-react";
 import type { Job } from "@/lib/types";
+import { formatDuration } from "@/lib/utils";
 
 interface JobDetailSidebarProps {
   job: Job;
   onClose: () => void;
-}
-
-function formatDuration(job: Job): string {
-  if (!job.created_at) return "-";
-  const start = new Date(job.created_at).getTime();
-  const end = new Date(job.updated_at).getTime();
-  const ms = end - start;
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  if (ms < 3600000) return `${(ms / 60000).toFixed(1)}m`;
-  return `${(ms / 3600000).toFixed(1)}h`;
 }
 
 export function JobDetailSidebar({ job, onClose }: JobDetailSidebarProps) {
@@ -59,7 +49,7 @@ export function JobDetailSidebar({ job, onClose }: JobDetailSidebarProps) {
             <div className="text-zinc-500">Steps</div>
             <div className="text-foreground font-mono">{stepCount}</div>
             <div className="text-zinc-500">Duration</div>
-            <div className="text-foreground font-mono">{formatDuration(job)}</div>
+            <div className="text-foreground font-mono">{formatDuration(job.created_at, job.updated_at)}</div>
             <div className="text-zinc-500">Created</div>
             <div className="text-zinc-400 font-mono text-[10px]">
               {new Date(job.created_at).toLocaleString()}

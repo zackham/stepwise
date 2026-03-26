@@ -30,6 +30,7 @@ import {
   ArrowLeft,
 } from "lucide-react";
 import type { JobTreeNode, StepDefinition } from "@/lib/types";
+import { formatDuration } from "@/lib/utils";
 
 
 function resolveStep(
@@ -48,16 +49,6 @@ function resolveStep(
     }
   }
   return null;
-}
-
-function formatDuration(createdAt: string, updatedAt: string): string {
-  const start = new Date(createdAt).getTime();
-  const end = new Date(updatedAt).getTime();
-  const ms = end - start;
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  if (ms < 3600000) return `${(ms / 60000).toFixed(1)}m`;
-  return `${(ms / 3600000).toFixed(1)}h`;
 }
 
 export function JobDetailPage() {
