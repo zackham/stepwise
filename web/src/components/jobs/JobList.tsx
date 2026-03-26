@@ -201,6 +201,18 @@ export function JobList({
   const listRef = useRef<HTMLDivElement>(null);
   const jobRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
+  // Count jobs per status (from full, unfiltered list) for filter pill badges
+  const statusCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const job of jobs) {
+      counts[job.status] = (counts[job.status] || 0) + 1;
+      if (job.has_suspended_steps) {
+        counts["awaiting_input"] = (counts["awaiting_input"] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [jobs]);
+
   // Filter jobs by query (matches name or objective) and status toggle, then sort
   const filteredJobs = useMemo(() => {
     const q = query.toLowerCase().trim();
@@ -342,6 +354,9 @@ export function JobList({
                 )}
               >
                 {opt.label}
+                {statusCounts[opt.value] ? (
+                  <span className="text-zinc-500"> ({statusCounts[opt.value]})</span>
+                ) : null}
               </button>
             ))}
           </div>
