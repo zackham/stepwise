@@ -1,8 +1,9 @@
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { JobList } from "@/components/jobs/JobList";
 import { JobSummaryBar } from "@/components/jobs/JobSummaryBar";
-import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
+import { CreateJobDialog, type CreateJobPrefill } from "@/components/jobs/CreateJobDialog";
+import { QuickLaunch } from "@/components/jobs/QuickLaunch";
 import { useJobs } from "@/hooks/useStepwise";
 import { Workflow } from "lucide-react";
 
@@ -10,6 +11,9 @@ export function JobDashboard() {
   const navigate = useNavigate();
   const { q, status } = useSearch({ from: "/jobs" });
   const { data: jobs = [] } = useJobs();
+
+  const [editPrefill, setEditPrefill] = useState<CreateJobPrefill | undefined>();
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
 
   const setQuery = useCallback(
     (value: string) => {
@@ -33,6 +37,11 @@ export function JobDashboard() {
     [navigate],
   );
 
+  const handleEditDialogChange = (open: boolean) => {
+    setEditDialogOpen(open);
+    if (!open) setEditPrefill(undefined);
+  };
+
   return (
     <div className="flex h-full">
       <div className="w-full md:w-72 md:border-r border-border flex flex-col md:shrink-0">
@@ -43,6 +52,13 @@ export function JobDashboard() {
           />
         </div>
         <JobSummaryBar jobs={jobs} />
+        <QuickLaunch
+          onLaunched={(jobId) => navigate({ to: "/jobs/$jobId", params: { jobId } })}
+          onEditLaunch={(prefill) => {
+            setEditPrefill(prefill);
+            setEditDialogOpen(true);
+          }}
+        />
         <div className="flex-1 overflow-hidden">
           <JobList
             selectedJobId={null}
@@ -65,6 +81,18 @@ export function JobDashboard() {
           </p>
         </div>
       </div>
+
+      {/* Edit & Run dialog (controlled, triggered from QuickLaunch) */}
+      <CreateJobDialog
+        open={editDialogOpen}
+        onOpenChange={handleEditDialogChange}
+        prefill={editPrefill}
+        onCreated={(jobId) => {
+          setEditDialogOpen(false);
+          setEditPrefill(undefined);
+          navigate({ to: "/jobs/$jobId", params: { jobId } });
+        }}
+      />
     </div>
   );
 }
