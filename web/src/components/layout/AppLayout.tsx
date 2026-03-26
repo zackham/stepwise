@@ -3,6 +3,7 @@ import { Outlet, Link, useLocation } from "@tanstack/react-router";
 import { ErrorBoundary, type FallbackProps } from "react-error-boundary";
 import { Toaster } from "sonner";
 import { useStepwiseWebSocket } from "@/hooks/useStepwiseWebSocket";
+import { useNotifySuspended } from "@/hooks/useNotifySuspended";
 import { useEngineStatus, useJobs, useJob } from "@/hooks/useStepwise";
 import { LayoutGrid, FileCode, Settings2, Zap, FolderOpen, AlertTriangle, Sun, Moon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -42,6 +43,7 @@ function ErrorFallback({ error, resetErrorBoundary }: FallbackProps) {
 
 export function AppLayout() {
   const wsStatus = useStepwiseWebSocket();
+  useNotifySuspended();
   const location = useLocation();
   const { data: status } = useEngineStatus();
   const [theme, setTheme] = useState<"dark" | "light">(getInitialTheme);
