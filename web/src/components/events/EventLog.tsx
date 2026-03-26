@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { StepwiseEvent } from "@/lib/types";
+import { useIsMobile } from "@/hooks/useMediaQuery";
 import { useLogSearch } from "@/hooks/useLogSearch";
 import { LogSearchBar } from "@/components/logs/LogSearchBar";
 import { highlightMatches, countMatches } from "@/lib/log-search";
@@ -108,6 +109,7 @@ function dataPreview(data: Record<string, unknown>): string {
 }
 
 export function EventLog({ jobId }: EventLogProps) {
+  const isMobile = useIsMobile();
   const { data: events = [] } = useEvents(jobId);
   const [autoScroll, setAutoScroll] = useState(true);
   const [activeFilters, setActiveFilters] = useState<
@@ -175,7 +177,7 @@ export function EventLog({ jobId }: EventLogProps) {
   return (
     <div ref={containerRef} tabIndex={-1} className="flex flex-col h-full">
       {/* Filters */}
-      <div className="flex items-center gap-2 p-3 border-b border-border">
+      <div className="flex flex-wrap items-center gap-2 p-3 border-b border-border">
         {(
           Object.entries(EVENT_CATEGORIES) as Array<
             [keyof typeof EVENT_CATEGORIES, { label: string; color: string }]
@@ -185,7 +187,7 @@ export function EventLog({ jobId }: EventLogProps) {
             key={key}
             onClick={() => toggleFilter(key)}
             className={cn(
-              "text-xs px-2 py-0.5 rounded-full border transition-colors",
+              "text-xs px-2 py-0.5 rounded-full border transition-colors min-h-[44px] md:min-h-0 items-center",
               activeFilters.has(key)
                 ? `${color} border-current/30`
                 : "text-zinc-600 border-zinc-700/50 bg-transparent"
@@ -198,7 +200,7 @@ export function EventLog({ jobId }: EventLogProps) {
         <button
           onClick={() => setAutoScroll(!autoScroll)}
           className={cn(
-            "text-xs flex items-center gap-1",
+            "text-xs flex items-center gap-1 min-h-[44px] md:min-h-0",
             autoScroll ? "text-blue-400" : "text-zinc-500"
           )}
         >
@@ -230,70 +232,104 @@ export function EventLog({ jobId }: EventLogProps) {
                   type="button"
                   onClick={() => hasData && toggleExpanded(evt.id)}
                   className={cn(
-                    "flex items-start gap-2 px-2 py-1.5 w-full text-left",
-                    hasData && "cursor-pointer"
+                    "px-2 py-1.5 w-full text-left",
+                    hasData && "cursor-pointer",
+                    isMobile ? "block" : "flex items-start gap-2"
                   )}
                 >
-                  {hasData ? (
-                    <span className="shrink-0 mt-0.5 text-zinc-600">
-                      {isExpanded ? (
-                        <ChevronDown className="w-3.5 h-3.5" />
-                      ) : (
-                        <ChevronRight className="w-3.5 h-3.5" />
-                      )}
-                    </span>
-                  ) : (
-                    <span className="shrink-0 mt-0.5 w-3.5" />
-                  )}
-
-                  <span
-                    className={cn(
-                      "shrink-0 mt-0.5",
-                      cat === "step" &&
-                        (evt.type.includes("failed")
-                          ? "text-red-400"
-                          : evt.type.includes("completed")
-                          ? "text-emerald-400"
-                          : "text-emerald-400/70"),
-                      cat === "job" && "text-blue-400",
-                      cat === "external" && "text-amber-400",
-                      cat === "engine" && "text-purple-400",
-                      cat === "effector" && "text-pink-400"
-                    )}
-                  >
-                    {eventIcon(evt.type, evt.is_effector)}
-                  </span>
-
-                  <span className="text-zinc-600 text-xs font-mono shrink-0 mt-0.5">
-                    {formatTime(evt.timestamp)}
-                  </span>
-
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5">
-                      <Badge
-                        variant="outline"
-                        className={cn(
-                          "text-[9px] font-mono border-transparent",
-                          catStyle.color
+                  <div className="flex items-start gap-2">
+                    {hasData ? (
+                      <span className="shrink-0 mt-0.5 text-zinc-600">
+                        {isExpanded ? (
+                          <ChevronDown className="w-3.5 h-3.5" />
+                        ) : (
+                          <ChevronRight className="w-3.5 h-3.5" />
                         )}
-                      >
-                        {highlightMatches(evt.type, search.compiledRegex)}
-                      </Badge>
-                      {evt.is_effector && (
-                        <Badge
-                          variant="outline"
-                          className="text-[9px] font-mono bg-pink-500/10 text-pink-400 border-pink-500/30"
-                        >
-                          effector
-                        </Badge>
+                      </span>
+                    ) : (
+                      <span className="shrink-0 mt-0.5 w-3.5" />
+                    )}
+
+                    <span
+                      className={cn(
+                        "shrink-0 mt-0.5",
+                        cat === "step" &&
+                          (evt.type.includes("failed")
+                            ? "text-red-400"
+                            : evt.type.includes("completed")
+                            ? "text-emerald-400"
+                            : "text-emerald-400/70"),
+                        cat === "job" && "text-blue-400",
+                        cat === "external" && "text-amber-400",
+                        cat === "engine" && "text-purple-400",
+                        cat === "effector" && "text-pink-400"
                       )}
-                    </div>
-                    {hasData && !isExpanded && (
-                      <div className="text-xs text-zinc-500 mt-0.5 font-mono truncate">
-                        {highlightMatches(dataPreview(evt.data), search.compiledRegex)}
+                    >
+                      {eventIcon(evt.type, evt.is_effector)}
+                    </span>
+
+                    <span className="text-zinc-600 text-xs font-mono shrink-0 mt-0.5">
+                      {formatTime(evt.timestamp)}
+                    </span>
+
+                    {!isMobile && (
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <Badge
+                            variant="outline"
+                            className={cn(
+                              "text-[9px] font-mono border-transparent",
+                              catStyle.color
+                            )}
+                          >
+                            {highlightMatches(evt.type, search.compiledRegex)}
+                          </Badge>
+                          {evt.is_effector && (
+                            <Badge
+                              variant="outline"
+                              className="text-[9px] font-mono bg-pink-500/10 text-pink-400 border-pink-500/30"
+                            >
+                              effector
+                            </Badge>
+                          )}
+                        </div>
+                        {hasData && !isExpanded && (
+                          <div className="text-xs text-zinc-500 mt-0.5 font-mono truncate">
+                            {highlightMatches(dataPreview(evt.data), search.compiledRegex)}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
+
+                  {isMobile && (
+                    <div className="ml-8 mt-0.5 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            "text-[9px] font-mono border-transparent",
+                            catStyle.color
+                          )}
+                        >
+                          {highlightMatches(evt.type, search.compiledRegex)}
+                        </Badge>
+                        {evt.is_effector && (
+                          <Badge
+                            variant="outline"
+                            className="text-[9px] font-mono bg-pink-500/10 text-pink-400 border-pink-500/30"
+                          >
+                            effector
+                          </Badge>
+                        )}
+                      </div>
+                      {hasData && !isExpanded && (
+                        <div className="text-xs text-zinc-500 mt-0.5 font-mono truncate">
+                          {highlightMatches(dataPreview(evt.data), search.compiledRegex)}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </button>
 
                 {hasData && isExpanded && (

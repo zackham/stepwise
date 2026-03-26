@@ -255,89 +255,164 @@ export function JobDetailPage() {
         />
 
         {/* Job header */}
-        <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-zinc-950/30 shrink-0">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm font-semibold truncate text-foreground">
-                {job.name || job.objective || "Untitled Job"}
-              </h2>
-              <JobStatusBadge status={job.status} />
-              {stale && (
-                <span className="flex items-center gap-0.5 text-amber-500 text-[10px]">
-                  <AlertTriangle className="w-3 h-3" />
-                  Stale
-                </span>
-              )}
-              <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
-                <Clock className="w-2.5 h-2.5" />
-                {formatDuration(job.created_at, job.updated_at)}
-              </span>
-              {costData && (costData.cost_usd > 0 || costData.billing_mode === "subscription") && (
-                <span
-                  className="text-[10px] text-zinc-600 flex items-center gap-0.5"
-                  title={costData.billing_mode === "subscription"
-                    ? "Claude Max subscription — no API cost"
-                    : "API cost"}
-                >
-                  <DollarSign className="w-2.5 h-2.5" />
-                  {costData.billing_mode === "subscription"
-                    ? "$0 (Max)"
-                    : `$${costData.cost_usd.toFixed(4)}`}
-                </span>
-              )}
-            </div>
-            <div className="text-[10px] font-mono text-zinc-600 mt-0.5 break-all flex items-center gap-2 flex-wrap">
-              {job.name && job.objective && (
-                <span className="font-sans text-zinc-500">{job.objective}</span>
-              )}
-              {job.workflow.metadata?.name && (
-                <Link
-                  to="/flows/$flowName"
-                  params={{ flowName: job.workflow.metadata.name }}
-                  className="font-sans text-blue-400 hover:text-blue-300 underline underline-offset-2"
-                >
-                  {job.workflow.metadata.name}
-                </Link>
-              )}
-              <span>{job.id}</span>
-            </div>
-          </div>
+        <div className="px-4 py-2 border-b border-border bg-zinc-950/30 shrink-0">
+          {isMobile ? (
+            <>
+              {/* Mobile Row 1: name + status */}
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-semibold truncate text-foreground flex-1 min-w-0">
+                  {job.name || job.objective || "Untitled Job"}
+                </h2>
+                <JobStatusBadge status={job.status} />
+                {stale && (
+                  <span className="flex items-center gap-0.5 text-amber-500 text-[10px]">
+                    <AlertTriangle className="w-3 h-3" />
+                  </span>
+                )}
+              </div>
+              {/* Mobile Row 2: duration + cost | route icons */}
+              <div className="flex items-center justify-between mt-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
+                    <Clock className="w-2.5 h-2.5" />
+                    {formatDuration(job.created_at, job.updated_at)}
+                  </span>
+                  {costData && (costData.cost_usd > 0 || costData.billing_mode === "subscription") && (
+                    <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
+                      <DollarSign className="w-2.5 h-2.5" />
+                      {costData.billing_mode === "subscription"
+                        ? "$0 (Max)"
+                        : `$${costData.cost_usd.toFixed(4)}`}
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-1">
+                  <Link
+                    to="/jobs/$jobId/events"
+                    params={{ jobId }}
+                    className="flex items-center justify-center min-w-[44px] min-h-[44px] text-xs text-zinc-500 hover:text-foreground rounded hover:bg-zinc-800/50"
+                    aria-label="Events"
+                    title="Events"
+                  >
+                    <ScrollText className="w-3.5 h-3.5" />
+                  </Link>
+                  <Link
+                    to="/jobs/$jobId/timeline"
+                    params={{ jobId }}
+                    className="flex items-center justify-center min-w-[44px] min-h-[44px] text-xs text-zinc-500 hover:text-foreground rounded hover:bg-zinc-800/50"
+                    aria-label="Timeline"
+                    title="Timeline"
+                  >
+                    <GanttChart className="w-3.5 h-3.5" />
+                  </Link>
+                  <Link
+                    to="/jobs/$jobId/tree"
+                    params={{ jobId }}
+                    className="flex items-center justify-center min-w-[44px] min-h-[44px] text-xs text-zinc-500 hover:text-foreground rounded hover:bg-zinc-800/50"
+                    aria-label="Tree"
+                    title="Tree"
+                  >
+                    <GitBranch className="w-3.5 h-3.5" />
+                  </Link>
+                  {!showRightPanel && (
+                    <button
+                      onClick={() => setRightPanelOpen(true)}
+                      className="flex items-center justify-center min-w-[44px] min-h-[44px] text-xs text-zinc-500 hover:text-foreground rounded hover:bg-zinc-800/50"
+                      aria-label="Details"
+                      title="Details"
+                    >
+                      <Info className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="flex items-center gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-sm font-semibold truncate text-foreground">
+                    {job.name || job.objective || "Untitled Job"}
+                  </h2>
+                  <JobStatusBadge status={job.status} />
+                  {stale && (
+                    <span className="flex items-center gap-0.5 text-amber-500 text-[10px]">
+                      <AlertTriangle className="w-3 h-3" />
+                      Stale
+                    </span>
+                  )}
+                  <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
+                    <Clock className="w-2.5 h-2.5" />
+                    {formatDuration(job.created_at, job.updated_at)}
+                  </span>
+                  {costData && (costData.cost_usd > 0 || costData.billing_mode === "subscription") && (
+                    <span
+                      className="text-[10px] text-zinc-600 flex items-center gap-0.5"
+                      title={costData.billing_mode === "subscription"
+                        ? "Claude Max subscription — no API cost"
+                        : "API cost"}
+                    >
+                      <DollarSign className="w-2.5 h-2.5" />
+                      {costData.billing_mode === "subscription"
+                        ? "$0 (Max)"
+                        : `$${costData.cost_usd.toFixed(4)}`}
+                    </span>
+                  )}
+                </div>
+                <div className="text-[10px] font-mono text-zinc-600 mt-0.5 break-all flex items-center gap-2 flex-wrap">
+                  {job.name && job.objective && (
+                    <span className="font-sans text-zinc-500">{job.objective}</span>
+                  )}
+                  {job.workflow.metadata?.name && (
+                    <Link
+                      to="/flows/$flowName"
+                      params={{ flowName: job.workflow.metadata.name }}
+                      className="font-sans text-blue-400 hover:text-blue-300 underline underline-offset-2"
+                    >
+                      {job.workflow.metadata.name}
+                    </Link>
+                  )}
+                  <span>{job.id}</span>
+                </div>
+              </div>
 
-          <div className="flex items-center gap-1 shrink-0">
-            <Link
-              to="/jobs/$jobId/events"
-              params={{ jobId }}
-              className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-800/50"
-            >
-              <ScrollText className="w-3.5 h-3.5" />
-              Events
-            </Link>
-            <Link
-              to="/jobs/$jobId/timeline"
-              params={{ jobId }}
-              className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-800/50"
-            >
-              <GanttChart className="w-3.5 h-3.5" />
-              Timeline
-            </Link>
-            <Link
-              to="/jobs/$jobId/tree"
-              params={{ jobId }}
-              className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-800/50"
-            >
-              <GitBranch className="w-3.5 h-3.5" />
-              Tree
-            </Link>
-            {!showRightPanel && (
-              <button
-                onClick={() => setRightPanelOpen(true)}
-                className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-800/50"
-              >
-                <Info className="w-3.5 h-3.5" />
-                Details
-              </button>
-            )}
-          </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <Link
+                  to="/jobs/$jobId/events"
+                  params={{ jobId }}
+                  className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-800/50"
+                >
+                  <ScrollText className="w-3.5 h-3.5" />
+                  Events
+                </Link>
+                <Link
+                  to="/jobs/$jobId/timeline"
+                  params={{ jobId }}
+                  className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-800/50"
+                >
+                  <GanttChart className="w-3.5 h-3.5" />
+                  Timeline
+                </Link>
+                <Link
+                  to="/jobs/$jobId/tree"
+                  params={{ jobId }}
+                  className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-800/50"
+                >
+                  <GitBranch className="w-3.5 h-3.5" />
+                  Tree
+                </Link>
+                {!showRightPanel && (
+                  <button
+                    onClick={() => setRightPanelOpen(true)}
+                    className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-800/50"
+                  >
+                    <Info className="w-3.5 h-3.5" />
+                    Details
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Controls */}
@@ -543,7 +618,7 @@ export function JobDetailPage() {
                 }
               }}
             >
-              <SheetContent side="right" showCloseButton={false} className="w-[85vw] sm:max-w-sm p-0 overflow-y-auto">
+              <SheetContent side="right" showCloseButton={false} className="w-[90vw] sm:max-w-sm p-0 overflow-y-auto">
                 {panelContent}
               </SheetContent>
             </Sheet>

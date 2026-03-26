@@ -59,7 +59,7 @@ export function JobTimelinePage() {
           open={!!panel}
           onOpenChange={(open) => { if (!open) setSelectedStep(null); }}
         >
-          <SheetContent side="right" showCloseButton={false} className="w-[85vw] sm:max-w-sm p-0 overflow-y-auto">
+          <SheetContent side="right" showCloseButton={false} className="w-[90vw] sm:max-w-sm p-0 overflow-y-auto">
             {panel}
           </SheetContent>
         </Sheet>

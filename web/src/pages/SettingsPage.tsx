@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { useConfig, useConfigMutations, useOpenRouterSearch } from "@/hooks/useConfig";
+import { useIsMobile } from "@/hooks/useMediaQuery";
 import type { LabelInfo, ModelInfo } from "@/lib/api";
 import {
   Tag,
@@ -107,7 +108,7 @@ function LabelRow({
               setModelValue(label.model);
               setEditing(true);
             }}
-            className="text-[11px] text-zinc-600 hover:text-zinc-300 opacity-0 group-hover:opacity-100 transition-opacity"
+            className="text-[11px] text-zinc-600 hover:text-zinc-300 hover-capable:opacity-0 hover-capable:group-hover:opacity-100 transition-opacity"
           >
             Change
           </button>
@@ -117,7 +118,7 @@ function LabelRow({
       {onDelete && (
         <button
           onClick={onDelete}
-          className="text-zinc-700 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity p-1"
+          className="text-zinc-700 hover:text-red-400 hover-capable:opacity-0 hover-capable:group-hover:opacity-100 transition-opacity p-1"
         >
           <Trash2 className="w-3 h-3" />
         </button>
@@ -139,6 +140,7 @@ function AddLabelForm({
   const [name, setName] = useState("");
   const [model, setModel] = useState(models[0]?.id ?? "");
   const [error, setError] = useState("");
+  const isMobile = useIsMobile();
 
   if (!open) {
     return (
@@ -165,35 +167,39 @@ function AddLabelForm({
   };
 
   return (
-    <div className="flex items-center gap-2 px-3 py-2">
-      <input
-        value={name}
-        onChange={(e) => {
-          setName(e.target.value);
-          setError("");
-        }}
-        placeholder="label-name"
-        className="text-xs bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-300 w-28 font-mono"
-        autoFocus
-      />
-      <select
-        value={model}
-        onChange={(e) => setModel(e.target.value)}
-        className="flex-1 text-xs bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-300"
-      >
-        {models.map((m) => (
-          <option key={m.id} value={m.id}>
-            {m.name} ({m.id})
-          </option>
-        ))}
-      </select>
-      <button onClick={handleSubmit} className="text-green-400 hover:text-green-300 p-1">
-        <Check className="w-3.5 h-3.5" />
-      </button>
-      <button onClick={() => setOpen(false)} className="text-zinc-500 hover:text-zinc-300 p-1">
-        <X className="w-3.5 h-3.5" />
-      </button>
-      {error && <span className="text-[10px] text-red-400">{error}</span>}
+    <div className={cn("px-3 py-2", isMobile ? "space-y-2" : "flex items-center gap-2")}>
+      <div className={cn(isMobile ? "flex items-center gap-2" : "contents")}>
+        <input
+          value={name}
+          onChange={(e) => {
+            setName(e.target.value);
+            setError("");
+          }}
+          placeholder="label-name"
+          className="text-xs bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-300 w-28 font-mono"
+          autoFocus
+        />
+        <select
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          className="flex-1 text-xs bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-300"
+        >
+          {models.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name} ({m.id})
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="flex items-center gap-2">
+        <button onClick={handleSubmit} className="text-green-400 hover:text-green-300 p-1">
+          <Check className="w-3.5 h-3.5" />
+        </button>
+        <button onClick={() => setOpen(false)} className="text-zinc-500 hover:text-zinc-300 p-1">
+          <X className="w-3.5 h-3.5" />
+        </button>
+        {error && <span className="text-[10px] text-red-400">{error}</span>}
+      </div>
     </div>
   );
 }
@@ -214,47 +220,50 @@ function ApiKeyRow({
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState("");
   const [scope, setScope] = useState("user");
+  const isMobile = useIsMobile();
 
   return (
     <div className="flex items-center gap-3 py-2 px-3 hover:bg-zinc-900/50 rounded group">
       <span className="text-sm text-zinc-300 w-28 shrink-0 capitalize">{name}</span>
       {editing ? (
-        <div className="flex-1 flex items-center gap-2">
+        <div className={cn("flex-1", isMobile ? "space-y-2" : "flex items-center gap-2")}>
           <input
             type="password"
             value={value}
             onChange={(e) => setValue(e.target.value)}
             placeholder="sk-..."
-            className="flex-1 text-xs bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-300 font-mono"
+            className={cn("text-xs bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-300 font-mono", isMobile ? "w-full" : "flex-1")}
             autoFocus
           />
-          <select
-            value={scope}
-            onChange={(e) => setScope(e.target.value)}
-            className="text-xs bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-400"
-          >
-            <option value="user">User</option>
-            <option value="project">Project</option>
-          </select>
-          <button
-            onClick={() => {
-              if (value) onSet(value, scope);
-              setEditing(false);
-              setValue("");
-            }}
-            className="text-green-400 hover:text-green-300 p-1"
-          >
-            <Check className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => {
-              setEditing(false);
-              setValue("");
-            }}
-            className="text-zinc-500 hover:text-zinc-300 p-1"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
+          <div className="flex items-center gap-2">
+            <select
+              value={scope}
+              onChange={(e) => setScope(e.target.value)}
+              className="text-xs bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-400"
+            >
+              <option value="user">User</option>
+              <option value="project">Project</option>
+            </select>
+            <button
+              onClick={() => {
+                if (value) onSet(value, scope);
+                setEditing(false);
+                setValue("");
+              }}
+              className="text-green-400 hover:text-green-300 p-1"
+            >
+              <Check className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => {
+                setEditing(false);
+                setValue("");
+              }}
+              className="text-zinc-500 hover:text-zinc-300 p-1"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
       ) : (
         <>
@@ -263,7 +272,7 @@ function ApiKeyRow({
           </span>
           <button
             onClick={() => setEditing(true)}
-            className="text-[11px] text-zinc-600 hover:text-zinc-300 opacity-0 group-hover:opacity-100 transition-opacity"
+            className="text-[11px] text-zinc-600 hover:text-zinc-300 hover-capable:opacity-0 hover-capable:group-hover:opacity-100 transition-opacity"
           >
             {hasKey ? "Update" : "Set"}
           </button>
@@ -285,6 +294,35 @@ function ModelRow({
   labelRefs: string[];
   onDelete: () => void;
 }) {
+  const isMobile = useIsMobile();
+
+  if (isMobile) {
+    return (
+      <div className="py-1.5 px-3 hover:bg-zinc-900/50 rounded group space-y-1">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-mono text-zinc-300 truncate flex-1 min-w-0">{model.id}</span>
+          {labelRefs.map((l) => (
+            <span key={l} className="text-[10px] px-1 py-0.5 bg-violet-950 text-violet-400 rounded shrink-0">
+              {l}
+            </span>
+          ))}
+          <button
+            onClick={onDelete}
+            className="text-zinc-700 hover:text-red-400 hover-capable:opacity-0 hover-capable:group-hover:opacity-100 transition-opacity p-1 shrink-0"
+          >
+            <Trash2 className="w-3 h-3" />
+          </button>
+        </div>
+        <div className="grid grid-cols-2 gap-x-3 text-[10px] text-zinc-500 font-mono">
+          <span title="Context window">{formatTokenCount(model.context_length)} ctx</span>
+          <span title="Max output">{formatTokenCount(model.max_output_tokens)} out</span>
+          <span title="Input cost per 1M tokens">{formatCostPerMToken(model.prompt_cost)}/Mi</span>
+          <span title="Output cost per 1M tokens">{formatCostPerMToken(model.completion_cost)}/Mo</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex items-center gap-2 py-1.5 px-3 hover:bg-zinc-900/50 rounded group">
       <div className="flex-1 min-w-0">
@@ -305,7 +343,7 @@ function ModelRow({
       </div>
       <button
         onClick={onDelete}
-        className="text-zinc-700 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity p-1 shrink-0"
+        className="text-zinc-700 hover:text-red-400 hover-capable:opacity-0 hover-capable:group-hover:opacity-100 transition-opacity p-1 shrink-0"
       >
         <Trash2 className="w-3 h-3" />
       </button>
@@ -540,7 +578,7 @@ export function SettingsPage() {
           <div className="space-y-0.5">
             {/* Column headers */}
             {config.model_registry.length > 0 && (
-              <div className="flex items-center gap-2 py-1 px-3 text-[10px] font-medium text-zinc-600 uppercase tracking-wide">
+              <div className="hidden md:flex items-center gap-2 py-1 px-3 text-[10px] font-medium text-zinc-600 uppercase tracking-wide">
                 <div className="flex-1">Model</div>
                 <div className="flex items-center gap-3 shrink-0 font-mono">
                   <span className="w-12 text-right">Context</span>
