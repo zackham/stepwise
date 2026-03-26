@@ -23,6 +23,7 @@
     "@tanstack/react-router": "^1.166.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
     "codemirror": "^6.0.2",
     "dagre": "^0.8.5",
     "framer-motion": "^12.35.1",
