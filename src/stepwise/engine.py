@@ -1608,6 +1608,11 @@ class Engine:
         # Interpolate $variable references in executor config from resolved inputs
         interpolated = _interpolate_config(exec_ref.config, inputs)
         if interpolated != exec_ref.config:
+            # Persist interpolated config for frontend inspection
+            state = run.executor_state or {}
+            state["_interpolated_config"] = interpolated
+            run.executor_state = state
+            self.store.save_run(run)
             exec_ref = ExecutorRef(
                 type=exec_ref.type, config=interpolated,
                 decorators=exec_ref.decorators,

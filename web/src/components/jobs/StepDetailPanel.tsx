@@ -27,8 +27,13 @@ import {
   DollarSign,
   StopCircle,
   Gauge,
+  Maximize2,
+  Minimize2,
+  Copy,
+  Check,
 } from "lucide-react";
 import { useState } from "react";
+import { useAgentOutput } from "@/hooks/useStepwise";
 import { FulfillWatchDialog } from "./FulfillWatchDialog";
 import { cn } from "@/lib/utils";
 
@@ -36,6 +41,8 @@ interface StepDetailPanelProps {
   jobId: string;
   stepDef: StepDefinition;
   onClose: () => void;
+  onExpand?: () => void;
+  expanded?: boolean;
 }
 
 function executorIcon(type: string) {
@@ -75,15 +82,49 @@ function formatTimestamp(ts: string | null): string {
   return new Date(ts).toLocaleTimeString();
 }
 
+function AgentRawView({ runId }: { runId: string }) {
+  const { data } = useAgentOutput(runId);
+  const [copied, setCopied] = useState(false);
+  const text = (data?.events ?? []).map((e) => JSON.stringify(e)).join("\n");
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  if (!text) return <div className="text-xs text-zinc-600">No output</div>;
+
+  return (
+    <div>
+      <div className="flex justify-end mb-1">
+        <button
+          onClick={handleCopy}
+          className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-300"
+        >
+          {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+          {copied ? "Copied" : "Copy All"}
+        </button>
+      </div>
+      <pre className="text-[10px] font-mono bg-zinc-950 border border-zinc-800 rounded p-2 text-zinc-400 whitespace-pre-wrap break-all max-h-96 overflow-auto">
+        {text}
+      </pre>
+    </div>
+  );
+}
+
 export function StepDetailPanel({
   jobId,
   stepDef,
   onClose,
+  onExpand,
+  expanded,
 }: StepDetailPanelProps) {
   const { data: runs = [] } = useRuns(jobId, stepDef.name);
   const { data: events = [] } = useEvents(jobId);
   const mutations = useStepwiseMutations();
   const [fulfillDialogOpen, setFulfillDialogOpen] = useState(false);
+  const [agentViewMode, setAgentViewMode] = useState<"stream" | "raw">("stream");
 
   const sortedRunsForCost = [...runs].sort((a, b) => b.attempt - a.attempt);
   const activeRun = sortedRunsForCost.find((r) => r.status === "running");
@@ -130,12 +171,23 @@ export function StepDetailPanel({
           </span>
           <h3 className="font-semibold text-foreground">{stepDef.name}</h3>
         </div>
-        <button
-          onClick={onClose}
-          className="text-zinc-500 hover:text-foreground"
-        >
-          <X className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-1">
+          {onExpand && (
+            <button
+              onClick={onExpand}
+              className="text-zinc-500 hover:text-foreground"
+              title={expanded ? "Collapse" : "Expand"}
+            >
+              {expanded ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            </button>
+          )}
+          <button
+            onClick={onClose}
+            className="text-zinc-500 hover:text-foreground"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       <ScrollArea className="flex-1 min-h-0">
@@ -178,7 +230,7 @@ export function StepDetailPanel({
               Boolean(stepDef.executor.config.prompt) && (
                 <div className="mt-2">
                   <div className="text-zinc-500 text-sm mb-1">Prompt</div>
-                  <pre className="text-xs font-mono bg-zinc-900 border border-amber-500/20 rounded p-2 text-amber-300 whitespace-pre-wrap break-words max-h-32 overflow-auto">
+                  <pre className={cn("text-xs font-mono bg-zinc-900 border border-amber-500/20 rounded p-2 text-amber-300 whitespace-pre-wrap break-words", !expanded && "max-h-32 overflow-auto")}>
 {String(stepDef.executor.config.prompt).trim()}
                   </pre>
                 </div>
@@ -188,7 +240,7 @@ export function StepDetailPanel({
                 {Boolean(stepDef.executor.config.prompt) && (
                   <div>
                     <div className="text-zinc-500 text-sm mb-1">Agent Prompt</div>
-                    <pre className="text-xs font-mono bg-zinc-900 border border-blue-500/20 rounded p-2 text-blue-300 whitespace-pre-wrap break-all max-h-32 overflow-auto">
+                    <pre className={cn("text-xs font-mono bg-zinc-900 border border-blue-500/20 rounded p-2 text-blue-300 whitespace-pre-wrap break-all", !expanded && "max-h-32 overflow-auto")}>
                       {String(stepDef.executor.config.prompt)}
                     </pre>
                   </div>
@@ -428,16 +480,80 @@ export function StepDetailPanel({
                             </div>
                           )}
 
+                        {/* Resolved Prompt (interpolated) */}
+                        {(() => {
+                          const ic = run.executor_state?._interpolated_config as Record<string, unknown> | undefined;
+                          const resolvedPrompt = ic?.prompt as string | undefined;
+                          const resolvedCommand = ic?.command as string | undefined;
+                          const resolvedCheckCommand = ic?.check_command as string | undefined;
+                          const templatePrompt = stepDef.executor.config.prompt as string | undefined;
+                          const templateCommand = stepDef.executor.config.command as string | undefined;
+                          const templateCheckCommand = stepDef.executor.config.check_command as string | undefined;
+                          return (
+                            <>
+                              {resolvedPrompt && resolvedPrompt !== templatePrompt && (
+                                <div>
+                                  <div className="text-xs text-zinc-500 mb-1">Resolved Prompt</div>
+                                  <pre className={cn("text-xs font-mono bg-zinc-900 border border-emerald-500/20 rounded p-2 text-emerald-300 whitespace-pre-wrap break-words", !expanded && "max-h-48 overflow-auto")}>
+                                    {resolvedPrompt.trim()}
+                                  </pre>
+                                </div>
+                              )}
+                              {resolvedCommand && resolvedCommand !== templateCommand && (
+                                <div>
+                                  <div className="text-xs text-zinc-500 mb-1">Resolved Command</div>
+                                  <pre className={cn("text-xs font-mono bg-zinc-900 border border-emerald-500/20 rounded p-2 text-emerald-300 whitespace-pre-wrap break-words", !expanded && "max-h-48 overflow-auto")}>
+                                    {resolvedCommand.trim()}
+                                  </pre>
+                                </div>
+                              )}
+                              {resolvedCheckCommand && resolvedCheckCommand !== templateCheckCommand && (
+                                <div>
+                                  <div className="text-xs text-zinc-500 mb-1">Resolved Check Command</div>
+                                  <pre className={cn("text-xs font-mono bg-zinc-900 border border-emerald-500/20 rounded p-2 text-emerald-300 whitespace-pre-wrap break-words", !expanded && "max-h-48 overflow-auto")}>
+                                    {resolvedCheckCommand.trim()}
+                                  </pre>
+                                </div>
+                              )}
+                            </>
+                          );
+                        })()}
+
                         {/* Agent Output Replay */}
                         {run.result && isAgent && (
                           <div>
-                            <div className="text-xs text-zinc-500 mb-1">
-                              Agent Output
+                            <div className="flex items-center justify-between mb-1">
+                              <div className="text-xs text-zinc-500">Agent Output</div>
+                              <div className="flex items-center gap-0.5 bg-zinc-800 rounded p-0.5">
+                                <button
+                                  onClick={() => setAgentViewMode("stream")}
+                                  className={cn(
+                                    "text-[10px] px-2 py-0.5 rounded transition-colors",
+                                    agentViewMode === "stream"
+                                      ? "bg-zinc-700 text-zinc-200"
+                                      : "text-zinc-500 hover:text-zinc-300"
+                                  )}
+                                >
+                                  Stream
+                                </button>
+                                <button
+                                  onClick={() => setAgentViewMode("raw")}
+                                  className={cn(
+                                    "text-[10px] px-2 py-0.5 rounded transition-colors",
+                                    agentViewMode === "raw"
+                                      ? "bg-zinc-700 text-zinc-200"
+                                      : "text-zinc-500 hover:text-zinc-300"
+                                  )}
+                                >
+                                  Raw
+                                </button>
+                              </div>
                             </div>
-                            <AgentStreamView
-                              runId={run.id}
-                              isLive={false}
-                            />
+                            {agentViewMode === "stream" ? (
+                              <AgentStreamView runId={run.id} isLive={false} />
+                            ) : (
+                              <AgentRawView runId={run.id} />
+                            )}
                           </div>
                         )}
 
@@ -447,7 +563,10 @@ export function StepDetailPanel({
                             <div className="text-xs text-zinc-500 mb-1">
                               Output
                             </div>
-                            <HandoffEnvelopeView envelope={run.result} />
+                            <HandoffEnvelopeView
+                              envelope={run.result}
+                              isLatest={run.id === sortedRuns[0]?.id}
+                            />
                           </div>
                         )}
 

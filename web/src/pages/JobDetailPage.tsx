@@ -74,6 +74,7 @@ export function JobDetailPage() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
   const [rightPanelOpen, setRightPanelOpen] = useState<boolean | null>(null);
+  const [expandedStep, setExpandedStep] = useState(false);
   const mutations = useStepwiseMutations();
 
   const isTerminal =
@@ -195,6 +196,7 @@ export function JobDetailPage() {
     setExpandedSteps(new Set());
     setSelection(null);
     setRightPanelOpen(null);
+    setExpandedStep(false);
   }, [jobId]);
 
   // Auto-open right panel for terminal jobs (only on initial load)
@@ -448,6 +450,7 @@ export function JobDetailPage() {
               jobId={resolvedStep.jobId}
               stepDef={resolvedStep.stepDef}
               onClose={() => setSelection(null)}
+              onExpand={() => setExpandedStep(true)}
             />
           ) : isDataFlowSelection && selection ? (
             <DataFlowPanel
@@ -594,6 +597,21 @@ export function JobDetailPage() {
           </div>
         ) : null;
       })()}
+
+      {/* Expanded step overlay */}
+      <Sheet open={expandedStep && !!resolvedStep} onOpenChange={(open) => !open && setExpandedStep(false)}>
+        <SheetContent side="right" showCloseButton={false} className="w-[70vw] max-w-4xl p-0 overflow-y-auto">
+          {resolvedStep && (
+            <StepDetailPanel
+              jobId={resolvedStep.jobId}
+              stepDef={resolvedStep.stepDef}
+              onClose={() => { setExpandedStep(false); setSelection(null); }}
+              onExpand={() => setExpandedStep(false)}
+              expanded={true}
+            />
+          )}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
