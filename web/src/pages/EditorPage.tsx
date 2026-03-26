@@ -4,8 +4,7 @@ import { useParams, useNavigate, Link } from "@tanstack/react-router";
 import { YamlEditor } from "@/components/editor/YamlEditor";
 import { EditorToolbar } from "@/components/editor/EditorToolbar";
 import { FlowDagView } from "@/components/dag/FlowDagView";
-import { StepDefinitionPanel } from "@/components/editor/StepDefinitionPanel";
-import { ChatSidebar } from "@/components/editor/ChatSidebar";
+import { RightSidebar, type SidebarTab } from "@/components/editor/RightSidebar";
 import { FlowFileViewer } from "@/components/editor/FlowFileViewer";
 import { FlowFileTree } from "@/components/editor/FlowFileTree";
 import { useEditorChat } from "@/hooks/useEditorChat";
@@ -125,6 +124,7 @@ export function EditorPage() {
   const [selectedStep, setSelectedStep] = useState<string | null>(null);
   const [stepContext, setStepContext] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<SidebarTab>("chat");
   const [viewingFile, setViewingFile] = useState<string | null>(null);
   const [centerTab, setCenterTab] = useState<CenterTab>("flow");
   const [editingPrompt, setEditingPrompt] = useState<{ step: string; field: string } | null>(null);
@@ -313,10 +313,13 @@ export function EditorPage() {
     }
   }, []);
 
-  // When selecting a step, also set it as chat context
+  // When selecting a step, also set it as chat context and switch to inspector
   const handleSelectStep = useCallback((stepName: string | null) => {
     setSelectedStep(stepName);
-    if (stepName) setStepContext(stepName);
+    if (stepName) {
+      setStepContext(stepName);
+      setActiveTab("inspector");
+    }
   }, []);
 
   // Cleanup parse timer
@@ -328,6 +331,31 @@ export function EditorPage() {
   const selectedStepDef = selectedStep && parsedFlow?.steps[selectedStep]
     ? parsedFlow.steps[selectedStep]
     : null;
+  const sidebarOpen = !!selectedStepDef || chatOpen;
+
+  const handleCloseInspector = useCallback(() => {
+    setSelectedStep(null);
+    setEditingPrompt(null);
+    setViewingFile("FLOW.yaml");
+    if (chatOpen) {
+      setActiveTab("chat");
+    }
+  }, [chatOpen]);
+
+  const handleToggleChat = useCallback(() => {
+    if (chatOpen && activeTab === "chat" && !selectedStepDef) {
+      // Chat is showing and no step selected — close sidebar
+      setChatOpen(false);
+    } else if (chatOpen && activeTab === "chat") {
+      // Chat is showing but step is selected — close chat, show inspector
+      setChatOpen(false);
+      setActiveTab("inspector");
+    } else {
+      // Open/switch to chat
+      setChatOpen(true);
+      setActiveTab("chat");
+    }
+  }, [chatOpen, activeTab, selectedStepDef]);
 
   if (!flowName) {
     navigate({ to: "/flows" });
@@ -357,9 +385,10 @@ export function EditorPage() {
         isRunning={mutations.createJob.isPending}
         parseErrors={parseErrors}
         chatOpen={chatOpen}
-        onToggleChat={() => setChatOpen((o) => !o)}
+        onToggleChat={handleToggleChat}
         isChatStreaming={chat.isStreaming}
         agentMode={chat.agentMode}
+        chatBackgrounded={chatOpen && activeTab !== "chat"}
         onBack={() => navigate({ to: "/flows" })}
       />
       <div className="flex-1 flex min-h-0">
@@ -476,77 +505,40 @@ export function EditorPage() {
           </div>
         </div>
 
-        {/* Step inspector */}
+        {/* Right sidebar — unified tabbed panel */}
         {isCompact ? (
           <Sheet
-            open={!!selectedStepDef}
+            open={sidebarOpen}
             onOpenChange={(open) => {
               if (!open) {
                 setSelectedStep(null);
+                setChatOpen(false);
                 setEditingPrompt(null);
-                setViewingFile("FLOW.yaml");
               }
             }}
           >
-            <SheetContent side="right" showCloseButton={false} className="w-[85vw] sm:max-w-sm p-0 overflow-y-auto">
-              {selectedStepDef && (
-                <StepDefinitionPanel
-                  stepDef={selectedStepDef}
-                  onClose={() => {
-                    setSelectedStep(null);
-                    setEditingPrompt(null);
-                    setViewingFile("FLOW.yaml");
-                  }}
-                  onDelete={handleDeleteStep}
-                  onViewFile={(path) => {
-                    setViewingFile(path);
-                    setCenterTab("source");
-                    setSelectedStep(null);
-                  }}
-                  onViewSource={(field) => {
-                    setEditingPrompt({ step: selectedStep!, field });
-                    setViewingFile(null);
-                    setCenterTab("source");
-                    setSelectedStep(null);
-                  }}
-                />
-              )}
-            </SheetContent>
-          </Sheet>
-        ) : (
-          selectedStepDef && (
-            <div className="w-80 border-l border-border shrink-0 flex flex-col">
-              <StepDefinitionPanel
-                stepDef={selectedStepDef}
-                onClose={() => {
-                  setSelectedStep(null);
-                  setEditingPrompt(null);
-                  setViewingFile("FLOW.yaml");
-                }}
-                onDelete={handleDeleteStep}
+            <SheetContent side="right" showCloseButton={false} className="w-[85vw] sm:max-w-md p-0">
+              <RightSidebar
+                activeTab={activeTab}
+                onTabChange={setActiveTab}
+                selectedStepDef={selectedStepDef}
+                onCloseInspector={handleCloseInspector}
+                onDeleteStep={handleDeleteStep}
                 onViewFile={(path) => {
                   setViewingFile(path);
                   setCenterTab("source");
+                  setSelectedStep(null);
                 }}
                 onViewSource={(field) => {
                   setEditingPrompt({ step: selectedStep!, field });
                   setViewingFile(null);
                   setCenterTab("source");
+                  setSelectedStep(null);
                 }}
-              />
-            </div>
-          )
-        )}
-
-        {/* Chat sidebar */}
-        {isCompact ? (
-          <Sheet open={chatOpen} onOpenChange={setChatOpen}>
-            <SheetContent side="right" showCloseButton={false} className="w-[85vw] sm:max-w-md p-0 overflow-y-auto">
-              <ChatSidebar
-                messages={chat.messages}
-                isStreaming={chat.isStreaming}
-                onSend={chat.send}
-                onReset={chat.reset}
+                chatMessages={chat.messages}
+                isChatStreaming={chat.isStreaming}
+                onChatSend={chat.send}
+                onChatReset={chat.reset}
                 onApplyYaml={chat.applyYaml}
                 agentMode={chat.agentMode}
                 onModeChange={chat.setAgentMode}
@@ -558,12 +550,26 @@ export function EditorPage() {
             </SheetContent>
           </Sheet>
         ) : (
-          chatOpen && (
-            <ChatSidebar
-              messages={chat.messages}
-              isStreaming={chat.isStreaming}
-              onSend={chat.send}
-              onReset={chat.reset}
+          sidebarOpen && (
+            <RightSidebar
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+              selectedStepDef={selectedStepDef}
+              onCloseInspector={handleCloseInspector}
+              onDeleteStep={handleDeleteStep}
+              onViewFile={(path) => {
+                setViewingFile(path);
+                setCenterTab("source");
+              }}
+              onViewSource={(field) => {
+                setEditingPrompt({ step: selectedStep!, field });
+                setViewingFile(null);
+                setCenterTab("source");
+              }}
+              chatMessages={chat.messages}
+              isChatStreaming={chat.isStreaming}
+              onChatSend={chat.send}
+              onChatReset={chat.reset}
               onApplyYaml={chat.applyYaml}
               agentMode={chat.agentMode}
               onModeChange={chat.setAgentMode}

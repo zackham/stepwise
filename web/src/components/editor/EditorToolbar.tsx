@@ -19,6 +19,7 @@ interface EditorToolbarProps {
   onToggleChat?: () => void;
   isChatStreaming?: boolean;
   agentMode?: AgentMode;
+  chatBackgrounded?: boolean;
 }
 
 export function EditorToolbar({
@@ -31,6 +32,7 @@ export function EditorToolbar({
   onToggleChat,
   isChatStreaming,
   agentMode = "claude",
+  chatBackgrounded,
 }: EditorToolbarProps) {
   return (
     <div className="flex items-center gap-3 h-10 px-3 border-b border-border shrink-0">
@@ -86,6 +88,9 @@ export function EditorToolbar({
         >
           <MessageSquare className="w-3.5 h-3.5 mr-1" />
           {AGENT_LABELS[agentMode]}
+          {chatBackgrounded && !isChatStreaming && (
+            <span className="w-1.5 h-1.5 rounded-full bg-violet-500 ml-0.5" />
+          )}
           {isChatStreaming && (
             <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
