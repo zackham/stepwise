@@ -53,6 +53,103 @@ function formatTimestamp(ts: string | null): string {
   return new Date(ts).toLocaleTimeString();
 }
 
+const LOG_INITIAL_LINES = 50;
+
+function highlightLogLine(line: string): React.ReactNode {
+  // Timestamp patterns: ISO, syslog-style, bracketed
+  const timestampRe = /^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[.\d]*Z?|\[\d{2}:\d{2}:\d{2}\]|\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})/;
+  // Log level patterns
+  const errorRe = /\b(ERROR|FATAL|CRITICAL|PANIC)\b/i;
+  const warnRe = /\b(WARN|WARNING)\b/i;
+  const infoRe = /\b(INFO)\b/i;
+  const debugRe = /\b(DEBUG|TRACE)\b/i;
+
+  let className = "text-zinc-300";
+  if (errorRe.test(line)) className = "text-red-400";
+  else if (warnRe.test(line)) className = "text-amber-400";
+  else if (infoRe.test(line)) className = "text-blue-400";
+  else if (debugRe.test(line)) className = "text-zinc-400";
+
+  // Highlight timestamp portion
+  const tsMatch = line.match(timestampRe);
+  if (tsMatch) {
+    return (
+      <span className={className}>
+        <span className="text-zinc-600">{tsMatch[0]}</span>
+        {line.slice(tsMatch[0].length)}
+      </span>
+    );
+  }
+  return <span className={className}>{line}</span>;
+}
+
+function ScriptLogView({ run }: { run: StepRun }) {
+  const [showAll, setShowAll] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const stdout = (run.result?.executor_meta?.stdout as string) ?? "";
+  const stderr = (run.result?.executor_meta?.stderr as string) ?? "";
+  const returnCode = run.result?.executor_meta?.return_code as number | undefined;
+
+  if (!stdout && !stderr) return null;
+
+  const fullText = [
+    stdout ? stdout : "",
+    stderr ? `--- stderr ---\n${stderr}` : "",
+  ].filter(Boolean).join("\n");
+
+  const lines = fullText.split("\n");
+  const truncated = !showAll && lines.length > LOG_INITIAL_LINES;
+  const displayLines = truncated ? lines.slice(-LOG_INITIAL_LINES) : lines;
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(fullText);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+          <Terminal className="w-3 h-3" />
+          <span>Logs</span>
+          {returnCode != null && (
+            <span className={cn(
+              "font-mono text-[10px] px-1 py-0.5 rounded",
+              returnCode === 0 ? "text-emerald-400 bg-emerald-500/10" : "text-red-400 bg-red-500/10"
+            )}>
+              exit {returnCode}
+            </span>
+          )}
+        </div>
+        <button
+          onClick={handleCopy}
+          className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-300"
+        >
+          {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <div className="bg-zinc-950 border border-zinc-800 rounded overflow-hidden">
+        {truncated && (
+          <button
+            onClick={() => setShowAll(true)}
+            className="w-full text-[10px] text-zinc-500 hover:text-zinc-300 bg-zinc-900 border-b border-zinc-800 py-1 px-2 text-center"
+          >
+            ↑ {lines.length - LOG_INITIAL_LINES} more lines — Show all
+          </button>
+        )}
+        <pre className="text-[11px] font-mono p-2 text-zinc-300 whitespace-pre-wrap break-all max-h-96 overflow-auto leading-relaxed">
+          {displayLines.map((line, i) => (
+            <div key={i}>{highlightLogLine(line)}</div>
+          ))}
+        </pre>
+      </div>
+    </div>
+  );
+}
+
 function AgentRawView({ runId }: { runId: string }) {
   const { data } = useAgentOutput(runId);
   const [copied, setCopied] = useState(false);
@@ -556,6 +653,11 @@ export function StepDetailPanel({
                               <AgentRawView runId={run.id} />
                             )}
                           </div>
+                        )}
+
+                        {/* Script Logs */}
+                        {run.result && stepDef.executor.type === "script" && (
+                          <ScriptLogView run={run} />
                         )}
 
                         {/* Result */}
