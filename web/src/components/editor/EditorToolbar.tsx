@@ -1,6 +1,7 @@
-import { Play, MessageSquare, ArrowLeft } from "lucide-react";
+import { Play, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import type { AgentMode } from "@/hooks/useEditorChat";
 
 const AGENT_LABELS: Record<AgentMode, string> = {
@@ -11,7 +12,6 @@ const AGENT_LABELS: Record<AgentMode, string> = {
 
 interface EditorToolbarProps {
   flowName: string;
-  onBack?: () => void;
   onRun?: () => void;
   isRunning?: boolean;
   parseErrors: string[];
@@ -24,7 +24,6 @@ interface EditorToolbarProps {
 
 export function EditorToolbar({
   flowName,
-  onBack,
   onRun,
   isRunning,
   parseErrors,
@@ -36,20 +35,13 @@ export function EditorToolbar({
 }: EditorToolbarProps) {
   return (
     <div className="flex items-center gap-3 h-10 px-3 border-b border-border shrink-0">
-      {onBack && (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onBack}
-          className="h-7 w-7 p-0 text-zinc-500 hover:text-foreground"
-          title="Back to flows"
-        >
-          <ArrowLeft className="w-3.5 h-3.5" />
-        </Button>
-      )}
-      <span className="text-sm font-medium text-foreground">
-        {flowName}
-      </span>
+      <Breadcrumb
+        segments={[
+          { label: "Flows", to: "/flows" },
+          { label: flowName },
+        ]}
+        className="border-0 px-0 py-0"
+      />
 
       {onRun && (
         <Button

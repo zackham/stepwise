@@ -2,6 +2,13 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { EditorToolbar } from "../EditorToolbar";
 
+// Mock TanStack Router Link as a simple anchor
+vi.mock("@tanstack/react-router", () => ({
+  Link: ({ children, to, ...props }: { children: React.ReactNode; to: string; [k: string]: unknown }) => (
+    <a href={to} {...props}>{children}</a>
+  ),
+}));
+
 describe("EditorToolbar", () => {
   it("displays flow name", () => {
     render(

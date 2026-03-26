@@ -15,6 +15,7 @@ import { useAutoSelectSuspended } from "@/hooks/useAutoSelectSuspended";
 import { useAutoExpand } from "@/hooks/useAutoExpand";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { useIsMobile } from "@/hooks/useMediaQuery";
+import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import {
   PanelRightClose,
   PanelLeftClose,
@@ -22,7 +23,6 @@ import {
   ScrollText,
   GitBranch,
   GanttChart,
-  ChevronRight,
   Package,
   Clock,
   Info,
@@ -30,7 +30,6 @@ import {
   Monitor,
   AlertTriangle,
   DollarSign,
-  ArrowLeft,
 } from "lucide-react";
 import type { JobTreeNode, StepDefinition } from "@/lib/types";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -244,33 +243,19 @@ export function JobDetailPage() {
 
       {/* Center: header + controls + DAG */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Sub-job breadcrumb */}
-        {job.parent_job_id && (
-          <div className="flex items-center gap-1 px-4 py-1.5 border-b border-border bg-purple-500/5 text-xs">
-            <Link
-              to="/jobs/$jobId"
-              params={{ jobId: job.parent_job_id }}
-              className="text-purple-400 hover:text-purple-300 truncate max-w-[200px]"
-            >
-              {parentJob?.objective || job.parent_job_id}
-            </Link>
-            <ChevronRight className="w-3 h-3 text-zinc-600 shrink-0" />
-            <span className="text-zinc-400 truncate">
-              {job.objective || "Sub-job"}
-            </span>
-          </div>
-        )}
+        {/* Breadcrumb */}
+        <Breadcrumb
+          segments={[
+            { label: "Jobs", to: "/jobs" },
+            ...(job.parent_job_id
+              ? [{ label: parentJob?.name || parentJob?.objective || job.parent_job_id, to: "/jobs/$jobId", params: { jobId: job.parent_job_id } }]
+              : []),
+            { label: job.name || job.objective || "Untitled Job" },
+          ]}
+        />
 
         {/* Job header */}
         <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-zinc-950/30 shrink-0">
-          {isMobile && (
-            <Link
-              to="/jobs"
-              className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground shrink-0 min-w-[44px] min-h-[44px] justify-center"
-            >
-              <ArrowLeft className="w-4 h-4" />
-            </Link>
-          )}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <h2 className="text-sm font-semibold truncate text-foreground">

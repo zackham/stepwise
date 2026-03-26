@@ -1,35 +1,22 @@
-import { useParams, Link } from "@tanstack/react-router";
+import { useParams } from "@tanstack/react-router";
 import { useJob } from "@/hooks/useStepwise";
 import { EventLog } from "@/components/events/EventLog";
-import { JobStatusBadge } from "@/components/StatusBadge";
-import { ArrowLeft } from "lucide-react";
+import { Breadcrumb } from "@/components/layout/Breadcrumb";
 
 export function JobEventsPage() {
   const { jobId } = useParams({ from: "/jobs/$jobId/events" });
   const { data: job } = useJob(jobId);
+  const jobName = job?.name || job?.objective || "...";
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-zinc-950/30">
-        <Link
-          to="/jobs/$jobId"
-          params={{ jobId }}
-          className="text-zinc-500 hover:text-foreground"
-        >
-          <ArrowLeft className="w-4 h-4" />
-        </Link>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold truncate text-foreground">
-              {job?.objective || "..."} — Events
-            </h2>
-            {job && <JobStatusBadge status={job.status} />}
-          </div>
-          <div className="text-[10px] font-mono text-zinc-600 mt-0.5">
-            {jobId}
-          </div>
-        </div>
-      </div>
+      <Breadcrumb
+        segments={[
+          { label: "Jobs", to: "/jobs" },
+          { label: jobName, to: "/jobs/$jobId", params: { jobId } },
+          { label: "Events" },
+        ]}
+      />
 
       <div className="flex-1 overflow-hidden">
         <EventLog jobId={jobId} />
