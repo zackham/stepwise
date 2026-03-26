@@ -341,7 +341,14 @@ export function FlowsPage() {
                       <FileText className="w-3.5 h-3.5 shrink-0 text-zinc-500" />
                     )}
                     <div className="flex flex-col min-w-0 flex-1">
-                      <span className="truncate">{flow.name}</span>
+                      <span className="truncate">
+                        {flow.name}
+                        {flow.executor_types?.includes("external") && (
+                          <span className="ml-1.5 px-1 py-0.5 text-[10px] font-medium rounded bg-amber-500/15 text-amber-400 leading-none">
+                            HITL
+                          </span>
+                        )}
+                      </span>
                       {flow.description && (
                         <span className="text-[10px] text-zinc-600 truncate leading-tight">
                           {flow.description}
