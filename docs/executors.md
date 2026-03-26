@@ -159,8 +159,6 @@ When a limit is hit, the step fails with a descriptive error (e.g., `cost_limit_
 
 **Streaming:** While an agent runs, its output streams to the web UI in real-time — you can watch it think, use tools, and iterate. After completion, the full trace is available in the step's detail panel and in `--report` output.
 
-**Context chains:** Agent steps can participate in context chains. When an agent step completes, its full conversation transcript is automatically captured and saved. Downstream chain members receive the prior conversations as a `<prior_context>` XML block prepended to their prompt. This gives multi-step agent workflows session continuity while maintaining the pure-function step model. See [YAML Format](yaml-format.md#context-chains) for configuration.
-
 ## External Executor
 
 Suspends the step and waits for external input via the web UI or API. For decisions that need judgment, approvals, or creative direction.
