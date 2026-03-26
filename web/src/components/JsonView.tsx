@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronRight, ChevronDown, Copy, Check } from "lucide-react";
+import { ChevronRight, ChevronDown, Copy, Check, Braces, List } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type StringClass =
@@ -77,6 +77,36 @@ function BlockString({ value, name }: { value: string; name?: string }) {
   );
 }
 
+function RawJsonView({ data }: { data: unknown }) {
+  const [copied, setCopied] = useState(false);
+  const json = JSON.stringify(data, null, 2);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(json);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <div className="relative group rounded border border-zinc-700/30 bg-zinc-900/40 px-3 py-2">
+      <button
+        onClick={handleCopy}
+        className="absolute top-2 right-2 text-zinc-500 hover:text-zinc-300 opacity-0 group-hover:opacity-100 transition-opacity"
+        title="Copy JSON"
+      >
+        {copied ? (
+          <Check className="w-3 h-3 text-emerald-400" />
+        ) : (
+          <Copy className="w-3 h-3" />
+        )}
+      </button>
+      <pre className="whitespace-pre-wrap break-words text-sm text-zinc-200 font-mono leading-relaxed">
+        {json}
+      </pre>
+    </div>
+  );
+}
+
 interface JsonViewProps {
   data: unknown;
   name?: string;
@@ -97,12 +127,38 @@ export function JsonView({
     Object.keys(data as Record<string, unknown>).length === 1;
   const [expanded, setExpanded] = useState(defaultExpanded || isSingleKeyObject);
   const [copied, setCopied] = useState(false);
+  const [rawJson, setRawJson] = useState(false);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(JSON.stringify(data, null, 2));
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
+
+  // At depth 0, show raw JSON toggle for objects and arrays
+  const isStructured =
+    depth === 0 &&
+    data !== null &&
+    data !== undefined &&
+    typeof data === "object";
+
+  if (isStructured && rawJson) {
+    return (
+      <div>
+        <div className="flex justify-end mb-1">
+          <button
+            onClick={() => setRawJson(false)}
+            className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-300"
+            title="Switch to tree view"
+          >
+            <List className="w-3 h-3" />
+            Tree
+          </button>
+        </div>
+        <RawJsonView data={data} />
+      </div>
+    );
+  }
 
   if (data === null || data === undefined) {
     return (
@@ -161,20 +217,32 @@ export function JsonView({
 
     return (
       <div className={depth === 0 ? "overflow-x-auto" : undefined}>
-        <button
-          onClick={() => setExpanded(!expanded)}
-          className="flex items-center gap-1 hover:text-foreground text-zinc-400 text-sm"
-        >
-          {expanded ? (
-            <ChevronDown className="w-3 h-3" />
-          ) : (
-            <ChevronRight className="w-3 h-3" />
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="flex items-center gap-1 hover:text-foreground text-zinc-400 text-sm"
+          >
+            {expanded ? (
+              <ChevronDown className="w-3 h-3" />
+            ) : (
+              <ChevronRight className="w-3 h-3" />
+            )}
+            {name && <span className="mr-1">{name}:</span>}
+            <span className="text-zinc-500">
+              [{data.length} item{data.length !== 1 ? "s" : ""}]
+            </span>
+          </button>
+          {depth === 0 && (
+            <button
+              onClick={() => setRawJson(true)}
+              className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-300 ml-1"
+              title="Switch to raw JSON"
+            >
+              <Braces className="w-3 h-3" />
+              JSON
+            </button>
           )}
-          {name && <span className="mr-1">{name}:</span>}
-          <span className="text-zinc-500">
-            [{data.length} item{data.length !== 1 ? "s" : ""}]
-          </span>
-        </button>
+        </div>
         {expanded && (
           <div className="ml-4 border-l border-zinc-700/50 pl-3 mt-1 space-y-0.5 min-w-0">
             {data.map((item, i) => (
@@ -224,17 +292,27 @@ export function JsonView({
             </span>
           </button>
           {depth === 0 && (
-            <button
-              onClick={handleCopy}
-              className="text-zinc-500 hover:text-zinc-300 ml-2"
-              title="Copy JSON"
-            >
-              {copied ? (
-                <Check className="w-3 h-3 text-emerald-400" />
-              ) : (
-                <Copy className="w-3 h-3" />
-              )}
-            </button>
+            <>
+              <button
+                onClick={handleCopy}
+                className="text-zinc-500 hover:text-zinc-300 ml-2"
+                title="Copy JSON"
+              >
+                {copied ? (
+                  <Check className="w-3 h-3 text-emerald-400" />
+                ) : (
+                  <Copy className="w-3 h-3" />
+                )}
+              </button>
+              <button
+                onClick={() => setRawJson(true)}
+                className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-300 ml-1"
+                title="Switch to raw JSON"
+              >
+                <Braces className="w-3 h-3" />
+                JSON
+              </button>
+            </>
           )}
         </div>
         {expanded && (
