@@ -225,8 +225,14 @@ export function JobDetailPage() {
 
   if (!job) {
     return (
-      <div className="flex items-center justify-center h-full text-zinc-500">
-        Job not found
+      <div className="flex flex-col items-center justify-center h-full gap-3 text-zinc-500">
+        <span className="text-sm">Job not found</span>
+        <Link
+          to="/jobs"
+          className="text-sm text-blue-400 hover:text-blue-300 underline underline-offset-2"
+        >
+          Back to Jobs
+        </Link>
       </div>
     );
   }
