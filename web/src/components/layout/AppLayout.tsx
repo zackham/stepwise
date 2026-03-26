@@ -6,6 +6,7 @@ import { useStepwiseWebSocket } from "@/hooks/useStepwiseWebSocket";
 import { useEngineStatus, useJobs, useJob } from "@/hooks/useStepwise";
 import { LayoutGrid, FileCode, Settings2, Zap, FolderOpen, AlertTriangle, Sun, Moon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { CommandPalette } from "@/components/CommandPalette";
 
 function getInitialTheme(): "dark" | "light" {
   const stored = localStorage.getItem("stepwise-theme");
@@ -217,6 +218,7 @@ export function AppLayout() {
         </ErrorBoundary>
       </main>
       <Toaster theme={theme} richColors position="bottom-right" />
+      <CommandPalette />
     </div>
   );
 }
