@@ -339,6 +339,31 @@ export function JobList({
           )}
         </div>
 
+        {/* Awaiting Input priority filter */}
+        {(statusCounts["awaiting_input"] ?? 0) > 0 && (
+          <button
+            data-testid="awaiting-input-filter"
+            onClick={() => setStatusFilter(statusFilter === "awaiting_input" ? null : "awaiting_input")}
+            className={cn(
+              "w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors",
+              statusFilter === "awaiting_input"
+                ? "bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/40"
+                : "bg-amber-500/10 text-amber-400/90 hover:bg-amber-500/15",
+            )}
+          >
+            <Hand className="w-3.5 h-3.5 shrink-0" />
+            <span>Awaiting Input</span>
+            <span className={cn(
+              "ml-auto tabular-nums rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+              statusFilter === "awaiting_input"
+                ? "bg-amber-500/30 text-amber-200"
+                : "bg-amber-500/20 text-amber-400",
+            )}>
+              {statusCounts["awaiting_input"]}
+            </span>
+          </button>
+        )}
+
         {/* Status pills + sort */}
         <div className="flex items-center gap-1.5">
           <div className="flex flex-wrap gap-1 flex-1">
