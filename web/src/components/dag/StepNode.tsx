@@ -1,20 +1,38 @@
-import { type KeyboardEvent, useState } from "react";
+import { type KeyboardEvent, useState, useRef } from "react";
 import {
   CirclePause,
   RotateCw,
   ChevronDown,
   Clock,
+  ArrowRight,
+  ArrowLeft,
+  Layers,
 } from "lucide-react";
 import { StepStatusBadge } from "@/components/StatusBadge";
 import { STEP_STATUS_COLORS, STEP_PENDING_COLORS } from "@/lib/status-colors";
 import type { ExitRule, StepDefinition, StepRun, StepRunStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { LiveDuration } from "@/components/LiveDuration";
-import { executorIcon } from "@/lib/executor-utils";
+import { executorIcon, executorLabel } from "@/lib/executor-utils";
+
+/** Color accents for executor type — left-border visual clustering */
+const EXECUTOR_ACCENT: Record<string, string> = {
+  script: "border-l-cyan-500/60",
+  agent: "border-l-violet-500/60",
+  llm: "border-l-blue-500/60",
+  mock_llm: "border-l-blue-400/40",
+  external: "border-l-amber-500/60",
+  poll: "border-l-indigo-500/60",
+};
+
+function getExecutorAccent(type: string): string {
+  return EXECUTOR_ACCENT[type] ?? "border-l-zinc-500/40";
+}
 
 interface StepNodeProps {
   stepDef: StepDefinition;
   latestRun: StepRun | null;
+  latestRuns?: Record<string, StepRun>;
   maxAttempts: number | null;
   isSelected: boolean;
   onClick: () => void;
@@ -83,10 +101,25 @@ const ACTION_COLORS: Record<string, string> = {
   abandon: "text-red-500",
 };
 
-function ExitRuleTooltip({ rules }: { rules: ExitRule[] }) {
+function formatTooltipValue(value: unknown, maxLen = 60): string {
+  if (value === null || value === undefined) return "null";
+  if (typeof value === "boolean" || typeof value === "number") return String(value);
+  if (typeof value === "string") {
+    if (value.length <= maxLen) return `"${value}"`;
+    return `"${value.slice(0, maxLen - 2)}..."`;
+  }
+  if (Array.isArray(value)) return `Array[${value.length}]`;
+  if (typeof value === "object") {
+    const keys = Object.keys(value as Record<string, unknown>);
+    return `{${keys.slice(0, 3).join(", ")}${keys.length > 3 ? ", ..." : ""}}`;
+  }
+  return String(value);
+}
+
+function ExitRulesSection({ rules }: { rules: ExitRule[] }) {
   return (
-    <div className="absolute left-0 top-full mt-1 z-50 bg-zinc-900 border border-zinc-700 rounded-md shadow-xl p-2 min-w-[280px] max-w-[400px]">
-      <div className="text-[10px] font-medium text-zinc-400 uppercase tracking-wide mb-1.5">
+    <>
+      <div className="text-[10px] font-medium text-zinc-400 uppercase tracking-wide mb-1">
         Exit Rules
       </div>
       <table className="w-full text-[10px]">
@@ -100,13 +133,13 @@ function ExitRuleTooltip({ rules }: { rules: ExitRule[] }) {
             const condText = condition ?? (field ? `${field} == ${JSON.stringify(value)}` : rule.type);
             return (
               <tr key={rule.name} className="border-t border-zinc-800 first:border-t-0">
-                <td className="py-1 pr-2 font-mono text-zinc-300 whitespace-nowrap">
+                <td className="py-0.5 pr-2 font-mono text-zinc-300 whitespace-nowrap">
                   {rule.name}
                 </td>
-                <td className="py-1 pr-2 font-mono text-zinc-500 max-w-[180px] truncate">
+                <td className="py-0.5 pr-2 font-mono text-zinc-500 max-w-[180px] truncate">
                   {condText}
                 </td>
-                <td className={cn("py-1 whitespace-nowrap font-medium", ACTION_COLORS[action] ?? "text-zinc-400")}>
+                <td className={cn("py-0.5 whitespace-nowrap font-medium", ACTION_COLORS[action] ?? "text-zinc-400")}>
                   {action}
                   {target && <span className="text-zinc-500"> → {target}</span>}
                 </td>
@@ -115,6 +148,117 @@ function ExitRuleTooltip({ rules }: { rules: ExitRule[] }) {
           })}
         </tbody>
       </table>
+    </>
+  );
+}
+
+function StepTooltip({
+  stepDef,
+  latestRun,
+  latestRuns,
+}: {
+  stepDef: StepDefinition;
+  latestRun: StepRun | null;
+  latestRuns?: Record<string, StepRun>;
+}) {
+  const hasInputs = stepDef.inputs.length > 0;
+  const hasOutputs = stepDef.outputs.length > 0;
+  const hasExitRules = stepDef.exit_rules.length > 0;
+
+  return (
+    <div className="absolute left-0 top-full mt-1 z-50 bg-zinc-900/95 backdrop-blur-sm border border-zinc-700 rounded-lg shadow-2xl p-2.5 min-w-[280px] max-w-[400px]">
+      {/* Header: executor type */}
+      <div className="flex items-center gap-1.5 mb-2 pb-1.5 border-b border-zinc-800">
+        <span className="text-zinc-400">
+          {executorIcon(stepDef.executor.type, "w-3.5 h-3.5")}
+        </span>
+        <span className="text-[11px] font-medium text-zinc-300">
+          {executorLabel(stepDef.executor.type)}
+        </span>
+        {stepDef.when && (
+          <span className="ml-auto text-[9px] font-mono text-amber-400/80 bg-amber-500/10 rounded px-1 py-0.5">
+            when: {stepDef.when.length > 30 ? stepDef.when.slice(0, 28) + "..." : stepDef.when}
+          </span>
+        )}
+      </div>
+
+      {/* Inputs */}
+      {hasInputs && (
+        <div className="mb-2">
+          <div className="flex items-center gap-1 text-[10px] font-medium text-zinc-400 uppercase tracking-wide mb-0.5">
+            <ArrowRight className="w-2.5 h-2.5" />
+            Inputs
+          </div>
+          <div className="space-y-0.5">
+            {stepDef.inputs.map((input) => {
+              const sourceStep = input.source_step;
+              const sourceField = input.source_field;
+              const sourceRun = sourceStep && sourceStep !== "$job" ? latestRuns?.[sourceStep] : null;
+              const resolvedValue = sourceRun?.result?.artifact?.[sourceField];
+              const hasValue = resolvedValue !== undefined;
+
+              return (
+                <div key={input.local_name} className="flex items-baseline gap-1 text-[10px] font-mono">
+                  <span className="text-cyan-400/80">{input.local_name}</span>
+                  <span className="text-zinc-600">←</span>
+                  <span className="text-zinc-500 truncate">
+                    {input.any_of_sources
+                      ? `any_of(${input.any_of_sources.map((s) => `${s.step}.${s.field}`).join(", ")})`
+                      : `${sourceStep}.${sourceField}`}
+                  </span>
+                  {hasValue && (
+                    <span className="text-zinc-600 truncate max-w-[120px]" title={String(resolvedValue)}>
+                      = {formatTooltipValue(resolvedValue, 20)}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Outputs */}
+      {hasOutputs && (
+        <div className="mb-2">
+          <div className="flex items-center gap-1 text-[10px] font-medium text-zinc-400 uppercase tracking-wide mb-0.5">
+            <ArrowLeft className="w-2.5 h-2.5" />
+            Outputs
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {stepDef.outputs.map((output) => {
+              const outputValue = latestRun?.result?.artifact?.[output];
+              const hasValue = outputValue !== undefined;
+              return (
+                <span
+                  key={output}
+                  className={cn(
+                    "text-[10px] font-mono rounded px-1.5 py-0.5",
+                    hasValue
+                      ? "text-emerald-400 bg-emerald-500/10"
+                      : "text-zinc-500 bg-zinc-800"
+                  )}
+                  title={hasValue ? `${output} = ${formatTooltipValue(outputValue)}` : output}
+                >
+                  {output}
+                  {hasValue && (
+                    <span className="text-emerald-500/60 ml-1">
+                      {formatTooltipValue(outputValue, 16)}
+                    </span>
+                  )}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Exit rules */}
+      {hasExitRules && (
+        <div className={cn(hasInputs || hasOutputs ? "pt-1.5 border-t border-zinc-800" : "")}>
+          <ExitRulesSection rules={stepDef.exit_rules} />
+        </div>
+      )}
     </div>
   );
 }
@@ -122,6 +266,7 @@ function ExitRuleTooltip({ rules }: { rules: ExitRule[] }) {
 export function StepNode({
   stepDef,
   latestRun,
+  latestRuns,
   maxAttempts,
   isSelected,
   onClick,
@@ -135,6 +280,7 @@ export function StepNode({
   height,
 }: StepNodeProps) {
   const [showTooltip, setShowTooltip] = useState(false);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Enter" || e.key === " ") {
@@ -157,15 +303,35 @@ export function StepNode({
   const attempt = latestRun?.attempt ?? 0;
   const showAttemptBadge = attempt > 1 || (maxAttempts != null && attempt >= 1);
 
+  const hasTooltipContent =
+    stepDef.exit_rules.length > 0 ||
+    stepDef.inputs.length > 0 ||
+    stepDef.outputs.length > 0 ||
+    !!stepDef.when;
+
+  const handleMouseEnter = () => {
+    if (!hasTooltipContent) return;
+    hoverTimerRef.current = setTimeout(() => setShowTooltip(true), 300);
+  };
+
+  const handleMouseLeave = () => {
+    if (hoverTimerRef.current) {
+      clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+    setShowTooltip(false);
+  };
+
   return (
     <div
       className={cn(
-        "absolute cursor-pointer border rounded-lg p-3",
-        "transition-shadow duration-200",
+        "absolute cursor-pointer border border-l-[3px] rounded-lg p-3 pl-2.5",
+        "transition-all duration-200",
         colors.bg,
         colors.border,
+        getExecutorAccent(stepDef.executor.type),
         isSelected && `ring-2 ${colors.ring} shadow-lg`,
-        !isSelected && "hover:shadow-md focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:shadow-lg",
+        !isSelected && "hover:shadow-md hover:brightness-110 focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:shadow-lg",
         status === "running" && "shadow-blue-500/20 shadow-md"
       )}
       role="button"
@@ -173,11 +339,19 @@ export function StepNode({
       style={{ left: x, top: y, width, height }}
       onClick={onClick}
       onKeyDown={handleKeyDown}
-      onMouseEnter={() => stepDef.exit_rules.length > 0 && setShowTooltip(true)}
-      onMouseLeave={() => setShowTooltip(false)}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
     >
-      {/* Top handle */}
-      <div className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-zinc-700 border-2 border-zinc-600" />
+      {/* Top handle — color-matched to status */}
+      <div className={cn(
+        "absolute -top-1.5 left-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full border-2",
+        status === "pending" ? "bg-zinc-700 border-zinc-600" :
+        status === "running" ? "bg-blue-500/60 border-blue-400/60" :
+        status === "completed" ? "bg-emerald-500/60 border-emerald-400/60" :
+        status === "failed" ? "bg-red-500/60 border-red-400/60" :
+        status === "suspended" ? "bg-amber-500/60 border-amber-400/60" :
+        "bg-zinc-700 border-zinc-600"
+      )} />
 
       {/* Content */}
       <div className="flex items-start justify-between gap-2">
@@ -250,12 +424,24 @@ export function StepNode({
         )}
       </div>
 
-      {/* Bottom handle */}
-      <div className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-zinc-700 border-2 border-zinc-600" />
+      {/* Bottom handle — color-matched to status */}
+      <div className={cn(
+        "absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full border-2",
+        status === "pending" ? "bg-zinc-700 border-zinc-600" :
+        status === "running" ? "bg-blue-500/60 border-blue-400/60" :
+        status === "completed" ? "bg-emerald-500/60 border-emerald-400/60" :
+        status === "failed" ? "bg-red-500/60 border-red-400/60" :
+        status === "suspended" ? "bg-amber-500/60 border-amber-400/60" :
+        "bg-zinc-700 border-zinc-600"
+      )} />
 
-      {/* Exit rule tooltip */}
-      {showTooltip && stepDef.exit_rules.length > 0 && (
-        <ExitRuleTooltip rules={stepDef.exit_rules} />
+      {/* Rich step tooltip on hover */}
+      {showTooltip && hasTooltipContent && (
+        <StepTooltip
+          stepDef={stepDef}
+          latestRun={latestRun}
+          latestRuns={latestRuns}
+        />
       )}
     </div>
   );
