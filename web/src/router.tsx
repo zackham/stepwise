@@ -34,6 +34,10 @@ const jobsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/jobs",
   component: JobDashboard,
+  validateSearch: (search: Record<string, unknown>): { q?: string; status?: string } => ({
+    q: typeof search.q === "string" && search.q ? search.q : undefined,
+    status: typeof search.status === "string" && search.status ? search.status : undefined,
+  }),
 });
 
 // Job detail
