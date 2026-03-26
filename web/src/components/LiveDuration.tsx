@@ -11,7 +11,7 @@ export const LiveDuration = memo(function LiveDuration({ startTime, endTime }: L
 
   useEffect(() => {
     if (!startTime || endTime) return;
-    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    const id = setInterval(() => setTick((t) => t + 1), 100);
     return () => clearInterval(id);
   }, [startTime, endTime]);
 
