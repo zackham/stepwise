@@ -1,8 +1,10 @@
 import { useState } from "react";
 import type { ContainerPort, HierarchicalDagNode } from "@/lib/dag-layout";
 import type { StepRun } from "@/lib/types";
+import { tryParseJsonValue } from "@/lib/utils";
 
-function formatPreview(value: unknown, maxLen: number = 30): string {
+function formatPreview(rawValue: unknown, maxLen: number = 30): string {
+  const value = tryParseJsonValue(rawValue);
   if (value === null || value === undefined) return "null";
   if (typeof value === "boolean") return String(value);
   if (typeof value === "number") return String(value);
@@ -15,7 +17,8 @@ function formatPreview(value: unknown, maxLen: number = 30): string {
   return String(value);
 }
 
-function formatTooltipValue(value: unknown): string {
+function formatTooltipValue(rawValue: unknown): string {
+  const value = tryParseJsonValue(rawValue);
   if (value === null || value === undefined) return "null";
   if (typeof value === "string") return value;
   if (typeof value === "boolean" || typeof value === "number") return String(value);

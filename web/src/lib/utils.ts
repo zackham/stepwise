@@ -6,6 +6,23 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 /**
+ * If `value` is a string that looks like a JSON array or object, parse and return it.
+ * Otherwise return the original value unchanged.
+ */
+export function tryParseJsonValue(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trimStart();
+  if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  }
+  return value;
+}
+
+/**
  * Format a duration between two timestamps as a human-readable string.
  * If `end` is null, uses current time (for in-progress durations).
  */
