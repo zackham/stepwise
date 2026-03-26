@@ -142,6 +142,21 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
           />
         </marker>
         <marker
+          id="arrowhead-completed"
+          markerWidth="8"
+          markerHeight="6"
+          refX="7"
+          refY="3"
+          orient="auto"
+          markerUnits="strokeWidth"
+        >
+          <polygon
+            points="0 0, 8 3, 0 6"
+            fill="oklch(0.5 0.1 160)"
+            opacity="0.7"
+          />
+        </marker>
+        <marker
           id="loop-arrow"
           markerWidth="8"
           markerHeight="6"
@@ -171,14 +186,19 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
         const totalHeight = edge.labels.length * LABEL_LINE_HEIGHT;
         const startY = mid.y - 6 - totalHeight / 2 + LABEL_LINE_HEIGHT / 2;
 
-        // Check if target step is active
+        // Check source and target status for edge state
+        const sourceStatus = latestRuns?.[edge.from]?.status;
         const targetStatus = latestRuns?.[edge.to]?.status;
         const isRunning = targetStatus === "running" || targetStatus === "delegated";
         const isSuspended = targetStatus === "suspended";
         const isActive = isRunning || isSuspended;
+        const isCompleted = sourceStatus === "completed" && (
+          targetStatus === "completed" || targetStatus === "running" || targetStatus === "delegated"
+        );
 
         // Data edges are always blue when active (loop edges are orange)
         const activeColor = "oklch(0.6 0.15 250)";
+        const completedColor = "oklch(0.5 0.1 160)"; // muted emerald
 
         const pathD = buildPath(edge.points);
 
@@ -195,18 +215,35 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
                 strokeLinecap="round"
               />
             )}
+            {/* Subtle glow for completed edges */}
+            {isCompleted && !isActive && (
+              <path
+                d={pathD}
+                fill="none"
+                stroke={completedColor}
+                strokeWidth={4}
+                opacity={0.08}
+                strokeLinecap="round"
+              />
+            )}
             <path
               d={pathD}
               fill="none"
               stroke={
                 isActive
                   ? activeColor
-                  : isSequencingOnly ? "oklch(0.35 0 0)" : "oklch(0.4 0 0)"
+                  : isCompleted
+                    ? completedColor
+                    : isSequencingOnly ? "oklch(0.35 0 0)" : "oklch(0.4 0 0)"
               }
-              strokeWidth={isActive ? 2 : isSequencingOnly ? 1 : 1.5}
+              strokeWidth={isActive ? 2 : isCompleted ? 1.5 : isSequencingOnly ? 1 : 1.5}
               strokeDasharray={isActive ? "8 12" : isSequencingOnly ? "4 3" : "none"}
-              markerEnd={isActive ? "url(#arrowhead-active)" : "url(#arrowhead)"}
-              opacity={isActive ? 0.8 : isSequencingOnly ? 0.4 : 0.5}
+              markerEnd={
+                isActive ? "url(#arrowhead-active)"
+                  : isCompleted ? "url(#arrowhead-completed)"
+                    : "url(#arrowhead)"
+              }
+              opacity={isActive ? 0.8 : isCompleted ? 0.7 : isSequencingOnly ? 0.4 : 0.5}
               className={isActive ? "edge-active" : undefined}
             />
             {edge.labels.map((field, fi) => {

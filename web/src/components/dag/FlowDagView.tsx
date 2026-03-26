@@ -719,6 +719,7 @@ export function FlowDagView({
               <StepNode
                 stepDef={stepDef}
                 latestRun={latestRuns[node.id] ?? null}
+                latestRuns={latestRuns}
                 maxAttempts={maxAttemptsMap[node.id] ?? null}
                 isSelected={selectedStep === node.id}
                 onClick={() =>
