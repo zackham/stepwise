@@ -1,6 +1,12 @@
 import { useState } from "react";
 import { ChevronRight, ChevronDown, Copy, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+  TooltipProvider,
+} from "@/components/ui/tooltip";
 
 type StringClass =
   | { type: "inline" }
@@ -77,6 +83,76 @@ function BlockString({ value, name }: { value: string; name?: string }) {
   );
 }
 
+function JsonStringWrapper({
+  raw,
+  parsed,
+  name,
+  defaultExpanded,
+  depth,
+}: {
+  raw: string;
+  parsed: unknown;
+  name?: string;
+  defaultExpanded: boolean;
+  depth: number;
+}) {
+  const [showRaw, setShowRaw] = useState(false);
+
+  const badge = (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger
+          onClick={() => setShowRaw(!showRaw)}
+          className={cn(
+            "inline-flex items-center gap-0.5 text-[10px] rounded px-1 py-0 transition-colors shrink-0 cursor-pointer",
+            showRaw
+              ? "text-zinc-400 bg-zinc-500/10 border border-zinc-500/20 hover:text-zinc-200 hover:bg-zinc-500/20"
+              : "text-amber-400 bg-amber-500/10 border border-amber-500/20 hover:text-amber-300 hover:bg-amber-500/20"
+          )}
+        >
+          {showRaw ? "raw" : "JSON string"}
+        </TooltipTrigger>
+        <TooltipContent>
+          {showRaw
+            ? "Value is a string containing valid JSON — click to view parsed"
+            : "Value is a string containing valid JSON — click to view raw"}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+
+  if (showRaw) {
+    const hasNewlines = raw.includes("\n");
+    return (
+      <div>
+        <div className="flex items-center gap-1.5 mb-0.5">
+          {name && <span className="text-zinc-400 text-sm mr-1">{name}:</span>}
+          {badge}
+        </div>
+        {hasNewlines ? (
+          <BlockString value={raw} />
+        ) : (
+          <span className="text-zinc-200 text-sm break-all">{raw}</span>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <div className="min-w-0">
+        <JsonView
+          data={parsed}
+          name={name}
+          defaultExpanded={defaultExpanded}
+          depth={depth}
+        />
+      </div>
+      {badge}
+    </div>
+  );
+}
+
 interface JsonViewProps {
   data: unknown;
   name?: string;
@@ -118,8 +194,9 @@ export function JsonView({
 
     if (cls.type === "json") {
       return (
-        <JsonView
-          data={cls.parsed}
+        <JsonStringWrapper
+          raw={data}
+          parsed={cls.parsed}
           name={name}
           defaultExpanded={depth < 1}
           depth={depth + 1}
