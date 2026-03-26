@@ -27,10 +27,12 @@ import {
   Minimize2,
   Copy,
   Check,
+  Columns,
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { useAgentOutput } from "@/hooks/useStepwise";
 import { FulfillWatchDialog } from "./FulfillWatchDialog";
+import { RunComparisonView } from "./RunComparisonView";
 import { cn, formatDuration } from "@/lib/utils";
 import { executorIcon } from "@/lib/executor-utils";
 
@@ -194,6 +196,7 @@ export function StepDetailPanel({
   const [fulfillDialogOpen, setFulfillDialogOpen] = useState(false);
   const [agentViewMode, setAgentViewMode] = useState<"stream" | "raw">("stream");
   const [copiedErrorRunId, setCopiedErrorRunId] = useState<string | null>(null);
+  const [compareMode, setCompareMode] = useState(false);
 
   const { data: configData } = useConfig();
   const isSubscription = configData?.billing_mode === "subscription";
@@ -463,12 +466,33 @@ export function StepDetailPanel({
 
           {/* Run History */}
           <div ref={runHistoryRef}>
-            <h4 className="text-xs font-medium text-zinc-500 uppercase tracking-wide mb-2">
-              Run History ({sortedRuns.length})
-            </h4>
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-xs font-medium text-zinc-500 uppercase tracking-wide">
+                Run History ({sortedRuns.length})
+              </h4>
+              {sortedRuns.length >= 2 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-6 text-xs gap-1"
+                  onClick={() => setCompareMode(!compareMode)}
+                >
+                  <Columns className="w-3 h-3" />
+                  {compareMode ? "List View" : "Compare"}
+                </Button>
+              )}
+            </div>
 
             {sortedRuns.length === 0 ? (
               <div className="text-zinc-500 text-sm">No runs yet</div>
+            ) : compareMode ? (
+              <RunComparisonView
+                runs={sortedRuns}
+                stepDef={stepDef}
+                exitResolutions={exitResolutions}
+                expanded={expanded}
+                isSubscription={isSubscription}
+              />
             ) : (
               <Accordion
                 key={stepDef.name}
