@@ -357,6 +357,7 @@ export function JobList({
                 onClick={() => onSelectJob(job.id)}
                 className={cn(
                   "w-full text-left px-3 py-1.5 rounded-md transition-colors",
+                  "border-b border-zinc-800/50 last:border-b-0",
                   "hover:bg-zinc-800/50",
                   selectedJobId === job.id
                     ? "bg-zinc-800 ring-1 ring-zinc-700"
