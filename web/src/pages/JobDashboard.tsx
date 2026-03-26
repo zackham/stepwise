@@ -1,12 +1,15 @@
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useCallback } from "react";
 import { JobList } from "@/components/jobs/JobList";
+import { JobSummaryBar } from "@/components/jobs/JobSummaryBar";
 import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
+import { useJobs } from "@/hooks/useStepwise";
 import { Workflow } from "lucide-react";
 
 export function JobDashboard() {
   const navigate = useNavigate();
   const { q, status } = useSearch({ from: "/jobs" });
+  const { data: jobs = [] } = useJobs();
 
   const setQuery = useCallback(
     (value: string) => {
@@ -39,6 +42,7 @@ export function JobDashboard() {
             onCreated={(jobId) => navigate({ to: "/jobs/$jobId", params: { jobId } })}
           />
         </div>
+        <JobSummaryBar jobs={jobs} />
         <div className="flex-1 overflow-hidden">
           <JobList
             selectedJobId={null}
