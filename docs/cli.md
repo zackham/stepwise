@@ -8,13 +8,13 @@ See [Quickstart](quickstart.md) for installation and first-run instructions.
 
 | Group | Commands |
 |-------|----------|
-| [Core](#core-commands) | `run`, `new`, `validate`, `check`, `preflight` |
+| [Core](#core-commands) | `run`, `new`, `validate`, `check`, `preflight`, `test-fixture` |
 | [Jobs](#job-commands) | `jobs`, `status`, `output`, `tail`, `logs`, `wait`, `cancel`, `fulfill`, `list` |
 | [Job Staging](#job-staging-commands) | `job create`, `job show`, `job run`, `job dep`, `job cancel`, `job rm` |
 | [Server](#server-commands) | `server start`, `server stop`, `server restart`, `server status` |
 | [Registry](#registry-commands) | `share`, `get`, `search`, `info`, `login`, `logout` |
 | [Configuration](#configuration-commands) | `config`, `init`, `templates`, `schema`, `diagram` |
-| [Utility](#utility-commands) | `agent-help`, `cache`, `update`, `welcome`, `uninstall` |
+| [Utility](#utility-commands) | `agent-help`, `flows`, `extensions`, `docs`, `cache`, `version`, `update`, `welcome`, `uninstall` |
 
 ## Global Flags
 
@@ -232,6 +232,24 @@ stepwise preflight my-flow.flow.yaml --input api_key=sk-test
 
 ---
 
+### `stepwise test-fixture`
+
+Generate a pytest test harness for a flow. Produces a ready-to-run test file with `CallableExecutor` stubs for each step, `WorkflowDefinition` matching the flow, and assertions on expected outputs.
+
+```bash
+stepwise test-fixture my-flow.flow.yaml               # print to stdout
+stepwise test-fixture my-flow.flow.yaml -o tests/test_my_flow.py
+```
+
+The generated test uses `register_step_fn()` and `run_job_sync()` from the standard test fixtures (see [Testing](../CLAUDE.md#testing)).
+
+| Flag | Description |
+|------|-------------|
+| `flow` | Flow name or path to `.flow.yaml` file (positional) |
+| `-o, --output PATH` | Output file path (default: stdout) |
+
+---
+
 ## Job Commands
 
 ### `stepwise jobs`
@@ -356,15 +374,25 @@ stepwise logs job-a1b2c3d4
 
 ### `stepwise wait`
 
-Block until an existing job reaches a terminal state or all progress is blocked by suspensions.
+Block until one or more existing jobs reach a terminal state or all progress is blocked by suspensions.
 
 ```bash
 stepwise wait job-a1b2c3d4
+stepwise wait job-a1b2c3d4 job-e5f6g7h8 --all     # wait for all to finish
+stepwise wait job-a1b2c3d4 job-e5f6g7h8 --any     # wait for first to finish
 ```
 
-Returns the same JSON format as stepwise run --wait. Blocks indefinitely until the job reaches a terminal state. Exit code 0 for completion, 1 for failure, 5 for suspension.
+Returns the same JSON format as `stepwise run --wait`. Exit code 0 for completion, 1 for failure, 5 for suspension.
 
-Useful for attaching to a job started with --async or for re-checking a job after fulfilling a step without using fulfill --wait.
+Useful for attaching to a job started with `--async`, or for re-checking a job after fulfilling a step without using `fulfill --wait`.
+
+Unlike `stepwise run --wait` (which creates and waits on a new job), `stepwise wait` attaches to an already-running job.
+
+| Flag | Description |
+|------|-------------|
+| `JOB_ID` | One or more job IDs (positional, repeatable) |
+| `--all` | Wait for all specified jobs to reach terminal state |
+| `--any` | Wait for the first specified job to reach terminal state |
 
 ---
 
@@ -912,9 +940,53 @@ The `--update` flag finds `<!-- stepwise-agent-help -->` / `<!-- /stepwise-agent
 
 ---
 
+### `stepwise flows`
+
+List all flows discovered in the current project. Scans the project root, `flows/`, and `.stepwise/flows/` for `.flow.yaml` files.
+
+```bash
+stepwise flows
+```
+
+---
+
+### `stepwise extensions`
+
+List discovered extensions. Stepwise extensions are executables on `PATH` matching the `stepwise-*` naming convention.
+
+```bash
+stepwise extensions list
+stepwise extensions list --refresh     # bypass cache, force fresh scan
+```
+
+| Flag | Description |
+|------|-------------|
+| `--refresh` | Bypass cache and force a fresh scan |
+
+---
+
+### `stepwise docs`
+
+Print reference documentation to the terminal. Useful for quick lookups without leaving the CLI.
+
+```bash
+stepwise docs                  # list available topics
+stepwise docs patterns         # show patterns reference
+stepwise docs cli              # show CLI reference
+stepwise docs executors        # show executor reference
+```
+
+| Argument | Description |
+|----------|-------------|
+| `topic` | Documentation topic (e.g., `patterns`, `cli`, `executors`). Omit to list available topics. |
+
+---
+
 ### `stepwise cache`
 
 Manage the step result cache. Cached results are stored in `.stepwise/cache/results.db`.
+
+To bypass the cache for a specific step during a run, use `stepwise run --rerun <step>` (see [`run` flags](#stepwise-run)).
 
 ---
 
@@ -979,6 +1051,18 @@ If already on the latest version:
 Upgrading via uv...
 Already up to date (0.2.0).
 ```
+
+---
+
+### `stepwise version`
+
+Print the installed stepwise version and exit.
+
+```bash
+stepwise version
+```
+
+Equivalent to `stepwise --version`.
 
 ---
 
