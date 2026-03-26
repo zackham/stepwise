@@ -1989,10 +1989,10 @@ def _flow_template_yaml(name: str, template: str) -> str:
             f"        action: loop\n"
             f"        target: implement\n"
         )
-    elif template == "human-approval":
+    elif template == "external-approval":
         return (
             f"name: {name}\n"
-            f"description: Agent task with human approval loop\n"
+            f"description: Agent task with external approval loop\n"
             f"\n"
             f"steps:\n"
             f"  draft:\n"
