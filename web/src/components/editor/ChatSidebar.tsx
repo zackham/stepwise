@@ -1,4 +1,4 @@
-import { MessageSquare, X, Trash2 } from "lucide-react";
+import { X } from "lucide-react";
 import { ChatMessages } from "./ChatMessages";
 import { ChatInput } from "./ChatInput";
 import type { ChatMessage, AgentMode } from "@/hooks/useEditorChat";
@@ -31,29 +31,7 @@ export function ChatSidebar({
   onRemoveStepContext,
 }: ChatSidebarProps) {
   return (
-    <div className="w-80 border-l border-border shrink-0 flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-border shrink-0">
-        <div className="flex items-center gap-2 min-w-0">
-          <MessageSquare className="w-3.5 h-3.5 text-violet-400 shrink-0" />
-          <span className="text-xs font-medium text-foreground">Chat</span>
-          {messages.length > 0 && (
-            <span className="text-[10px] text-zinc-600">
-              {messages.length} msg{messages.length !== 1 && "s"}
-            </span>
-          )}
-        </div>
-        {messages.length > 0 && (
-          <button
-            onClick={onReset}
-            className="text-zinc-600 hover:text-zinc-400 p-0.5"
-            title="Clear conversation"
-          >
-            <Trash2 className="w-3 h-3" />
-          </button>
-        )}
-      </div>
-
+    <div className="flex flex-col flex-1 min-h-0">
       {/* Messages area */}
       <ChatMessages
         messages={messages}
