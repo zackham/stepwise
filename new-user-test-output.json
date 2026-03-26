@@ -1,70 +1,75 @@
 {
-  "flow_yaml": "name: my-first-flow\ndescription: Simple two-step fetch and summarize\n\nsteps:\n  fetch:\n    run: |\n      echo '{\"data\": \"hello world\"}'\n    outputs: [data]\n\n  summarize:\n    run: |\n      echo \"{\\\"summary\\\": \\\"processed: $data\\\"}\"\n    inputs:\n      data: fetch.data\n    outputs: [summary]\n",
+  "flow_yaml": "name: my-first-flow\nsteps:\n  fetch:\n    run: |\n      echo '{\"data\": \"hello world\"}'\n    outputs: [data]\n\n  summarize:\n    run: |\n      echo \"{\\\"summary\\\": \\\"processed: $data\\\"}\"\n    inputs:\n      data: fetch.data\n    outputs: [summary]\n",
   "success": true,
   "confusion_points": [
     {
-      "description": "No minimal 2-step hello-world in docs — quickstart jumps to a 4-step code-review with agent/human executors",
+      "description": "README doesn't directly show a minimal script-only flow — the quickstart example uses agent and external executors which require API keys",
       "severity": "minor",
       "resolved": true,
-      "how_resolved": "The code-review example in quickstart.md still shows `run:` shorthand and `inputs:` syntax clearly enough to extrapolate a simpler flow. examples/report-test-failure.flow.yaml is a pure-script flow."
+      "how_resolved": "Found flows/rapid-test.flow.yaml which shows a minimal script step with echo + JSON"
     },
     {
-      "description": "How script executor passes inputs as env vars ($data in run: block) not explicitly called out in quickstart — only shown by example",
+      "description": "Not immediately clear how shell variables from inputs are injected — is it $data or $STEPWISE_INPUT_DATA?",
       "severity": "minor",
       "resolved": true,
-      "how_resolved": "Welcome FLOW.yaml uses $feature, $plan in shell scripts, showing inputs become shell variables. README code-review example also uses $diff_summary in prompt fields. Inferred the same applies to `run:` blocks."
+      "how_resolved": "README code-review example shows $var syntax in run blocks (e.g. $diff_summary), and the welcome flow confirms this pattern extensively"
     },
     {
-      "description": "`stepwise validate` not mentioned in quickstart — quickstart goes straight to `stepwise run`",
+      "description": "README quickstart section says 'Create code-review.flow.yaml' but doesn't mention what directory to put it in or whether stepwise init is needed first",
       "severity": "minor",
       "resolved": true,
-      "how_resolved": "Found `validate` in README CLI table and confirmed via `stepwise --help`"
+      "how_resolved": "Tried running from /tmp and it worked fine — no .stepwise/ directory required for basic flows"
+    },
+    {
+      "description": "No simple hello-world or two-step script tutorial in quickstart — jumps straight to a 4-step flow with agent and external executors",
+      "severity": "moderate",
+      "resolved": true,
+      "how_resolved": "Pieced together the pattern from rapid-test.flow.yaml and the parallel-research example"
     }
   ],
   "docs_consulted": [
     "README.md",
     "docs/quickstart.md",
     "flows/welcome/FLOW.yaml",
-    "examples/report-test-failure.flow.yaml",
-    "stepwise --help",
-    "stepwise validate --help"
+    "flows/rapid-test.flow.yaml",
+    "examples/report-test-parallel.flow.yaml"
   ],
   "evidence": [
     {
       "id": "NU1",
-      "requirement": "README or docs explain how to create a flow file",
+      "requirement": "README explains how to create a flow",
       "result": "pass",
-      "evidence": "quickstart.md 'Create your own flow' section (line 29) walks through creating a .flow.yaml with full YAML example and per-step explanations. README lines 57-101 also show a complete inline code-review.flow.yaml."
+      "evidence": "README.md has inline code-review.flow.yaml example and links to docs/quickstart.md which has a 'Create your own flow' section with a complete walkthrough"
     },
     {
       "id": "NU2",
       "requirement": "Input binding syntax (step.field, $job.field) is documented",
       "result": "pass",
-      "evidence": "quickstart.md shows `diff_summary: gather-context.diff_summary` (step.field syntax) and line 80 explains 'Dependencies are implicit from inputs'. README line 164 shows `--var repo_path=...` for $job inputs."
+      "evidence": "Quickstart explains 'Dependencies are implicit from inputs:'. The code-review example shows 'diff_summary: gather-context.diff_summary' syntax. $job.field syntax shown in quickstart --input example and welcome flow ($job.team_name)"
     },
     {
       "id": "NU3",
       "requirement": "Output declaration syntax is documented",
       "result": "pass",
-      "evidence": "quickstart.md shows `outputs: [diff_summary, commits]` and explains 'Runs shell commands, parses JSON from stdout' — keys in stdout JSON match the outputs list. Pattern consistent across all examples."
+      "evidence": "Both README and quickstart examples show 'outputs: [field1, field2]' syntax on every step definition"
     },
     {
       "id": "NU4",
       "requirement": "stepwise validate is documented as a way to check flows",
       "result": "pass",
-      "evidence": "README CLI table line 132: 'stepwise validate <flow>   Check a flow for errors'. Also discoverable via `stepwise --help`. Note: quickstart.md does NOT mention validate — minor gap."
+      "evidence": "README CLI section lists 'stepwise validate <flow>   Check a flow for errors'"
     },
     {
       "id": "NU5",
       "requirement": "At least one complete example flow is available to reference",
       "result": "pass",
-      "evidence": "flows/welcome/FLOW.yaml is a comprehensive 351-line demo. examples/ has 4 additional flow files (report-test-failure, report-test-linear, report-test-loop, report-test-parallel). README and quickstart both contain inline complete examples."
+      "evidence": "Multiple example flows available: flows/welcome/FLOW.yaml (comprehensive), flows/rapid-test.flow.yaml (minimal), examples/report-test-parallel.flow.yaml (fan-out pattern)"
     },
     {
       "id": "NU6",
-      "requirement": "The flow built validates and would run correctly",
+      "requirement": "The flow you built validates and would run correctly",
       "result": "pass",
-      "evidence": "`uv run stepwise validate my-first-flow.flow.yaml` returned '✓ my-first-flow.flow.yaml (2 steps)' with no errors or warnings."
+      "evidence": "Flow passed 'stepwise validate' with no errors/warnings, and ran successfully with 'stepwise run' completing both steps in 0.1s"
     }
   ],
   "score_pct": 100

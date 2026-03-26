@@ -6,7 +6,7 @@
       "description": "Empty file validation",
       "result": "handled",
       "severity": "minor",
-      "detail": "Validator returned clear error: 'YAML root must be a mapping' with exit code 1."
+      "detail": "Validator returned clear error: 'YAML root must be a mapping'. Exit code 1."
     },
     {
       "test_number": 2,
@@ -14,123 +14,120 @@
       "description": "Binary content validation",
       "result": "handled",
       "severity": "minor",
-      "detail": "Validator returned clear error: UTF-8 decode failure. No stack trace. Binary content caught at decoding stage before YAML parsing."
+      "detail": "Validator returned clear error: \"'utf-8' codec can't decode byte 0x91 in position 3\". Exit code 1."
     },
     {
       "test_number": 3,
       "category": "malformed_yaml",
-      "description": "Deeply nested YAML (52 levels)",
-      "result": "silent_ignore",
+      "description": "Deeply nested YAML (55 levels)",
+      "result": "handled",
       "severity": "minor",
-      "detail": "52-level deep nesting under config: accepted silently. No crash, hang, or stack overflow. Technically valid since config is opaque to the validator, but no depth limit exists."
+      "detail": "Validated successfully with no issues. Parser handles deeply nested structures fine."
     },
     {
       "test_number": 4,
       "category": "malformed_yaml",
-      "description": "10,000 character step name",
+      "description": "10,000-character step name",
       "result": "handled",
       "severity": "minor",
-      "detail": "YAML parser caught the issue: 'mapping values are not allowed here' at column 10003. Exit code 1. No memory issues."
+      "detail": "YAML parse error returned: 'mapping values are not allowed here'. The extremely long key triggers a YAML parser limitation. Exit code 1."
     },
     {
       "test_number": 5,
       "category": "malformed_yaml",
-      "description": "Unicode bomb — emoji, RTL, null bytes in step names",
-      "result": "silent_ignore",
-      "severity": "major",
-      "detail": "Null byte correctly rejected by PyYAML. However, emoji (🔥step) and RTL (بstep) step names pass validation with no warning, violating the documented kebab-case convention. These could cause undefined behavior in shell interpolation, DAG rendering, or dependency referencing. No step name pattern enforcement exists."
+      "description": "Unicode bomb (emoji, RTL, null bytes)",
+      "result": "handled",
+      "severity": "minor",
+      "detail": "YAML parse error: 'unacceptable character #x0000: special characters are not allowed'. Null bytes are rejected at the YAML parser level. Exit code 1."
     },
     {
       "test_number": 6,
       "category": "injection",
-      "description": "Shell injection via input variable in run: command",
+      "description": "Shell injection via input value with quote escaping",
       "result": "vulnerable",
       "severity": "blocker",
-      "detail": "CONFIRMED VULNERABLE. _interpolate_config() in engine.py uses Template.safe_substitute() to inject raw input values into the 'command' config field before subprocess.run(shell=True). With 'run: echo $user_input' and input '; rm /tmp/stepwise-injection-test/marker; echo pwned', the marker file was deleted. The semicolons are interpreted by the shell because the value is string-interpolated directly into the command text. Inputs are ALSO set as env vars (safe by itself), but Template substitution replaces $var in the command first. When $var is inside double quotes in the script, the shell treats metacharacters as literals (safe). When unquoted, full shell injection is possible. The step fails on output validation but the injected command still executes."
+      "detail": "Input value 'hello\"; touch /tmp/.../pwned; echo \"done' successfully broke out of double-quoted context in the run: script and executed arbitrary commands. The /tmp/.../pwned file was created, confirming command execution. Root cause: shlex.quote() wraps values in single quotes, which are ineffective inside bash double-quoted strings. When flow authors write run: 'echo \"$var\"' (natural pattern), injected double-quotes close the DQ context and semicolons become command separators."
     },
     {
       "test_number": 7,
       "category": "injection",
-      "description": "YAML anchor bomb (billion laughs variant)",
+      "description": "YAML anchor bomb (billion laughs)",
       "result": "handled",
       "severity": "minor",
-      "detail": "PyYAML uses Python object references for anchors — not exponential copies — so memory stays bounded. The bomb's list-of-lists structure is also structurally incompatible with stepwise's mapping-based YAML schema, causing a parse error before processing. No memory exhaustion, completed in <1s."
+      "detail": "YAML with 8 levels of 10x anchor expansion (10^8 potential items) validated successfully and quickly. Python's YAML library handles anchor resolution efficiently. No observable memory or CPU spike."
     },
     {
       "test_number": 8,
       "category": "injection",
-      "description": "Config interpolation injection via $(command) and backtick syntax",
-      "result": "handled",
-      "severity": "minor",
-      "detail": "Neither $(whoami) nor `whoami` was executed. Values passed as env vars. When the script's run: block doesn't reference the input variable with $var syntax in the command text, Template substitution doesn't trigger and the value stays in the env. Command substitution syntax in values is not auto-expanded."
+      "description": "Config interpolation injection via $(command) and backticks",
+      "result": "vulnerable",
+      "severity": "blocker",
+      "detail": "Both $(whoami) and `whoami` execute when interpolated into double-quoted shell contexts in run: scripts. Results showed the actual username 'zack' wrapped in literal single quotes from shlex.quote(). The shlex.quote() protection is ineffective because: (1) single quotes are literal inside bash DQ strings, (2) both $() and `` are command-substitution operators inside DQ strings. Direct env var access (STEPWISE_INPUT_<name>) is safe — the vulnerability is specifically in the $variable template interpolation path."
     },
     {
       "test_number": 9,
       "category": "resource_exhaustion",
-      "description": "100MB JSON output from a single step",
+      "description": "Huge output (10MB JSON stdout)",
       "result": "handled",
       "severity": "minor",
-      "detail": "Completed successfully in ~2.7s. Full 100MB artifact stored in SQLite without crash or truncation. No artifact size limit exists — repeated large outputs will silently bloat the database. Functionally correct but no guardrails."
+      "detail": "Engine enforces a 5MB artifact size limit. Clear error: 'Step artifact too large: 10.0MB (limit: 5MB). Reduce output size or split into smaller steps.' Job failed gracefully."
     },
     {
       "test_number": 10,
       "category": "resource_exhaustion",
-      "description": "1000-step chained flow validation",
+      "description": "1000 chained steps validation",
       "result": "handled",
       "severity": "minor",
-      "detail": "Validation completed in 0.191s for 1000 serially chained steps. Linear scaling, no quadratic blowup. Excellent performance."
+      "detail": "Validated 1000-step chain in 0.245 seconds. No performance issues. Output: '✓ /tmp/chain1000.flow.yaml (1000 steps)'."
     },
     {
       "test_number": 11,
       "category": "resource_exhaustion",
-      "description": "50 concurrent job starts via REST API",
-      "result": "crashed",
-      "severity": "blocker",
-      "detail": "Server crashed and exited. 50 concurrent POST /api/jobs succeeded, but 50 concurrent start_job calls triggered a race condition in ThreadSafeStore. The _LockedConnection proxy releases the lock between execute() and commit(), allowing a concurrent load_job to read a partially-written row where created_at is None. This hits TypeError in _parse_dt(). The CRITICAL handler then kills the server process. Root cause: lock granularity is per-call, not per-transaction. Traceback: store.py:203 _row_to_job → store.py:28 _parse_dt → TypeError: fromisoformat: argument must be str."
+      "description": "Rapid job creation (50 concurrent API requests)",
+      "result": "handled",
+      "severity": "minor",
+      "detail": "50 concurrent POST requests to /api/jobs completed in 23ms total. Server remained responsive after the burst. FastAPI + SQLite WAL mode handled concurrent writes without locking issues."
     },
     {
       "test_number": 12,
       "category": "edge_case",
-      "description": "Self-referencing non-optional input (circular dependency)",
+      "description": "Self-referencing non-optional input",
       "result": "handled",
       "severity": "minor",
-      "detail": "Validator detected cycle: 'Cycle detected involving steps: loop-step'. Run mode also rejected with structured JSON error and exit code 2. No hang, no crash. Both validate and run stages protected."
+      "detail": "Validator detected the cycle: 'Cycle detected: self-step → (input: data) self-step. Consider adding optional: true to one input binding to break the cycle.' Both validate and run rejected with clear errors."
     },
     {
       "test_number": 13,
       "category": "edge_case",
-      "description": "Step with empty outputs list (outputs: [])",
+      "description": "Empty outputs list (outputs: [])",
       "result": "handled",
       "severity": "minor",
-      "detail": "Validates cleanly and runs to completion. echo '{}' produces empty JSON object, engine accepts it with empty outputs list. Job completed successfully with outputs: [{}]."
+      "detail": "Validated and ran successfully. Step output was captured as {stdout: 'hello world'} rather than matched against declared outputs. Job completed normally."
     },
     {
       "test_number": 14,
       "category": "edge_case",
-      "description": "Special characters in job inputs — newlines, tabs, quotes, backslashes",
+      "description": "Special characters in job inputs (newlines, tabs, quotes, backslashes)",
       "result": "handled",
-      "severity": "major",
-      "detail": "No shell injection — inputs are passed as env vars. However, when the script's run: block uses $var inside shell-quoted strings (e.g., Python -c with single quotes), special characters in the env var value break shell quoting and cause syntax errors. The engine returns a structured JSON error (not a crash). This is a script authoring hazard — well-written scripts should use sys.argv or the JSON input file ($JOB_ENGINE_INPUTS) instead of inline $var expansion."
+      "severity": "minor",
+      "detail": "All special characters preserved correctly through the pipeline. Input with newlines, tabs, double quotes, and backslashes round-tripped via STEPWISE_INPUT_<name> env var and appeared in output artifact with correct escaping."
     }
   ],
   "critical_findings": [
     {
       "test_number": 6,
-      "description": "Shell command injection via unsanitized input variable expansion in script steps",
+      "description": "Shell injection via double-quote escape in input values",
       "severity": "blocker",
-      "detail": "engine.py _interpolate_config() uses Template.safe_substitute() to inject raw input values into executor config strings, including the 'command' field for ScriptExecutor. This happens before subprocess.run(shell=True). Attack vector: any $var reference in a 'run:' command (especially unquoted) where the input comes from untrusted sources. Semicolons, pipes, and other shell metacharacters in input values are interpreted by the shell. Mitigation options: (1) stop interpolating the 'command' config field and rely solely on env vars, (2) shell-escape substituted values with shlex.quote(), or (3) document that $var in run: is unsafe with untrusted input and recommend env var access patterns."
+      "detail": "When a flow's run: script embeds $variable inside double-quoted bash expressions (e.g., echo \"$var\"), an attacker-controlled input value containing double quotes can break out of the quoting context and execute arbitrary shell commands. shlex.quote() is applied but produces single-quoted output, which is ineffective inside bash DQ strings. Proof: input value created the file /tmp/pwned via command injection."
     },
     {
-      "test_number": 11,
-      "description": "Server crash from concurrent job starts — ThreadSafeStore race condition",
+      "test_number": 8,
+      "description": "Command substitution injection via backticks and $() in input values",
       "severity": "blocker",
-      "detail": "50 concurrent start_job API calls crash the server process. ThreadSafeStore's _LockedConnection releases the lock between execute() and commit(), allowing concurrent load_job to read a partially-written row (created_at=None → TypeError). The CRITICAL exception handler then kills the server. Root cause: lock granularity is per-call, not per-transaction. Exploitable by any client sending rapid concurrent requests."
+      "detail": "Both `command` and $(command) syntax in input values are executed as command substitution when interpolated into double-quoted shell contexts via $variable in run: scripts. shlex.quote()'s single-quote wrapping is ineffective inside bash DQ strings. Proof: input '$(whoami)' and '`whoami`' both returned the actual username 'zack'. Mitigation: pass values exclusively via STEPWISE_INPUT_<name> env vars (which are safe) or apply DQ-aware escaping (escape \", $, `, \\ in values destined for shell command keys)."
     }
   ],
-  "handled_well": 10,
-  "silent_failures": 2,
-  "crashed": 1,
-  "vulnerable": 1,
-  "total_tests": 14,
-  "score_pct": 71
+  "handled_well": 12,
+  "silent_failures": 0,
+  "score_pct": 86
 }
