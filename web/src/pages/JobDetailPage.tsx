@@ -19,6 +19,7 @@ import {
   PanelRightOpen,
   ScrollText,
   GitBranch,
+  GanttChart,
   ChevronRight,
   Package,
   Clock,
@@ -383,6 +384,14 @@ export function JobDetailPage() {
             >
               <ScrollText className="w-3.5 h-3.5" />
               Events
+            </Link>
+            <Link
+              to="/jobs/$jobId/timeline"
+              params={{ jobId }}
+              className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-800/50"
+            >
+              <GanttChart className="w-3.5 h-3.5" />
+              Timeline
             </Link>
             <Link
               to="/jobs/$jobId/tree"
