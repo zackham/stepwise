@@ -1,5 +1,6 @@
 import type { DagEdge, LoopEdge } from "@/lib/dag-layout";
 import type { StepRun } from "@/lib/types";
+import { tryParseJsonValue } from "@/lib/utils";
 
 interface SelectedLabel {
   fromStep: string;
@@ -26,7 +27,8 @@ interface DagEdgesProps {
   onLeaveLabel?: () => void;
 }
 
-function formatPreviewValue(value: unknown, maxLen: number): string {
+function formatPreviewValue(rawValue: unknown, maxLen: number): string {
+  const value = tryParseJsonValue(rawValue);
   if (value === null || value === undefined) return "null";
   if (typeof value === "boolean") return String(value);
   if (typeof value === "number") return String(value);
