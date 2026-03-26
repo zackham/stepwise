@@ -147,6 +147,71 @@ describe("StepNode", () => {
     expect(onClick).toHaveBeenCalledOnce();
   });
 
+  it("calls onClick on Enter key", () => {
+    const onClick = vi.fn();
+    render(
+      <StepNode
+        stepDef={makeStepDef()}
+        latestRun={null}
+        {...defaultProps}
+        onClick={onClick}
+      />
+    );
+
+    const node = screen.getByRole("button");
+    fireEvent.keyDown(node, { key: "Enter" });
+
+    expect(onClick).toHaveBeenCalledOnce();
+  });
+
+  it("calls onClick on Space key", () => {
+    const onClick = vi.fn();
+    render(
+      <StepNode
+        stepDef={makeStepDef()}
+        latestRun={null}
+        {...defaultProps}
+        onClick={onClick}
+      />
+    );
+
+    const node = screen.getByRole("button");
+    fireEvent.keyDown(node, { key: " " });
+
+    expect(onClick).toHaveBeenCalledOnce();
+  });
+
+  it("does not call onClick on other keys", () => {
+    const onClick = vi.fn();
+    render(
+      <StepNode
+        stepDef={makeStepDef()}
+        latestRun={null}
+        {...defaultProps}
+        onClick={onClick}
+      />
+    );
+
+    const node = screen.getByRole("button");
+    fireEvent.keyDown(node, { key: "Tab" });
+    fireEvent.keyDown(node, { key: "a" });
+
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it("has focus-visible ring class for keyboard focus", () => {
+    render(
+      <StepNode
+        stepDef={makeStepDef()}
+        latestRun={null}
+        {...defaultProps}
+      />
+    );
+
+    const node = screen.getByRole("button");
+    expect(node.className).toContain("focus-visible:ring-2");
+  });
+
   it("shows attempt N/M badge when maxAttempts is set", () => {
     render(
       <StepNode
