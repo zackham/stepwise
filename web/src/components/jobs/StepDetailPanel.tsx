@@ -18,13 +18,8 @@ import {
   X,
   RefreshCw,
   Clock,
-  Terminal,
-  User,
-  Brain,
-  Cog,
   AlertTriangle,
   Eye,
-  Bot,
   DollarSign,
   StopCircle,
   Gauge,
@@ -36,7 +31,8 @@ import {
 import { useState, useEffect, useRef } from "react";
 import { useAgentOutput } from "@/hooks/useStepwise";
 import { FulfillWatchDialog } from "./FulfillWatchDialog";
-import { cn } from "@/lib/utils";
+import { cn, formatDuration } from "@/lib/utils";
+import { executorIcon } from "@/lib/executor-utils";
 
 interface StepDetailPanelProps {
   jobId: string;
@@ -46,36 +42,10 @@ interface StepDetailPanelProps {
   expanded?: boolean;
 }
 
-function executorIcon(type: string) {
-  switch (type) {
-    case "script":
-      return <Terminal className="w-4 h-4" />;
-    case "external":
-      return <User className="w-4 h-4" />;
-    case "mock_llm":
-    case "llm":
-      return <Brain className="w-4 h-4" />;
-    case "agent":
-      return <Bot className="w-4 h-4" />;
-    default:
-      return <Cog className="w-4 h-4" />;
-  }
-}
-
 function formatCost(cost: number | null | undefined): string {
   if (cost == null || cost === 0) return "-";
   if (cost < 0.01) return `$${cost.toFixed(4)}`;
   return `$${cost.toFixed(2)}`;
-}
-
-function formatDuration(startedAt: string | null, completedAt: string | null): string {
-  if (!startedAt) return "-";
-  const start = new Date(startedAt).getTime();
-  const end = completedAt ? new Date(completedAt).getTime() : Date.now();
-  const ms = end - start;
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${(ms / 60000).toFixed(1)}m`;
 }
 
 function formatTimestamp(ts: string | null): string {

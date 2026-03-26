@@ -8,21 +8,15 @@ import {
 } from "@/components/ui/collapsible";
 import {
   X,
-  Terminal,
-  User,
-  Brain,
-  Bot,
-  Cog,
-  Repeat,
   Trash2,
   ExternalLink,
   ChevronDown,
   Clock,
   RefreshCw,
   Shield,
-  Eye,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { executorIcon } from "@/lib/executor-utils";
 import { useConfig } from "@/hooks/useConfig";
 
 interface StepDefinitionPanelProps {
@@ -31,26 +25,6 @@ interface StepDefinitionPanelProps {
   onDelete?: () => void;
   onViewFile?: (path: string) => void;
   onViewSource?: (field: string) => void;
-}
-
-function executorIcon(type: string) {
-  switch (type) {
-    case "script":
-      return <Terminal className="w-4 h-4" />;
-    case "external":
-      return <User className="w-4 h-4" />;
-    case "mock_llm":
-    case "llm":
-      return <Brain className="w-4 h-4" />;
-    case "agent":
-      return <Bot className="w-4 h-4" />;
-    case "for_each":
-      return <Repeat className="w-4 h-4" />;
-    case "poll":
-      return <Eye className="w-4 h-4" />;
-    default:
-      return <Cog className="w-4 h-4" />;
-  }
 }
 
 const EXEC_TYPE_COLORS: Record<string, string> = {
