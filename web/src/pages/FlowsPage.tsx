@@ -355,15 +355,20 @@ export function FlowsPage() {
                         </span>
                       )}
                     </div>
-                    <span className="ml-auto text-xs text-zinc-600 shrink-0">
-                      {sortBy === "most-used"
-                        ? `${statsMap.get(flowDirKey(flow.path))?.job_count ?? 0} jobs`
-                        : sortBy === "recent"
+                    <div className="ml-auto flex items-center gap-2 shrink-0">
+                      {(statsMap.get(flowDirKey(flow.path))?.job_count ?? 0) > 0 && (
+                        <span className="text-[10px] text-zinc-600">
+                          {statsMap.get(flowDirKey(flow.path))!.job_count} jobs
+                        </span>
+                      )}
+                      <span className="text-xs text-zinc-600">
+                        {sortBy === "recent"
                           ? statsMap.get(flowDirKey(flow.path))?.last_run_at
                             ? formatRelativeTime(statsMap.get(flowDirKey(flow.path))!.last_run_at!)
                             : "never"
                           : flow.steps_count}
-                    </span>
+                      </span>
+                    </div>
                   </button>
                 ))
               )}
