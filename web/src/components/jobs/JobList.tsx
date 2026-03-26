@@ -112,6 +112,26 @@ function timeAgo(ts: string): string {
   return `${Math.floor(diff / 86400000)}d ago`;
 }
 
+type TimeGroup = "Today" | "Yesterday" | "This Week" | "Older";
+
+function getTimeGroup(ts: string): TimeGroup {
+  const now = new Date();
+  const date = new Date(ts);
+
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfYesterday = new Date(startOfToday.getTime() - 86400000);
+
+  // Start of this week (Monday)
+  const dayOfWeek = now.getDay();
+  const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+  const startOfWeek = new Date(startOfToday.getTime() - mondayOffset * 86400000);
+
+  if (date >= startOfToday) return "Today";
+  if (date >= startOfYesterday) return "Yesterday";
+  if (date >= startOfWeek) return "This Week";
+  return "Older";
+}
+
 function canCancel(status: string): boolean {
   return status === "running" || status === "paused";
 }
@@ -418,74 +438,90 @@ export function JobList({
               </div>
             )
           ) : (
-            filteredJobs.map((job, index) => (
-              <button
-                key={job.id}
-                id={`job-${job.id}`}
-                ref={(el) => { jobRefs.current[index] = el; }}
-                role="option"
-                aria-selected={selectedJobId === job.id}
-                onClick={() => onSelectJob(job.id)}
-                onFocus={() => setFocusedIndex(index)}
-                className={cn(
-                  "w-full text-left px-3 py-1.5 rounded-md transition-colors",
-                  "border-b border-zinc-800/50 last:border-b-0",
-                  "hover:bg-zinc-800/50",
-                  selectedJobId === job.id
-                    ? "bg-zinc-800 ring-1 ring-zinc-700"
-                    : "bg-transparent",
-                  focusedIndex === index && selectedJobId !== job.id
-                    && "bg-zinc-800/30 ring-1 ring-zinc-700/50",
-                )}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-start gap-2 min-w-0 flex-1">
-                    <Briefcase className="w-3.5 h-3.5 text-zinc-500 mt-0.5 shrink-0" />
-                    <div className="min-w-0">
-                      <div className="text-sm text-foreground truncate">
-                        {job.name || job.objective || "Untitled Job"}
-                      </div>
-                      {job.name && job.objective && (
-                        <div className="text-[11px] text-zinc-500 truncate">
-                          {job.objective}
+            filteredJobs.map((job, index) => {
+              const isTimeSorted = sortBy === "recent" || sortBy === "oldest";
+              const group = isTimeSorted ? getTimeGroup(job.updated_at) : null;
+              const prevGroup = isTimeSorted && index > 0 ? getTimeGroup(filteredJobs[index - 1].updated_at) : null;
+              const showGroupHeader = isTimeSorted && group !== prevGroup;
+
+              return (
+                <div key={job.id}>
+                  {showGroupHeader && (
+                    <div className={cn(
+                      "px-3 py-1 text-[10px] font-medium text-zinc-500 uppercase tracking-wider",
+                      index > 0 && "mt-2 border-t border-zinc-800/50 pt-2",
+                    )}>
+                      {group}
+                    </div>
+                  )}
+                  <button
+                    id={`job-${job.id}`}
+                    ref={(el) => { jobRefs.current[index] = el; }}
+                    role="option"
+                    aria-selected={selectedJobId === job.id}
+                    onClick={() => onSelectJob(job.id)}
+                    onFocus={() => setFocusedIndex(index)}
+                    className={cn(
+                      "w-full text-left px-3 py-1.5 rounded-md transition-colors",
+                      "border-b border-zinc-800/50 last:border-b-0",
+                      "hover:bg-zinc-800/50",
+                      selectedJobId === job.id
+                        ? "bg-zinc-800 ring-1 ring-zinc-700"
+                        : "bg-transparent",
+                      focusedIndex === index && selectedJobId !== job.id
+                        && "bg-zinc-800/30 ring-1 ring-zinc-700/50",
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-start gap-2 min-w-0 flex-1">
+                        <Briefcase className="w-3.5 h-3.5 text-zinc-500 mt-0.5 shrink-0" />
+                        <div className="min-w-0">
+                          <div className="text-sm text-foreground truncate">
+                            {job.name || job.objective || "Untitled Job"}
+                          </div>
+                          {job.name && job.objective && (
+                            <div className="text-[11px] text-zinc-500 truncate">
+                              {job.objective}
+                            </div>
+                          )}
+                          <div className="flex items-center gap-1.5 mt-1">
+                            <span className="text-[10px] font-mono text-zinc-600">
+                              {job.id}
+                            </span>
+                          </div>
                         </div>
-                      )}
-                      <div className="flex items-center gap-1.5 mt-1">
-                        <span className="text-[10px] font-mono text-zinc-600">
-                          {job.id}
-                        </span>
                       </div>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-1 shrink-0">
-                    <div className="flex flex-col items-end gap-1">
-                      <div className="flex items-center gap-1">
-                        {isStale(job) && (
-                          <AlertTriangle className="w-3 h-3 text-amber-500" />
-                        )}
-                        <JobStatusBadge status={job.status} />
-                        {job.has_suspended_steps && (
-                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 ring-1 ring-amber-500/30">
-                            <Hand className="w-2.5 h-2.5" />
-                            Awaiting Input
+                      <div className="flex items-start gap-1 shrink-0">
+                        <div className="flex flex-col items-end gap-1">
+                          <div className="flex items-center gap-1">
+                            {isStale(job) && (
+                              <AlertTriangle className="w-3 h-3 text-amber-500" />
+                            )}
+                            <JobStatusBadge status={job.status} />
+                            {job.has_suspended_steps && (
+                              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 ring-1 ring-amber-500/30">
+                                <Hand className="w-2.5 h-2.5" />
+                                Awaiting Input
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
+                            {isCliOwned(job.created_by) ? (
+                              <Terminal className="w-2.5 h-2.5" />
+                            ) : (
+                              <Monitor className="w-2.5 h-2.5" />
+                            )}
+                            <Clock className="w-2.5 h-2.5" />
+                            {timeAgo(job.updated_at)}
                           </span>
-                        )}
+                        </div>
+                        <JobActions job={job} mutations={mutations} />
                       </div>
-                      <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
-                        {isCliOwned(job.created_by) ? (
-                          <Terminal className="w-2.5 h-2.5" />
-                        ) : (
-                          <Monitor className="w-2.5 h-2.5" />
-                        )}
-                        <Clock className="w-2.5 h-2.5" />
-                        {timeAgo(job.updated_at)}
-                      </span>
                     </div>
-                    <JobActions job={job} mutations={mutations} />
-                  </div>
+                  </button>
                 </div>
-              </button>
-            ))
+              );
+            })
           )}
         </div>
       </ScrollArea>
