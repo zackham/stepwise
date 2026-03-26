@@ -1,4 +1,5 @@
-import { ChevronUp, Layers } from "lucide-react";
+import { useState, useMemo } from "react";
+import { ChevronDown, ChevronUp, Layers } from "lucide-react";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { StepNode } from "./StepNode";
 import { DagEdges } from "./DagEdges";
@@ -6,6 +7,7 @@ import { ContainerPortEdges } from "./ContainerPortEdges";
 import { ExpandedStepContainer } from "./ExpandedStepContainer";
 import type { HierarchicalDagNode, ForEachInstance } from "@/lib/dag-layout";
 import type { FlowDefinition, StepRun, JobTreeNode, JobStatus } from "@/lib/types";
+import { JOB_STATUS_COLORS } from "@/lib/status-colors";
 import { cn } from "@/lib/utils";
 
 interface ForEachExpandedContainerProps {
@@ -40,6 +42,17 @@ function InstanceStatusBadge({ status }: { status: string | null }) {
   return <JobStatusBadge status={status as JobStatus} />;
 }
 
+function InstanceStatusDot({ status }: { status: string | null }) {
+  const s = (status ?? "pending") as JobStatus;
+  const colors = JOB_STATUS_COLORS[s] ?? JOB_STATUS_COLORS.pending;
+  return (
+    <span
+      className={cn("w-2 h-2 rounded-full shrink-0", colors.dot, s === "running" && "animate-pulse")}
+      title={s}
+    />
+  );
+}
+
 export function ForEachExpandedContainer({
   node,
   stepName,
@@ -52,6 +65,7 @@ export function ForEachExpandedContainer({
   onNavigateSubJob,
   depth,
 }: ForEachExpandedContainerProps) {
+  const [collapsed, setCollapsed] = useState(false);
   const borderColor = DEPTH_BORDER_COLORS[Math.min(depth, DEPTH_BORDER_COLORS.length - 1)];
   const bgColor = DEPTH_BG_COLORS[Math.min(depth, DEPTH_BG_COLORS.length - 1)];
 
@@ -60,6 +74,18 @@ export function ForEachExpandedContainer({
   for (const st of subTrees) {
     subTreeById.set(st.job.id, st);
   }
+
+  // Aggregate status counts for header summary
+  const statusSummary = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const inst of instances) {
+      const s = inst.status ?? "pending";
+      counts[s] = (counts[s] || 0) + 1;
+    }
+    return counts;
+  }, [instances]);
+
+  const ChevronIcon = collapsed ? ChevronDown : ChevronUp;
 
   return (
     <div
@@ -75,20 +101,53 @@ export function ForEachExpandedContainer({
         className="flex items-center gap-2 px-3 h-10 bg-purple-500/10 border-b border-purple-500/20 cursor-pointer"
         onClick={(e) => {
           e.stopPropagation();
-          onToggleExpand(stepName);
+          setCollapsed(!collapsed);
         }}
       >
         <Layers className="w-3.5 h-3.5 text-purple-400 shrink-0" />
         <span className="text-sm font-medium text-foreground truncate">
           {stepName}
         </span>
+        {/* Aggregate status badges */}
+        <div className="flex items-center gap-1.5">
+          {Object.entries(statusSummary).map(([status, count]) => (
+            <span key={status} className="flex items-center gap-0.5">
+              <JobStatusBadge status={status as JobStatus} />
+              {count > 1 && (
+                <span className="text-[10px] text-zinc-500">&times;{count}</span>
+              )}
+            </span>
+          ))}
+        </div>
         <span className="text-[10px] text-zinc-500 ml-auto mr-1">
           {instances.length} instances
         </span>
-        <ChevronUp className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
+        <ChevronIcon className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
       </div>
 
-      {/* Instances — horizontal layout */}
+      {collapsed ? (
+        /* Collapsed view: compact instance status grid */
+        <div className="px-3 py-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            {instances.map((instance) => {
+              const subTree = subTreeById.get(instance.jobId) ?? null;
+              const itemLabel =
+                subTree?.job.objective?.match(/\[(\d+)\]/)?.[0] ??
+                `[${instance.index}]`;
+              return (
+                <div
+                  key={instance.jobId}
+                  className="flex items-center gap-1.5 text-[11px]"
+                >
+                  <span className="text-zinc-500 font-mono">{itemLabel}</span>
+                  <InstanceStatusDot status={instance.status} />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+      /* Expanded view: instances — horizontal layout */
       <div
         className="flex"
         style={{
@@ -244,6 +303,7 @@ export function ForEachExpandedContainer({
           );
         })}
       </div>
+      )}
 
       {/* Top/bottom handles for parent edges */}
       <div className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-purple-700 border-2 border-purple-500/50" />
