@@ -11,7 +11,20 @@ import { ExpandedStepContainer } from "./ExpandedStepContainer";
 import { ForEachExpandedContainer } from "./ForEachExpandedContainer";
 import { FlowPortNode } from "./FlowPortNode";
 import { ExternalInputPanel, getWatchProps } from "./ExternalInputPanel";
-import type { FlowDefinition, StepRun, JobTreeNode } from "@/lib/types";
+import type { FlowDefinition, StepRun, JobTreeNode, JobStatus } from "@/lib/types";
+import { Share2, Download, Check } from "lucide-react";
+import { toBlob } from "html-to-image";
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 
 function formatTooltipValue(value: unknown): string {
   if (value === null || value === undefined) return "null";
@@ -19,6 +32,26 @@ function formatTooltipValue(value: unknown): string {
   if (typeof value === "boolean" || typeof value === "number") return String(value);
   return JSON.stringify(value, null, 2);
 }
+
+const STATUS_COLORS: Record<JobStatus, string> = {
+  staged: "#8b5cf6",
+  pending: "#71717a",
+  running: "#3b82f6",
+  paused: "#f59e0b",
+  completed: "#10b981",
+  failed: "#ef4444",
+  cancelled: "#71717a",
+};
+
+const STATUS_LABELS: Record<JobStatus, string> = {
+  staged: "Staged",
+  pending: "Pending",
+  running: "Running",
+  paused: "Paused",
+  completed: "Completed",
+  failed: "Failed",
+  cancelled: "Cancelled",
+};
 
 interface FlowDagViewProps {
   workflow: FlowDefinition;
@@ -33,6 +66,8 @@ interface FlowDagViewProps {
   isFulfilling?: boolean;
   selection?: DagSelection;
   onSelectDataFlow?: (selection: DagSelection) => void;
+  flowName?: string;
+  jobStatus?: JobStatus;
 }
 
 export function FlowDagView({
@@ -48,6 +83,8 @@ export function FlowDagView({
   isFulfilling,
   selection,
   onSelectDataFlow,
+  flowName,
+  jobStatus,
 }: FlowDagViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -67,6 +104,184 @@ export function FlowDagView({
   const followAnimRef = useRef<number | null>(null);
   const cameraRef = useRef(new DagCamera());
   const lastFrameTimeRef = useRef<number | null>(null);
+
+  const [shareState, setShareState] = useState<"idle" | "capturing" | "copied">("idle");
+  const logoRef = useRef<HTMLImageElement | null>(null);
+
+  // Preload logo for watermark
+  useEffect(() => {
+    const img = new Image();
+    img.src = "/stepwise-icon-64.png";
+    img.onload = () => { logoRef.current = img; };
+  }, []);
+
+  const captureDAG = useCallback(async (mode: "clipboard" | "download") => {
+    const canvas = canvasRef.current;
+    const container = containerRef.current;
+    if (!canvas || !container) return;
+
+    setShareState("capturing");
+    try {
+      // Save current state
+      const savedTransform = canvas.style.transform;
+      const savedOverflow = container.style.overflow;
+
+      // Remove transform and show full canvas for capture
+      canvas.style.transform = "none";
+      container.style.overflow = "visible";
+
+      // Hide overlays during capture
+      if (inputPanelRef.current) inputPanelRef.current.style.display = "none";
+      if (edgeTooltipRef.current) edgeTooltipRef.current.style.display = "none";
+
+      const pixelRatio = 2;
+      const blob = await toBlob(canvas, {
+        backgroundColor: "#09090b",
+        pixelRatio,
+        filter: (node) => {
+          // Filter out counter-scaled overlays
+          if (node instanceof HTMLElement && node.dataset?.captureHide) return false;
+          return true;
+        },
+      });
+
+      // Restore state
+      canvas.style.transform = savedTransform;
+      container.style.overflow = savedOverflow;
+      if (inputPanelRef.current) inputPanelRef.current.style.display = "";
+      if (edgeTooltipRef.current) edgeTooltipRef.current.style.display = "";
+
+      if (!blob) { setShareState("idle"); return; }
+
+      // Load captured image
+      const dagImg = new Image();
+      dagImg.src = URL.createObjectURL(blob);
+      await new Promise<void>((resolve) => { dagImg.onload = () => resolve(); });
+
+      // Create branded composite
+      const HEADER_H = 72 * pixelRatio;
+      const FOOTER_H = 48 * pixelRatio;
+      const PAD = 24 * pixelRatio;
+      const imgW = dagImg.naturalWidth;
+      const imgH = dagImg.naturalHeight;
+      // Cap width for social sharing — scale down if DAG is huge
+      const maxW = 2400 * pixelRatio;
+      const scale = imgW > maxW ? maxW / imgW : 1;
+      const scaledW = Math.round(imgW * scale);
+      const scaledH = Math.round(imgH * scale);
+
+      const outW = scaledW + PAD * 2;
+      const outH = HEADER_H + scaledH + FOOTER_H + PAD;
+      const offscreen = document.createElement("canvas");
+      offscreen.width = outW;
+      offscreen.height = outH;
+      const ctx = offscreen.getContext("2d")!;
+
+      // Background
+      ctx.fillStyle = "#09090b";
+      ctx.fillRect(0, 0, outW, outH);
+
+      // Subtle border
+      ctx.strokeStyle = "#27272a";
+      ctx.lineWidth = pixelRatio;
+      ctx.strokeRect(0, 0, outW, outH);
+
+      // Header
+      const headerY = HEADER_H / 2;
+      ctx.fillStyle = "#fafafa";
+      ctx.font = `bold ${20 * pixelRatio}px system-ui, -apple-system, sans-serif`;
+      ctx.textBaseline = "middle";
+      const title = flowName || "Flow";
+      ctx.fillText(title, PAD, headerY);
+
+      // Status badge
+      if (jobStatus) {
+        const titleWidth = ctx.measureText(title).width;
+        const badgeX = PAD + titleWidth + 12 * pixelRatio;
+        const badgeColor = STATUS_COLORS[jobStatus];
+        const badgeLabel = STATUS_LABELS[jobStatus];
+        ctx.font = `${12 * pixelRatio}px system-ui, -apple-system, sans-serif`;
+        const badgeTextW = ctx.measureText(badgeLabel).width;
+        const badgePadX = 10 * pixelRatio;
+        const badgePadY = 6 * pixelRatio;
+        const badgeH = 12 * pixelRatio + badgePadY * 2;
+        const badgeW = badgeTextW + badgePadX * 2;
+
+        // Badge background
+        ctx.fillStyle = badgeColor + "22";
+        ctx.beginPath();
+        const r = 4 * pixelRatio;
+        ctx.roundRect(badgeX, headerY - badgeH / 2, badgeW, badgeH, r);
+        ctx.fill();
+
+        // Badge text
+        ctx.fillStyle = badgeColor;
+        ctx.fillText(badgeLabel, badgeX + badgePadX, headerY);
+      }
+
+      // Header divider
+      ctx.strokeStyle = "#27272a";
+      ctx.lineWidth = pixelRatio;
+      ctx.beginPath();
+      ctx.moveTo(PAD, HEADER_H - pixelRatio);
+      ctx.lineTo(outW - PAD, HEADER_H - pixelRatio);
+      ctx.stroke();
+
+      // DAG image
+      ctx.drawImage(dagImg, PAD, HEADER_H, scaledW, scaledH);
+      URL.revokeObjectURL(dagImg.src);
+
+      // Footer watermark
+      const footerY = HEADER_H + scaledH + FOOTER_H / 2;
+      const logoSize = 20 * pixelRatio;
+      ctx.fillStyle = "#52525b";
+      ctx.font = `${13 * pixelRatio}px system-ui, -apple-system, sans-serif`;
+      ctx.textBaseline = "middle";
+      const stepwiseTextW = ctx.measureText("stepwise").width;
+      if (logoRef.current) {
+        ctx.globalAlpha = 0.4;
+        ctx.drawImage(
+          logoRef.current,
+          outW - PAD - logoSize - stepwiseTextW - 8 * pixelRatio,
+          footerY - logoSize / 2,
+          logoSize,
+          logoSize,
+        );
+        ctx.globalAlpha = 1;
+      }
+      ctx.textAlign = "right";
+      ctx.fillText("stepwise", outW - PAD, footerY);
+      ctx.textAlign = "left";
+
+      // Export
+      const finalBlob = await new Promise<Blob | null>((resolve) =>
+        offscreen.toBlob(resolve, "image/png"),
+      );
+      if (!finalBlob) { setShareState("idle"); return; }
+
+      if (mode === "clipboard") {
+        try {
+          await navigator.clipboard.write([
+            new ClipboardItem({ "image/png": finalBlob }),
+          ]);
+          setShareState("copied");
+          setTimeout(() => setShareState("idle"), 2000);
+        } catch {
+          // Clipboard API not available — fallback to download
+          downloadBlob(finalBlob, `${flowName || "flow"}-dag.png`);
+          setShareState("copied");
+          setTimeout(() => setShareState("idle"), 2000);
+        }
+      } else {
+        downloadBlob(finalBlob, `${flowName || "flow"}-dag.png`);
+        setShareState("copied");
+        setTimeout(() => setShareState("idle"), 2000);
+      }
+    } catch (err) {
+      console.error("DAG capture failed:", err);
+      setShareState("idle");
+    }
+  }, [flowName, jobStatus]);
 
   const rawLayout = useMemo(
     () => computeHierarchicalLayout(workflow, expandedSteps, jobTree),
@@ -850,6 +1065,36 @@ export function FlowDagView({
             className="text-zinc-500 hover:text-zinc-300 text-xs ml-1"
           >
             Reset
+          </button>
+        </div>
+      </div>
+
+      {/* Share / export controls */}
+      <div className="absolute bottom-3 right-3 flex items-center gap-1 z-10">
+        <div className="flex items-center gap-0.5 bg-zinc-900/80 rounded-md border border-zinc-700/50 px-1 py-1">
+          <button
+            onClick={() => captureDAG("clipboard")}
+            disabled={shareState === "capturing"}
+            className="flex items-center gap-1.5 text-zinc-400 hover:text-foreground text-xs px-2 py-0.5 rounded hover:bg-zinc-800/50 disabled:opacity-50"
+            title="Copy DAG image to clipboard"
+          >
+            {shareState === "copied" ? (
+              <Check className="w-3.5 h-3.5 text-emerald-400" />
+            ) : shareState === "capturing" ? (
+              <Share2 className="w-3.5 h-3.5 animate-pulse" />
+            ) : (
+              <Share2 className="w-3.5 h-3.5" />
+            )}
+            {shareState === "copied" ? "Copied!" : "Share"}
+          </button>
+          <div className="w-px h-4 bg-zinc-700/50" />
+          <button
+            onClick={() => captureDAG("download")}
+            disabled={shareState === "capturing"}
+            className="text-zinc-400 hover:text-foreground px-1.5 py-0.5 rounded hover:bg-zinc-800/50 disabled:opacity-50"
+            title="Download DAG as PNG"
+          >
+            <Download className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
