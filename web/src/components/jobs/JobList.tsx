@@ -74,6 +74,11 @@ function sortJobs(jobs: Job[], sort: SortOption): Job[] {
 interface JobListProps {
   selectedJobId: string | null;
   onSelectJob: (jobId: string) => void;
+  /** Controlled text filter (synced to URL in JobDashboard) */
+  query?: string;
+  statusFilter?: string | null;
+  onQueryChange?: (value: string) => void;
+  onStatusFilterChange?: (value: string | null) => void;
 }
 
 const STATUS_OPTIONS: { value: string; label: string }[] = [
@@ -172,10 +177,23 @@ function JobActions({
   );
 }
 
-export function JobList({ selectedJobId, onSelectJob }: JobListProps) {
-  const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string | null>(null);
+export function JobList({
+  selectedJobId,
+  onSelectJob,
+  query: controlledQuery,
+  statusFilter: controlledStatusFilter,
+  onQueryChange,
+  onStatusFilterChange,
+}: JobListProps) {
+  const [localQuery, setLocalQuery] = useState("");
+  const [localStatusFilter, setLocalStatusFilter] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<SortOption>(getSavedSort);
+
+  const isControlled = onQueryChange !== undefined;
+  const query = isControlled ? (controlledQuery ?? "") : localQuery;
+  const statusFilter = isControlled ? (controlledStatusFilter ?? null) : localStatusFilter;
+  const setQuery = isControlled ? onQueryChange! : setLocalQuery;
+  const setStatusFilter = isControlled ? onStatusFilterChange! : setLocalStatusFilter;
   const [confirmDelete, setConfirmDelete] = useState(false);
   const { data: jobs = [], isLoading } = useJobs();
   const mutations = useStepwiseMutations();
