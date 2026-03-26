@@ -13,7 +13,6 @@ Stepwise has three runtime concepts, a dependency system, and a control flow mec
 | **Exit rule** | Decides what happens after step completion | advance, loop, escalate, abandon |
 | **For-each** | Iterates over a list with embedded sub-flows | Items execute in parallel |
 | **Branching** | Conditional activation via step-level `when` | `when` condition, `any_of` merge |
-| **Context chain** | Session continuity across agent steps | Prior transcripts compiled into context |
 | **Job staging** | Stage, review, and release jobs before execution | STAGED → PENDING lifecycle |
 | **Groups** | Batch label for organizing staged jobs | `--group wave-1` |
 | **Job dependencies** | Ordering between jobs (not steps) | `depends_on`, auto-start cascade |
@@ -325,44 +324,6 @@ When `classify` completes with `category == 'simple'`, `quick-path`'s `when` con
 - `after: [step-x]` = ordering only (wait for step-x to complete)
 - `inputs: { field: step-x.field }` = data dependency (also implies ordering)
 - `when: "expr"` = conditional gate on resolved inputs (evaluated after deps are satisfied)
-
-## Context Chains
-
-Steps are **pure functions** — they take inputs and produce outputs, with no shared state. But some workflows need session continuity: step B should know what step A discussed, not just its final output.
-
-**Context chains** solve this by compiling prior chain members' conversation transcripts into an XML context block that's prepended to the agent's prompt:
-
-```yaml
-chains:
-  review:
-    max_tokens: 80000
-
-steps:
-  research:
-    executor: agent
-    prompt: "Research $topic"
-    chain: review
-
-  draft:
-    executor: agent
-    prompt: "Draft a report based on your research"
-    chain: review
-    inputs:
-      findings: research.findings
-```
-
-When `draft` runs, the engine:
-1. Loads `research`'s conversation transcript (captured after it completed)
-2. Compiles it into `<prior_context>` XML
-3. Prepends it to `draft`'s prompt
-
-The agent sees the full reasoning, tool usage, and discoveries from the research phase — not just the final output fields. This is critical for agentic workflows where the process matters as much as the result.
-
-**Key properties:**
-- Chains maintain the pure-function step model — context flows through files, not shared memory
-- Topological ordering ensures deterministic context regardless of parallel execution
-- Overflow strategies drop whole transcripts (never mid-conversation) when the token budget is exceeded
-- Transcript capture happens automatically for agent steps (via `acpx sessions show`)
 
 ## Handoff Envelopes
 

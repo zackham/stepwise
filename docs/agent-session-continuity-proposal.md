@@ -1,3 +1,5 @@
+> ⚠️ **Design Proposal** — This describes planned behavior that may not be fully implemented yet. Do not rely on this as current documentation.
+
 # Agent Session Continuity & Optional Inputs
 
 **Date:** 2026-03-17
