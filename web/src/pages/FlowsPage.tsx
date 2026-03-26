@@ -3,11 +3,11 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { RegistryBrowser } from "@/components/editor/RegistryBrowser";
 import { FlowInfoPanel } from "@/components/editor/FlowInfoPanel";
 import { LocalFlowInfoPanel } from "@/components/editor/LocalFlowInfoPanel";
+import { CreateFlowDialog } from "@/components/editor/CreateFlowDialog";
 import { FlowDagView } from "@/components/dag/FlowDagView";
 import {
   useLocalFlows,
   useLocalFlow,
-  useCreateFlow,
   useDeleteFlow,
   useRegistryFlow,
   useInstallFlow,
@@ -63,13 +63,11 @@ export function FlowsPage() {
   const [tab, setTab] = useState<Tab>("local");
   const [filter, setFilter] = useState("");
   const [sortBy, setSortBy] = useState<SortBy>("name");
-  const [showNewFlowInput, setShowNewFlowInput] = useState(false);
-  const [newFlowName, setNewFlowName] = useState("");
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
 
   // Data
   const { data: flows = [] } = useLocalFlows();
   const { data: flowStats = [] } = useFlowStats();
-  const createFlowMutation = useCreateFlow();
   const deleteFlowMutation = useDeleteFlow();
   const mutations = useStepwiseMutations();
   const patchMetadataMutation = usePatchFlowMetadata();
@@ -179,17 +177,12 @@ export function FlowsPage() {
     [deleteFlowMutation, selectedLocalFlow]
   );
 
-  const handleCreate = useCallback(() => {
-    const name = newFlowName.trim();
-    if (!name) return;
-    createFlowMutation.mutate(name, {
-      onSuccess: (result) => {
-        setShowNewFlowInput(false);
-        setNewFlowName("");
-        navigate({ to: "/flows/$flowName", params: { flowName: result.name } });
-      },
-    });
-  }, [newFlowName, createFlowMutation, navigate]);
+  const handleFlowCreated = useCallback(
+    (result: { path: string; name: string }) => {
+      navigate({ to: "/flows/$flowName", params: { flowName: result.name } });
+    },
+    [navigate]
+  );
 
   const handleInstall = useCallback(() => {
     if (!selectedRegistryFlow) return;
@@ -249,51 +242,20 @@ export function FlowsPage() {
 
         {tab === "local" && (
           <>
-            {showNewFlowInput ? (
-              <form
-                onSubmit={(e) => { e.preventDefault(); handleCreate(); }}
-                className="flex gap-1.5"
-              >
-                <Input
-                  autoFocus
-                  value={newFlowName}
-                  onChange={(e) => setNewFlowName(e.target.value)}
-                  placeholder="flow-name"
-                  className="w-28 sm:w-40 h-8 text-sm bg-zinc-900 border-zinc-700"
-                  onKeyDown={(e) => {
-                    if (e.key === "Escape") {
-                      setShowNewFlowInput(false);
-                      setNewFlowName("");
-                    }
-                  }}
-                />
-                <Button
-                  type="submit"
-                  size="sm"
-                  disabled={!newFlowName.trim() || createFlowMutation.isPending}
-                  className="h-8"
-                >
-                  {createFlowMutation.isPending ? "..." : "Create"}
-                </Button>
-              </form>
-            ) : (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowNewFlowInput(true)}
-                className="h-8"
-              >
-                <Plus className="w-3.5 h-3.5 mr-1.5" />
-                New Flow
-              </Button>
-            )}
-            {createFlowMutation.isError && (
-              <span className="text-xs text-red-400">
-                {(createFlowMutation.error as Error).message?.includes("409")
-                  ? "Already exists"
-                  : "Failed"}
-              </span>
-            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowCreateDialog(true)}
+              className="h-8"
+            >
+              <Plus className="w-3.5 h-3.5 mr-1.5" />
+              New Flow
+            </Button>
+            <CreateFlowDialog
+              open={showCreateDialog}
+              onOpenChange={setShowCreateDialog}
+              onCreated={handleFlowCreated}
+            />
           </>
         )}
       </div>
@@ -336,7 +298,7 @@ export function FlowsPage() {
                       <Button
                         size="sm"
                         className="text-xs"
-                        onClick={() => setShowNewFlowInput(true)}
+                        onClick={() => setShowCreateDialog(true)}
                       >
                         <Plus className="w-3 h-3 mr-1" />
                         New Flow
