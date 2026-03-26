@@ -108,6 +108,19 @@ export function useAgentOutput(runId: string | undefined) {
   });
 }
 
+export function useSimilarErrors(
+  errorCategory: string | null | undefined,
+  excludeRunId?: string,
+  stepName?: string,
+) {
+  return useQuery({
+    queryKey: ["similarErrors", errorCategory, excludeRunId, stepName],
+    queryFn: () => api.fetchSimilarErrors(errorCategory!, excludeRunId, stepName),
+    enabled: !!errorCategory,
+    staleTime: 30_000,
+  });
+}
+
 // ── Mutation hooks ───────────────────────────────────────────────────
 
 export function useStepwiseMutations() {

@@ -849,6 +849,47 @@ class SQLiteStore:
 
         return None, False
 
+    # ── Cross-Job Error Queries ────────────────────────────────────────────
+
+    def similar_failed_runs(
+        self,
+        error_category: str,
+        exclude_run_id: str | None = None,
+        step_name: str | None = None,
+        limit: int = 5,
+    ) -> list[dict]:
+        """Find failed runs with the same error_category across all jobs."""
+        query = """
+            SELECT sr.id, sr.job_id, sr.step_name, sr.error, sr.error_category,
+                   sr.completed_at, j.name as job_name, j.objective
+            FROM step_runs sr
+            JOIN jobs j ON sr.job_id = j.id
+            WHERE sr.status = 'failed'
+              AND sr.error_category = ?
+        """
+        params: list = [error_category]
+        if exclude_run_id:
+            query += " AND sr.id != ?"
+            params.append(exclude_run_id)
+        if step_name:
+            query += " AND sr.step_name = ?"
+            params.append(step_name)
+        query += " ORDER BY sr.completed_at DESC LIMIT ?"
+        params.append(limit)
+        rows = self._conn.execute(query, params).fetchall()
+        return [
+            {
+                "run_id": r["id"],
+                "job_id": r["job_id"],
+                "step_name": r["step_name"],
+                "error": r["error"],
+                "error_category": r["error_category"],
+                "completed_at": r["completed_at"],
+                "job_name": r["job_name"] or (r["objective"][:60] if r["objective"] else ""),
+            }
+            for r in rows
+        ]
+
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
     def close(self) -> None:

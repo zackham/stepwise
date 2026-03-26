@@ -31,11 +31,13 @@ import {
 import { useState, useEffect, useRef } from "react";
 import { useAgentOutput } from "@/hooks/useStepwise";
 import { FulfillWatchDialog } from "./FulfillWatchDialog";
+import { ErrorRecoverySuggestions } from "./ErrorRecoverySuggestions";
 import { cn, formatDuration } from "@/lib/utils";
 import { executorIcon } from "@/lib/executor-utils";
 
 interface StepDetailPanelProps {
   jobId: string;
+  job?: import("@/lib/types").Job;
   stepDef: StepDefinition;
   onClose: () => void;
   onExpand?: () => void;
@@ -183,6 +185,7 @@ function AgentRawView({ runId }: { runId: string }) {
 
 export function StepDetailPanel({
   jobId,
+  job,
   stepDef,
   onClose,
   onExpand,
@@ -548,6 +551,15 @@ export function StepDetailPanel({
                               {run.error}
                             </div>
                           </div>
+                        )}
+
+                        {/* Recovery suggestions for failed runs */}
+                        {run.status === "failed" && run.error && job && (
+                          <ErrorRecoverySuggestions
+                            run={run}
+                            job={job}
+                            stepDef={stepDef}
+                          />
                         )}
 
                         {/* Cost (from executor_meta) */}
