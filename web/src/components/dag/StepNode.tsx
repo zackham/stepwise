@@ -8,7 +8,8 @@ import {
 import { StepStatusBadge } from "@/components/StatusBadge";
 import { STEP_STATUS_COLORS, STEP_PENDING_COLORS } from "@/lib/status-colors";
 import type { ExitRule, StepDefinition, StepRun, StepRunStatus } from "@/lib/types";
-import { cn, formatDuration } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { LiveDuration } from "@/components/LiveDuration";
 import { executorIcon } from "@/lib/executor-utils";
 
 interface StepNodeProps {
@@ -194,7 +195,7 @@ export function StepNode({
       {latestRun && (status === "completed" || status === "failed" || status === "running") && (
         <div className="flex items-center gap-0.5 text-[9px] text-zinc-500 mt-0.5">
           <Clock className="w-2.5 h-2.5" />
-          {formatDuration(latestRun.started_at, latestRun.completed_at)}
+          <LiveDuration startTime={latestRun.started_at} endTime={latestRun.completed_at} />
         </div>
       )}
 
