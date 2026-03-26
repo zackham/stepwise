@@ -62,6 +62,8 @@ function makeSubTree(jobId: string, status: JobStatus): JobTreeNode {
       heartbeat_at: null,
       parent_job_id: null,
       parent_step_run_id: null,
+      job_group: null,
+      depends_on: [],
     },
     runs: [],
     sub_jobs: [],

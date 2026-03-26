@@ -66,7 +66,7 @@ export function computeCanvasLayout(jobs: Job[]): CanvasLayoutResult {
   // Collect job groups
   const groupMap = new Map<string, Job[]>();
   for (const job of jobs) {
-    const group = (job.config?.metadata?.job_group as string) ?? null;
+    const group = job.job_group ?? null;
     if (group) {
       if (!groupMap.has(group)) groupMap.set(group, []);
       groupMap.get(group)!.push(job);

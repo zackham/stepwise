@@ -75,6 +75,8 @@ function makeJob(overrides: Partial<Job> = {}): Job {
     runner_pid: null,
     heartbeat_at: null,
     has_suspended_steps: false,
+    job_group: null,
+    depends_on: [],
     ...overrides,
   };
 }

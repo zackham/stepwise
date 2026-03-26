@@ -233,6 +233,8 @@ export interface Job {
   heartbeat_at: string | null;
   has_suspended_steps?: boolean;
   current_step?: JobCurrentStep | null;
+  job_group: string | null;
+  depends_on: string[];
 }
 
 // ── Event ──────────────────────────────────────────────────────────────
