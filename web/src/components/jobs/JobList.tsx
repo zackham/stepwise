@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { useJobs, useStepwiseMutations } from "@/hooks/useStepwise";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -195,8 +195,11 @@ export function JobList({
   const setQuery = isControlled ? onQueryChange! : setLocalQuery;
   const setStatusFilter = isControlled ? onStatusFilterChange! : setLocalStatusFilter;
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [focusedIndex, setFocusedIndex] = useState<number>(-1);
   const { data: jobs = [], isLoading } = useJobs();
   const mutations = useStepwiseMutations();
+  const listRef = useRef<HTMLDivElement>(null);
+  const jobRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   // Filter jobs by query (matches name or objective) and status toggle, then sort
   const filteredJobs = useMemo(() => {
@@ -219,10 +222,59 @@ export function JobList({
     return sortJobs(filtered, sortBy);
   }, [jobs, query, statusFilter, sortBy]);
 
+  // Reset focused index when filtered list changes
+  useEffect(() => {
+    setFocusedIndex(-1);
+  }, [filteredJobs.length, query, statusFilter, sortBy]);
+
+  // Scroll focused item into view
+  useEffect(() => {
+    if (focusedIndex >= 0 && jobRefs.current[focusedIndex]) {
+      jobRefs.current[focusedIndex]?.scrollIntoView({ block: "nearest" });
+    }
+  }, [focusedIndex]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const len = filteredJobs.length;
+      if (len === 0) return;
+
+      switch (e.key) {
+        case "ArrowDown":
+          e.preventDefault();
+          setFocusedIndex((prev) => (prev < len - 1 ? prev + 1 : prev));
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          setFocusedIndex((prev) => (prev > 0 ? prev - 1 : prev));
+          break;
+        case "Enter":
+          e.preventDefault();
+          if (focusedIndex >= 0 && focusedIndex < len) {
+            onSelectJob(filteredJobs[focusedIndex].id);
+          }
+          break;
+        case "Escape":
+          e.preventDefault();
+          setFocusedIndex(-1);
+          break;
+      }
+    },
+    [filteredJobs, focusedIndex, onSelectJob],
+  );
+
   const hasActiveFilter = !!query || !!statusFilter;
 
   return (
-    <div className="flex flex-col h-full">
+    <div
+      className="flex flex-col h-full"
+      ref={listRef}
+      onKeyDown={handleKeyDown}
+      role="listbox"
+      aria-label="Job list"
+      aria-activedescendant={focusedIndex >= 0 && filteredJobs[focusedIndex] ? `job-${filteredJobs[focusedIndex].id}` : undefined}
+      tabIndex={0}
+    >
       {/* Search + delete */}
       <div className="p-2 border-b border-border space-y-1.5">
         <div className="flex items-center gap-1.5">
@@ -351,17 +403,24 @@ export function JobList({
               </div>
             )
           ) : (
-            filteredJobs.map((job) => (
+            filteredJobs.map((job, index) => (
               <button
                 key={job.id}
+                id={`job-${job.id}`}
+                ref={(el) => { jobRefs.current[index] = el; }}
+                role="option"
+                aria-selected={selectedJobId === job.id}
                 onClick={() => onSelectJob(job.id)}
+                onFocus={() => setFocusedIndex(index)}
                 className={cn(
                   "w-full text-left px-3 py-1.5 rounded-md transition-colors",
                   "border-b border-zinc-800/50 last:border-b-0",
                   "hover:bg-zinc-800/50",
                   selectedJobId === job.id
                     ? "bg-zinc-800 ring-1 ring-zinc-700"
-                    : "bg-transparent"
+                    : "bg-transparent",
+                  focusedIndex === index && selectedJobId !== job.id
+                    && "bg-zinc-800/30 ring-1 ring-zinc-700/50",
                 )}
               >
                 <div className="flex items-start justify-between gap-2">
