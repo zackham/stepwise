@@ -1,5 +1,5 @@
-import { useState, useCallback, useMemo } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useState, useCallback, useMemo, useEffect } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { RegistryBrowser } from "@/components/editor/RegistryBrowser";
 import { FlowInfoPanel } from "@/components/editor/FlowInfoPanel";
 import { LocalFlowInfoPanel } from "@/components/editor/LocalFlowInfoPanel";
@@ -75,8 +75,17 @@ export function FlowsPage() {
   const patchMetadataMutation = usePatchFlowMetadata();
 
   // Local selection
+  const { flow: flowParam } = useSearch({ from: "/flows" });
   const [selectedLocalFlow, setSelectedLocalFlow] = useState<LocalFlow | null>(null);
   const { data: localFlowDetail } = useLocalFlow(selectedLocalFlow?.path);
+
+  // Auto-select flow from URL param on initial load
+  useEffect(() => {
+    if (flowParam && flows.length > 0 && !selectedLocalFlow) {
+      const match = flows.find((f) => f.name === flowParam);
+      if (match) setSelectedLocalFlow(match);
+    }
+  }, [flowParam, flows, selectedLocalFlow]);
   const [localExpandedSteps, setLocalExpandedSteps] = useState<Set<string>>(new Set());
   const toggleLocalExpand = useCallback((stepName: string) => {
     setLocalExpandedSteps((prev) => {
@@ -162,6 +171,7 @@ export function FlowsPage() {
         onSuccess: () => {
           if (selectedLocalFlow?.path === flow.path) {
             setSelectedLocalFlow(null);
+            navigate({ to: "/flows", search: {}, replace: true });
           }
         },
       });
@@ -352,6 +362,7 @@ export function FlowsPage() {
                         handleEdit(flow);
                       } else {
                         setSelectedLocalFlow(flow);
+                        navigate({ to: "/flows", search: { flow: flow.name }, replace: true });
                       }
                     }}
                     onDoubleClick={() => handleEdit(flow)}
