@@ -487,7 +487,7 @@ export function EditorPage() {
               }
             }}
           >
-            <SheetContent side="right" showCloseButton={false} className="w-[85vw] sm:max-w-sm p-0 overflow-y-auto">
+            <SheetContent side="right" showCloseButton={false} className="w-[90vw] sm:max-w-sm p-0 overflow-y-auto">
               {selectedStepDef && (
                 <StepDefinitionPanel
                   stepDef={selectedStepDef}
@@ -540,7 +540,7 @@ export function EditorPage() {
         {/* Chat sidebar */}
         {isCompact ? (
           <Sheet open={chatOpen} onOpenChange={setChatOpen}>
-            <SheetContent side="right" showCloseButton={false} className="w-[85vw] sm:max-w-md p-0 overflow-y-auto">
+            <SheetContent side="right" showCloseButton={false} className="w-[90vw] sm:max-w-md p-0 overflow-y-auto">
               <ChatSidebar
                 messages={chat.messages}
                 isStreaming={chat.isStreaming}

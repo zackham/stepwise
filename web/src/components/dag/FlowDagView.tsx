@@ -800,7 +800,7 @@ export function FlowDagView({
 
       {/* Zoom controls + follow flow */}
       <div className="absolute bottom-3 left-3 flex items-center gap-3 z-10">
-        <label className="flex items-center gap-1.5 bg-zinc-900/80 rounded-md border border-zinc-700/50 px-2 py-1 cursor-pointer select-none">
+        <label className="flex items-center gap-1.5 bg-zinc-900/80 rounded-md border border-zinc-700/50 px-2 py-1 cursor-pointer select-none min-h-[44px] md:min-h-0">
           <input
             type="checkbox"
             checked={followFlow}
@@ -821,7 +821,7 @@ export function FlowDagView({
               setZoomDisplay(Math.round(t.scale * 100));
               setFollowFlow(false);
             }}
-            className="text-zinc-400 hover:text-foreground text-sm px-1"
+            className="text-zinc-400 hover:text-foreground text-sm px-1 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center"
           >
             +
           </button>
@@ -837,7 +837,7 @@ export function FlowDagView({
               setZoomDisplay(Math.round(t.scale * 100));
               setFollowFlow(false);
             }}
-            className="text-zinc-400 hover:text-foreground text-sm px-1"
+            className="text-zinc-400 hover:text-foreground text-sm px-1 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center"
           >
             -
           </button>
@@ -846,7 +846,7 @@ export function FlowDagView({
               initView();
               setFollowFlow(true);
             }}
-            className="text-zinc-500 hover:text-zinc-300 text-xs ml-1"
+            className="text-zinc-500 hover:text-zinc-300 text-xs ml-1 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center"
           >
             Reset
           </button>

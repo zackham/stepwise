@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { JOB_STATUS_COLORS } from "@/lib/status-colors";
+import { useIsMobile } from "@/hooks/useMediaQuery";
 import type { Job, JobStatus } from "@/lib/types";
 
 const DISPLAY_ORDER: JobStatus[] = [
@@ -17,6 +18,7 @@ interface JobSummaryBarProps {
 }
 
 export function JobSummaryBar({ jobs }: JobSummaryBarProps) {
+  const isMobile = useIsMobile();
   const counts = useMemo(() => {
     const map: Partial<Record<JobStatus, number>> = {};
     for (const job of jobs) {
@@ -26,6 +28,14 @@ export function JobSummaryBar({ jobs }: JobSummaryBarProps) {
   }, [jobs]);
 
   if (jobs.length === 0) return null;
+
+  if (isMobile) {
+    return (
+      <div className="flex items-center px-3 h-8 border-b border-border text-xs text-zinc-400">
+        <span className="font-medium text-zinc-300">{jobs.length} jobs</span>
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-center gap-3 px-3 h-8 border-b border-border text-xs text-zinc-400">
