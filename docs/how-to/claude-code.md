@@ -2,7 +2,7 @@
 
 > Last verified: 2026-03-21
 
-Use Stepwise flows as structured tools from Claude Code. Run multi-step workflows, handle human-in-the-loop steps, and get structured JSON output — all from within a Claude Code session.
+Use Stepwise flows as structured tools from Claude Code. Run multi-step workflows, handle external fulfillment steps, and get structured JSON output — all from within a Claude Code session.
 
 ## What You'll Build
 

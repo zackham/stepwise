@@ -709,7 +709,7 @@ stepwise search --tag agent --sort downloads
 
 ```
 NAME                 AUTHOR     STEPS  DOWNLOADS  TAGS
-code-review          alice      3      1,247      agent, human-in-the-loop
+code-review          alice      3      1,247      agent, external-fulfillment
 pr-review-lite       bob        2      892        script, code-review
 ```
 

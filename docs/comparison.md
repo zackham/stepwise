@@ -28,13 +28,13 @@ These are serious workflow orchestration engines. Temporal gives you durable exe
 - **Zero infrastructure.** Temporal needs a server cluster, workers, and Postgres/Cassandra. Airflow needs a scheduler, web server, and metadata database. Stepwise needs `curl | sh` and stores everything in SQLite. One process, one machine.
 - **Embedded in the dev workflow.** You write a `.flow.yaml`, run `stepwise run`, and watch results in the terminal or web UI on localhost. No deploy step. No worker registration. No Docker compose files.
 - **AI-native step types.** Temporal and Airflow treat every step as "run this code." Stepwise has first-class executors for LLM calls, agent sessions, human gates, and polling — each with typed contracts, cost tracking, and appropriate retry semantics.
-- **Human-in-the-loop as a primitive.** The `external` executor pauses a job and waits for human input through a typed form. This isn't bolted on — it's the same execution model as every other step.
+- **External fulfillment as a primitive.** The `external` executor pauses a job and waits for input through a typed form — from a human, another agent, or an API. This isn't bolted on — it's the same execution model as every other step.
 
 **Use Temporal/Airflow when:** You need distributed execution across machines, team access controls, compliance audit trails, or you're running workflows in production at scale. Use stepwise for developer-facing AI workflows on your own hardware.
 
 ## vs LangGraph
 
-LangGraph builds stateful agent graphs in Python. It's LangChain's answer to "I need more than a chain" — cyclic graphs with persistent state and human-in-the-loop support.
+LangGraph builds stateful agent graphs in Python. It's LangChain's answer to "I need more than a chain" — cyclic graphs with persistent state and external fulfillment support.
 
 **Where LangGraph wins:** Native Python — your graph is code, so you get IDE support, debugging, and the full Python ecosystem. Tight LangChain integration for retrieval, tool calling, and prompt management. LangGraph Platform provides hosted deployment with persistence and streaming.
 
@@ -50,7 +50,7 @@ LangChain, LlamaIndex, and similar libraries let you chain LLM calls in Python. 
 
 - **Real execution engine, not function composition.** Stepwise has a state machine with persistent runs, step statuses, and event logs. If your process dies mid-workflow, you resume from where you left off. Prompt chaining libraries run in-memory; crash = restart.
 - **Exit rules and conditional branching.** Steps can loop, escalate to humans, or abandon based on output conditions. This is declarative control flow that the engine enforces and logs.
-- **Human gates are first-class.** An `external` step pauses the job, presents a typed input form, and resumes when a human responds. In LangChain, human-in-the-loop means writing custom callback handlers and managing state yourself.
+- **Human gates are first-class.** An `external` step pauses the job, presents a typed input form, and resumes when a human responds. In LangChain, external fulfillment means writing custom callback handlers and managing state yourself.
 - **Declarative, not imperative.** Flows are YAML, not Python. Portable, versionable, diffable, and shareable. Non-programmers can review and modify flows.
 - **Observability built in.** Every step transition, every input/output handoff, every cost event is logged. `stepwise run --report` generates an interactive HTML trace.
 
@@ -74,7 +74,7 @@ CrewAI orchestrates multiple AI agents with defined roles. You create "crews" of
 
 **Where stepwise differs:** CrewAI agents are Python objects with LLM calls; stepwise agent steps are full ACP-compatible agent sessions (Claude, Codex, Gemini) that can use tools, read/write files, and execute shell commands. CrewAI manages conversations between agents in-memory; stepwise persists every step's inputs, outputs, and state to SQLite — if your process crashes, you resume from the last completed step, not from scratch. Stepwise's exit rules, human gates, and conditional branching provide control flow that CrewAI delegates to the agents themselves.
 
-**Use CrewAI when:** You want multiple LLM personas collaborating on a task in Python, and the task completes in a single run without human intervention. Use stepwise when you need durable execution, human-in-the-loop, shell commands, or real agent sessions with tool access.
+**Use CrewAI when:** You want multiple LLM personas collaborating on a task in Python, and the task completes in a single run without human intervention. Use stepwise when you need durable execution, external fulfillment, shell commands, or real agent sessions with tool access.
 
 ## vs Claude Projects / Custom Instructions / System Prompts
 
@@ -96,9 +96,9 @@ Claude Projects and custom instructions let you configure a single AI session wi
 | GitHub Actions | CI/CD on git events | LLM orchestration, human gates, local execution |
 | Temporal/Airflow | Distributed durable workflows | Zero infrastructure, AI-native executors, YAML workflows |
 | LangGraph | Stateful Python agent graphs | Declarative YAML, full agent sessions, no library dependency |
-| LangChain/LlamaIndex | Embedding LLM calls in Python apps | Persistent state, declarative workflows, human-in-the-loop |
+| LangChain/LlamaIndex | Embedding LLM calls in Python apps | Persistent state, declarative workflows, external fulfillment |
 | Dify | Visual LLM app builder | Version-controlled flows, agentic execution, headless operation |
-| CrewAI | Multi-persona agent teams | Durable state, human-in-the-loop, real tool-using agents |
+| CrewAI | Multi-persona agent teams | Durable state, external fulfillment, real tool-using agents |
 | Claude Projects | Interactive AI conversations with context | Multi-step orchestration, branching, reproducibility |
 
 The common thread: stepwise occupies the space between "chain some LLM calls in a script" and "deploy a workflow platform." It gives you real orchestration — persistent state, exit rules, human gates, cost tracking — without requiring infrastructure, a web platform, or a Python framework. If your workflow is steps with typed inputs and outputs that include AI agents and human decisions, that's the sweet spot.
