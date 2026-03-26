@@ -243,7 +243,7 @@ export function StepNode({
         ) : isSuspended ? (
           <span className="flex items-center gap-1 text-amber-400">
             <CirclePause className="w-2.5 h-2.5" />
-            Awaiting input
+            Awaiting fulfillment
           </span>
         ) : (
           executorSubtitle(stepDef)
