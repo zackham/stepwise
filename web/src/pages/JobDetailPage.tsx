@@ -5,7 +5,7 @@ import { useConfig } from "@/hooks/useConfig";
 import { JobList } from "@/components/jobs/JobList";
 import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
 import { FlowDagView } from "@/components/dag/FlowDagView";
-import { StepDetailPanel } from "@/components/jobs/StepDetailPanel";
+import { StepDetailPanel, StepDetailSkeleton } from "@/components/jobs/StepDetailPanel";
 import { DataFlowPanel } from "@/components/dag/DataFlowPanel";
 import { HumanControls } from "@/components/jobs/HumanControls";
 import { JobStatusBadge } from "@/components/StatusBadge";
@@ -32,6 +32,7 @@ import {
   ArrowLeft,
 } from "lucide-react";
 import type { JobTreeNode, StepDefinition } from "@/lib/types";
+import { Skeleton } from "@/components/ui/skeleton";
 import { formatDuration } from "@/lib/utils";
 
 
@@ -216,8 +217,40 @@ export function JobDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-full text-zinc-500">
-        Loading...
+      <div className="flex h-full" data-testid="job-detail-skeleton">
+        {/* Sidebar skeleton */}
+        <div className="hidden md:flex w-72 border-r border-border flex-col shrink-0">
+          <div className="p-3 border-b border-border">
+            <Skeleton className="h-5 w-24" />
+          </div>
+          <div className="p-2 space-y-1">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="px-3 py-1.5">
+                <div className="flex items-start gap-2">
+                  <Skeleton className="w-3.5 h-3.5 mt-0.5 rounded shrink-0" />
+                  <div className="flex-1 space-y-1.5">
+                    <Skeleton className="h-4 w-3/4" />
+                    <Skeleton className="h-3 w-1/2" />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        {/* Main content skeleton */}
+        <div className="flex-1 flex flex-col">
+          <div className="h-10 border-b border-border flex items-center px-4 gap-3">
+            <Skeleton className="h-4 w-48" />
+            <div className="flex-1" />
+            <Skeleton className="h-5 w-16 rounded-full" />
+          </div>
+          <div className="flex-1 flex items-center justify-center">
+            <div className="space-y-3 text-center">
+              <Skeleton className="h-32 w-64 mx-auto rounded-lg" />
+              <Skeleton className="h-4 w-40 mx-auto" />
+            </div>
+          </div>
+        </div>
       </div>
     );
   }

@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { AlertTriangle, Briefcase, Clock, Hand, Monitor, Terminal, Trash2, Search, X, MoreVertical, XCircle, RefreshCw, ArrowUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { Job } from "@/lib/types";
 
 type SortOption = "recent" | "oldest" | "name" | "duration" | "status";
@@ -387,8 +388,25 @@ export function JobList({
       <ScrollArea className="flex-1 min-h-0">
         <div className="p-2 space-y-1">
           {isLoading ? (
-            <div className="text-zinc-500 text-sm text-center py-8">
-              Loading...
+            <div className="space-y-1" data-testid="job-list-skeleton">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="px-3 py-1.5 rounded-md">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-start gap-2 min-w-0 flex-1">
+                      <Skeleton className="w-3.5 h-3.5 mt-0.5 rounded shrink-0" />
+                      <div className="min-w-0 flex-1 space-y-1.5">
+                        <Skeleton className="h-4 w-3/4" />
+                        <Skeleton className="h-3 w-1/2" />
+                        <Skeleton className="h-2.5 w-20 mt-1" />
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      <Skeleton className="h-5 w-16 rounded-full" />
+                      <Skeleton className="h-3 w-12" />
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           ) : filteredJobs.length === 0 ? (
             hasActiveFilter ? (
@@ -428,7 +446,7 @@ export function JobList({
                 onClick={() => onSelectJob(job.id)}
                 onFocus={() => setFocusedIndex(index)}
                 className={cn(
-                  "w-full text-left px-3 py-1.5 rounded-md transition-colors",
+                  "w-full text-left px-3 py-1.5 rounded-md transition-colors animate-fade-in",
                   "border-b border-zinc-800/50 last:border-b-0",
                   "hover:bg-zinc-800/50",
                   selectedJobId === job.id
