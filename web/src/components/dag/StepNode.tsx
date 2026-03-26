@@ -1,6 +1,6 @@
 import { type KeyboardEvent, useState } from "react";
 import {
-  Hand,
+  CirclePause,
   RotateCw,
   ChevronDown,
   Clock,
@@ -242,8 +242,8 @@ export function StepNode({
           </button>
         ) : isSuspended ? (
           <span className="flex items-center gap-1 text-amber-400">
-            <Hand className="w-2.5 h-2.5" />
-            Awaiting input
+            <CirclePause className="w-2.5 h-2.5" />
+            Awaiting fulfillment
           </span>
         ) : (
           executorSubtitle(stepDef)

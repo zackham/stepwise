@@ -34,9 +34,9 @@ const TEMPLATES = [
     icon: Bot,
   },
   {
-    id: "human-approval",
-    label: "Human Approval",
-    description: "Agent draft with human approval loop",
+    id: "external-approval",
+    label: "External Approval",
+    description: "Agent draft with external approval loop",
     icon: UserCheck,
   },
 ] as const;

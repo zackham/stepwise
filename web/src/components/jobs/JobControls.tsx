@@ -22,7 +22,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 
-interface HumanControlsProps {
+interface JobControlsProps {
   job: Job;
   selectedStep?: string | null;
   runs?: StepRun[];
@@ -35,7 +35,7 @@ function isStale(job: { status: string; created_by: string; heartbeat_at: string
   return age > 60_000;
 }
 
-export function HumanControls({ job, selectedStep, runs }: HumanControlsProps) {
+export function JobControls({ job, selectedStep, runs }: JobControlsProps) {
   const mutations = useStepwiseMutations();
   const [contextDialogOpen, setContextDialogOpen] = useState(false);
   const [contextText, setContextText] = useState("");

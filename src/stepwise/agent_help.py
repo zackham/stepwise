@@ -271,7 +271,7 @@ def _format_compact(entries: list[dict], registry_entries: list[dict] | None = N
         "  background `--wait` is strictly better (auto-notification, no polling).",
         "  Optionally add `--notify <url>` for webhook callbacks on events.",
         "",
-        "**Mediated** — Run a flow with external (human-in-the-loop) steps.",
+        "**Mediated** — Run a flow with external (awaiting fulfillment) steps.",
         "  `stepwise run <flow> --wait` → exit 5 = suspended → read prompt →",
         "  `stepwise fulfill <run-id> '{...}' --wait` → resume until done.",
         "",

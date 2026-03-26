@@ -23,7 +23,7 @@
       "answer": {
         "name": "answer",
         "executor": {
-          "type": "human",
+          "type": "external",
           "config": {
             "prompt": "Answer the clarifying question from the 'clarify' step. Click on the clarify node in the DAG to see the question."
           },

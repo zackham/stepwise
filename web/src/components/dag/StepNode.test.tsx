@@ -94,7 +94,7 @@ describe("StepNode", () => {
     expect(screen.getByText("failed")).toBeInTheDocument();
   });
 
-  it("shows 'Awaiting input' indicator for external-suspended steps", () => {
+  it("shows 'Awaiting fulfillment' indicator for external-suspended steps", () => {
     render(
       <StepNode
         stepDef={makeStepDef()}
@@ -109,10 +109,10 @@ describe("StepNode", () => {
         {...defaultProps}
       />
     );
-    expect(screen.getByText("Awaiting input")).toBeInTheDocument();
+    expect(screen.getByText("Awaiting fulfillment")).toBeInTheDocument();
   });
 
-  it("does not show 'Awaiting input' for non-external suspended steps", () => {
+  it("does not show 'Awaiting fulfillment' for non-external suspended steps", () => {
     render(
       <StepNode
         stepDef={makeStepDef()}
@@ -127,7 +127,7 @@ describe("StepNode", () => {
         {...defaultProps}
       />
     );
-    expect(screen.queryByText("Awaiting input")).toBeNull();
+    expect(screen.queryByText("Awaiting fulfillment")).toBeNull();
   });
 
   it("calls onClick when clicked", () => {

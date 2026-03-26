@@ -345,7 +345,7 @@ export function FlowsPage() {
                         {flow.name}
                         {flow.executor_types?.includes("external") && (
                           <span className="ml-1.5 px-1 py-0.5 text-[10px] font-medium rounded bg-amber-500/15 text-amber-400 leading-none">
-                            HITL
+                            External
                           </span>
                         )}
                       </span>
