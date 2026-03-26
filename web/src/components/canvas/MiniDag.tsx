@@ -50,6 +50,7 @@ function computeMiniLayout(
   width: number,
   height: number,
 ): { nodes: MiniNode[]; edges: MiniEdge[] } {
+  if (!workflow?.steps) return { nodes: [], edges: [] };
   const stepNames = Object.keys(workflow.steps);
   if (stepNames.length === 0) return { nodes: [], edges: [] };
 

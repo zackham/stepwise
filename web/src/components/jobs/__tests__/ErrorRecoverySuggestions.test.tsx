@@ -82,6 +82,8 @@ function makeJob(overrides: Partial<Job> = {}): Job {
     created_by: "server",
     runner_pid: null,
     heartbeat_at: null,
+    job_group: null,
+    depends_on: [],
     ...overrides,
   };
 }
