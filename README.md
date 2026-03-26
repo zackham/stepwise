@@ -15,7 +15,7 @@
 
 ---
 
-Stepwise is a workflow engine that coordinates multi-step jobs where each step can be a **shell script**, an **LLM call**, an **autonomous AI agent**, or a **human decision**. Write a `.flow.yaml`, run it from the terminal, and watch it execute in a real-time web UI with DAG visualization and live agent streaming.
+Stepwise is a workflow engine that coordinates multi-step jobs where each step can be a **shell script**, an **LLM call**, an **autonomous AI agent**, or an **external input**. Write a `.flow.yaml`, run it from the terminal, and watch it execute in a real-time web UI with DAG visualization and live agent streaming.
 
 ## Install + try it
 
@@ -118,7 +118,7 @@ steps:
 - **`after:` ordering** — declare step sequencing without data dependencies
 - **Four run modes** — headless `run`, ephemeral `--watch` UI, blocking `--wait` JSON, fire-and-forget `--async`
 - **`--input` flag** — pass job inputs from the command line (`--input key=value`)
-- **Human-in-the-loop** — stdin prompts in headless mode, schema-driven web forms in watch mode
+- **External fulfillment** — stdin prompts in headless mode, schema-driven web forms in watch mode (human, agent, or API)
 - **Real-time streaming** — agent output (text + tool calls) streamed live via WebSocket
 - **Expression exit rules** — `outputs.score >= 0.8`, `attempt < 5`, branch on any output value
 - **Job completion cleanup** — automatic resource cleanup when jobs complete or fail
