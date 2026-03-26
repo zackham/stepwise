@@ -27,12 +27,16 @@ import {
   Minimize2,
   Copy,
   Check,
+  Terminal,
 } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useAgentOutput } from "@/hooks/useStepwise";
 import { FulfillWatchDialog } from "./FulfillWatchDialog";
 import { cn, formatDuration } from "@/lib/utils";
 import { executorIcon } from "@/lib/executor-utils";
+import { useLogSearch } from "@/hooks/useLogSearch";
+import { LogSearchBar } from "@/components/logs/LogSearchBar";
+import { highlightMatches, countMatches } from "@/lib/log-search";
 
 interface StepDetailPanelProps {
   jobId: string;
@@ -55,7 +59,7 @@ function formatTimestamp(ts: string | null): string {
 
 const LOG_INITIAL_LINES = 50;
 
-function highlightLogLine(line: string): React.ReactNode {
+function highlightLogLine(line: string, searchRegex?: RegExp | null): React.ReactNode {
   // Timestamp patterns: ISO, syslog-style, bracketed
   const timestampRe = /^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[.\d]*Z?|\[\d{2}:\d{2}:\d{2}\]|\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})/;
   // Log level patterns
@@ -70,22 +74,27 @@ function highlightLogLine(line: string): React.ReactNode {
   else if (infoRe.test(line)) className = "text-blue-400";
   else if (debugRe.test(line)) className = "text-zinc-400";
 
+  const applySearch = (text: string) =>
+    searchRegex ? highlightMatches(text, searchRegex) : text;
+
   // Highlight timestamp portion
   const tsMatch = line.match(timestampRe);
   if (tsMatch) {
     return (
       <span className={className}>
-        <span className="text-zinc-600">{tsMatch[0]}</span>
-        {line.slice(tsMatch[0].length)}
+        <span className="text-zinc-600">{applySearch(tsMatch[0])}</span>
+        {applySearch(line.slice(tsMatch[0].length))}
       </span>
     );
   }
-  return <span className={className}>{line}</span>;
+  return <span className={className}>{applySearch(line)}</span>;
 }
 
 function ScriptLogView({ run }: { run: StepRun }) {
   const [showAll, setShowAll] = useState(false);
   const [copied, setCopied] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const search = useLogSearch(containerRef);
 
   const stdout = (run.result?.executor_meta?.stdout as string) ?? "";
   const stderr = (run.result?.executor_meta?.stderr as string) ?? "";
@@ -102,6 +111,26 @@ function ScriptLogView({ run }: { run: StepRun }) {
   const truncated = !showAll && lines.length > LOG_INITIAL_LINES;
   const displayLines = truncated ? lines.slice(-LOG_INITIAL_LINES) : lines;
 
+  // Compute match count
+  const totalMatches = useMemo(() => {
+    if (!search.compiledRegex) return 0;
+    return displayLines.reduce(
+      (sum, line) => sum + countMatches(line, search.compiledRegex),
+      0
+    );
+  }, [displayLines, search.compiledRegex]);
+
+  useEffect(() => {
+    search.setMatchCount(totalMatches);
+  }, [totalMatches]);
+
+  const hasActiveSearch = search.query.length > 0 && !search.regexError;
+
+  const lineHasMatch = useMemo(() => {
+    if (!search.compiledRegex) return null;
+    return displayLines.map((line) => countMatches(line, search.compiledRegex) > 0);
+  }, [displayLines, search.compiledRegex]);
+
   const handleCopy = () => {
     navigator.clipboard.writeText(fullText);
     setCopied(true);
@@ -109,7 +138,7 @@ function ScriptLogView({ run }: { run: StepRun }) {
   };
 
   return (
-    <div>
+    <div ref={containerRef} tabIndex={-1}>
       <div className="flex items-center justify-between mb-1">
         <div className="flex items-center gap-1.5 text-xs text-zinc-500">
           <Terminal className="w-3 h-3" />
@@ -132,6 +161,7 @@ function ScriptLogView({ run }: { run: StepRun }) {
         </button>
       </div>
       <div className="bg-zinc-950 border border-zinc-800 rounded overflow-hidden">
+        <LogSearchBar search={search} />
         {truncated && (
           <button
             onClick={() => setShowAll(true)}
@@ -142,7 +172,14 @@ function ScriptLogView({ run }: { run: StepRun }) {
         )}
         <pre className="text-[11px] font-mono p-2 text-zinc-300 whitespace-pre-wrap break-all max-h-96 overflow-auto leading-relaxed">
           {displayLines.map((line, i) => (
-            <div key={i}>{highlightLogLine(line)}</div>
+            <div
+              key={i}
+              className={cn(
+                hasActiveSearch && lineHasMatch && !lineHasMatch[i] && "opacity-40"
+              )}
+            >
+              {highlightLogLine(line, search.compiledRegex)}
+            </div>
           ))}
         </pre>
       </div>
