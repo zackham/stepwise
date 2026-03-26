@@ -17,6 +17,7 @@ interface AgentStreamViewProps {
   isLive: boolean;
   startedAt?: string | null;
   costUsd?: number | null;
+  billingMode?: string;
 }
 
 function toolIcon(kind: string) {
@@ -111,7 +112,7 @@ function UsageBar({ usage }: { usage: { used: number; size: number } }) {
   );
 }
 
-export function AgentStreamView({ runId, isLive, startedAt, costUsd }: AgentStreamViewProps) {
+export function AgentStreamView({ runId, isLive, startedAt, costUsd, billingMode }: AgentStreamViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
 
@@ -160,9 +161,11 @@ export function AgentStreamView({ runId, isLive, startedAt, costUsd }: AgentStre
             </span>
           )}
         </div>
-        {costUsd != null && costUsd > 0 && (
+        {(billingMode === "subscription" || (costUsd != null && costUsd > 0)) && (
           <span className="text-xs font-mono text-zinc-600 mt-1 block">
-            ${costUsd < 0.01 ? costUsd.toFixed(4) : costUsd.toFixed(2)}
+            {billingMode === "subscription"
+              ? "$0 (Max)"
+              : `$${costUsd! < 0.01 ? costUsd!.toFixed(4) : costUsd!.toFixed(2)}`}
           </span>
         )}
       </div>
