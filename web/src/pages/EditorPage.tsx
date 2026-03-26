@@ -360,7 +360,6 @@ export function EditorPage() {
         onToggleChat={() => setChatOpen((o) => !o)}
         isChatStreaming={chat.isStreaming}
         agentMode={chat.agentMode}
-        onBack={() => navigate({ to: "/flows" })}
       />
       <div className="flex-1 flex min-h-0">
         {/* File tree for directory flows — toggled */}
