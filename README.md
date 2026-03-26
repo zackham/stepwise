@@ -26,11 +26,11 @@ curl -fsSL https://raw.githubusercontent.com/zackham/stepwise/master/install.sh 
 Try the interactive demo or a real-world code review flow:
 
 ```bash
-stepwise run @stepwise:welcome --watch
+stepwise welcome
 stepwise run @stepwise:code-review --watch
 ```
 
-`--watch` opens a browser with a real-time DAG visualization. Steps execute automatically — agents stream output live, external steps pause and wait for your input. Drop `--watch` to run headless in the terminal.
+`stepwise welcome` walks through a sample flow interactively. `--watch` on other commands opens a browser with a real-time DAG visualization. Steps execute automatically — agents stream output live, external steps pause and wait for your input. Drop `--watch` to run headless in the terminal.
 
 ## Flows your agents can call
 
