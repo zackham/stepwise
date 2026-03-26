@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { ForEachExpandedContainer } from "../ForEachExpandedContainer";
 import type { HierarchicalDagNode, ForEachInstance, HierarchicalDagLayout } from "@/lib/dag-layout";
-import type { JobTreeNode } from "@/lib/types";
+import type { JobTreeNode, JobStatus } from "@/lib/types";
 
 function makeLayout(): HierarchicalDagLayout {
   return {
@@ -44,7 +44,7 @@ function makeNode(overrides: Partial<HierarchicalDagNode> = {}): HierarchicalDag
   };
 }
 
-function makeSubTree(jobId: string, status: string): JobTreeNode {
+function makeSubTree(jobId: string, status: JobStatus): JobTreeNode {
   return {
     job: {
       id: jobId,
@@ -53,6 +53,8 @@ function makeSubTree(jobId: string, status: string): JobTreeNode {
       status,
       workflow: { steps: {} },
       inputs: {},
+      workspace_path: "/tmp",
+      config: { max_sub_job_depth: 3, timeout_minutes: null, metadata: {} },
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
       created_by: "server",
@@ -102,7 +104,7 @@ describe("ForEachExpandedContainer", () => {
       makeInstance(2, "running"),
     ];
     const subTrees = instances.map((i) =>
-      makeSubTree(i.jobId, i.status!)
+      makeSubTree(i.jobId, i.status as JobStatus)
     );
     const node = makeNode({ forEachChildren: instances });
 

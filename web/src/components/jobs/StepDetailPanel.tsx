@@ -27,11 +27,13 @@ import {
   Minimize2,
   Copy,
   Check,
+  Terminal,
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { useAgentOutput } from "@/hooks/useStepwise";
 import { FulfillWatchDialog } from "./FulfillWatchDialog";
 import { cn } from "@/lib/utils";
+import { Skeleton } from "@/components/ui/skeleton";
 import { LiveDuration } from "@/components/LiveDuration";
 import { executorIcon } from "@/lib/executor-utils";
 
@@ -41,6 +43,16 @@ interface StepDetailPanelProps {
   onClose: () => void;
   onExpand?: () => void;
   expanded?: boolean;
+}
+
+export function StepDetailSkeleton() {
+  return (
+    <div data-testid="step-detail-skeleton" className="animate-fade-in p-3 space-y-3">
+      <Skeleton className="h-5 w-32" />
+      <Skeleton className="h-4 w-48" />
+      <Skeleton className="h-4 w-24" />
+    </div>
+  );
 }
 
 function formatCost(cost: number | null | undefined): string {

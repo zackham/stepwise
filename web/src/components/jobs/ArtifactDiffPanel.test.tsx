@@ -32,6 +32,7 @@ function makeRun(
       : null,
     error: null,
     error_category: null,
+    traceback: null,
     executor_state: null,
     watch: null,
     sub_job_id: null,
