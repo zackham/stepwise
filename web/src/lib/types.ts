@@ -255,6 +255,19 @@ export interface FlowTemplate {
   created_at: string;
 }
 
+// ── Quick Launch ──────────────────────────────────────────────────────
+
+export interface QuickLaunchItem {
+  flow_name: string;
+  flow_path: string | null;
+  last_inputs: Record<string, unknown>;
+  last_job_id: string;
+  last_job_name: string | null;
+  last_run_at: string;
+  last_status: JobStatus;
+  workflow: FlowDefinition;
+}
+
 // ── Engine Status ──────────────────────────────────────────────────────
 
 export interface EngineStatus {
