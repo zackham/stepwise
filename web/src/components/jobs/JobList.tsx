@@ -16,7 +16,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import { AlertTriangle, Briefcase, Clock, Hand, Monitor, Terminal, Trash2, Search, X, MoreVertical, XCircle, RefreshCw, ArrowUpDown } from "lucide-react";
+import { AlertTriangle, Briefcase, CirclePause, Clock, Monitor, Terminal, Trash2, Search, X, MoreVertical, XCircle, RefreshCw, ArrowUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Job } from "@/lib/types";
@@ -292,7 +292,7 @@ function VirtualJobList({
                       <JobStatusBadge status={job.status} />
                       {job.has_suspended_steps && (
                         <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 ring-1 ring-amber-500/30">
-                          <Hand className="w-2.5 h-2.5" />
+                          <CirclePause className="w-2.5 h-2.5" />
                           Awaiting Input
                         </span>
                       )}
@@ -486,7 +486,7 @@ export function JobList({
                 : "bg-amber-500/10 text-amber-400/90 hover:bg-amber-500/15",
             )}
           >
-            <Hand className="w-3.5 h-3.5 shrink-0" />
+            <CirclePause className="w-3.5 h-3.5 shrink-0" />
             <span>Awaiting Input</span>
             <span className={cn(
               "ml-auto tabular-nums rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
