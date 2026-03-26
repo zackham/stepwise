@@ -346,15 +346,17 @@ export function JobDetailPage() {
                 <Clock className="w-2.5 h-2.5" />
                 {formatDuration(job.created_at, job.updated_at)}
               </span>
-              {costData && costData.cost_usd > 0 && (
+              {costData && (costData.cost_usd > 0 || costData.billing_mode === "subscription") && (
                 <span
                   className="text-[10px] text-zinc-600 flex items-center gap-0.5"
-                  title={configData?.billing_mode === "subscription"
-                    ? "Estimated cost — running against subscription plan"
+                  title={costData.billing_mode === "subscription"
+                    ? "Claude Max subscription — no API cost"
                     : "API cost"}
                 >
                   <DollarSign className="w-2.5 h-2.5" />
-                  ${costData.cost_usd.toFixed(4)}
+                  {costData.billing_mode === "subscription"
+                    ? "$0 (Max)"
+                    : `$${costData.cost_usd.toFixed(4)}`}
                 </span>
               )}
             </div>
@@ -491,17 +493,14 @@ export function JobDetailPage() {
                       {formatDuration(job.created_at, job.updated_at)}
                     </span>
                   </div>
-                  {costData && costData.cost_usd > 0 && (
+                  {costData && (costData.cost_usd > 0 || costData.billing_mode === "subscription") && (
                     <div className="flex items-center gap-2">
                       <span className="text-zinc-500 w-16">Cost</span>
                       <span className="font-mono text-zinc-400">
-                        ${costData.cost_usd.toFixed(4)}
+                        {costData.billing_mode === "subscription"
+                          ? "$0 (Max)"
+                          : `$${costData.cost_usd.toFixed(4)}`}
                       </span>
-                      {configData?.billing_mode === "subscription" && (
-                        <span className="text-[9px] text-zinc-600" title="Running against subscription plan — cost is estimated">
-                          est.
-                        </span>
-                      )}
                     </div>
                   )}
                   <div className="flex items-center gap-2">

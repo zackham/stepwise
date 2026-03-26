@@ -140,7 +140,7 @@ export function fetchStepEvents(
 
 export function fetchRunCost(
   runId: string
-): Promise<{ run_id: string; cost_usd: number }> {
+): Promise<{ run_id: string; cost_usd: number; billing_mode: string }> {
   return request(`/runs/${runId}/cost`);
 }
 
@@ -160,7 +160,7 @@ export function deleteAllJobs(): Promise<{ status: string; count: number }> {
 
 export function fetchJobCost(
   jobId: string
-): Promise<{ job_id: string; cost_usd: number }> {
+): Promise<{ job_id: string; cost_usd: number; billing_mode: string }> {
   return request(`/jobs/${jobId}/cost`);
 }
 
