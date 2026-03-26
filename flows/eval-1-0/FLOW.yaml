@@ -1,7 +1,7 @@
 name: eval-1-0
 description: "Stepwise 1.0 readiness evaluation — self-hosted on Stepwise"
 author: stepwise
-tags: [evaluation, self-hosted, agents, human-in-the-loop]
+tags: [evaluation, self-hosted, agents, external-fulfillment]
 
 config:
   stepwise_path:

@@ -59,7 +59,7 @@ describe("Awaiting Input filter", () => {
     );
     render(<JobList {...defaultProps} />);
     expect(screen.getByTestId("awaiting-input-filter")).toBeInTheDocument();
-    expect(screen.getByTestId("awaiting-input-filter")).toHaveTextContent("Awaiting Input");
+    expect(screen.getByTestId("awaiting-input-filter")).toHaveTextContent("Awaiting Fulfillment");
     expect(screen.getByTestId("awaiting-input-filter")).toHaveTextContent("1");
   });
 

@@ -6,7 +6,7 @@ Use Stepwise flows as structured tools from OpenAI Codex CLI or OpenCode. The sa
 
 ## What You'll Build
 
-Your Codex or OpenCode agent will discover available Stepwise flows, invoke them with `--wait` for blocking JSON output, handle exit codes programmatically, and fulfill human-in-the-loop steps. The same flow file works whether called from Codex, Claude Code, or any other agent.
+Your Codex or OpenCode agent will discover available Stepwise flows, invoke them with `--wait` for blocking JSON output, handle exit codes programmatically, and fulfill external fulfillment steps. The same flow file works whether called from Codex, Claude Code, or any other agent.
 
 ## Prerequisites
 
