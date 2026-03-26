@@ -986,6 +986,8 @@ stepwise docs executors        # show executor reference
 
 Manage the step result cache. Cached results are stored in `.stepwise/cache/results.db`.
 
+To bypass the cache for a specific step during a run, use `stepwise run --rerun <step>` (see [`run` flags](#stepwise-run)).
+
 ---
 
 #### `stepwise cache stats`
