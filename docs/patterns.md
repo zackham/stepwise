@@ -419,7 +419,7 @@ steps:
 
 **Why `continue_session` matters:** Without it, each loop iteration starts a fresh agent session. The agent re-reads the codebase, re-discovers patterns, and may repeat mistakes. With it, the agent builds on prior work and receives targeted feedback.
 
-**`max_continuous_attempts`:** For long loops, set this to force a fresh session periodically. After N continuous attempts, the engine starts a new session with chain context backfill, preventing context window exhaustion.
+**`max_continuous_attempts`:** For long loops, set this to force a fresh session periodically. After N continuous attempts, the engine starts a new session, preventing context window exhaustion.
 
 ---
 
@@ -477,7 +477,6 @@ steps:
 
 **Guidelines:**
 - Use bare flow names (`flow: evaluate-quality`), not file paths — portable across machines
-- Sub-flows have independent chain scope — no context leakage between parent and child
 - Keep sub-flows focused: one responsibility, clear inputs/outputs
 - `for_each` supports sub-flows for fan-out over composed flows
 

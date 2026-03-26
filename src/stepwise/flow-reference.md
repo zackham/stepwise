@@ -260,13 +260,12 @@ implement:
 |---|---|---|---|---|
 | `continue_session` | bool | no | `false` | Reuse agent session across loop iterations |
 | `loop_prompt` | string | no | — | Alternate prompt template used on attempt > 1 (falls back to `prompt`) |
-| `max_continuous_attempts` | int | no | — | After N iterations, force fresh session with chain context backfill |
+| `max_continuous_attempts` | int | no | — | After N iterations, force a fresh session |
 
 **Behavior:**
 - First run (attempt 1): creates a new session, sends `prompt`
 - Loop-back (attempt 2+): continues existing session, sends `loop_prompt` (or `prompt` if not set)
-- When `continue_session` is true, M7a chain context injection is skipped (agent already has full history)
-- If `max_continuous_attempts` is exceeded or the session crashes, falls back to fresh session + chain context backfill
+- If `max_continuous_attempts` is exceeded or the session crashes, falls back to a fresh session
 
 **Cross-step session sharing via `_session_id`:**
 

@@ -631,7 +631,7 @@ steps:
 ```
 
 - `loop_prompt` — alternate prompt used on attempt > 1 (falls back to `prompt` if not set)
-- `max_continuous_attempts` — circuit breaker; after N iterations, forces a fresh session with M7a chain context backfill
+- `max_continuous_attempts` — circuit breaker; after N iterations, forces a fresh session
 - `_session_id` — auto-emitted output for cross-step session sharing. Downstream steps receive it via optional input to continue the same conversation:
 
 ```yaml

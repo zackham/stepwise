@@ -120,7 +120,6 @@ steps:
 - **`--input` flag** — pass job inputs from the command line (`--input key=value`)
 - **Human-in-the-loop** — stdin prompts in headless mode, schema-driven web forms in watch mode
 - **Real-time streaming** — agent output (text + tool calls) streamed live via WebSocket
-- **Context chains** — session continuity across agent steps via compiled transcripts
 - **Expression exit rules** — `outputs.score >= 0.8`, `attempt < 5`, branch on any output value
 - **Job completion cleanup** — automatic resource cleanup when jobs complete or fail
 - **Agent step reliability** — retry logic, session continuity, and circuit breakers for agent steps
