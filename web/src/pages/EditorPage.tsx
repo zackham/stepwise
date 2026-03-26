@@ -21,6 +21,7 @@ import {
 import { useStepwiseMutations } from "@/hooks/useStepwise";
 import { Code, Workflow, FolderTree } from "lucide-react";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { RunConfigDialog } from "@/components/editor/RunConfigDialog";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { cn } from "@/lib/utils";
 import type { FlowDefinition, ParseResult } from "@/lib/types";
@@ -266,17 +267,40 @@ export function EditorPage() {
 
   // Run flow directly from editor
   const mutations = useStepwiseMutations();
-  const handleRun = useCallback(() => {
+  const [showRunConfig, setShowRunConfig] = useState(false);
+
+  const launchJob = useCallback((inputs: Record<string, unknown>) => {
     if (!parsedFlow || !flowName) return;
     mutations.createJob.mutate(
-      { objective: flowName, workflow: parsedFlow, inputs: {}, workspace_path: undefined },
+      { objective: flowName, workflow: parsedFlow, inputs, workspace_path: undefined },
       {
         onSuccess: (job) => {
+          setShowRunConfig(false);
           navigate({ to: "/jobs/$jobId", params: { jobId: job.id } });
         },
       }
     );
   }, [parsedFlow, flowName, mutations, navigate]);
+
+  const handleRun = useCallback(() => {
+    if (!parsedFlow || !flowName) return;
+    const vars = parsedFlow.config_vars ?? [];
+    const needsInput = vars.some(
+      (v) => v.required !== false && (v.default === undefined || v.default === null)
+    );
+    if (needsInput) {
+      setShowRunConfig(true);
+    } else {
+      // Pre-fill defaults and run immediately
+      const inputs: Record<string, unknown> = {};
+      for (const v of vars) {
+        if (v.default !== undefined && v.default !== null) {
+          inputs[v.name] = v.default;
+        }
+      }
+      launchJob(inputs);
+    }
+  }, [parsedFlow, flowName, launchJob]);
 
   // Click file in tree → open source tab with that file
   const handleSelectFile = useCallback((filePath: string | null) => {
@@ -551,6 +575,17 @@ export function EditorPage() {
           )
         )}
       </div>
+
+      {/* Run config dialog for flows with required inputs */}
+      {parsedFlow?.config_vars && parsedFlow.config_vars.length > 0 && (
+        <RunConfigDialog
+          open={showRunConfig}
+          onOpenChange={setShowRunConfig}
+          configVars={parsedFlow.config_vars}
+          onRun={launchJob}
+          isPending={mutations.createJob.isPending}
+        />
+      )}
     </div>
   );
 }
