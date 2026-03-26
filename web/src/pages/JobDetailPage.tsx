@@ -399,6 +399,8 @@ export function JobDetailPage() {
             isFulfilling={mutations.fulfillWatch.isPending}
             selection={selection}
             onSelectDataFlow={handleSelectDataFlow}
+            flowName={job.workflow.metadata?.name || job.name || job.objective || "Flow"}
+            jobStatus={job.status}
           />
         </div>
       </div>
