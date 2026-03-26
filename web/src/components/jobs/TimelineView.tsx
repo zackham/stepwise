@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect, useRef } from "react";
 import type { StepRun, Job, StepRunStatus } from "@/lib/types";
 import { STEP_STATUS_COLORS } from "@/lib/status-colors";
 import { cn } from "@/lib/utils";
+import { LiveDuration } from "@/components/LiveDuration";
 
 interface TimelineViewProps {
   job: Job;
@@ -226,7 +227,7 @@ export function TimelineView({ job, runs, onSelectStep }: TimelineViewProps) {
                       <div className="absolute inset-0 flex items-center px-1.5 overflow-hidden">
                         <span className="text-[10px] text-white/90 font-medium truncate whitespace-nowrap drop-shadow-sm">
                           {row.run.attempt > 1 && `#${row.run.attempt} · `}
-                          {formatMs(row.durationMs)}
+                          <LiveDuration startTime={row.run.started_at} endTime={row.run.completed_at} />
                         </span>
                       </div>
                     </div>
@@ -247,7 +248,7 @@ export function TimelineView({ job, runs, onSelectStep }: TimelineViewProps) {
                             {row.run.status}
                           </span>
                           <span className="text-zinc-500">
-                            {formatMs(row.durationMs)}
+                            <LiveDuration startTime={row.run.started_at} endTime={row.run.completed_at} />
                           </span>
                         </div>
                         {row.run.started_at && (
