@@ -5,7 +5,7 @@ import { Toaster } from "sonner";
 import { useStepwiseWebSocket } from "@/hooks/useStepwiseWebSocket";
 import { useNotifySuspended } from "@/hooks/useNotifySuspended";
 import { useEngineStatus, useJobs, useJob } from "@/hooks/useStepwise";
-import { LayoutGrid, FileCode, Settings2, Zap, FolderOpen, AlertTriangle, Sun, Moon } from "lucide-react";
+import { LayoutGrid, FileCode, Settings2, Zap, FolderOpen, AlertTriangle, Sun, Moon, Network } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CommandPalette } from "@/components/CommandPalette";
 
@@ -56,11 +56,12 @@ export function AppLayout() {
   const currentPath = location.pathname;
   const isJobsActive =
     currentPath === "/jobs" || currentPath.startsWith("/jobs/");
+  const isCanvasActive = currentPath === "/canvas";
   const isFlowsActive = currentPath.startsWith("/flows");
   const isSettingsActive = currentPath.startsWith("/settings");
 
   // Derive a route key for page transition animation — changes on top-level route switches
-  const routeKey = isJobsActive ? "jobs" : isFlowsActive ? "flows" : isSettingsActive ? "settings" : currentPath;
+  const routeKey = isJobsActive ? "jobs" : isCanvasActive ? "canvas" : isFlowsActive ? "flows" : isSettingsActive ? "settings" : currentPath;
 
   // Dynamic tab title
   const { data: suspendedJobs } = useJobs("suspended");
@@ -81,6 +82,8 @@ export function AppLayout() {
       title = jobName ? `${jobName} — Stepwise` : "Stepwise";
     } else if (isJobsActive) {
       title = "Jobs — Stepwise";
+    } else if (isCanvasActive) {
+      title = "Canvas — Stepwise";
     } else if (isFlowsActive) {
       title = "Flows — Stepwise";
     } else if (isSettingsActive) {
@@ -92,7 +95,7 @@ export function AppLayout() {
     }
 
     document.title = title;
-  }, [currentPath, isJobsActive, isFlowsActive, isSettingsActive, detailJobId, detailJob, pendingCount]);
+  }, [currentPath, isJobsActive, isCanvasActive, isFlowsActive, isSettingsActive, detailJobId, detailJob, pendingCount]);
 
   return (
     <div className="h-screen flex flex-col bg-background text-foreground">
@@ -131,6 +134,18 @@ export function AppLayout() {
                 {pendingCount}
               </span>
             )}
+          </Link>
+          <Link
+            to="/canvas"
+            className={cn(
+              "flex items-center justify-center min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 px-2 md:px-3 py-1.5 text-sm rounded-md transition-colors",
+              isCanvasActive
+                ? "bg-zinc-200 dark:bg-zinc-800 text-foreground"
+                : "text-zinc-500 hover:text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
+            )}
+          >
+            <Network className="w-4 h-4 md:w-3.5 md:h-3.5 md:mr-1.5" />
+            <span className="hidden md:inline">Canvas</span>
           </Link>
           <Link
             to="/flows"
