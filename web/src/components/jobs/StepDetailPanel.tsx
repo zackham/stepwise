@@ -1,4 +1,5 @@
 import { useRuns, useEvents, useRunCost, useStepwiseMutations } from "@/hooks/useStepwise";
+import { useConfig } from "@/hooks/useConfig";
 import type { StepDefinition, StepRun } from "@/lib/types";
 import { StepStatusBadge } from "@/components/StatusBadge";
 import { HandoffEnvelopeView } from "./HandoffEnvelopeView";
@@ -84,6 +85,9 @@ export function StepDetailPanel({
   const { data: events = [] } = useEvents(jobId);
   const mutations = useStepwiseMutations();
   const [fulfillDialogOpen, setFulfillDialogOpen] = useState(false);
+
+  const { data: configData } = useConfig();
+  const isSubscription = configData?.billing_mode === "subscription";
 
   const sortedRunsForCost = [...runs].sort((a, b) => b.attempt - a.attempt);
   const activeRun = sortedRunsForCost.find((r) => r.status === "running");
@@ -266,6 +270,7 @@ export function StepDetailPanel({
               isLive={true}
               startedAt={activeRun.started_at}
               costUsd={costData?.cost_usd}
+              billingMode={costData?.billing_mode}
             />
           )}
 
@@ -403,13 +408,15 @@ export function StepDetailPanel({
                         )}
 
                         {/* Cost (from executor_meta) */}
-                        {run.result?.executor_meta?.cost_usd != null &&
-                          (run.result.executor_meta.cost_usd as number) > 0 && (
+                        {(isSubscription || (run.result?.executor_meta?.cost_usd != null &&
+                          (run.result.executor_meta.cost_usd as number) > 0)) && (
                           <div className="flex items-center gap-1.5 text-xs">
                             <DollarSign className="w-3 h-3 text-emerald-500" />
                             <span className="text-zinc-500">Cost:</span>
                             <span className="font-mono text-emerald-400">
-                              {formatCost(run.result.executor_meta.cost_usd as number)}
+                              {isSubscription
+                                ? "$0 (Max)"
+                                : formatCost(run.result?.executor_meta?.cost_usd as number)}
                             </span>
                           </div>
                         )}
