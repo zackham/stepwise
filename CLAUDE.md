@@ -45,6 +45,16 @@ make build-web                             # npm build → copies web/dist/ → 
 
 All delegation modes (`run`, `--wait`, `--async`) use WebSocket notifications from the server for low-latency updates, falling back to REST polling at 2s intervals if WS connection fails.
 
+**Always pass `--name`** when launching jobs. The web UI job list shows the name as the primary label — without it, users see "implement" or "plan-light" for every job with no way to tell them apart. Use a short, human-readable label describing what the job is doing:
+
+```bash
+stepwise run flows/implement/FLOW.yaml --name "impl: cost-analytics" --input ...
+stepwise run flows/plan-light/FLOW.yaml --name "plan: dag-minimap" --input ...
+stepwise job create flows/implement/FLOW.yaml --name "impl: mobile-overhaul" --input ...
+```
+
+For plan→implement chains, prefix with `plan:` and `impl:` so the relationship is visible in the list.
+
 ---
 
 ## Architecture
