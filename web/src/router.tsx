@@ -62,6 +62,9 @@ const flowsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/flows",
   component: FlowsPage,
+  validateSearch: (search: Record<string, unknown>): { flow?: string } => ({
+    flow: typeof search.flow === "string" ? search.flow : undefined,
+  }),
 });
 
 // Flow editor
