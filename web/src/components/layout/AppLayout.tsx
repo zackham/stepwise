@@ -1,10 +1,21 @@
-import { useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Outlet, Link, useLocation } from "@tanstack/react-router";
 import { ErrorBoundary, type FallbackProps } from "react-error-boundary";
 import { useStepwiseWebSocket } from "@/hooks/useStepwiseWebSocket";
 import { useEngineStatus, useJobs, useJob } from "@/hooks/useStepwise";
-import { LayoutGrid, FileCode, Settings2, Zap, FolderOpen, AlertTriangle } from "lucide-react";
+import { LayoutGrid, FileCode, Settings2, Zap, FolderOpen, AlertTriangle, Sun, Moon } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+function getInitialTheme(): "dark" | "light" {
+  const stored = localStorage.getItem("stepwise-theme");
+  if (stored === "light" || stored === "dark") return stored;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function applyTheme(theme: "dark" | "light") {
+  document.documentElement.classList.toggle("dark", theme === "dark");
+  localStorage.setItem("stepwise-theme", theme);
+}
 
 function ErrorFallback({ error, resetErrorBoundary }: FallbackProps) {
   return (
@@ -32,6 +43,11 @@ export function AppLayout() {
   useStepwiseWebSocket();
   const location = useLocation();
   const { data: status } = useEngineStatus();
+  const [theme, setTheme] = useState<"dark" | "light">(getInitialTheme);
+
+  useEffect(() => {
+    applyTheme(theme);
+  }, [theme]);
 
   const currentPath = location.pathname;
   const isJobsActive =
@@ -72,9 +88,9 @@ export function AppLayout() {
   }, [currentPath, isJobsActive, isFlowsActive, isSettingsActive, detailJobId, detailJob, pendingCount]);
 
   return (
-    <div className="h-screen flex flex-col bg-background text-foreground dark">
+    <div className="h-screen flex flex-col bg-background text-foreground">
       {/* Top nav */}
-      <header className="h-12 border-b border-border flex items-center px-4 gap-6 shrink-0 bg-zinc-950/80">
+      <header className="h-12 border-b border-border flex items-center px-4 gap-6 shrink-0 bg-white/80 dark:bg-zinc-950/80">
         <Link to="/jobs" className="flex items-center gap-2">
           <img src="/stepwise-icon-64.png" alt="Stepwise" className="w-5 h-5" />
           <span className="font-semibold text-sm tracking-tight">
@@ -97,8 +113,8 @@ export function AppLayout() {
             className={cn(
               "flex items-center justify-center min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 px-2 md:px-3 py-1.5 text-sm rounded-md transition-colors",
               isJobsActive
-                ? "bg-zinc-800 text-foreground"
-                : "text-zinc-500 hover:text-foreground hover:bg-zinc-800/50"
+                ? "bg-zinc-200 dark:bg-zinc-800 text-foreground"
+                : "text-zinc-500 hover:text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
             )}
           >
             <LayoutGrid className="w-4 h-4 md:w-3.5 md:h-3.5 md:mr-1.5" />
@@ -109,8 +125,8 @@ export function AppLayout() {
             className={cn(
               "flex items-center justify-center min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 px-2 md:px-3 py-1.5 text-sm rounded-md transition-colors",
               isFlowsActive
-                ? "bg-zinc-800 text-foreground"
-                : "text-zinc-500 hover:text-foreground hover:bg-zinc-800/50"
+                ? "bg-zinc-200 dark:bg-zinc-800 text-foreground"
+                : "text-zinc-500 hover:text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
             )}
           >
             <FileCode className="w-4 h-4 md:w-3.5 md:h-3.5 md:mr-1.5" />
@@ -121,8 +137,8 @@ export function AppLayout() {
             className={cn(
               "flex items-center justify-center min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 px-2 md:px-3 py-1.5 text-sm rounded-md transition-colors",
               isSettingsActive
-                ? "bg-zinc-800 text-foreground"
-                : "text-zinc-500 hover:text-foreground hover:bg-zinc-800/50"
+                ? "bg-zinc-200 dark:bg-zinc-800 text-foreground"
+                : "text-zinc-500 hover:text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
             )}
           >
             <Settings2 className="w-4 h-4 md:w-3.5 md:h-3.5 md:mr-1.5" />
@@ -131,6 +147,15 @@ export function AppLayout() {
         </nav>
 
         <div className="flex-1" />
+
+        {/* Theme toggle */}
+        <button
+          onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+          className="p-1.5 rounded-md text-zinc-500 hover:text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 transition-colors"
+          title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+        >
+          {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+        </button>
 
         {/* Engine status */}
         {status && (
