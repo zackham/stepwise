@@ -72,4 +72,18 @@ describe("EditorToolbar", () => {
     fireEvent.click(screen.getByTitle("Open chat"));
     expect(onToggleChat).toHaveBeenCalled();
   });
+
+  it("shows backgrounded dot when chat is open but on inspector tab", () => {
+    const { container } = render(
+      <EditorToolbar
+        flowName="research"
+        parseErrors={[]}
+        onToggleChat={() => {}}
+        chatOpen={true}
+        chatBackgrounded={true}
+      />
+    );
+    const dot = container.querySelector(".bg-violet-500");
+    expect(dot).not.toBeNull();
+  });
 });
