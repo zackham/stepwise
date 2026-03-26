@@ -9,6 +9,7 @@ import { JobDashboard } from "@/pages/JobDashboard";
 import { JobDetailPage } from "@/pages/JobDetailPage";
 import { JobEventsPage } from "@/pages/JobEventsPage";
 import { JobTreePage } from "@/pages/JobTreePage";
+import { JobTimelinePage } from "@/pages/JobTimelinePage";
 import { FlowsPage } from "@/pages/FlowsPage";
 import { EditorPage } from "@/pages/EditorPage";
 import { SettingsPage } from "@/pages/SettingsPage";
@@ -61,6 +62,13 @@ const jobTreeRoute = createRoute({
   component: JobTreePage,
 });
 
+// Job timeline
+const jobTimelineRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/jobs/$jobId/timeline",
+  component: JobTimelinePage,
+});
+
 // Flows list
 const flowsRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -109,6 +117,7 @@ const routeTree = rootRoute.addChildren([
   jobDetailRoute,
   jobEventsRoute,
   jobTreeRoute,
+  jobTimelineRoute,
   flowsRoute,
   flowEditorRoute,
   editorRedirectRoute,
