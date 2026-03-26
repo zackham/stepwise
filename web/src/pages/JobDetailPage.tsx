@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
-import { useJob, useRuns, useJobTree, useJobOutput, useJobCost, useConfig, useEvents, useStepwiseMutations } from "@/hooks/useStepwise";
+import { useJob, useRuns, useJobTree, useJobOutput, useJobCost, useConfig, useStepwiseMutations } from "@/hooks/useStepwise";
 import { JobList } from "@/components/jobs/JobList";
 import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
 import { FlowDagView } from "@/components/dag/FlowDagView";
@@ -80,7 +80,11 @@ export function JobDetailPage() {
   const isTerminal =
     job?.status === "completed" || job?.status === "failed" || job?.status === "cancelled";
   const { data: outputs } = useJobOutput(job?.id, isTerminal);
-  const { data: events = [] } = useEvents(job?.status === "failed" ? jobId : undefined);
+  // Find the first failed step run for the error summary banner
+  const failedRun = useMemo(() => {
+    if (job?.status !== "failed") return null;
+    return runs.find((r) => r.status === "failed") ?? null;
+  }, [job?.status, runs]);
 
   // Derive selectedStep from selection for backward compatibility
   const selectedStep = selection?.kind === "step" ? selection.stepName : null;
@@ -249,12 +253,6 @@ export function JobDetailPage() {
   const stale = job.status === "running" && job.created_by !== "server" &&
     (!job.heartbeat_at || Date.now() - new Date(job.heartbeat_at).getTime() > 60_000);
 
-  // Extract failure reason from job.failed event
-  const failureEvent = job.status === "failed"
-    ? events.find((e) => e.type === "job.failed")
-    : null;
-  const failureReason = failureEvent?.data as { reason?: string; step?: string; error?: string; rule?: string } | null;
-
   // Determine what the right panel shows
   const isDataFlowSelection =
     selection?.kind === "edge-field" ||
@@ -400,24 +398,27 @@ export function JobDetailPage() {
         {/* Controls */}
         <HumanControls job={job} selectedStep={selectedStep} runs={runs} />
 
-        {/* Failure banner */}
-        {failureReason && (
-          <div className="flex items-start gap-2 px-4 py-2 border-b border-red-900/50 bg-red-950/30 text-xs">
-            <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
-            <div className="min-w-0">
+        {/* Error summary banner */}
+        {failedRun && (
+          <div className="flex items-center gap-2 px-4 py-2 border-b border-red-900/50 bg-red-950/30 text-xs">
+            <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+            <div className="flex-1 min-w-0">
               <span className="text-red-300 font-medium">
-                {failureReason.reason === "step_failed" && failureReason.step
-                  ? <>Step "<button type="button" className="underline underline-offset-2 hover:text-red-200 cursor-pointer" onClick={() => handleSelectStep(failureReason.step!)}>{failureReason.step}</button>" failed</>
-                  : failureReason.reason === "no_terminal_reached"
-                    ? "No terminal step reached — all branches were gated"
-                    : failureReason.reason === "abandoned" && failureReason.step
-                      ? <>Step "<button type="button" className="underline underline-offset-2 hover:text-red-200 cursor-pointer" onClick={() => handleSelectStep(failureReason.step!)}>{failureReason.step}</button>" abandoned (rule: {failureReason.rule})</>
-                      : `Job failed: ${failureReason.reason}`}
+                Step "{failedRun.step_name}" failed
               </span>
-              {failureReason.error && (
-                <p className="text-red-400/70 font-mono mt-0.5 break-all">{failureReason.error}</p>
+              {failedRun.error && (
+                <span className="text-red-400/70 font-mono ml-2 truncate">
+                  — {failedRun.error.split("\n")[0]}
+                </span>
               )}
             </div>
+            <button
+              type="button"
+              className="text-red-400 hover:text-red-300 underline underline-offset-2 whitespace-nowrap shrink-0"
+              onClick={() => handleSelectStep(failedRun.step_name)}
+            >
+              View Details
+            </button>
           </div>
         )}
 
