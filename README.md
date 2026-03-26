@@ -160,6 +160,7 @@ See [`docs/cli.md`](docs/cli.md) for the full reference with all flags, examples
 | [How-To: Build Extensions](docs/how-to-plugins.md) | Write custom executor plugins |
 | [How-To: Create Agent Skills](docs/how-to-skills.md) | Wrap flows as agent-callable skills |
 | [How-To: Non-Claude Agents](docs/how-to-generic-agents.md) | Using Stepwise with non-Claude agents |
+| [Troubleshooting](docs/troubleshooting.md) | Error reference, causes, fixes, diagnostic commands |
 
 ## Development
 

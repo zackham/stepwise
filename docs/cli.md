@@ -2,7 +2,7 @@
 
 Stepwise is a CLI-first tool. All commands are available via `stepwise <command>`.
 
-See [Quickstart](quickstart.md) for installation and first-run instructions.
+See [Quickstart](quickstart.md) for installation and first-run instructions. See [Troubleshooting](troubleshooting.md) for error messages and diagnostic commands.
 
 ## Overview
 
