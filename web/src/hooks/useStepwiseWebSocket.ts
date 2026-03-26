@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { AgentOutputMessage } from "@/lib/types";
+import type { AgentOutputMessage, TickMessage } from "@/lib/types";
 
 export type WsStatus = "connected" | "disconnected" | "reconnecting";
 
@@ -12,6 +12,17 @@ export function subscribeAgentOutput(fn: (msg: AgentOutputMessage) => void) {
   agentOutputListeners.add(fn);
   return () => {
     agentOutputListeners.delete(fn);
+  };
+}
+
+// ── Tick message pub/sub ────────────────────────────────────────────
+
+const tickListeners = new Set<(msg: TickMessage) => void>();
+
+export function subscribeTickMessages(fn: (msg: TickMessage) => void) {
+  tickListeners.add(fn);
+  return () => {
+    tickListeners.delete(fn);
   };
 }
 
@@ -54,6 +65,7 @@ export function useStepwiseWebSocket(): WsStatus {
             queryClient.invalidateQueries({ queryKey: ["events", jobId] });
             queryClient.invalidateQueries({ queryKey: ["jobTree", jobId] });
           }
+          for (const fn of tickListeners) fn(msg as TickMessage);
         } else if (msg.type === "stale_jobs") {
           // Stale job detection — refresh job list so UI shows stale indicators
           queryClient.invalidateQueries({ queryKey: ["jobs"] });
