@@ -138,7 +138,7 @@ export function FlowDagView({
       const blob = await toBlob(canvas, {
         backgroundColor: "#09090b",
         pixelRatio,
-        filter: (node) => {
+        filter: (node: HTMLElement) => {
           // Filter out counter-scaled overlays
           if (node instanceof HTMLElement && node.dataset?.captureHide) return false;
           return true;

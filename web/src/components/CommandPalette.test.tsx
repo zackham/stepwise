@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 
 // cmdk uses ResizeObserver and scrollIntoView internally
 beforeAll(() => {
-  global.ResizeObserver = class {
+  globalThis.ResizeObserver = class {
     observe() {}
     unobserve() {}
     disconnect() {}

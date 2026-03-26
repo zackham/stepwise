@@ -5,7 +5,7 @@ import { useConfig } from "@/hooks/useConfig";
 import { JobList } from "@/components/jobs/JobList";
 import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
 import { FlowDagView } from "@/components/dag/FlowDagView";
-import { StepDetailPanel, StepDetailSkeleton } from "@/components/jobs/StepDetailPanel";
+import { StepDetailPanel } from "@/components/jobs/StepDetailPanel";
 import { DataFlowPanel } from "@/components/dag/DataFlowPanel";
 import { JobControls } from "@/components/jobs/JobControls";
 import { JobStatusBadge } from "@/components/StatusBadge";
@@ -486,7 +486,6 @@ export function JobDetailPage() {
           resolvedStep ? (
             <StepDetailPanel
               jobId={resolvedStep.jobId}
-              job={job}
               stepDef={resolvedStep.stepDef}
               onClose={() => setSelection(null)}
               onExpand={() => setExpandedStep(true)}
@@ -640,7 +639,6 @@ export function JobDetailPage() {
           {resolvedStep && (
             <StepDetailPanel
               jobId={resolvedStep.jobId}
-              job={job}
               stepDef={resolvedStep.stepDef}
               onClose={() => { setExpandedStep(false); setSelection(null); }}
               onExpand={() => setExpandedStep(false)}

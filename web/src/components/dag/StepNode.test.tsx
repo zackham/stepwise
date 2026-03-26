@@ -30,6 +30,7 @@ function makeRun(overrides: Partial<StepRun> = {}): StepRun {
     result: null,
     error: null,
     error_category: null,
+    traceback: null,
     executor_state: null,
     watch: null,
     sub_job_id: null,
