@@ -106,18 +106,50 @@ export function FlowDagView({
     setFollowFlow(true);
   }, [workflow]);
 
-  // Initial view: 100% zoom, centered horizontally, near top
+  // Fit-to-view: compute bounding box of all nodes and scale/pan to fit in viewport
   const initView = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
-    const x = (rect.width - layout.width) / 2;
-    const y = 32;
-    transformRef.current = { x, y, scale: 1 };
-    cameraRef.current.syncFromManualInput(x, y, 1);
+
+    if (layout.nodes.length === 0) {
+      // No nodes — just center
+      const x = rect.width / 2;
+      transformRef.current = { x, y: 32, scale: 1 };
+      cameraRef.current.syncFromManualInput(x, 32, 1);
+      applyTransform();
+      setZoomDisplay(100);
+      hasCenteredRef.current = true;
+      return;
+    }
+
+    // Compute bounding box of all nodes
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const node of layout.nodes) {
+      minX = Math.min(minX, node.x);
+      minY = Math.min(minY, node.y);
+      maxX = Math.max(maxX, node.x + node.width);
+      maxY = Math.max(maxY, node.y + node.height);
+    }
+
+    const contentWidth = maxX - minX;
+    const contentHeight = maxY - minY;
+    const padding = 40;
+
+    const scaleX = (rect.width - padding * 2) / contentWidth;
+    const scaleY = (rect.height - padding * 2) / contentHeight;
+    // Fit within viewport but cap at 100% — don't over-zoom small DAGs
+    const scale = Math.min(scaleX, scaleY, 1);
+
+    // Center the content in the viewport
+    const x = (rect.width - contentWidth * scale) / 2 - minX * scale;
+    const y = (rect.height - contentHeight * scale) / 2 - minY * scale;
+
+    transformRef.current = { x, y, scale };
+    cameraRef.current.syncFromManualInput(x, y, scale);
     applyTransform();
-    setZoomDisplay(100);
+    setZoomDisplay(Math.round(scale * 100));
     hasCenteredRef.current = true;
   }, [layout, applyTransform]);
 
