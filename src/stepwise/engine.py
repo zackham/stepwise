@@ -889,7 +889,7 @@ class Engine:
                             if job.status != JobStatus.RUNNING:
                                 return
                     except Exception:
-                        pass
+                        _engine_logger.warning("Tick loop error", exc_info=True)
 
             # 2. Check delegated runs
             for run in self.store.delegated_runs(job.id):

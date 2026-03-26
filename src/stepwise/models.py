@@ -7,12 +7,15 @@ SubJobDefinition, WatchSpec, and all enums.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
+
+logger = logging.getLogger("stepwise.models")
 
 
 def _gen_id(prefix: str = "id") -> str:
@@ -893,8 +896,8 @@ class WorkflowDefinition:
                                 if evaluate_exit_condition(cond, outputs, 1):
                                     covered = True
                                     break
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.warning("Exit condition validation error: %s", e)
                         if not covered:
                             warns.append(
                                 f"\u26a0 Step '{name}': uncovered output "
