@@ -358,11 +358,20 @@ export function JobDetailPage() {
                 </span>
               )}
             </div>
-            <div className="text-[10px] font-mono text-zinc-600 mt-0.5 break-all">
+            <div className="text-[10px] font-mono text-zinc-600 mt-0.5 break-all flex items-center gap-2 flex-wrap">
               {job.name && job.objective && (
-                <span className="font-sans text-zinc-500 mr-2">{job.objective}</span>
+                <span className="font-sans text-zinc-500">{job.objective}</span>
               )}
-              {job.id}
+              {job.workflow.metadata?.name && (
+                <Link
+                  to="/flows/$flowName"
+                  params={{ flowName: job.workflow.metadata.name }}
+                  className="font-sans text-blue-400 hover:text-blue-300 underline underline-offset-2"
+                >
+                  {job.workflow.metadata.name}
+                </Link>
+              )}
+              <span>{job.id}</span>
             </div>
           </div>
 
