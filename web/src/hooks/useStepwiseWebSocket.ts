@@ -1,6 +1,8 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { AgentOutputMessage } from "@/lib/types";
+
+export type WsStatus = "connected" | "disconnected" | "reconnecting";
 
 // ── Agent output pub/sub ────────────────────────────────────────────
 
@@ -15,13 +17,16 @@ export function subscribeAgentOutput(fn: (msg: AgentOutputMessage) => void) {
 
 // ── WebSocket connection ────────────────────────────────────────────
 
-export function useStepwiseWebSocket() {
+export function useStepwiseWebSocket(): WsStatus {
   const queryClient = useQueryClient();
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [wsStatus, setWsStatus] = useState<WsStatus>("disconnected");
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
+
+    setWsStatus("reconnecting");
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${protocol}//${window.location.host}/ws`;
@@ -31,6 +36,7 @@ export function useStepwiseWebSocket() {
 
     ws.onopen = () => {
       console.log("[ws] connected");
+      setWsStatus("connected");
     };
 
     ws.onmessage = (event) => {
@@ -66,6 +72,7 @@ export function useStepwiseWebSocket() {
 
     ws.onclose = () => {
       console.log("[ws] disconnected, reconnecting in 3s");
+      setWsStatus("reconnecting");
       reconnectTimeoutRef.current = setTimeout(connect, 3000);
     };
 
@@ -83,4 +90,6 @@ export function useStepwiseWebSocket() {
       wsRef.current?.close();
     };
   }, [connect]);
+
+  return wsStatus;
 }
