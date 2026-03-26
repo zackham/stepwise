@@ -420,6 +420,34 @@ export function deleteFlowFile(
   });
 }
 
+// ── Errors / Recovery ────────────────────────────────────────────────
+
+export interface SimilarFailure {
+  run_id: string;
+  job_id: string;
+  step_name: string;
+  error: string | null;
+  error_category: string;
+  completed_at: string | null;
+  job_name: string;
+}
+
+export async function fetchSimilarErrors(
+  errorCategory: string,
+  excludeRunId?: string,
+  stepName?: string,
+  limit?: number,
+): Promise<SimilarFailure[]> {
+  const params = new URLSearchParams({ error_category: errorCategory });
+  if (excludeRunId) params.set("exclude_run_id", excludeRunId);
+  if (stepName) params.set("step_name", stepName);
+  if (limit) params.set("limit", String(limit));
+  const res = await request<{ results: SimilarFailure[] }>(
+    `/errors/similar?${params}`,
+  );
+  return res.results;
+}
+
 // ── Config / Labels / Settings ───────────────────────────────────────
 
 export interface LabelInfo {

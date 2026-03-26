@@ -1373,6 +1373,24 @@ def get_job_outputs_alias(
     return get_job_output(job_id, step=step, inputs=inputs)
 
 
+@app.get("/api/errors/similar")
+def similar_errors(
+    error_category: str,
+    exclude_run_id: str | None = None,
+    step_name: str | None = None,
+    limit: int = 5,
+):
+    """Find similar past failures by error category."""
+    engine = _get_engine()
+    results = engine.store.similar_failed_runs(
+        error_category=error_category,
+        exclude_run_id=exclude_run_id,
+        step_name=step_name,
+        limit=min(limit, 20),
+    )
+    return {"results": results}
+
+
 def list_suspended_jobs(
     since: str | None = None,
     flow: str | None = None,
