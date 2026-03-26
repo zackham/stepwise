@@ -95,11 +95,25 @@ export interface FlowMetadata {
   forked_from?: string;
 }
 
+// ── Config Variable ──────────────────────────────────────────────────
+
+export interface ConfigVar {
+  name: string;
+  description?: string;
+  type?: "str" | "text" | "number" | "bool" | "choice";
+  default?: unknown;
+  required?: boolean;
+  example?: string;
+  options?: string[];
+  sensitive?: boolean;
+}
+
 // ── Flow Definition ───────────────────────────────────────────────────
 
 export interface FlowDefinition {
   steps: Record<string, StepDefinition>;
   metadata?: FlowMetadata;
+  config_vars?: ConfigVar[];
 }
 
 // ── Sidecar ────────────────────────────────────────────────────────────
