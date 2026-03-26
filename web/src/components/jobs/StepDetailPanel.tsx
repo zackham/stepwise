@@ -126,6 +126,7 @@ export function StepDetailPanel({
   const mutations = useStepwiseMutations();
   const [fulfillDialogOpen, setFulfillDialogOpen] = useState(false);
   const [agentViewMode, setAgentViewMode] = useState<"stream" | "raw">("stream");
+  const [copiedErrorRunId, setCopiedErrorRunId] = useState<string | null>(null);
 
   const { data: configData } = useConfig();
   const isSubscription = configData?.billing_mode === "subscription";
@@ -460,6 +461,21 @@ export function StepDetailPanel({
                                   {run.error_category}
                                 </span>
                               )}
+                              <button
+                                onClick={() => {
+                                  navigator.clipboard.writeText(run.error!);
+                                  setCopiedErrorRunId(run.id);
+                                  setTimeout(() => setCopiedErrorRunId(null), 2000);
+                                }}
+                                className="ml-auto flex items-center gap-1 text-[10px] text-red-400/60 hover:text-red-300 transition-colors"
+                                title="Copy error"
+                              >
+                                {copiedErrorRunId === run.id ? (
+                                  <><Check className="w-3 h-3" /> Copied!</>
+                                ) : (
+                                  <><Copy className="w-3 h-3" /> Copy</>
+                                )}
+                              </button>
                             </div>
                             <div className="text-red-300/80 text-xs font-mono whitespace-pre-wrap break-words">
                               {run.error}
