@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 
 interface HandoffEnvelopeViewProps {
   envelope: HandoffEnvelope;
+  isLatest?: boolean;
 }
 
 function Section({
@@ -51,7 +52,7 @@ function Section({
   );
 }
 
-export function HandoffEnvelopeView({ envelope }: HandoffEnvelopeViewProps) {
+export function HandoffEnvelopeView({ envelope, isLatest }: HandoffEnvelopeViewProps) {
   const hasSidecar =
     envelope.sidecar.decisions_made.length > 0 ||
     envelope.sidecar.assumptions.length > 0 ||
@@ -60,7 +61,7 @@ export function HandoffEnvelopeView({ envelope }: HandoffEnvelopeViewProps) {
 
   return (
     <div className="space-y-1">
-      <Section title="Artifact" data={envelope.artifact} defaultOpen={true} />
+      <Section title="Artifact" data={envelope.artifact} defaultOpen={isLatest !== false} />
       {hasSidecar && <Section title="Sidecar" data={envelope.sidecar} />}
       <Section title="Executor Meta" data={envelope.executor_meta} />
       {envelope.workspace && (
