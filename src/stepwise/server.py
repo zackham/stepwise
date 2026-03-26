@@ -40,6 +40,7 @@ from stepwise.agent import verify_agent_pid
 from stepwise.events import JOB_AWAITING_APPROVAL
 from stepwise.hooks import build_event_envelope
 
+logger = logging.getLogger("stepwise.server")
 
 
 class _LockedConnection:
@@ -1496,8 +1497,8 @@ def list_templates():
             try:
                 data = json.loads(f.read_text())
                 templates.append(data)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to load template: %s", e)
     return templates
 
 
