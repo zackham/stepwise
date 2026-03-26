@@ -2,7 +2,14 @@ import { useState, useMemo } from "react";
 import { useJobs, useStepwiseMutations } from "@/hooks/useStepwise";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { AlertTriangle, Briefcase, Clock, Hand, Monitor, Terminal, Trash2, Search, X } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
+import { AlertTriangle, Briefcase, Clock, Hand, Monitor, Terminal, Trash2, Search, X, MoreVertical, XCircle, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Job, JobStatus } from "@/lib/types";
 
@@ -40,6 +47,71 @@ function timeAgo(ts: string): string {
   if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
   if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
   return `${Math.floor(diff / 86400000)}d ago`;
+}
+
+function canCancel(status: string): boolean {
+  return status === "running" || status === "paused";
+}
+
+function canRetry(status: string): boolean {
+  return status === "paused" || status === "failed";
+}
+
+function JobActions({
+  job,
+  mutations,
+}: {
+  job: Job;
+  mutations: ReturnType<typeof useStepwiseMutations>;
+}) {
+  const showCancel = canCancel(job.status);
+  const showRetry = canRetry(job.status);
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        className="p-1 rounded hover:bg-zinc-700/50 text-zinc-500 hover:text-zinc-300 transition-colors"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <MoreVertical className="w-3.5 h-3.5" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" side="bottom" sideOffset={4}>
+        {showRetry && (
+          <DropdownMenuItem
+            onClick={(e) => {
+              e.stopPropagation();
+              mutations.resumeJob.mutate(job.id);
+            }}
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Retry
+          </DropdownMenuItem>
+        )}
+        {showCancel && (
+          <DropdownMenuItem
+            onClick={(e) => {
+              e.stopPropagation();
+              mutations.cancelJob.mutate(job.id);
+            }}
+          >
+            <XCircle className="w-3.5 h-3.5" />
+            Cancel
+          </DropdownMenuItem>
+        )}
+        {(showRetry || showCancel) && <DropdownMenuSeparator />}
+        <DropdownMenuItem
+          variant="destructive"
+          onClick={(e) => {
+            e.stopPropagation();
+            mutations.deleteJob.mutate(job.id);
+          }}
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+          Delete
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }
 
 export function JobList({ selectedJobId, onSelectJob }: JobListProps) {
@@ -221,28 +293,31 @@ export function JobList({ selectedJobId, onSelectJob }: JobListProps) {
                       </div>
                     </div>
                   </div>
-                  <div className="flex flex-col items-end gap-1 shrink-0">
-                    <div className="flex items-center gap-1">
-                      {isStale(job) && (
-                        <AlertTriangle className="w-3 h-3 text-amber-500" />
-                      )}
-                      <JobStatusBadge status={job.status} />
-                      {job.has_suspended_steps && (
-                        <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 ring-1 ring-amber-500/30">
-                          <Hand className="w-2.5 h-2.5" />
-                          Awaiting Input
-                        </span>
-                      )}
+                  <div className="flex items-start gap-1 shrink-0">
+                    <div className="flex flex-col items-end gap-1">
+                      <div className="flex items-center gap-1">
+                        {isStale(job) && (
+                          <AlertTriangle className="w-3 h-3 text-amber-500" />
+                        )}
+                        <JobStatusBadge status={job.status} />
+                        {job.has_suspended_steps && (
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 ring-1 ring-amber-500/30">
+                            <Hand className="w-2.5 h-2.5" />
+                            Awaiting Input
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
+                        {isCliOwned(job.created_by) ? (
+                          <Terminal className="w-2.5 h-2.5" />
+                        ) : (
+                          <Monitor className="w-2.5 h-2.5" />
+                        )}
+                        <Clock className="w-2.5 h-2.5" />
+                        {timeAgo(job.updated_at)}
+                      </span>
                     </div>
-                    <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
-                      {isCliOwned(job.created_by) ? (
-                        <Terminal className="w-2.5 h-2.5" />
-                      ) : (
-                        <Monitor className="w-2.5 h-2.5" />
-                      )}
-                      <Clock className="w-2.5 h-2.5" />
-                      {timeAgo(job.updated_at)}
-                    </span>
+                    <JobActions job={job} mutations={mutations} />
                   </div>
                 </div>
               </button>
