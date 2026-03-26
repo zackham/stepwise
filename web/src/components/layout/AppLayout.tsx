@@ -1,9 +1,32 @@
-import { useEffect } from "react";
+import { useEffect, useCallback } from "react";
 import { Outlet, Link, useLocation } from "@tanstack/react-router";
+import { ErrorBoundary, type FallbackProps } from "react-error-boundary";
 import { useStepwiseWebSocket } from "@/hooks/useStepwiseWebSocket";
 import { useEngineStatus, useJobs, useJob } from "@/hooks/useStepwise";
-import { LayoutGrid, FileCode, Settings2, Zap, FolderOpen } from "lucide-react";
+import { LayoutGrid, FileCode, Settings2, Zap, FolderOpen, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+function ErrorFallback({ error, resetErrorBoundary }: FallbackProps) {
+  return (
+    <div className="flex items-center justify-center h-full">
+      <div className="max-w-md w-full mx-4 p-6 rounded-lg border border-red-900/50 bg-red-950/20">
+        <div className="flex items-center gap-3 mb-4">
+          <AlertTriangle className="w-5 h-5 text-red-400 shrink-0" />
+          <h2 className="text-lg font-semibold text-red-400">Something went wrong</h2>
+        </div>
+        <pre className="text-sm text-zinc-400 bg-zinc-900 rounded p-3 mb-4 overflow-auto max-h-40 whitespace-pre-wrap break-words">
+          {error instanceof Error ? error.message : String(error)}
+        </pre>
+        <button
+          onClick={resetErrorBoundary}
+          className="px-4 py-2 text-sm font-medium rounded-md bg-zinc-800 text-zinc-200 hover:bg-zinc-700 transition-colors"
+        >
+          Reload
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export function AppLayout() {
   useStepwiseWebSocket();
@@ -22,6 +45,10 @@ export function AppLayout() {
   const jobIdMatch = currentPath.match(/^\/jobs\/([^/]+)/);
   const detailJobId = jobIdMatch?.[1] ?? undefined;
   const { data: detailJob } = useJob(detailJobId);
+
+  const handleReset = useCallback(() => {
+    window.location.reload();
+  }, []);
 
   useEffect(() => {
     let title = "Stepwise";
@@ -133,7 +160,9 @@ export function AppLayout() {
 
       {/* Main content */}
       <main className="flex-1 overflow-hidden">
-        <Outlet />
+        <ErrorBoundary FallbackComponent={ErrorFallback} onReset={handleReset}>
+          <Outlet />
+        </ErrorBoundary>
       </main>
     </div>
   );
