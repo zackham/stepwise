@@ -384,6 +384,99 @@ class TestH8ConcurrentJobLimit:
 
         asyncio.run(run_test())
 
+    def test_submit_at_limit_creates_pending_job(self):
+        """Submitting a job when at max_concurrent_jobs persists it as PENDING, not dropped."""
+        store = SQLiteStore(":memory:")
+        registry = _make_registry()
+
+        import threading
+        gate = threading.Event()
+
+        def blocking(inputs):
+            gate.wait(timeout=5)
+            return {"result": "ok"}
+
+        register_step_fn("block", blocking)
+        register_step_fn("echo", lambda inputs: {"result": "ok"})
+
+        engine = AsyncEngine(store=store, registry=registry, max_concurrent_jobs=1)
+
+        wf_block = _simple_workflow(fn_name="block")
+        wf_fast = _simple_workflow(fn_name="echo")
+
+        async def run_test():
+            engine_task = asyncio.create_task(engine.run())
+            try:
+                # Fill the single slot
+                job1 = engine.create_job(objective="blocker", workflow=wf_block)
+                engine.start_job(job1.id)
+                await asyncio.sleep(0.1)
+                assert store.load_job(job1.id).status == JobStatus.RUNNING
+
+                # Submit another job — must be persisted as PENDING, not dropped
+                job2 = engine.create_job(objective="queued", workflow=wf_fast)
+                engine.start_job(job2.id)
+
+                # Job 2 must exist in the store as PENDING
+                job2_loaded = store.load_job(job2.id)
+                assert job2_loaded is not None, "Job was dropped — not found in store"
+                assert job2_loaded.status == JobStatus.PENDING, (
+                    f"Expected PENDING, got {job2_loaded.status.value}"
+                )
+
+                # Release blocker — job2 should auto-start and complete
+                gate.set()
+                await asyncio.wait_for(engine.wait_for_job(job1.id), timeout=10)
+                await asyncio.wait_for(engine.wait_for_job(job2.id), timeout=10)
+
+                assert store.load_job(job1.id).status == JobStatus.COMPLETED
+                assert store.load_job(job2.id).status == JobStatus.COMPLETED
+            finally:
+                gate.set()
+                engine_task.cancel()
+                try:
+                    await engine_task
+                except asyncio.CancelledError:
+                    pass
+
+        asyncio.run(run_test())
+
+    def test_create_endpoint_auto_starts_or_queues(self):
+        """POST /api/jobs should auto-start the job. When at limit, job stays PENDING (queued).
+
+        Verifies that the create endpoint auto-starts jobs — before the fix,
+        the endpoint just saved the job as PENDING without calling start_job,
+        so the JOB_QUEUED event was never emitted.
+        """
+        store = SQLiteStore(":memory:")
+        registry = _make_registry()
+        register_step_fn("echo", lambda inputs: {"result": "ok"})
+
+        engine = AsyncEngine(store=store, registry=registry, max_concurrent_jobs=1)
+
+        # Fill the slot with a RUNNING job
+        _create_running_job(store)
+
+        # Simulate what the server's create_job endpoint does:
+        # create + auto-start
+        wf = _simple_workflow(fn_name="echo")
+        job = engine.create_job(objective="test-queued", workflow=wf)
+        engine.start_job(job.id)
+
+        # Job must be PENDING (queued because at limit), not dropped
+        job_loaded = store.load_job(job.id)
+        assert job_loaded is not None, "Job was dropped — not found in store"
+        assert job_loaded.status == JobStatus.PENDING, (
+            f"Expected PENDING (queued), got {job_loaded.status.value}"
+        )
+
+        # JOB_QUEUED event must have been emitted (proves start_job was called)
+        events = store.load_events(job.id)
+        queued_events = [e for e in events if e.type == JOB_QUEUED]
+        assert len(queued_events) == 1, (
+            f"Expected JOB_QUEUED event, got: {[e.type for e in events]}"
+        )
+
     def test_pending_jobs_query(self):
         """store.pending_jobs() returns PENDING jobs in FIFO order."""
         store = SQLiteStore(":memory:")
