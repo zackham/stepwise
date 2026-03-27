@@ -32,9 +32,15 @@ export const JobCard = memo(function JobCard({ job, runs, dependencyNames }: Job
       to="/jobs/$jobId"
       params={{ jobId: job.id }}
       className={cn(
+<<<<<<< HEAD
         "block w-full max-w-[340px] rounded-lg border transition-all duration-200 overflow-hidden",
         "bg-zinc-900/80 hover:bg-zinc-900",
         "border-zinc-800 hover:border-zinc-700",
+=======
+        "block rounded-lg border transition-all duration-200 overflow-hidden",
+        "bg-white/80 hover:bg-white dark:bg-zinc-900/80 dark:hover:bg-zinc-900",
+        "border-zinc-300 hover:border-zinc-400 dark:border-zinc-800 dark:hover:border-zinc-700",
+>>>>>>> ui-light-mode
         isCompleted && "opacity-45 hover:opacity-70",
         isFailed && "border-red-900/60 shadow-[0_0_12px_rgba(239,68,68,0.15)]",
         isActive && "border-blue-900/40",
@@ -43,7 +49,7 @@ export const JobCard = memo(function JobCard({ job, runs, dependencyNames }: Job
       {/* Header */}
       <div className="px-3 pt-2.5 pb-1 flex items-start gap-2">
         <div className="flex-1 min-w-0">
-          <p className="text-[13px] font-medium text-zinc-100 truncate leading-tight">
+          <p className="text-[13px] font-medium text-zinc-900 dark:text-zinc-100 truncate leading-tight">
             {displayName}
           </p>
           {flowName && (

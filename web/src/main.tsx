@@ -14,8 +14,15 @@ const queryClient = new QueryClient({
   },
 });
 
-// Force dark mode
-document.documentElement.classList.add("dark");
+// Apply saved theme (or system preference) before first render to prevent flash
+const _savedTheme = localStorage.getItem("stepwise-theme");
+if (_savedTheme === "light") {
+  document.documentElement.classList.remove("dark");
+} else if (_savedTheme === "dark" || !_savedTheme) {
+  document.documentElement.classList.add("dark");
+} else if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+  document.documentElement.classList.add("dark");
+}
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

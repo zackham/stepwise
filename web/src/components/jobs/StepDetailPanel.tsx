@@ -77,11 +77,11 @@ function highlightLogLine(line: string): React.ReactNode {
   const infoRe = /\b(INFO)\b/i;
   const debugRe = /\b(DEBUG|TRACE)\b/i;
 
-  let className = "text-zinc-300";
+  let className = "text-zinc-700 dark:text-zinc-300";
   if (errorRe.test(line)) className = "text-red-400";
   else if (warnRe.test(line)) className = "text-amber-400";
   else if (infoRe.test(line)) className = "text-blue-400";
-  else if (debugRe.test(line)) className = "text-zinc-400";
+  else if (debugRe.test(line)) className = "text-zinc-500 dark:text-zinc-400";
 
   // Highlight timestamp portion
   const tsMatch = line.match(timestampRe);
@@ -144,16 +144,16 @@ function ScriptLogView({ run }: { run: StepRun }) {
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
-      <div className="bg-zinc-950 border border-zinc-800 rounded overflow-hidden">
+      <div className="bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded overflow-hidden">
         {truncated && (
           <button
             onClick={() => setShowAll(true)}
-            className="w-full text-[10px] text-zinc-500 hover:text-zinc-300 bg-zinc-900 border-b border-zinc-800 py-1 px-2 text-center"
+            className="w-full text-[10px] text-zinc-500 hover:text-zinc-300 bg-zinc-100 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 py-1 px-2 text-center"
           >
             ↑ {lines.length - LOG_INITIAL_LINES} more lines — Show all
           </button>
         )}
-        <pre className="text-[11px] font-mono p-2 text-zinc-300 whitespace-pre-wrap break-all max-h-96 overflow-auto leading-relaxed">
+        <pre className="text-[11px] font-mono p-2 text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap break-all max-h-96 overflow-auto leading-relaxed">
           {displayLines.map((line, i) => (
             <div key={i}>{highlightLogLine(line)}</div>
           ))}
@@ -187,7 +187,7 @@ function AgentRawView({ runId }: { runId: string }) {
           {copied ? "Copied" : "Copy All"}
         </button>
       </div>
-      <pre className="text-[10px] font-mono bg-zinc-950 border border-zinc-800 rounded p-2 text-zinc-400 whitespace-pre-wrap break-all max-h-96 overflow-auto">
+      <pre className="text-[10px] font-mono bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded p-2 text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap break-all max-h-96 overflow-auto">
         {text}
       </pre>
     </div>
@@ -314,7 +314,7 @@ export function StepDetailPanel({
               Boolean(stepDef.executor.config.command) && (
                 <div className="mt-2">
                   <div className="text-zinc-500 text-sm mb-1">Command</div>
-                  <pre className="text-xs font-mono bg-zinc-900 border border-zinc-800 rounded p-2 text-green-400 whitespace-pre-wrap break-all">
+                  <pre className="text-xs font-mono bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded p-2 text-green-600 dark:text-green-400 whitespace-pre-wrap break-all">
                     {String(stepDef.executor.config.command)}
                   </pre>
                 </div>
@@ -323,7 +323,7 @@ export function StepDetailPanel({
               Boolean(stepDef.executor.config.prompt) && (
                 <div className="mt-2">
                   <div className="text-zinc-500 text-sm mb-1">Prompt</div>
-                  <pre className={cn("text-xs font-mono bg-zinc-900 border border-amber-500/20 rounded p-2 text-amber-300 whitespace-pre-wrap break-words", !expanded && "max-h-32 overflow-auto")}>
+                  <pre className={cn("text-xs font-mono bg-zinc-50 dark:bg-zinc-900 border border-amber-500/20 rounded p-2 text-amber-700 dark:text-amber-300 whitespace-pre-wrap break-words", !expanded && "max-h-32 overflow-auto")}>
 {String(stepDef.executor.config.prompt).trim()}
                   </pre>
                 </div>
@@ -333,7 +333,7 @@ export function StepDetailPanel({
                 {Boolean(stepDef.executor.config.prompt) && (
                   <div>
                     <div className="text-zinc-500 text-sm mb-1">Agent Prompt</div>
-                    <pre className={cn("text-xs font-mono bg-zinc-900 border border-blue-500/20 rounded p-2 text-blue-300 whitespace-pre-wrap break-all", !expanded && "max-h-32 overflow-auto")}>
+                    <pre className={cn("text-xs font-mono bg-zinc-50 dark:bg-zinc-900 border border-blue-500/20 rounded p-2 text-blue-700 dark:text-blue-300 whitespace-pre-wrap break-all", !expanded && "max-h-32 overflow-auto")}>
                       {String(stepDef.executor.config.prompt)}
                     </pre>
                   </div>
@@ -365,7 +365,7 @@ export function StepDetailPanel({
                   {stepDef.inputs.map((b) => (
                     <div
                       key={b.local_name}
-                      className="text-xs font-mono bg-zinc-900/50 rounded px-2 py-1"
+                      className="text-xs font-mono bg-zinc-100/50 dark:bg-zinc-900/50 rounded px-2 py-1"
                     >
                       <span className="text-blue-400">{b.local_name}</span>
                       <span className="text-zinc-600"> &larr; </span>
@@ -385,7 +385,7 @@ export function StepDetailPanel({
                   {stepDef.exit_rules.map((r) => (
                     <div
                       key={r.name}
-                      className="text-xs font-mono bg-zinc-900/50 rounded px-2 py-1"
+                      className="text-xs font-mono bg-zinc-100/50 dark:bg-zinc-900/50 rounded px-2 py-1"
                     >
                       <span className="text-amber-400">{r.name}</span>
                       <span className="text-zinc-600"> ({r.type})</span>
@@ -605,7 +605,7 @@ export function StepDetailPanel({
                               {resolvedPrompt && resolvedPrompt !== templatePrompt && (
                                 <div>
                                   <div className="text-xs text-zinc-500 mb-1">Resolved Prompt</div>
-                                  <pre className={cn("text-xs font-mono bg-zinc-900 border border-emerald-500/20 rounded p-2 text-emerald-300 whitespace-pre-wrap break-words", !expanded && "max-h-48 overflow-auto")}>
+                                  <pre className={cn("text-xs font-mono bg-zinc-50 dark:bg-zinc-900 border border-emerald-500/20 rounded p-2 text-emerald-700 dark:text-emerald-300 whitespace-pre-wrap break-words", !expanded && "max-h-48 overflow-auto")}>
                                     {resolvedPrompt.trim()}
                                   </pre>
                                 </div>
@@ -613,7 +613,7 @@ export function StepDetailPanel({
                               {resolvedCommand && resolvedCommand !== templateCommand && (
                                 <div>
                                   <div className="text-xs text-zinc-500 mb-1">Resolved Command</div>
-                                  <pre className={cn("text-xs font-mono bg-zinc-900 border border-emerald-500/20 rounded p-2 text-emerald-300 whitespace-pre-wrap break-words", !expanded && "max-h-48 overflow-auto")}>
+                                  <pre className={cn("text-xs font-mono bg-zinc-50 dark:bg-zinc-900 border border-emerald-500/20 rounded p-2 text-emerald-700 dark:text-emerald-300 whitespace-pre-wrap break-words", !expanded && "max-h-48 overflow-auto")}>
                                     {resolvedCommand.trim()}
                                   </pre>
                                 </div>
@@ -621,7 +621,7 @@ export function StepDetailPanel({
                               {resolvedCheckCommand && resolvedCheckCommand !== templateCheckCommand && (
                                 <div>
                                   <div className="text-xs text-zinc-500 mb-1">Resolved Check Command</div>
-                                  <pre className={cn("text-xs font-mono bg-zinc-900 border border-emerald-500/20 rounded p-2 text-emerald-300 whitespace-pre-wrap break-words", !expanded && "max-h-48 overflow-auto")}>
+                                  <pre className={cn("text-xs font-mono bg-zinc-50 dark:bg-zinc-900 border border-emerald-500/20 rounded p-2 text-emerald-700 dark:text-emerald-300 whitespace-pre-wrap break-words", !expanded && "max-h-48 overflow-auto")}>
                                     {resolvedCheckCommand.trim()}
                                   </pre>
                                 </div>
@@ -635,14 +635,14 @@ export function StepDetailPanel({
                           <div>
                             <div className="flex items-center justify-between mb-1">
                               <div className="text-xs text-zinc-500">Agent Output</div>
-                              <div className="flex items-center gap-0.5 bg-zinc-800 rounded p-0.5">
+                              <div className="flex items-center gap-0.5 bg-zinc-200 dark:bg-zinc-800 rounded p-0.5">
                                 <button
                                   onClick={() => setAgentViewMode("stream")}
                                   className={cn(
                                     "text-[10px] px-2 py-0.5 rounded transition-colors",
                                     agentViewMode === "stream"
-                                      ? "bg-zinc-700 text-zinc-200"
-                                      : "text-zinc-500 hover:text-zinc-300"
+                                      ? "bg-white dark:bg-zinc-700 text-zinc-800 dark:text-zinc-200"
+                                      : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
                                   )}
                                 >
                                   Stream
@@ -652,8 +652,8 @@ export function StepDetailPanel({
                                   className={cn(
                                     "text-[10px] px-2 py-0.5 rounded transition-colors",
                                     agentViewMode === "raw"
-                                      ? "bg-zinc-700 text-zinc-200"
-                                      : "text-zinc-500 hover:text-zinc-300"
+                                      ? "bg-white dark:bg-zinc-700 text-zinc-800 dark:text-zinc-200"
+                                      : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
                                   )}
                                 >
                                   Raw

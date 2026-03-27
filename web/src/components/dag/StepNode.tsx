@@ -132,8 +132,8 @@ function ExitRulesSection({ rules }: { rules: ExitRule[] }) {
             const target = rule.config.target as string | undefined;
             const condText = condition ?? (field ? `${field} == ${JSON.stringify(value)}` : rule.type);
             return (
-              <tr key={rule.name} className="border-t border-zinc-800 first:border-t-0">
-                <td className="py-0.5 pr-2 font-mono text-zinc-300 whitespace-nowrap">
+              <tr key={rule.name} className="border-t border-zinc-200 dark:border-zinc-800 first:border-t-0">
+                <td className="py-0.5 pr-2 font-mono text-zinc-700 dark:text-zinc-300 whitespace-nowrap">
                   {rule.name}
                 </td>
                 <td className="py-0.5 pr-2 font-mono text-zinc-500 max-w-[180px] truncate">
@@ -166,13 +166,13 @@ function StepTooltip({
   const hasExitRules = stepDef.exit_rules.length > 0;
 
   return (
-    <div className="absolute left-0 top-full mt-1 z-50 bg-zinc-900/95 backdrop-blur-sm border border-zinc-700 rounded-lg shadow-2xl p-2.5 min-w-[280px] max-w-[400px]">
+    <div className="absolute left-0 top-full mt-1 z-50 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-sm border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-2xl p-2.5 min-w-[280px] max-w-[400px]">
       {/* Header: executor type */}
-      <div className="flex items-center gap-1.5 mb-2 pb-1.5 border-b border-zinc-800">
-        <span className="text-zinc-400">
+      <div className="flex items-center gap-1.5 mb-2 pb-1.5 border-b border-zinc-200 dark:border-zinc-800">
+        <span className="text-zinc-500 dark:text-zinc-400">
           {executorIcon(stepDef.executor.type, "w-3.5 h-3.5")}
         </span>
-        <span className="text-[11px] font-medium text-zinc-300">
+        <span className="text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
           {executorLabel(stepDef.executor.type)}
         </span>
         {stepDef.when && (
@@ -236,7 +236,7 @@ function StepTooltip({
                     "text-[10px] font-mono rounded px-1.5 py-0.5",
                     hasValue
                       ? "text-emerald-400 bg-emerald-500/10"
-                      : "text-zinc-500 bg-zinc-800"
+                      : "text-zinc-500 bg-zinc-200 dark:bg-zinc-800"
                   )}
                   title={hasValue ? `${output} = ${formatTooltipValue(outputValue)}` : output}
                 >
@@ -255,7 +255,7 @@ function StepTooltip({
 
       {/* Exit rules */}
       {hasExitRules && (
-        <div className={cn(hasInputs || hasOutputs ? "pt-1.5 border-t border-zinc-800" : "")}>
+        <div className={cn(hasInputs || hasOutputs ? "pt-1.5 border-t border-zinc-200 dark:border-zinc-800" : "")}>
           <ExitRulesSection rules={stepDef.exit_rules} />
         </div>
       )}
@@ -365,7 +365,7 @@ export function StepNode({
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {showAttemptBadge && (
-            <span className="flex items-center gap-0.5 text-[10px] text-zinc-500 bg-zinc-800 rounded px-1 py-0.5">
+            <span className="flex items-center gap-0.5 text-[10px] text-zinc-500 bg-zinc-200 dark:bg-zinc-800 rounded px-1 py-0.5">
               <RotateCw className="w-2.5 h-2.5" />
               {maxAttempts ? `${attempt}/${maxAttempts}` : attempt}
             </span>

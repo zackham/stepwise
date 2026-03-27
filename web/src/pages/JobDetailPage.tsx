@@ -235,7 +235,7 @@ export function JobDetailPage() {
       {!isMobile && sidebarCollapsed && (
         <button
           onClick={() => setSidebarCollapsed(false)}
-          className="w-8 border-r border-border flex items-center justify-center text-zinc-500 hover:text-foreground hover:bg-zinc-800/50 shrink-0"
+          className="w-8 border-r border-border flex items-center justify-center text-zinc-500 hover:text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 shrink-0"
         >
           <PanelRightClose className="w-4 h-4" />
         </button>
@@ -255,7 +255,7 @@ export function JobDetailPage() {
         />
 
         {/* Job header */}
-        <div className="px-4 py-2 border-b border-border bg-zinc-950/30 shrink-0">
+        <div className="px-4 py-2 border-b border-border bg-zinc-50/30 dark:bg-zinc-950/30 shrink-0">
           {isMobile ? (
             <>
               {/* Mobile Row 1: name + status */}
@@ -290,7 +290,7 @@ export function JobDetailPage() {
                   <Link
                     to="/jobs/$jobId/events"
                     params={{ jobId }}
-                    className="flex items-center justify-center min-w-[44px] min-h-[44px] text-xs text-zinc-500 hover:text-foreground rounded hover:bg-zinc-800/50"
+                    className="flex items-center justify-center min-w-[44px] min-h-[44px] text-xs text-zinc-500 hover:text-foreground rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
                     aria-label="Events"
                     title="Events"
                   >
@@ -299,7 +299,7 @@ export function JobDetailPage() {
                   <Link
                     to="/jobs/$jobId/timeline"
                     params={{ jobId }}
-                    className="flex items-center justify-center min-w-[44px] min-h-[44px] text-xs text-zinc-500 hover:text-foreground rounded hover:bg-zinc-800/50"
+                    className="flex items-center justify-center min-w-[44px] min-h-[44px] text-xs text-zinc-500 hover:text-foreground rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
                     aria-label="Timeline"
                     title="Timeline"
                   >
@@ -308,7 +308,7 @@ export function JobDetailPage() {
                   <Link
                     to="/jobs/$jobId/tree"
                     params={{ jobId }}
-                    className="flex items-center justify-center min-w-[44px] min-h-[44px] text-xs text-zinc-500 hover:text-foreground rounded hover:bg-zinc-800/50"
+                    className="flex items-center justify-center min-w-[44px] min-h-[44px] text-xs text-zinc-500 hover:text-foreground rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
                     aria-label="Tree"
                     title="Tree"
                   >
@@ -317,7 +317,7 @@ export function JobDetailPage() {
                   {!showRightPanel && (
                     <button
                       onClick={() => setRightPanelOpen(true)}
-                      className="flex items-center justify-center min-w-[44px] min-h-[44px] text-xs text-zinc-500 hover:text-foreground rounded hover:bg-zinc-800/50"
+                      className="flex items-center justify-center min-w-[44px] min-h-[44px] text-xs text-zinc-500 hover:text-foreground rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
                       aria-label="Details"
                       title="Details"
                     >
@@ -380,7 +380,7 @@ export function JobDetailPage() {
                 <Link
                   to="/jobs/$jobId/events"
                   params={{ jobId }}
-                  className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-800/50"
+                  className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
                 >
                   <ScrollText className="w-3.5 h-3.5" />
                   Events
@@ -388,7 +388,7 @@ export function JobDetailPage() {
                 <Link
                   to="/jobs/$jobId/timeline"
                   params={{ jobId }}
-                  className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-800/50"
+                  className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
                 >
                   <GanttChart className="w-3.5 h-3.5" />
                   Timeline
@@ -396,7 +396,7 @@ export function JobDetailPage() {
                 <Link
                   to="/jobs/$jobId/tree"
                   params={{ jobId }}
-                  className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-800/50"
+                  className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
                 >
                   <GitBranch className="w-3.5 h-3.5" />
                   Tree
@@ -404,7 +404,7 @@ export function JobDetailPage() {
                 {!showRightPanel && (
                   <button
                     onClick={() => setRightPanelOpen(true)}
-                    className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-800/50"
+                    className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
                   >
                     <Info className="w-3.5 h-3.5" />
                     Details
@@ -501,8 +501,8 @@ export function JobDetailPage() {
           ) : (
             <>
               {/* Job details header */}
-              <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-zinc-950/50 shrink-0">
-                <span className="text-xs font-medium text-zinc-400">Job Details</span>
+              <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-zinc-50/50 dark:bg-zinc-950/50 shrink-0">
+                <span className="text-xs font-medium text-zinc-600 dark:text-zinc-400">Job Details</span>
                 <button
                   onClick={() => setRightPanelOpen(false)}
                   className="text-zinc-600 hover:text-zinc-300 p-0.5"
@@ -521,7 +521,7 @@ export function JobDetailPage() {
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-zinc-500 w-16">Steps</span>
-                    <span className="font-mono text-zinc-300">{stepCount}</span>
+                    <span className="font-mono text-zinc-700 dark:text-zinc-300">{stepCount}</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-zinc-500 w-16">Duration</span>
@@ -585,7 +585,7 @@ export function JobDetailPage() {
                     <div className="text-[10px] font-medium text-zinc-500 uppercase tracking-wide mb-1.5">
                       Inputs
                     </div>
-                    <div className="max-h-40 overflow-y-auto bg-zinc-900/50 rounded border border-zinc-800 p-2">
+                    <div className="max-h-40 overflow-y-auto bg-zinc-50/50 dark:bg-zinc-900/50 rounded border border-zinc-200 dark:border-zinc-800 p-2">
                       <JsonView data={job.inputs} defaultExpanded={false} />
                     </div>
                   </div>
@@ -598,7 +598,7 @@ export function JobDetailPage() {
                       <Package className="w-3 h-3" />
                       Outputs
                     </div>
-                    <div className="max-h-40 overflow-y-auto bg-zinc-900/50 rounded border border-zinc-800 p-2">
+                    <div className="max-h-40 overflow-y-auto bg-zinc-50/50 dark:bg-zinc-900/50 rounded border border-zinc-200 dark:border-zinc-800 p-2">
                       <JsonView data={outputs} defaultExpanded={false} />
                     </div>
                   </div>

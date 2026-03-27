@@ -108,10 +108,10 @@ export function DataFlowPanel({
   return (
     <>
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-zinc-950/50 shrink-0">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-zinc-50/50 dark:bg-zinc-950/50 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <ArrowRight className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
-          <span className="text-xs font-mono font-medium text-zinc-300 truncate">
+          <span className="text-xs font-mono font-medium text-zinc-700 dark:text-zinc-300 truncate">
             {title}
           </span>
           {badge && (
@@ -148,7 +148,7 @@ export function DataFlowPanel({
                 </span>
                 <CopyButton value={value} />
               </div>
-              <div className="bg-zinc-900/50 rounded border border-zinc-800 p-2 overflow-x-auto">
+              <div className="bg-zinc-50/50 dark:bg-zinc-900/50 rounded border border-zinc-200 dark:border-zinc-800 p-2 overflow-x-auto">
                 <JsonView data={value} defaultExpanded={true} />
               </div>
             </div>

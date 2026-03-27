@@ -98,8 +98,8 @@ export const STEP_STATUS_COLORS: Record<
 
 // For steps with no run yet (pending)
 export const STEP_PENDING_COLORS = {
-  bg: "bg-zinc-800/50",
+  bg: "bg-zinc-200/50 dark:bg-zinc-800/50",
   text: "text-zinc-500",
-  border: "border-zinc-700/50",
+  border: "border-zinc-300/50 dark:border-zinc-700/50",
   ring: "ring-zinc-500/30",
 };

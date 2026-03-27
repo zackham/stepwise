@@ -194,13 +194,13 @@ export function CreateJobDialog({ onCreated, prefill, open: controlledOpen, onOp
 
         <div className="space-y-4">
           {/* Mode toggle */}
-          <div className="flex gap-1 p-0.5 bg-zinc-900 rounded-md">
+          <div className="flex gap-1 p-0.5 bg-zinc-100 dark:bg-zinc-900 rounded-md">
             <button
               onClick={() => setMode("flow")}
               className={`flex-1 py-1.5 text-xs font-medium rounded transition-colors ${
                 mode === "flow"
-                  ? "bg-zinc-700 text-foreground"
-                  : "text-zinc-500 hover:text-zinc-300"
+                  ? "bg-white dark:bg-zinc-700 text-foreground shadow-sm"
+                  : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
               }`}
             >
               From Flow
@@ -209,8 +209,8 @@ export function CreateJobDialog({ onCreated, prefill, open: controlledOpen, onOp
               onClick={() => setMode("json")}
               className={`flex-1 py-1.5 text-xs font-medium rounded transition-colors ${
                 mode === "json"
-                  ? "bg-zinc-700 text-foreground"
-                  : "text-zinc-500 hover:text-zinc-300"
+                  ? "bg-white dark:bg-zinc-700 text-foreground shadow-sm"
+                  : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
               }`}
             >
               JSON
@@ -282,7 +282,7 @@ export function CreateJobDialog({ onCreated, prefill, open: controlledOpen, onOp
                   <Label className="text-zinc-400">Inputs</Label>
                   {jobInputFields.map((field) => (
                     <div key={field} className="space-y-1">
-                      <label className="text-xs font-medium text-zinc-300">
+                      <label className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
                         {field}
                       </label>
                       {field.includes("prompt") || field.includes("question") || field.includes("description") || field.includes("context") ? (
@@ -290,14 +290,14 @@ export function CreateJobDialog({ onCreated, prefill, open: controlledOpen, onOp
                           value={inputValues[field] ?? ""}
                           onChange={(e) => handleInputChange(field, e.target.value)}
                           placeholder={field}
-                          className="text-xs min-h-[60px] bg-zinc-900 border-zinc-700"
+                          className="text-xs min-h-[60px] bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700"
                         />
                       ) : (
                         <Input
                           value={inputValues[field] ?? ""}
                           onChange={(e) => handleInputChange(field, e.target.value)}
                           placeholder={field}
-                          className="text-xs bg-zinc-900 border-zinc-700"
+                          className="text-xs bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700"
                         />
                       )}
                     </div>
