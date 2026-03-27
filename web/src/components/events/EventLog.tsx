@@ -190,7 +190,7 @@ export function EventLog({ jobId }: EventLogProps) {
               "text-xs px-2 py-0.5 rounded-full border transition-colors min-h-[44px] md:min-h-0 items-center",
               activeFilters.has(key)
                 ? `${color} border-current/30`
-                : "text-zinc-600 border-zinc-700/50 bg-transparent"
+                : "text-zinc-400 dark:text-zinc-600 border-zinc-300/50 dark:border-zinc-700/50 bg-transparent"
             )}
           >
             {label}

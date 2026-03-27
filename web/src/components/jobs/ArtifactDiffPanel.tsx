@@ -67,7 +67,7 @@ export function ArtifactDiffPanel({
           <select
             value={effectiveLeft?.attempt ?? ""}
             onChange={(e) => setLeftAttempt(Number(e.target.value))}
-            className="bg-zinc-800 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-300 text-xs"
+            className="bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded px-1.5 py-0.5 text-zinc-700 dark:text-zinc-300 text-xs"
           >
             {runsWithResults.map((r) => (
               <option key={r.id} value={r.attempt}>
@@ -79,7 +79,7 @@ export function ArtifactDiffPanel({
           <select
             value={effectiveRight?.attempt ?? ""}
             onChange={(e) => setRightAttempt(Number(e.target.value))}
-            className="bg-zinc-800 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-300 text-xs"
+            className="bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded px-1.5 py-0.5 text-zinc-700 dark:text-zinc-300 text-xs"
           >
             {runsWithResults.map((r) => (
               <option key={r.id} value={r.attempt}>
@@ -101,8 +101,8 @@ export function ArtifactDiffPanel({
             onClick={() => setSelectedField(null)}
             className={`text-[10px] px-2 py-0.5 rounded transition-colors ${
               selectedField === null
-                ? "bg-zinc-700 text-zinc-200"
-                : "text-zinc-500 hover:text-zinc-300 bg-zinc-800"
+                ? "bg-zinc-200 dark:bg-zinc-700 text-zinc-800 dark:text-zinc-200"
+                : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 bg-zinc-100 dark:bg-zinc-800"
             }`}
           >
             All fields
