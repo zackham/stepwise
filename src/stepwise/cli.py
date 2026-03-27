@@ -3809,18 +3809,20 @@ def cmd_self_update(args: argparse.Namespace) -> int:
     from pathlib import Path
 
     # Block update if running from editable install (dev mode)
-    dist_info = list(Path(__file__).parent.parent.glob("stepwise_run*.dist-info/direct_url.json"))
-    if dist_info:
-        try:
+    try:
+        import importlib.metadata
+        dist = importlib.metadata.distribution("stepwise-run")
+        direct_url_text = dist.read_text("direct_url.json")
+        if direct_url_text:
             import json as _json
-            data = _json.loads(dist_info[0].read_text())
+            data = _json.loads(direct_url_text)
             if data.get("dir_info", {}).get("editable"):
                 io = _io(args)
                 io.log("warn", "Running from editable install — 'stepwise update' is disabled.")
                 io.log("info", "To update, pull the latest source: cd ~/work/stepwise && git pull")
                 return 0
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     old_version = _get_version()
     method = _detect_install_method()
