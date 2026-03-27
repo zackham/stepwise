@@ -11,7 +11,7 @@ function ExecutorBadge({ type }: { type: string }) {
   }[type] ?? <Terminal className="w-3 h-3" />;
 
   return (
-    <span className="inline-flex items-center gap-0.5 text-[10px] text-zinc-500 bg-zinc-800 px-1 py-0.5 rounded">
+    <span className="inline-flex items-center gap-0.5 text-[10px] text-zinc-500 bg-zinc-200 dark:bg-zinc-800 px-1 py-0.5 rounded">
       {icon}
       {type}
     </span>
@@ -31,8 +31,8 @@ export function RegistryFlowCard({ flow, isSelected, onClick }: RegistryFlowCard
       className={cn(
         "w-full text-left p-2 rounded-md transition-colors",
         isSelected
-          ? "bg-zinc-800 border border-zinc-600"
-          : "hover:bg-zinc-800/50 border border-transparent"
+          ? "bg-zinc-200 dark:bg-zinc-800 border border-zinc-400 dark:border-zinc-600"
+          : "hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50 border border-transparent"
       )}
     >
       <div className="flex items-start justify-between gap-1">

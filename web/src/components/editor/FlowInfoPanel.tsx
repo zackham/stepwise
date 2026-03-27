@@ -58,7 +58,7 @@ export function FlowInfoPanel({
                   {flow.tags.map((tag) => (
                     <span
                       key={tag}
-                      className="text-[10px] bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded"
+                      className="text-[10px] bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 px-1.5 py-0.5 rounded"
                     >
                       {tag}
                     </span>
@@ -76,7 +76,7 @@ export function FlowInfoPanel({
               {flow.executor_types.map((t) => (
                 <span
                   key={t}
-                  className="text-[10px] font-mono bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded"
+                  className="text-[10px] font-mono bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 px-1.5 py-0.5 rounded"
                 >
                   {t}
                 </span>

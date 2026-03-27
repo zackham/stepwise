@@ -114,7 +114,7 @@ function DiffTextBlock({
       )}
       <pre
         className={cn(
-          "text-xs font-mono bg-zinc-900 border border-zinc-800 rounded p-2 whitespace-pre-wrap break-words",
+          "text-xs font-mono bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded p-2 whitespace-pre-wrap break-words",
           isDiff && `border-l-2 ${borderColor} ${bgColor}`,
           className
         )}

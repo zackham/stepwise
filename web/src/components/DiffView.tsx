@@ -154,7 +154,7 @@ export function DiffView({
   }
 
   return (
-    <div className="bg-zinc-950 border border-zinc-800 rounded overflow-hidden font-mono text-xs">
+    <div className="bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded overflow-hidden font-mono text-xs">
       {result.blocks.map((block, bi) => (
         <DiffBlock key={bi} block={block} />
       ))}
@@ -185,7 +185,7 @@ function DiffBlock({ block }: { block: DiffBlock }) {
     return (
       <button
         onClick={() => setExpanded(true)}
-        className="w-full text-[10px] text-zinc-500 hover:text-zinc-300 bg-zinc-900 border-y border-zinc-800 py-1 px-2 text-center cursor-pointer"
+        className="w-full text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 bg-zinc-100 dark:bg-zinc-900 border-y border-zinc-200 dark:border-zinc-800 py-1 px-2 text-center cursor-pointer"
       >
         Show {block.hiddenCount} hidden lines
       </button>
@@ -194,9 +194,9 @@ function DiffBlock({ block }: { block: DiffBlock }) {
 
   const colorClass =
     block.type === "added"
-      ? "bg-emerald-500/10 text-emerald-300"
+      ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
       : block.type === "removed"
-        ? "bg-red-500/10 text-red-300"
+        ? "bg-red-500/10 text-red-700 dark:text-red-300"
         : "text-zinc-500";
 
   const gutter =
