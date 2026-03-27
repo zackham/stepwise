@@ -824,7 +824,7 @@ export function FlowDagView({
   return (
     <div
       ref={containerRef}
-      className="relative w-full h-full overflow-hidden bg-zinc-950/50 rounded-lg touch-none"
+      className="relative w-full h-full overflow-hidden bg-zinc-100/50 dark:bg-zinc-950/50 rounded-lg touch-none"
       onWheel={handleWheel}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
@@ -1002,11 +1002,11 @@ export function FlowDagView({
               zIndex: 50,
             }}
           >
-            <div className="bg-zinc-900 border border-zinc-700 rounded-md shadow-xl p-2 -translate-x-1/2">
-              <div className="text-[10px] font-medium text-zinc-400 uppercase tracking-wide mb-1">
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md shadow-xl p-2 -translate-x-1/2">
+              <div className="text-[10px] font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wide mb-1">
                 {hoveredLabel.field}
               </div>
-              <pre className="text-[11px] font-mono text-zinc-200 whitespace-pre-wrap break-words max-w-[280px] max-h-[200px] overflow-auto m-0">
+              <pre className="text-[11px] font-mono text-zinc-800 dark:text-zinc-200 whitespace-pre-wrap break-words max-w-[280px] max-h-[200px] overflow-auto m-0">
                 {formatTooltipValue(hoveredLabel.value)}
               </pre>
             </div>
@@ -1016,7 +1016,7 @@ export function FlowDagView({
 
       {/* Zoom controls + follow flow */}
       <div className="absolute bottom-3 left-3 flex items-center gap-3 z-10">
-        <label className="flex items-center gap-1.5 bg-zinc-900/80 rounded-md border border-zinc-700/50 px-2 py-1 cursor-pointer select-none min-h-[44px] md:min-h-0">
+        <label className="flex items-center gap-1.5 bg-white/80 dark:bg-zinc-900/80 rounded-md border border-zinc-300/50 dark:border-zinc-700/50 px-2 py-1 cursor-pointer select-none min-h-[44px] md:min-h-0">
           <input
             type="checkbox"
             checked={followFlow}
@@ -1027,7 +1027,7 @@ export function FlowDagView({
           />
           <span className="text-zinc-400 text-xs">Follow flow</span>
         </label>
-        <div className="flex items-center gap-1 bg-zinc-900/80 rounded-md border border-zinc-700/50 px-2 py-1">
+        <div className="flex items-center gap-1 bg-white/80 dark:bg-zinc-900/80 rounded-md border border-zinc-300/50 dark:border-zinc-700/50 px-2 py-1">
           <button
             onClick={() => {
               transformRef.current.scale = Math.min(transformRef.current.scale * 1.2, 3);
@@ -1071,11 +1071,11 @@ export function FlowDagView({
 
       {/* Share / export controls */}
       <div className="absolute bottom-3 right-3 flex items-center gap-1 z-10">
-        <div className="flex items-center gap-0.5 bg-zinc-900/80 rounded-md border border-zinc-700/50 px-1 py-1">
+        <div className="flex items-center gap-0.5 bg-white/80 dark:bg-zinc-900/80 rounded-md border border-zinc-300/50 dark:border-zinc-700/50 px-1 py-1">
           <button
             onClick={() => captureDAG("clipboard")}
             disabled={shareState === "capturing"}
-            className="flex items-center gap-1.5 text-zinc-400 hover:text-foreground text-xs px-2 py-0.5 rounded hover:bg-zinc-800/50 disabled:opacity-50"
+            className="flex items-center gap-1.5 text-zinc-400 hover:text-foreground text-xs px-2 py-0.5 rounded hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 disabled:opacity-50"
             title="Copy DAG image to clipboard"
           >
             {shareState === "copied" ? (
@@ -1087,11 +1087,11 @@ export function FlowDagView({
             )}
             {shareState === "copied" ? "Copied!" : "Share"}
           </button>
-          <div className="w-px h-4 bg-zinc-700/50" />
+          <div className="w-px h-4 bg-zinc-300/50 dark:bg-zinc-700/50" />
           <button
             onClick={() => captureDAG("download")}
             disabled={shareState === "capturing"}
-            className="text-zinc-400 hover:text-foreground px-1.5 py-0.5 rounded hover:bg-zinc-800/50 disabled:opacity-50"
+            className="text-zinc-400 hover:text-foreground px-1.5 py-0.5 rounded hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 disabled:opacity-50"
             title="Download DAG as PNG"
           >
             <Download className="w-3.5 h-3.5" />

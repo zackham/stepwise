@@ -124,7 +124,7 @@ export function ExternalInputPanel({
     });
 
   const textareaClass =
-    "w-full min-h-[44px] rounded-md border border-zinc-700 bg-zinc-800/80 px-2.5 py-2 text-sm text-foreground placeholder:text-zinc-600 focus:outline-none focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/20 transition-colors";
+    "w-full min-h-[44px] rounded-md border border-zinc-300 dark:border-zinc-700 bg-zinc-50/80 dark:bg-zinc-800/80 px-2.5 py-2 text-sm text-foreground placeholder:text-zinc-500 dark:placeholder:text-zinc-600 focus:outline-none focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/20 transition-colors";
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey && hasValues) {
@@ -135,13 +135,13 @@ export function ExternalInputPanel({
 
   return (
     <div
-      className="w-80 max-w-[calc(100vw-2rem)] max-h-[80vh] overflow-y-auto rounded-lg border border-amber-500/30 bg-zinc-900/95 backdrop-blur-sm shadow-xl shadow-amber-500/5"
+      className="w-80 max-w-[calc(100vw-2rem)] max-h-[80vh] overflow-y-auto rounded-lg border border-amber-500/30 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-sm shadow-xl shadow-amber-500/5"
       onClick={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}
     >
       {/* Connector arrow */}
       <div className="flex justify-center -mt-2">
-        <div className="w-3 h-3 rotate-45 bg-zinc-900 border-l border-t border-amber-500/30" />
+        <div className="w-3 h-3 rotate-45 bg-white dark:bg-zinc-900 border-l border-t border-amber-500/30" />
       </div>
 
       <form onSubmit={handleSubmit} className="p-3 pt-1 space-y-2.5">

@@ -93,11 +93,11 @@ function CodeBlock({
       ? "border-emerald-900/50 bg-emerald-950/20"
       : tint === "cyan"
         ? "border-cyan-900/50 bg-cyan-950/20"
-        : "border-zinc-800 bg-zinc-900/50";
+        : "border-zinc-300 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50";
   return (
     <pre
       className={cn(
-        "text-xs font-mono text-zinc-400 border rounded px-2.5 py-2 whitespace-pre-wrap break-words max-h-[200px] overflow-y-auto leading-relaxed",
+        "text-xs font-mono text-zinc-600 dark:text-zinc-400 border rounded px-2.5 py-2 whitespace-pre-wrap break-words max-h-[200px] overflow-y-auto leading-relaxed",
         tintClass
       )}
     >
@@ -131,7 +131,7 @@ function KV({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex items-baseline gap-2 text-xs min-w-0">
       <span className="text-zinc-500 shrink-0">{label}</span>
-      <span className="text-zinc-300 font-mono min-w-0 break-all">{children}</span>
+      <span className="text-zinc-700 dark:text-zinc-300 font-mono min-w-0 break-all">{children}</span>
     </div>
   );
 }
@@ -169,10 +169,10 @@ function OutputSchemaTable({
       {entries.map(([name, field]) => (
         <div
           key={name}
-          className="flex items-baseline gap-2 text-xs font-mono bg-zinc-900/50 rounded px-2 py-1.5 min-w-0"
+          className="flex items-baseline gap-2 text-xs font-mono bg-zinc-100/50 dark:bg-zinc-900/50 rounded px-2 py-1.5 min-w-0"
         >
           <span className="text-blue-400">{name}</span>
-          <Badge className="bg-zinc-800 text-zinc-400 border-zinc-700">
+          <Badge className="bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border-zinc-300 dark:border-zinc-700">
             {field.type}
           </Badge>
           {field.required === false && (
@@ -267,7 +267,7 @@ export function StepDefinitionPanel({
           <Badge
             className={
               EXEC_TYPE_COLORS[execType] ??
-              "bg-zinc-800 text-zinc-400 border-zinc-700"
+              "bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border-zinc-300 dark:border-zinc-700"
             }
           >
             {execType}
@@ -298,7 +298,7 @@ export function StepDefinitionPanel({
 
       {/* Content area */}
       <ScrollArea className="flex-1 min-h-0">
-          <div className="py-2 space-y-1 divide-y divide-zinc-800/50">
+          <div className="py-2 space-y-1 divide-y divide-zinc-200/50 dark:divide-zinc-800/50">
             {/* ── Executor Config ── */}
             <Section title="Executor">
               {execType === "script" && (() => {
@@ -394,12 +394,12 @@ export function StepDefinitionPanel({
                   )}
                   <div className="flex flex-wrap gap-1.5">
                     {!!config.output_mode && (
-                      <Badge className="bg-zinc-800 text-zinc-400 border-zinc-700">
+                      <Badge className="bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border-zinc-300 dark:border-zinc-700">
                         output: {String(config.output_mode)}
                       </Badge>
                     )}
                     {!!config.output_path && (
-                      <Badge className="bg-zinc-800 text-zinc-400 border-zinc-700">
+                      <Badge className="bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border-zinc-300 dark:border-zinc-700">
                         path: {String(config.output_path)}
                       </Badge>
                     )}
@@ -473,7 +473,7 @@ export function StepDefinitionPanel({
                       {stepDef.outputs.map((out) => (
                         <span
                           key={out}
-                          className="text-xs font-mono bg-zinc-800 text-zinc-300 px-2 py-1 rounded"
+                          className="text-xs font-mono bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 px-2 py-1 rounded"
                         >
                           {out}
                         </span>
@@ -502,7 +502,7 @@ export function StepDefinitionPanel({
                       {stepDef.inputs.map((b) => (
                         <div
                           key={b.local_name}
-                          className="text-xs font-mono bg-zinc-900/50 rounded px-2 py-1.5 flex items-center gap-1.5 flex-wrap"
+                          className="text-xs font-mono bg-zinc-100/50 dark:bg-zinc-900/50 rounded px-2 py-1.5 flex items-center gap-1.5 flex-wrap"
                         >
                           <span className="text-blue-400">
                             {b.local_name}
@@ -539,10 +539,10 @@ export function StepDefinitionPanel({
                         return (
                           <div
                             key={r.name}
-                            className="text-xs font-mono bg-zinc-900/50 rounded px-2.5 py-2 space-y-0.5"
+                            className="text-xs font-mono bg-zinc-100/50 dark:bg-zinc-900/50 rounded px-2.5 py-2 space-y-0.5"
                           >
                             <div className="flex items-center gap-2">
-                              <span className="text-zinc-300">{r.name}</span>
+                              <span className="text-zinc-700 dark:text-zinc-300">{r.name}</span>
                               <span className={actionColor}>→ {action}</span>
                             </div>
                             {r.config.condition != null && (
@@ -570,7 +570,7 @@ export function StepDefinitionPanel({
                       {stepDef.after.map((s) => (
                         <span
                           key={s}
-                          className="text-xs font-mono bg-zinc-800 text-zinc-400 px-2 py-1 rounded"
+                          className="text-xs font-mono bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 px-2 py-1 rounded"
                         >
                           after {s}
                         </span>
@@ -608,12 +608,12 @@ export function StepDefinitionPanel({
                   {stepDef.executor.decorators.map((d, i) => (
                     <div
                       key={i}
-                      className="flex items-center gap-2 text-xs font-mono bg-zinc-900/50 rounded px-2.5 py-2"
+                      className="flex items-center gap-2 text-xs font-mono bg-zinc-100/50 dark:bg-zinc-900/50 rounded px-2.5 py-2"
                     >
                       {d.type === "timeout" && (
                         <>
                           <Clock className="w-3 h-3 text-zinc-500" />
-                          <span className="text-zinc-300">
+                          <span className="text-zinc-700 dark:text-zinc-300">
                             {String(d.config.timeout_minutes ?? d.config.timeout ?? "?")}m
                           </span>
                         </>
@@ -621,7 +621,7 @@ export function StepDefinitionPanel({
                       {d.type === "retry" && (
                         <>
                           <RefreshCw className="w-3 h-3 text-zinc-500" />
-                          <span className="text-zinc-300">
+                          <span className="text-zinc-700 dark:text-zinc-300">
                             max {String(d.config.max_retries ?? d.config.max ?? "?")}
                           </span>
                           {d.config.backoff && (
@@ -634,7 +634,7 @@ export function StepDefinitionPanel({
                       {d.type === "fallback" && (
                         <>
                           <Shield className="w-3 h-3 text-zinc-500" />
-                          <span className="text-zinc-300">
+                          <span className="text-zinc-700 dark:text-zinc-300">
                             fallback → {String(d.config.executor_type ?? d.config.type ?? "?")}
                           </span>
                         </>

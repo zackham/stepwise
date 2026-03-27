@@ -76,9 +76,9 @@ function renderInline(text: string): ReactNode[] {
       parts.push(text.slice(last, match.index));
     }
     if (match[2]) {
-      parts.push(<strong key={key++} className="font-semibold text-zinc-200">{match[2]}</strong>);
+      parts.push(<strong key={key++} className="font-semibold text-zinc-800 dark:text-zinc-200">{match[2]}</strong>);
     } else if (match[3]) {
-      parts.push(<code key={key++} className="px-1 py-0.5 rounded bg-zinc-800 text-zinc-300 font-mono text-[11px] break-all">{match[3]}</code>);
+      parts.push(<code key={key++} className="px-1 py-0.5 rounded bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 font-mono text-[11px] break-all">{match[3]}</code>);
     }
     last = match.index + match[0].length;
   }
@@ -175,19 +175,19 @@ export function ChatMessages({ messages, isStreaming, onApplyYaml, emptyMessage 
 
             {msg.content && (
               msg.role === "user" ? (
-                <div className="text-xs text-blue-300 bg-blue-950/30 rounded px-2.5 py-1.5">
+                <div className="text-xs text-blue-700 dark:text-blue-300 bg-blue-100/50 dark:bg-blue-950/30 rounded px-2.5 py-1.5">
                   <span className="whitespace-pre-wrap break-words">{msg.content}</span>
                 </div>
               ) : (
-                <div className="text-xs text-zinc-300 leading-relaxed">
+                <div className="text-xs text-zinc-700 dark:text-zinc-300 leading-relaxed">
                   <MarkdownContent content={msg.content} />
                 </div>
               )
             )}
 
             {msg.filesChanged && msg.filesChanged.length > 0 && (
-              <div className="my-1.5 px-2.5 py-1.5 bg-green-950/30 border border-green-900/30 rounded text-[11px] text-green-300/80">
-                <div className="flex items-center gap-1.5 font-medium text-green-300">
+              <div className="my-1.5 px-2.5 py-1.5 bg-green-100/30 dark:bg-green-950/30 border border-green-300/30 dark:border-green-900/30 rounded text-[11px] text-green-700/80 dark:text-green-300/80">
+                <div className="flex items-center gap-1.5 font-medium text-green-700 dark:text-green-300">
                   <Pencil className="w-3 h-3" />
                   {msg.filesChanged.length === 1 ? "1 file written" : `${msg.filesChanged.length} files written`}
                 </div>
@@ -202,12 +202,12 @@ export function ChatMessages({ messages, isStreaming, onApplyYaml, emptyMessage 
             {msg.yamlBlocks?.map((block, blockIdx) => (
               <div
                 key={block.apply_id}
-                className="bg-zinc-900 border border-zinc-700 rounded overflow-hidden min-w-0"
+                className="bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded overflow-hidden min-w-0"
               >
-                <pre className="text-[11px] text-zinc-300 p-2 overflow-x-auto max-h-48">
+                <pre className="text-[11px] text-zinc-700 dark:text-zinc-300 p-2 overflow-x-auto max-h-48">
                   <code>{block.content}</code>
                 </pre>
-                <div className="flex items-center gap-1.5 p-1.5 bg-zinc-800/50 border-t border-zinc-700">
+                <div className="flex items-center gap-1.5 p-1.5 bg-zinc-100/50 dark:bg-zinc-800/50 border-t border-zinc-300 dark:border-zinc-700">
                   {block.applied ? (
                     <Button size="sm" variant="ghost" disabled className="h-6 text-xs">
                       <Check className="w-3 h-3 mr-1 text-green-400" />

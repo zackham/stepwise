@@ -39,10 +39,10 @@ function formatCostPerMToken(costPerToken: number | undefined | null): string {
 
 function SourceBadge({ source }: { source: string }) {
   const colors: Record<string, string> = {
-    default: "bg-zinc-800 text-zinc-500",
-    user: "bg-blue-950 text-blue-400",
-    project: "bg-green-950 text-green-400",
-    local: "bg-amber-950 text-amber-400",
+    default: "bg-zinc-200 dark:bg-zinc-800 text-zinc-500",
+    user: "bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400",
+    project: "bg-green-100 dark:bg-green-950 text-green-600 dark:text-green-400",
+    local: "bg-amber-100 dark:bg-amber-950 text-amber-600 dark:text-amber-400",
   };
   return (
     <span className={cn("text-[10px] px-1.5 py-0.5 rounded", colors[source] ?? colors.default)}>
@@ -75,14 +75,14 @@ function LabelRow({
   };
 
   return (
-    <div className="flex items-center gap-3 py-2 px-3 hover:bg-zinc-900/50 rounded group">
-      <span className="text-sm font-mono text-zinc-300 w-24 shrink-0">{label.name}</span>
+    <div className="flex items-center gap-3 py-2 px-3 hover:bg-zinc-50/50 dark:hover:bg-zinc-900/50 rounded group">
+      <span className="text-sm font-mono text-zinc-700 dark:text-zinc-300 w-24 shrink-0">{label.name}</span>
       {editing ? (
         <div className="flex-1 flex items-center gap-2">
           <select
             value={modelValue}
             onChange={(e) => setModelValue(e.target.value)}
-            className="flex-1 text-xs bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-300"
+            className="flex-1 text-xs bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-700 dark:text-zinc-300"
           >
             {models.map((m) => (
               <option key={m.id} value={m.id}>
@@ -96,7 +96,7 @@ function LabelRow({
           <button onClick={handleSave} className="text-green-400 hover:text-green-300 p-1">
             <Check className="w-3.5 h-3.5" />
           </button>
-          <button onClick={() => setEditing(false)} className="text-zinc-500 hover:text-zinc-300 p-1">
+          <button onClick={() => setEditing(false)} className="text-zinc-500 hover:text-zinc-700 dark:text-zinc-300 p-1">
             <X className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -108,7 +108,7 @@ function LabelRow({
               setModelValue(label.model);
               setEditing(true);
             }}
-            className="text-[11px] text-zinc-600 hover:text-zinc-300 hover-capable:opacity-0 hover-capable:group-hover:opacity-100 transition-opacity"
+            className="text-[11px] text-zinc-600 hover:text-zinc-700 dark:text-zinc-300 hover-capable:opacity-0 hover-capable:group-hover:opacity-100 transition-opacity"
           >
             Change
           </button>
@@ -146,7 +146,7 @@ function AddLabelForm({
     return (
       <button
         onClick={() => setOpen(true)}
-        className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 px-3 py-2"
+        className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-700 dark:text-zinc-300 px-3 py-2"
       >
         <Plus className="w-3 h-3" />
         Add Label
@@ -176,13 +176,13 @@ function AddLabelForm({
             setError("");
           }}
           placeholder="label-name"
-          className="text-xs bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-300 w-28 font-mono"
+          className="text-xs bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-700 dark:text-zinc-300 w-28 font-mono"
           autoFocus
         />
         <select
           value={model}
           onChange={(e) => setModel(e.target.value)}
-          className="flex-1 text-xs bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-300"
+          className="flex-1 text-xs bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-700 dark:text-zinc-300"
         >
           {models.map((m) => (
             <option key={m.id} value={m.id}>
@@ -195,7 +195,7 @@ function AddLabelForm({
         <button onClick={handleSubmit} className="text-green-400 hover:text-green-300 p-1">
           <Check className="w-3.5 h-3.5" />
         </button>
-        <button onClick={() => setOpen(false)} className="text-zinc-500 hover:text-zinc-300 p-1">
+        <button onClick={() => setOpen(false)} className="text-zinc-500 hover:text-zinc-700 dark:text-zinc-300 p-1">
           <X className="w-3.5 h-3.5" />
         </button>
         {error && <span className="text-[10px] text-red-400">{error}</span>}
@@ -223,8 +223,8 @@ function ApiKeyRow({
   const isMobile = useIsMobile();
 
   return (
-    <div className="flex items-center gap-3 py-2 px-3 hover:bg-zinc-900/50 rounded group">
-      <span className="text-sm text-zinc-300 w-28 shrink-0 capitalize">{name}</span>
+    <div className="flex items-center gap-3 py-2 px-3 hover:bg-zinc-50/50 dark:hover:bg-zinc-900/50 rounded group">
+      <span className="text-sm text-zinc-700 dark:text-zinc-300 w-28 shrink-0 capitalize">{name}</span>
       {editing ? (
         <div className={cn("flex-1", isMobile ? "space-y-2" : "flex items-center gap-2")}>
           <input
@@ -232,14 +232,14 @@ function ApiKeyRow({
             value={value}
             onChange={(e) => setValue(e.target.value)}
             placeholder="sk-..."
-            className={cn("text-xs bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-300 font-mono", isMobile ? "w-full" : "flex-1")}
+            className={cn("text-xs bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-700 dark:text-zinc-300 font-mono", isMobile ? "w-full" : "flex-1")}
             autoFocus
           />
           <div className="flex items-center gap-2">
             <select
               value={scope}
               onChange={(e) => setScope(e.target.value)}
-              className="text-xs bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-400"
+              className="text-xs bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-400"
             >
               <option value="user">User</option>
               <option value="project">Project</option>
@@ -259,7 +259,7 @@ function ApiKeyRow({
                 setEditing(false);
                 setValue("");
               }}
-              className="text-zinc-500 hover:text-zinc-300 p-1"
+              className="text-zinc-500 hover:text-zinc-700 dark:text-zinc-300 p-1"
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -272,7 +272,7 @@ function ApiKeyRow({
           </span>
           <button
             onClick={() => setEditing(true)}
-            className="text-[11px] text-zinc-600 hover:text-zinc-300 hover-capable:opacity-0 hover-capable:group-hover:opacity-100 transition-opacity"
+            className="text-[11px] text-zinc-600 hover:text-zinc-700 dark:text-zinc-300 hover-capable:opacity-0 hover-capable:group-hover:opacity-100 transition-opacity"
           >
             {hasKey ? "Update" : "Set"}
           </button>
@@ -298,9 +298,9 @@ function ModelRow({
 
   if (isMobile) {
     return (
-      <div className="py-1.5 px-3 hover:bg-zinc-900/50 rounded group space-y-1">
+      <div className="py-1.5 px-3 hover:bg-zinc-50/50 dark:hover:bg-zinc-900/50 rounded group space-y-1">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-mono text-zinc-300 truncate flex-1 min-w-0">{model.id}</span>
+          <span className="text-xs font-mono text-zinc-700 dark:text-zinc-300 truncate flex-1 min-w-0">{model.id}</span>
           {labelRefs.map((l) => (
             <span key={l} className="text-[10px] px-1 py-0.5 bg-violet-950 text-violet-400 rounded shrink-0">
               {l}
@@ -324,10 +324,10 @@ function ModelRow({
   }
 
   return (
-    <div className="flex items-center gap-2 py-1.5 px-3 hover:bg-zinc-900/50 rounded group">
+    <div className="flex items-center gap-2 py-1.5 px-3 hover:bg-zinc-50/50 dark:hover:bg-zinc-900/50 rounded group">
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-mono text-zinc-300 truncate">{model.id}</span>
+          <span className="text-xs font-mono text-zinc-700 dark:text-zinc-300 truncate">{model.id}</span>
           {labelRefs.map((l) => (
             <span key={l} className="text-[10px] px-1 py-0.5 bg-violet-950 text-violet-400 rounded shrink-0">
               {l}
@@ -373,7 +373,7 @@ function ModelSearch({
     return (
       <button
         onClick={() => setOpen(true)}
-        className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 px-3 py-2"
+        className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-700 dark:text-zinc-300 px-3 py-2"
       >
         <Search className="w-3 h-3" />
         Search OpenRouter Models
@@ -393,7 +393,7 @@ function ModelSearch({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search models (e.g. claude, gpt, gemini)..."
-            className="w-full text-xs bg-zinc-900 border border-zinc-700 rounded pl-7 pr-2 py-1.5 text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-blue-500"
+            className="w-full text-xs bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded pl-7 pr-2 py-1.5 text-zinc-700 dark:text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-blue-500"
           />
           {isFetching && (
             <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-600 animate-spin" />
@@ -404,14 +404,14 @@ function ModelSearch({
             setOpen(false);
             setQuery("");
           }}
-          className="text-zinc-500 hover:text-zinc-300 p-1"
+          className="text-zinc-500 hover:text-zinc-700 dark:text-zinc-300 p-1"
         >
           <X className="w-3.5 h-3.5" />
         </button>
       </div>
 
       {query.length >= 2 && (
-        <div className="max-h-64 overflow-y-auto border border-zinc-800 rounded bg-zinc-950/80">
+        <div className="max-h-64 overflow-y-auto border border-zinc-200 dark:border-zinc-800 rounded bg-zinc-50/80 dark:bg-zinc-950/80">
           {isLoading ? (
             <div className="flex items-center justify-center py-4 text-xs text-zinc-600">
               <Loader2 className="w-3 h-3 animate-spin mr-1.5" />
@@ -426,10 +426,10 @@ function ModelSearch({
               <button
                 key={m.id}
                 onClick={() => onAdd(m)}
-                className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-zinc-800/50 border-b border-zinc-800/50 last:border-b-0"
+                className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50 border-b border-zinc-200/50 dark:border-zinc-800/50 last:border-b-0"
               >
                 <div className="flex-1 min-w-0">
-                  <div className="text-xs text-zinc-300 truncate">{m.name}</div>
+                  <div className="text-xs text-zinc-700 dark:text-zinc-300 truncate">{m.name}</div>
                   <div className="text-[10px] text-zinc-600 font-mono truncate">{m.id}</div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0 text-[10px] text-zinc-500 font-mono">
@@ -462,13 +462,13 @@ function Section({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="border border-zinc-800 rounded-lg overflow-hidden">
+    <div className="border border-zinc-200 dark:border-zinc-800 rounded-lg overflow-hidden">
       <button
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center gap-2 px-4 py-3 bg-zinc-950/50 hover:bg-zinc-900/50 transition-colors"
+        className="w-full flex items-center gap-2 px-4 py-3 bg-zinc-50/50 dark:bg-zinc-950/50 hover:bg-zinc-100/50 dark:hover:bg-zinc-900/50 transition-colors"
       >
         <Icon className="w-4 h-4 text-zinc-500" />
-        <span className="text-sm font-medium text-zinc-300">{title}</span>
+        <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{title}</span>
         <div className="flex-1" />
         <ChevronDown className={cn("w-4 h-4 text-zinc-600 transition-transform", !open && "-rotate-90")} />
       </button>
@@ -617,7 +617,7 @@ export function SettingsPage() {
               <select
                 value={config.default_model}
                 onChange={(e) => mutations.setDefaultModel.mutate(e.target.value)}
-                className="text-xs bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-300"
+                className="text-xs bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-700 dark:text-zinc-300"
               >
                 {config.labels.map((l) => (
                   <option key={l.name} value={l.name}>
