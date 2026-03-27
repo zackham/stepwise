@@ -165,8 +165,8 @@ export function CanvasPage() {
           className={cn(
             "flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border transition-colors",
             hideCompleted
-              ? "bg-zinc-800 border-zinc-700 text-zinc-300"
-              : "bg-zinc-900/80 border-zinc-800 text-zinc-500 hover:text-zinc-300",
+              ? "bg-zinc-200 dark:bg-zinc-800 border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300"
+              : "bg-white/80 dark:bg-zinc-900/80 border-zinc-300 dark:border-zinc-800 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300",
           )}
           title={hideCompleted ? "Show completed jobs" : "Hide completed jobs"}
         >
@@ -175,7 +175,7 @@ export function CanvasPage() {
         </button>
         <button
           onClick={fitToView}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border bg-zinc-900/80 border-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border bg-white/80 dark:bg-zinc-900/80 border-zinc-300 dark:border-zinc-800 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors"
           title="Fit to view"
         >
           <Maximize className="w-3.5 h-3.5" />
@@ -211,7 +211,7 @@ export function CanvasPage() {
           {layout.groups.map((group) => (
             <div
               key={group.label}
-              className="absolute rounded-xl border border-dashed border-zinc-800/60 bg-zinc-900/20"
+              className="absolute rounded-xl border border-dashed border-zinc-300/60 dark:border-zinc-800/60 bg-zinc-100/20 dark:bg-zinc-900/20"
               style={{
                 left: group.x,
                 top: group.y,

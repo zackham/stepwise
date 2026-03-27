@@ -51,8 +51,8 @@ function ToolCard({ tool }: { tool: { id: string; title: string; kind: string; s
     <div
       className={`flex items-center gap-1.5 rounded px-2 py-1 my-1 text-xs font-mono ${
         isRunning
-          ? "bg-zinc-900 border border-blue-500/30"
-          : "bg-zinc-900/50 border border-zinc-700/30"
+          ? "bg-zinc-100 dark:bg-zinc-900 border border-blue-500/30"
+          : "bg-zinc-100/50 dark:bg-zinc-900/50 border border-zinc-300/30 dark:border-zinc-700/30"
       }`}
     >
       <span className={isRunning ? "text-blue-400" : "text-zinc-500"}>
@@ -96,7 +96,7 @@ function SegmentRenderer({
             <span
               key={i}
               className={cn(
-                "whitespace-pre-wrap text-sm font-mono text-zinc-300 leading-relaxed",
+                "whitespace-pre-wrap text-sm font-mono text-zinc-700 dark:text-zinc-300 leading-relaxed",
                 hasActiveSearch && !matches && "opacity-40"
               )}
             >
@@ -116,11 +116,11 @@ function SegmentRenderer({
 function UsageBar({ usage }: { usage: { used: number; size: number } }) {
   const pct = usage.size > 0 ? (usage.used / usage.size) * 100 : 0;
   return (
-    <div className="border-t border-zinc-800/50 px-3 py-1 flex items-center justify-between">
+    <div className="border-t border-zinc-300/50 dark:border-zinc-800/50 px-3 py-1 flex items-center justify-between">
       <span className="text-[10px] text-zinc-600 font-mono">
         {usage.used.toLocaleString()} / {usage.size.toLocaleString()} tokens
       </span>
-      <div className="w-16 h-1 bg-zinc-800 rounded-full overflow-hidden">
+      <div className="w-16 h-1 bg-zinc-300 dark:bg-zinc-800 rounded-full overflow-hidden">
         <div
           className="h-full bg-blue-500/50 rounded-full transition-all"
           style={{ width: `${Math.min(pct, 100)}%` }}
@@ -186,10 +186,10 @@ export function AgentStreamView({ runId, isLive, startedAt, costUsd, billingMode
 
   if (segments.length === 0 && isLive) {
     return (
-      <div className="bg-zinc-950/50 border border-zinc-800/50 rounded-lg p-4">
+      <div className="bg-zinc-50/50 dark:bg-zinc-950/50 border border-zinc-300/50 dark:border-zinc-800/50 rounded-lg p-4">
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
-          <span className="text-sm text-blue-300">Agent starting...</span>
+          <span className="text-sm text-blue-600 dark:text-blue-300">Agent starting...</span>
           {startedAt && (
             <span className="text-xs text-zinc-600 ml-auto font-mono">
               {new Date(startedAt).toLocaleTimeString()}
@@ -212,7 +212,7 @@ export function AgentStreamView({ runId, isLive, startedAt, costUsd, billingMode
   }
 
   return (
-    <div ref={containerRef} tabIndex={-1} className="bg-zinc-950/50 border border-zinc-800/50 rounded-lg overflow-hidden">
+    <div ref={containerRef} tabIndex={-1} className="bg-zinc-50/50 dark:bg-zinc-950/50 border border-zinc-300/50 dark:border-zinc-800/50 rounded-lg overflow-hidden">
       <LogSearchBar search={search} />
       <div
         ref={scrollRef}

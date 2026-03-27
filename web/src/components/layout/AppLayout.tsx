@@ -28,12 +28,12 @@ function ErrorFallback({ error, resetErrorBoundary }: FallbackProps) {
           <AlertTriangle className="w-5 h-5 text-red-400 shrink-0" />
           <h2 className="text-lg font-semibold text-red-400">Something went wrong</h2>
         </div>
-        <pre className="text-sm text-zinc-400 bg-zinc-900 rounded p-3 mb-4 overflow-auto max-h-40 whitespace-pre-wrap break-words">
+        <pre className="text-sm text-zinc-600 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-900 rounded p-3 mb-4 overflow-auto max-h-40 whitespace-pre-wrap break-words">
           {error instanceof Error ? error.message : String(error)}
         </pre>
         <button
           onClick={resetErrorBoundary}
-          className="px-4 py-2 text-sm font-medium rounded-md bg-zinc-800 text-zinc-200 hover:bg-zinc-700 transition-colors"
+          className="px-4 py-2 text-sm font-medium rounded-md bg-zinc-200 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 hover:bg-zinc-300 dark:hover:bg-zinc-700 transition-colors"
         >
           Reload
         </button>

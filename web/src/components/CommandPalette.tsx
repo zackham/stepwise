@@ -82,10 +82,10 @@ export function CommandPalette() {
         onClick={(e) => e.stopPropagation()}
       >
         <Command
-          className="rounded-xl border border-zinc-700 bg-zinc-900 text-zinc-100 shadow-2xl overflow-hidden"
+          className="rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-2xl overflow-hidden"
           loop
         >
-          <div className="flex items-center border-b border-zinc-700 px-3">
+          <div className="flex items-center border-b border-zinc-300 dark:border-zinc-700 px-3">
             <Search className="w-4 h-4 text-zinc-400 shrink-0 mr-2" />
             <Command.Input
               placeholder="Search jobs, flows, pages..."
@@ -106,7 +106,7 @@ export function CommandPalette() {
               <Command.Item
                 value="Jobs page"
                 onSelect={() => selectPage("/jobs")}
-                className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-md cursor-pointer aria-selected:bg-zinc-800 text-zinc-300 aria-selected:text-zinc-100"
+                className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-md cursor-pointer aria-selected:bg-zinc-100 dark:aria-selected:bg-zinc-800 text-zinc-700 dark:text-zinc-300 aria-selected:text-zinc-900 dark:aria-selected:text-zinc-100"
               >
                 <LayoutGrid className="w-4 h-4 text-zinc-500" />
                 Jobs
@@ -114,7 +114,7 @@ export function CommandPalette() {
               <Command.Item
                 value="Flows page"
                 onSelect={() => selectPage("/flows")}
-                className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-md cursor-pointer aria-selected:bg-zinc-800 text-zinc-300 aria-selected:text-zinc-100"
+                className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-md cursor-pointer aria-selected:bg-zinc-100 dark:aria-selected:bg-zinc-800 text-zinc-700 dark:text-zinc-300 aria-selected:text-zinc-900 dark:aria-selected:text-zinc-100"
               >
                 <FileCode className="w-4 h-4 text-zinc-500" />
                 Flows
@@ -122,7 +122,7 @@ export function CommandPalette() {
               <Command.Item
                 value="Settings page"
                 onSelect={() => selectPage("/settings")}
-                className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-md cursor-pointer aria-selected:bg-zinc-800 text-zinc-300 aria-selected:text-zinc-100"
+                className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-md cursor-pointer aria-selected:bg-zinc-100 dark:aria-selected:bg-zinc-800 text-zinc-700 dark:text-zinc-300 aria-selected:text-zinc-900 dark:aria-selected:text-zinc-100"
               >
                 <Settings2 className="w-4 h-4 text-zinc-500" />
                 Settings
@@ -142,7 +142,7 @@ export function CommandPalette() {
                       key={job.id}
                       value={`${job.name ?? ""} ${job.objective} ${job.id}`}
                       onSelect={() => selectJob(job)}
-                      className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-md cursor-pointer aria-selected:bg-zinc-800 text-zinc-300 aria-selected:text-zinc-100"
+                      className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-md cursor-pointer aria-selected:bg-zinc-100 dark:aria-selected:bg-zinc-800 text-zinc-700 dark:text-zinc-300 aria-selected:text-zinc-900 dark:aria-selected:text-zinc-100"
                     >
                       <Icon className="w-4 h-4 text-zinc-500 shrink-0" />
                       <span className="truncate">
@@ -168,7 +168,7 @@ export function CommandPalette() {
                     key={flow.path}
                     value={`${flow.name} ${flow.description}`}
                     onSelect={() => selectFlow(flow.name)}
-                    className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-md cursor-pointer aria-selected:bg-zinc-800 text-zinc-300 aria-selected:text-zinc-100"
+                    className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-md cursor-pointer aria-selected:bg-zinc-100 dark:aria-selected:bg-zinc-800 text-zinc-700 dark:text-zinc-300 aria-selected:text-zinc-900 dark:aria-selected:text-zinc-100"
                   >
                     <Briefcase className="w-4 h-4 text-zinc-500 shrink-0" />
                     <span className="truncate">{flow.name}</span>
@@ -183,21 +183,21 @@ export function CommandPalette() {
             )}
           </Command.List>
 
-          <div className="border-t border-zinc-700 px-3 py-2 flex items-center gap-3 text-xs text-zinc-500">
+          <div className="border-t border-zinc-300 dark:border-zinc-700 px-3 py-2 flex items-center gap-3 text-xs text-zinc-500">
             <span>
-              <kbd className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono text-[11px]">
+              <kbd className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 font-mono text-[11px]">
                 ↑↓
               </kbd>{" "}
               navigate
             </span>
             <span>
-              <kbd className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono text-[11px]">
+              <kbd className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 font-mono text-[11px]">
                 ↵
               </kbd>{" "}
               select
             </span>
             <span>
-              <kbd className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono text-[11px]">
+              <kbd className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 font-mono text-[11px]">
                 esc
               </kbd>{" "}
               close

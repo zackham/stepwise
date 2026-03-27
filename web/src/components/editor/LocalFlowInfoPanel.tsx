@@ -89,7 +89,7 @@ function InlineEdit({
           }
         }}
         placeholder={placeholder}
-        className="w-full text-sm bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-300 resize-none"
+        className="w-full text-sm bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-700 dark:text-zinc-300 resize-none"
         rows={3}
       />
     );
@@ -109,7 +109,7 @@ function InlineEdit({
         }
       }}
       placeholder={placeholder}
-      className="h-7 text-sm bg-zinc-900 border-zinc-700"
+      className="h-7 text-sm bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700"
     />
   );
 }
@@ -150,7 +150,7 @@ function TagEditor({
       {tags.map((tag) => (
         <span
           key={tag}
-          className="text-[10px] bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded flex items-center gap-1 group/tag"
+          className="text-[10px] bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 px-1.5 py-0.5 rounded flex items-center gap-1 group/tag"
         >
           {tag}
           <button
@@ -176,7 +176,7 @@ function TagEditor({
               }
             }}
             placeholder="tag"
-            className="h-5 w-16 text-[10px] bg-zinc-900 border-zinc-700 px-1"
+            className="h-5 w-16 text-[10px] bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700 px-1"
           />
           <button onClick={addTag}>
             <Check className="w-3 h-3 text-zinc-500" />
@@ -185,7 +185,7 @@ function TagEditor({
       ) : (
         <button
           onClick={() => setAdding(true)}
-          className="text-[10px] bg-zinc-800/50 text-zinc-600 px-1.5 py-0.5 rounded hover:text-zinc-400"
+          className="text-[10px] bg-zinc-200/50 dark:bg-zinc-800/50 text-zinc-600 px-1.5 py-0.5 rounded hover:text-zinc-500 dark:hover:text-zinc-400"
         >
           <Plus className="w-2.5 h-2.5 inline" />
         </button>
@@ -303,7 +303,7 @@ export function LocalFlowInfoPanel({
                   {(flow.executor_types ?? []).map((t) => (
                     <span
                       key={t}
-                      className="text-[10px] font-mono bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded"
+                      className="text-[10px] font-mono bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 px-1.5 py-0.5 rounded"
                     >
                       {t}
                     </span>

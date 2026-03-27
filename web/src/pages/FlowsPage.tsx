@@ -217,8 +217,8 @@ export function FlowsPage() {
             className={cn(
               "px-3 py-1.5 text-sm rounded-md transition-colors",
               tab === "local"
-                ? "bg-zinc-800 text-foreground"
-                : "text-zinc-500 hover:text-foreground hover:bg-zinc-800/50"
+                ? "bg-zinc-200 dark:bg-zinc-800 text-foreground"
+                : "text-zinc-500 hover:text-foreground hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
             )}
           >
             <FolderOpen className="w-3.5 h-3.5 inline mr-1.5" />
@@ -229,8 +229,8 @@ export function FlowsPage() {
             className={cn(
               "px-3 py-1.5 text-sm rounded-md transition-colors",
               tab === "registry"
-                ? "bg-zinc-800 text-foreground"
-                : "text-zinc-500 hover:text-foreground hover:bg-zinc-800/50"
+                ? "bg-zinc-200 dark:bg-zinc-800 text-foreground"
+                : "text-zinc-500 hover:text-foreground hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
             )}
           >
             <Globe className="w-3.5 h-3.5 inline mr-1.5" />
@@ -272,11 +272,11 @@ export function FlowsPage() {
                   value={filter}
                   onChange={(e) => setFilter(e.target.value)}
                   placeholder="Filter flows..."
-                  className="pl-8 h-8 text-sm bg-zinc-900 border-zinc-700"
+                  className="pl-8 h-8 text-sm bg-zinc-50 dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700"
                 />
               </div>
               <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortBy)}>
-                <SelectTrigger className="w-28 h-8 text-xs bg-zinc-900 border-zinc-700">
+                <SelectTrigger className="w-28 h-8 text-xs bg-zinc-50 dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -331,8 +331,8 @@ export function FlowsPage() {
                     className={cn(
                       "w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors",
                       selectedLocalFlow?.path === flow.path
-                        ? "bg-zinc-800 text-foreground"
-                        : "text-zinc-400 hover:text-foreground hover:bg-zinc-800/50"
+                        ? "bg-zinc-100 dark:bg-zinc-800 text-foreground"
+                        : "text-zinc-600 dark:text-zinc-400 hover:text-foreground hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
                     )}
                   >
                     {flow.is_directory ? (
