@@ -33,7 +33,7 @@ import { useState, useEffect, useRef } from "react";
 import { useAgentOutput } from "@/hooks/useStepwise";
 import { FulfillWatchDialog } from "./FulfillWatchDialog";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
+import { cn, safeRenderValue } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LiveDuration } from "@/components/LiveDuration";
 import { executorIcon } from "@/lib/executor-utils";
@@ -337,29 +337,36 @@ export function StepDetailPanel({
                   <div>
                     <div className="text-zinc-500 text-sm mb-1">Agent Prompt</div>
                     <pre className={cn("text-xs font-mono bg-zinc-50 dark:bg-zinc-900 border border-blue-500/20 rounded p-2 text-blue-700 dark:text-blue-300 whitespace-pre-wrap break-all", !expanded && "max-h-32 overflow-auto")}>
-                      {String(stepDef.executor.config.prompt)}
+                      {safeRenderValue(stepDef.executor.config.prompt)}
                     </pre>
                   </div>
                 )}
                 <div className="flex gap-3 text-xs">
                   {Boolean(stepDef.executor.config.output_mode) && (
                     <span className="text-zinc-500">
-                      Mode: <span className="text-zinc-400 font-mono">{String(stepDef.executor.config.output_mode)}</span>
+                      Mode: <span className="text-zinc-400 font-mono">{safeRenderValue(stepDef.executor.config.output_mode)}</span>
                     </span>
                   )}
                   {Boolean(stepDef.executor.config.model) && (
                     <span className="text-zinc-500">
-                      Model: <span className="text-zinc-400 font-mono">{String(stepDef.executor.config.model)}</span>
+                      Model: <span className="text-zinc-400 font-mono">{safeRenderValue(stepDef.executor.config.model)}</span>
                     </span>
                   )}
                   {Boolean(stepDef.executor.config.permission_mode) && (
                     <span className="text-zinc-500">
-                      Perms: <span className="text-zinc-400 font-mono">{String(stepDef.executor.config.permission_mode)}</span>
+                      Perms: <span className="text-zinc-400 font-mono">{safeRenderValue(stepDef.executor.config.permission_mode)}</span>
                     </span>
                   )}
                 </div>
               </div>
             )}
+            {!["script", "external", "agent"].includes(stepDef.executor.type) &&
+              Object.keys(stepDef.executor.config).length > 0 && (
+                <div className="mt-2">
+                  <div className="text-zinc-500 text-sm mb-1">Config</div>
+                  <JsonView data={stepDef.executor.config} defaultExpanded={false} />
+                </div>
+              )}
 
             {stepDef.inputs.length > 0 && (
               <div className="mt-2">
@@ -390,12 +397,12 @@ export function StepDetailPanel({
                       key={r.name}
                       className="text-xs font-mono bg-zinc-100/50 dark:bg-zinc-900/50 rounded px-2 py-1"
                     >
-                      <span className="text-amber-400">{r.name}</span>
-                      <span className="text-zinc-600"> ({r.type})</span>
+                      <span className="text-amber-400">{safeRenderValue(r.name)}</span>
+                      <span className="text-zinc-600"> ({safeRenderValue(r.type)})</span>
                       {r.config.action != null && (
                         <span className="text-zinc-400">
                           {" "}
-                          &rarr; {String(r.config.action)}
+                          &rarr; {safeRenderValue(r.config.action)}
                         </span>
                       )}
                     </div>

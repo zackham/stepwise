@@ -11,7 +11,7 @@ import {
 import { StepStatusBadge } from "@/components/StatusBadge";
 import { STEP_STATUS_COLORS, STEP_PENDING_COLORS } from "@/lib/status-colors";
 import type { ExitRule, StepDefinition, StepRun, StepRunStatus } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { cn, safeRenderValue } from "@/lib/utils";
 import { LiveDuration } from "@/components/LiveDuration";
 import { executorIcon, executorLabel } from "@/lib/executor-utils";
 
@@ -51,25 +51,21 @@ function executorSubtitle(stepDef: StepDefinition): string {
   const limit = 36;
   switch (type) {
     case "script": {
-      const cmd = config.command as string | undefined;
+      const cmd = typeof config.command === "string" ? config.command : undefined;
       if (!cmd) return "script";
-      // Extract meaningful summary from command
-      // For python3 -c "..." commands, skip boilerplate
       const pyInline = cmd.match(/python3?\s+-c\s+["'](.+)/);
       if (pyInline) {
-        // Show outputs for the step instead
         const outputs = stepDef.outputs;
         if (outputs.length > 0) return `script → ${outputs.join(", ")}`;
         return "python script";
       }
-      // For simple commands, show the command itself
       const simple = cmd.replace(/^(bash|sh)\s+-c\s+["']?/, "").trim();
       return simple.length > limit
         ? simple.slice(0, limit - 2) + "..."
         : simple;
     }
     case "external": {
-      const prompt = config.prompt as string | undefined;
+      const prompt = typeof config.prompt === "string" ? config.prompt : undefined;
       if (!prompt) return "external input";
       return prompt.length > limit
         ? prompt.slice(0, limit - 2) + "..."
@@ -78,12 +74,12 @@ function executorSubtitle(stepDef: StepDefinition): string {
     case "mock_llm":
       return "LLM simulation";
     case "llm": {
-      const model = config.model as string | undefined;
+      const model = typeof config.model === "string" ? config.model : undefined;
       return model ? `LLM: ${model}` : "LLM";
     }
     case "agent": {
-      const mode = config.output_mode as string | undefined;
-      const model = config.model as string | undefined;
+      const mode = typeof config.output_mode === "string" ? config.output_mode : undefined;
+      const model = typeof config.model === "string" ? config.model : undefined;
       const parts = ["Agent"];
       if (model) parts.push(model);
       if (mode && mode !== "effect") parts.push(`(${mode})`);
@@ -125,16 +121,16 @@ function ExitRulesSection({ rules }: { rules: ExitRule[] }) {
       <table className="w-full text-[10px]">
         <tbody>
           {rules.map((rule) => {
-            const action = rule.config.action as string;
-            const condition = rule.config.condition as string | undefined;
-            const field = rule.config.field as string | undefined;
+            const action = safeRenderValue(rule.config.action);
+            const condition = rule.config.condition != null ? safeRenderValue(rule.config.condition) : undefined;
+            const field = rule.config.field != null ? safeRenderValue(rule.config.field) : undefined;
             const value = rule.config.value;
-            const target = rule.config.target as string | undefined;
-            const condText = condition ?? (field ? `${field} == ${JSON.stringify(value)}` : rule.type);
+            const target = rule.config.target != null ? safeRenderValue(rule.config.target) : undefined;
+            const condText = condition ?? (field ? `${field} == ${JSON.stringify(value)}` : safeRenderValue(rule.type));
             return (
               <tr key={rule.name} className="border-t border-zinc-200 dark:border-zinc-800 first:border-t-0">
                 <td className="py-0.5 pr-2 font-mono text-zinc-700 dark:text-zinc-300 whitespace-nowrap">
-                  {rule.name}
+                  {safeRenderValue(rule.name)}
                 </td>
                 <td className="py-0.5 pr-2 font-mono text-zinc-500 max-w-[180px] truncate">
                   {condText}

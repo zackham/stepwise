@@ -15,7 +15,7 @@ import {
   RefreshCw,
   Shield,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, safeRenderValue } from "@/lib/utils";
 import { executorIcon } from "@/lib/executor-utils";
 import { useConfig } from "@/hooks/useConfig";
 
@@ -461,6 +461,18 @@ export function StepDefinitionPanel({
                   )}
                 </div>
               )}
+
+              {!["script", "llm", "mock_llm", "agent", "external", "poll"].includes(execType) &&
+                Object.keys(config).length > 0 && (
+                  <div className="space-y-1.5">
+                    <span className="text-xs text-zinc-500">Config</span>
+                    <div className="space-y-1">
+                      {Object.entries(config).map(([k, v]) => (
+                        <KV key={k} label={k}>{safeRenderValue(v)}</KV>
+                      ))}
+                    </div>
+                  </div>
+                )}
             </Section>
 
             {/* ── Data Flow ── */}
@@ -640,7 +652,14 @@ export function StepDefinitionPanel({
                         </>
                       )}
                       {!["timeout", "retry", "fallback"].includes(d.type) && (
-                        <span className="text-zinc-400">{d.type}</span>
+                        <>
+                          <span className="text-zinc-400">{d.type}</span>
+                          {d.config && Object.keys(d.config).length > 0 && (
+                            <span className="text-zinc-500 text-[10px]">
+                              {Object.entries(d.config).map(([k, v]) => `${k}=${safeRenderValue(v)}`).join(", ")}
+                            </span>
+                          )}
+                        </>
                       )}
                     </div>
                   ))}
