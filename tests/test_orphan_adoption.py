@@ -69,7 +69,7 @@ class TestAdoptStaleCLIJob:
 
     def test_adopt_transfers_ownership(self):
         """Adopted job should become server-owned."""
-        from stepwise.server import _adopt_stale_cli_job
+        from stepwise.engine import _adopt_stale_cli_job
 
         store, reg, engine = _make_engine()
         job = engine.create_job(objective="test-adopt", workflow=_simple_workflow())
@@ -86,7 +86,7 @@ class TestAdoptStaleCLIJob:
 
     def test_adopt_fails_running_steps_with_dead_pid(self):
         """Running steps with dead PIDs should be failed on adoption."""
-        from stepwise.server import _adopt_stale_cli_job
+        from stepwise.engine import _adopt_stale_cli_job
 
         store, reg, engine = _make_engine()
         job = engine.create_job(objective="test-adopt", workflow=_simple_workflow())
@@ -115,7 +115,7 @@ class TestAdoptStaleCLIJob:
 
     def test_adopt_preserves_running_steps_with_alive_pid(self):
         """Running steps with alive PIDs should NOT be failed."""
-        from stepwise.server import _adopt_stale_cli_job
+        from stepwise.engine import _adopt_stale_cli_job
 
         store, reg, engine = _make_engine()
         job = engine.create_job(objective="test-adopt", workflow=_simple_workflow())
@@ -142,7 +142,7 @@ class TestAdoptStaleCLIJob:
 
     def test_adopt_fails_steps_with_no_pid(self):
         """Running steps with no PID should be failed (can't verify process)."""
-        from stepwise.server import _adopt_stale_cli_job
+        from stepwise.engine import _adopt_stale_cli_job
 
         store, reg, engine = _make_engine()
         job = engine.create_job(objective="test-adopt", workflow=_simple_workflow())
@@ -172,7 +172,7 @@ class TestAutoAdoptStaleCLIJobs:
 
     def test_adopts_stale_jobs(self):
         """Jobs with stale heartbeats should be adopted."""
-        from stepwise.server import _auto_adopt_stale_cli_jobs
+        from stepwise.engine import _auto_adopt_stale_cli_jobs
 
         store, reg, engine = _make_engine()
 
@@ -189,7 +189,7 @@ class TestAutoAdoptStaleCLIJobs:
 
     def test_skips_fresh_jobs(self):
         """Jobs with recent heartbeats should not be adopted."""
-        from stepwise.server import _auto_adopt_stale_cli_jobs
+        from stepwise.engine import _auto_adopt_stale_cli_jobs
 
         store, reg, engine = _make_engine()
 
@@ -206,7 +206,7 @@ class TestAutoAdoptStaleCLIJobs:
 
     def test_skips_server_owned_jobs(self):
         """Server-owned jobs should not be adopted (already ours)."""
-        from stepwise.server import _auto_adopt_stale_cli_jobs
+        from stepwise.engine import _auto_adopt_stale_cli_jobs
 
         store, reg, engine = _make_engine()
 
@@ -224,7 +224,7 @@ class TestAdoptedJobRecovery:
 
     def test_adopted_job_settles_when_all_steps_done(self):
         """An adopted job with all steps completed should settle to COMPLETED."""
-        from stepwise.server import _adopt_stale_cli_job
+        from stepwise.engine import _adopt_stale_cli_job
 
         store, reg, engine = _make_engine()
         wf = _simple_workflow()
@@ -260,7 +260,7 @@ class TestAdoptedJobRecovery:
     def test_adopted_job_redispatches_after_failed_step(self):
         """After adoption fails a running step, engine should re-dispatch ready steps."""
         import asyncio
-        from stepwise.server import _adopt_stale_cli_job
+        from stepwise.engine import _adopt_stale_cli_job
 
         register_step_fn("produce", lambda inputs: {"val": 10})
         register_step_fn("consume", lambda inputs: {"result": inputs["val"] * 2})
