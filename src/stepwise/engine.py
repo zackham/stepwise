@@ -3019,7 +3019,7 @@ class AsyncEngine(Engine):
         billing_mode: str = "subscription",
         config: object | None = None,
         cache: "StepResultCache | None" = None,
-        max_concurrent_jobs: int = 10,
+        max_concurrent_jobs: int = 0,  # 0 = unlimited
     ) -> None:
         super().__init__(store, registry, jobs_dir, project_dir, billing_mode=billing_mode, config=config, cache=cache)
         self._queue: asyncio.Queue = asyncio.Queue()
