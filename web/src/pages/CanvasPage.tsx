@@ -94,7 +94,7 @@ export function CanvasPage() {
   return (
     <div className="h-full overflow-y-auto">
       {/* Toolbar */}
-      <div className="sticky top-0 z-10 flex items-center justify-end px-6 py-3 bg-zinc-950/80 backdrop-blur-sm border-b border-zinc-800/50">
+      <div className="sticky top-0 z-10 flex items-center justify-end px-6 py-3 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-sm border-b border-zinc-200 dark:border-zinc-800/50">
         <button
           onClick={() => setHideCompleted(!hideCompleted)}
           className={cn(
@@ -108,76 +108,23 @@ export function CanvasPage() {
           {hideCompleted ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
           <span className="hidden sm:inline">{hideCompleted ? "Show done" : "Hide done"}</span>
         </button>
-<<<<<<< HEAD
       </div>
 
       {/* Content */}
-      <div className="px-6 py-6 space-y-8">
+      <div className="p-6 space-y-8">
         {/* Grouped jobs */}
         {grouped.map(([groupLabel, groupJobs]) => {
           const completedCount = groupJobs.filter((j) => j.status === "completed").length;
           return (
             <section key={groupLabel}>
               <div className="mb-3 flex items-center gap-2">
-                <h2 className="text-sm font-medium text-zinc-300">{groupLabel}</h2>
-                <span className="text-xs text-zinc-600">
+                <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{groupLabel}</h2>
+                <span className="text-xs text-zinc-400 dark:text-zinc-600">
                   {completedCount}/{groupJobs.length} complete
-=======
-        <button
-          onClick={fitToView}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border bg-white/80 dark:bg-zinc-900/80 border-zinc-300 dark:border-zinc-800 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors"
-          title="Fit to view"
-        >
-          <Maximize className="w-3.5 h-3.5" />
-        </button>
-      </div>
-
-      {/* Canvas */}
-      <div
-        ref={containerRef}
-        className={cn("h-full w-full", isPanning ? "cursor-grabbing" : "cursor-grab")}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
-      >
-        <div
-          style={{
-            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-            transformOrigin: "0 0",
-            width: layout.width,
-            height: layout.height,
-            position: "relative",
-          }}
-        >
-          {/* Dependency arrows (behind cards) */}
-          <DependencyArrows
-            edges={layout.edges}
-            width={layout.width}
-            height={layout.height}
-          />
-
-          {/* Group clusters */}
-          {layout.groups.map((group) => (
-            <div
-              key={group.label}
-              className="absolute rounded-xl border border-dashed border-zinc-300/60 dark:border-zinc-800/60 bg-zinc-100/20 dark:bg-zinc-900/20"
-              style={{
-                left: group.x,
-                top: group.y,
-                width: group.width,
-                height: group.height,
-              }}
-            >
-              <div className="px-3 pt-1.5 text-[11px] text-zinc-600 font-medium">
-                {group.label}:{" "}
-                <span className="text-zinc-500">
-                  {group.completedCount}/{group.totalCount} complete
->>>>>>> ui-light-mode
                 </span>
               </div>
-              <div className="rounded-xl border border-dashed border-zinc-800/60 bg-zinc-900/20 p-4">
-                <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4 justify-items-center">
+              <div className="rounded-xl border border-dashed border-zinc-300/60 dark:border-zinc-800/60 bg-zinc-100/20 dark:bg-zinc-900/20 p-4">
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
                   {groupJobs.map(renderCard)}
                 </div>
               </div>
@@ -189,9 +136,9 @@ export function CanvasPage() {
         {ungrouped.length > 0 && (
           <section>
             {grouped.length > 0 && (
-              <h2 className="mb-3 text-sm font-medium text-zinc-400">Other jobs</h2>
+              <h2 className="mb-3 text-sm font-medium text-zinc-500 dark:text-zinc-400">Other jobs</h2>
             )}
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4 justify-items-center">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
               {ungrouped.map(renderCard)}
             </div>
           </section>
