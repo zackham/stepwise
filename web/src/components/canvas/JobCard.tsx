@@ -9,11 +9,13 @@ import type { Job, StepRun } from "@/lib/types";
 export interface JobCardProps {
   job: Job;
   runs: StepRun[];
-  width: number;
-  height: number;
+  dependencyNames?: string[];
 }
 
-export const JobCard = memo(function JobCard({ job, runs, width, height }: JobCardProps) {
+const DAG_W = 268;
+const DAG_H = 90;
+
+export const JobCard = memo(function JobCard({ job, runs, dependencyNames }: JobCardProps) {
   const isCompleted = job.status === "completed";
   const isFailed = job.status === "failed";
   const isActive = job.status === "running" || job.status === "paused";
@@ -25,28 +27,21 @@ export const JobCard = memo(function JobCard({ job, runs, width, height }: JobCa
   // Find current running step
   const currentStep = job.current_step ?? null;
 
-  // Reserve space for header/footer
-  const headerH = 44;
-  const footerH = 36;
-  const dagW = width - 16; // 8px padding each side
-  const dagH = Math.max(height - headerH - footerH - 8, 40);
-
   return (
     <Link
       to="/jobs/$jobId"
       params={{ jobId: job.id }}
       className={cn(
-        "block rounded-lg border transition-all duration-200 overflow-hidden",
+        "block w-full max-w-[340px] rounded-lg border transition-all duration-200 overflow-hidden",
         "bg-zinc-900/80 hover:bg-zinc-900",
         "border-zinc-800 hover:border-zinc-700",
         isCompleted && "opacity-45 hover:opacity-70",
         isFailed && "border-red-900/60 shadow-[0_0_12px_rgba(239,68,68,0.15)]",
         isActive && "border-blue-900/40",
       )}
-      style={{ width, height }}
     >
       {/* Header */}
-      <div className="px-3 pt-2.5 pb-1 flex items-start gap-2 min-h-[44px]">
+      <div className="px-3 pt-2.5 pb-1 flex items-start gap-2">
         <div className="flex-1 min-w-0">
           <p className="text-[13px] font-medium text-zinc-100 truncate leading-tight">
             {displayName}
@@ -66,46 +61,46 @@ export const JobCard = memo(function JobCard({ job, runs, width, height }: JobCa
           <MiniDag
             workflow={job.workflow}
             runs={runs}
-            width={dagW}
-            height={dagH}
+            width={DAG_W}
+            height={DAG_H}
           />
-        ) : (
-          <div
-            className="flex items-center justify-center text-zinc-600 text-[10px]"
-            style={{ width: dagW, height: dagH }}
-          >
-            {runs.length > 0 ? `${runs.length} runs` : "No workflow data"}
-          </div>
-        )}
+        ) : null}
       </div>
 
       {/* Footer */}
-      <div className="px-3 pb-2 pt-0.5 flex items-center justify-between min-h-[36px]">
-        <div className="flex-1 min-w-0">
-          {currentStep ? (
-            <p className="text-[11px] text-zinc-400 truncate">
-              <span className="text-zinc-500">{currentStep.name}</span>
-              {currentStep.started_at && (
-                <span className="text-zinc-600 ml-1.5">
-                  <LiveDuration
-                    startTime={currentStep.started_at}
-                    endTime={currentStep.completed_at ?? null}
-                  />
-                </span>
-              )}
-            </p>
-          ) : (
-            <span className="text-[11px] text-zinc-600">
-              {Object.keys(job.workflow?.steps ?? {}).length} steps
-            </span>
-          )}
+      <div className="px-3 pb-2 pt-0.5 space-y-0.5">
+        <div className="flex items-center justify-between">
+          <div className="flex-1 min-w-0">
+            {currentStep ? (
+              <p className="text-[11px] text-zinc-400 truncate">
+                <span className="text-zinc-500">{currentStep.name}</span>
+                {currentStep.started_at && (
+                  <span className="text-zinc-600 ml-1.5">
+                    <LiveDuration
+                      startTime={currentStep.started_at}
+                      endTime={currentStep.completed_at ?? null}
+                    />
+                  </span>
+                )}
+              </p>
+            ) : (
+              <span className="text-[11px] text-zinc-600">
+                {Object.keys(job.workflow?.steps ?? {}).length} steps
+              </span>
+            )}
+          </div>
+          <span className="text-[11px] text-zinc-600 shrink-0 ml-2">
+            <LiveDuration
+              startTime={job.created_at}
+              endTime={isCompleted || isFailed || job.status === "cancelled" ? job.updated_at : null}
+            />
+          </span>
         </div>
-        <span className="text-[11px] text-zinc-600 shrink-0 ml-2">
-          <LiveDuration
-            startTime={job.created_at}
-            endTime={isCompleted || isFailed || job.status === "cancelled" ? job.updated_at : null}
-          />
-        </span>
+        {dependencyNames && dependencyNames.length > 0 && (
+          <p className="text-[10px] text-zinc-600 truncate">
+            depends on {dependencyNames.join(", ")}
+          </p>
+        )}
       </div>
     </Link>
   );
