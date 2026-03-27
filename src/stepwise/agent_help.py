@@ -559,7 +559,7 @@ def _format_full(entries: list[dict]) -> str:
         "stepwise status <job-id>                  # check progress",
         "```",
         "",
-        "Exit codes: 0=success, 1=failed, 2=input error, 3=timeout, 4=cancelled",
+        "Exit codes: 0=success, 1=failed, 2=input error, 4=cancelled, 5=suspended",
         "",
     ])
 

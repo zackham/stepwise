@@ -154,19 +154,6 @@ stepwise run flow.yaml --wait --vars-file inputs.yaml
 
 Error messages are actionable — they tell you exactly which `--input` flags to add.
 
-### Timeout (exit code 3)
-
-```json
-{
-  "status": "timeout",
-  "job_id": "job-a1b2c3d4",
-  "timeout_seconds": 300,
-  "suspended_at_step": "approve"
-}
-```
-
-The job is still alive. You can fulfill suspended steps (see section 6) or retrieve it later with `stepwise output`.
-
 ### Cancelled (exit code 4)
 
 ```json

@@ -72,7 +72,6 @@ Every `stepwise run --wait` call returns a structured exit code. The agent shoul
 | 0 | `completed` | Flow finished successfully | Parse `outputs[0]` |
 | 1 | `failed` | A step failed | Read `error` and `failed_step`; check `completed_outputs` for partial results |
 | 2 | `error` | Invalid input | Read `error` message — it tells you which `--input` to add |
-| 3 | `timeout` | Timed out (job still alive) | Use `stepwise output <job_id>` to check progress, or `stepwise fulfill` if suspended |
 | 4 | `cancelled` | Job was cancelled | Retry or report to user |
 | 5 | `suspended` | Waiting for external input | Read `suspended_steps` and fulfill (see below) |
 

@@ -134,9 +134,14 @@ stepwise server start [--detach]               Persistent server with web UI
 stepwise validate <flow>                       Check a flow for errors
 stepwise jobs                                  List all jobs
 stepwise status <job-id>                       Step-by-step detail
+stepwise tail <job-id>                         Live event stream
+stepwise output <job-id> [--step name]         Retrieve step outputs
 stepwise fulfill <run-id> '{...}'              Satisfy an external step
+stepwise job create/show/run/dep/cancel/rm     Stage and manage jobs
 stepwise schema <flow>                         Input/output schema (JSON)
 stepwise agent-help                            Generate agent instructions
+stepwise docs <topic>                          Browse documentation
+stepwise login / logout                        Registry authentication
 stepwise update                                Upgrade to latest version
 ```
 
@@ -169,7 +174,7 @@ See [`docs/cli.md`](docs/cli.md) for the full reference with all flags, examples
 ```bash
 git clone https://github.com/zackham/stepwise.git && cd stepwise
 uv sync
-uv run pytest tests/                       # 1705 tests
+uv run pytest tests/                       # 1980 tests
 uv run stepwise --help
 ```
 
