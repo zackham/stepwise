@@ -3847,3 +3847,53 @@ class AsyncEngine(Engine):
                     self.store.save_run(run)
                     self._halt_job(parent_job, run)
                     self._check_job_terminal(parent_job.id)
+
+
+def _adopt_stale_cli_job(engine: AsyncEngine, job: Job) -> None:
+    """Adopt a single stale CLI-owned job, transferring ownership to the server.
+
+    Fails all RUNNING steps (their runner process is dead), transfers ownership,
+    and triggers engine re-evaluation so exit rules can recover.
+    """
+    from stepwise.agent import _is_pid_alive
+
+    _engine_logger.info(
+        "Auto-adopting stale CLI job %s (%s) — owner %s, last heartbeat %s",
+        job.id, job.objective, job.created_by,
+        job.heartbeat_at.isoformat() if job.heartbeat_at else "never",
+    )
+
+    # Fail all orphaned RUNNING steps whose process is dead
+    for run in engine.store.running_runs(job.id):
+        if run.pid and _is_pid_alive(run.pid):
+            continue  # process still alive — leave it
+        run.status = StepRunStatus.FAILED
+        run.error = "Runner died: CLI process lost, job adopted by server"
+        run.completed_at = _now()
+        engine.store.save_run(run)
+        _engine_logger.info(
+            "Failed orphaned step run %s (step %s) in adopted job %s",
+            run.id, run.step_name, job.id,
+        )
+
+    # Transfer ownership
+    job.created_by = "server"
+    job.runner_pid = None
+    job.updated_at = _now()
+    engine.store.save_job(job)
+
+
+def _auto_adopt_stale_cli_jobs(engine: AsyncEngine, max_age_seconds: int = 120) -> list[str]:
+    """Find and adopt CLI-owned jobs with stale heartbeats.
+
+    Returns list of adopted job IDs. After calling this, run recover_jobs()
+    to re-evaluate the newly server-owned jobs.
+    """
+    stale = engine.store.stale_jobs(max_age_seconds=max_age_seconds)
+    adopted = []
+    for job in stale:
+        _adopt_stale_cli_job(engine, job)
+        adopted.append(job.id)
+    if adopted:
+        _engine_logger.info("Auto-adopted %d stale CLI job(s): %s", len(adopted), adopted)
+    return adopted
