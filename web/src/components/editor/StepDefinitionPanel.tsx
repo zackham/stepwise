@@ -545,7 +545,7 @@ export function StepDefinitionPanel({
                     <span className="text-xs text-zinc-500">Exit Rules</span>
                     <div className="space-y-1.5">
                       {stepDef.exit_rules.map((r) => {
-                        const action = String(r.config.action ?? "");
+                        const action = safeRenderValue(r.config.action ?? "");
                         const actionColor =
                           EXIT_ACTION_COLORS[action] ?? "text-zinc-400";
                         return (
@@ -554,19 +554,19 @@ export function StepDefinitionPanel({
                             className="text-xs font-mono bg-zinc-100/50 dark:bg-zinc-900/50 rounded px-2.5 py-2 space-y-0.5"
                           >
                             <div className="flex items-center gap-2">
-                              <span className="text-zinc-700 dark:text-zinc-300">{r.name}</span>
+                              <span className="text-zinc-700 dark:text-zinc-300">{safeRenderValue(r.name)}</span>
                               <span className={actionColor}>→ {action}</span>
                             </div>
                             {r.config.condition != null && (
                               <div className="text-zinc-500">
-                                when: {String(r.config.condition)}
+                                when: {safeRenderValue(r.config.condition)}
                               </div>
                             )}
                             {action === "loop" && !!r.config.target && (
                               <div className="text-zinc-500">
-                                target: {String(r.config.target)}
+                                target: {safeRenderValue(r.config.target)}
                                 {r.config.max_iterations != null &&
-                                  ` (max ${String(r.config.max_iterations)})`}
+                                  ` (max ${safeRenderValue(r.config.max_iterations)})`}
                               </div>
                             )}
                           </div>
