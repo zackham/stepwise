@@ -3,8 +3,6 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
-
 ## [0.21.0] — 2026-03-27
 
 **Full-Stack Orchestration Platform** — from engine primitives to production-grade job management, a comprehensive web UI, and hardened agent reliability. 297 commits spanning 15 internal versions since 0.6.0.
