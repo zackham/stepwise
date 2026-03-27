@@ -3,7 +3,7 @@ import { useCallback, useState } from "react";
 import { JobList } from "@/components/jobs/JobList";
 import { JobSummaryBar } from "@/components/jobs/JobSummaryBar";
 import { CreateJobDialog, type CreateJobPrefill } from "@/components/jobs/CreateJobDialog";
-import { QuickLaunch } from "@/components/jobs/QuickLaunch";
+// QuickLaunch removed — post-1.0
 import { useJobs } from "@/hooks/useStepwise";
 import { Workflow } from "lucide-react";
 
@@ -52,13 +52,6 @@ export function JobDashboard() {
           />
         </div>
         <JobSummaryBar jobs={jobs} />
-        <QuickLaunch
-          onLaunched={(jobId) => navigate({ to: "/jobs/$jobId", params: { jobId } })}
-          onEditLaunch={(prefill) => {
-            setEditPrefill(prefill);
-            setEditDialogOpen(true);
-          }}
-        />
         <div className="flex-1 overflow-hidden">
           <JobList
             selectedJobId={null}
