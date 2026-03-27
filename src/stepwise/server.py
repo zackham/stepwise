@@ -908,6 +908,14 @@ def create_job(req: CreateJobRequest):
             engine.store.save_job(job)
         if req.status == "awaiting_approval":
             engine._emit(job.id, JOB_AWAITING_APPROVAL)
+        # Auto-start unless deferred (staged/awaiting_approval).
+        # If at the concurrency limit, start_job queues the job as PENDING
+        # and it will be dispatched when a slot opens.
+        if req.status not in ("staged", "awaiting_approval"):
+            try:
+                engine.start_job(job.id)
+            except (KeyError, ValueError):
+                pass  # job status changed or already started
         _notify_change(job.id)
         return _serialize_job(job)
     except ValueError as e:
@@ -955,6 +963,13 @@ def get_job(job_id: str):
 @app.post("/api/jobs/{job_id}/start")
 def start_job(job_id: str):
     engine = _get_engine()
+    try:
+        job = engine.store.load_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    # Idempotent: already running is a no-op (not an error)
+    if job.status == JobStatus.RUNNING:
+        return {"status": "started"}
     try:
         engine.start_job(job_id)
         _notify_change(job_id)
