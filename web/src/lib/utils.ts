@@ -23,10 +23,6 @@ export function tryParseJsonValue(value: unknown): unknown {
 }
 
 /**
- * Format a duration between two timestamps as a human-readable string.
- * If `end` is null, uses current time (for in-progress durations).
- */
-/**
  * Safely convert an unknown value to a string for rendering as a React child.
  * Prevents React Error #31 when objects/arrays are passed as JSX children.
  */
@@ -38,6 +34,10 @@ export function safeRenderValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/**
+ * Format a duration between two timestamps as a human-readable string.
+ * If `end` is null, uses current time (for in-progress durations).
+ */
 export function formatDuration(start: string | null, end: string | null): string {
   if (!start) return "-";
   const startMs = new Date(start).getTime();
