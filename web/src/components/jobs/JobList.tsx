@@ -358,6 +358,7 @@ export function JobList({
   const mutations = useStepwiseMutations();
   const listRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Count jobs per status (from full, unfiltered list) for filter pill badges
   const statusCounts = useMemo(() => {
@@ -370,6 +371,25 @@ export function JobList({
     }
     return counts;
   }, [jobs]);
+
+  // When a text query is active, recount statuses from query-matched jobs only
+  const filteredStatusCounts = useMemo(() => {
+    const q = query.toLowerCase().trim();
+    if (!q) return statusCounts;
+    const counts: Record<string, number> = {};
+    for (const job of jobs) {
+      const nameMatch = (job.name || "").toLowerCase().includes(q);
+      const objMatch = (job.objective || "").toLowerCase().includes(q);
+      if (!nameMatch && !objMatch) continue;
+      counts[job.status] = (counts[job.status] || 0) + 1;
+      if (job.has_suspended_steps) {
+        counts["awaiting_input"] = (counts["awaiting_input"] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [jobs, query, statusCounts]);
+
+  const displayCounts = query.trim() ? filteredStatusCounts : statusCounts;
 
   // Filter jobs by query (matches name or objective) and status toggle, then sort
   const filteredJobs = useMemo(() => {
@@ -427,6 +447,49 @@ export function JobList({
     [filteredJobs, focusedIndex, onSelectJob],
   );
 
+  // Global keyboard shortcuts: j/k to navigate, / to focus search, Escape to clear
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target.isContentEditable
+      ) return;
+
+      const len = filteredJobs.length;
+
+      if (e.key === "j") {
+        e.preventDefault();
+        if (len === 0) return;
+        setFocusedIndex((prev) => {
+          const next = prev < len - 1 ? prev + 1 : prev;
+          if (next >= 0 && next < len) onSelectJob(filteredJobs[next].id);
+          return next;
+        });
+      } else if (e.key === "k") {
+        e.preventDefault();
+        if (len === 0) return;
+        setFocusedIndex((prev) => {
+          const next = prev > 0 ? prev - 1 : 0;
+          if (next >= 0 && next < len) onSelectJob(filteredJobs[next].id);
+          return next;
+        });
+      } else if (e.key === "/") {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      } else if (e.key === "Escape") {
+        if (query || statusFilter) {
+          e.preventDefault();
+          setQuery("");
+          setStatusFilter(null);
+        }
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [filteredJobs, onSelectJob, query, statusFilter, setQuery, setStatusFilter]);
+
   const hasActiveFilter = !!query || !!statusFilter;
 
   return (
@@ -445,6 +508,7 @@ export function JobList({
           <div className="relative flex-1">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-600" />
             <input
+              ref={searchInputRef}
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -492,7 +556,7 @@ export function JobList({
         </div>
 
         {/* Awaiting Fulfillment priority filter */}
-        {(statusCounts["awaiting_input"] ?? 0) > 0 && (
+        {(displayCounts["awaiting_input"] ?? 0) > 0 && (
           <button
             data-testid="awaiting-input-filter"
             onClick={() => setStatusFilter(statusFilter === "awaiting_input" ? null : "awaiting_input")}
@@ -511,7 +575,7 @@ export function JobList({
                 ? "bg-amber-500/30 text-amber-200"
                 : "bg-amber-500/20 text-amber-400",
             )}>
-              {statusCounts["awaiting_input"]}
+              {displayCounts["awaiting_input"]}
             </span>
           </button>
         )}
@@ -531,8 +595,8 @@ export function JobList({
                 )}
               >
                 {opt.label}
-                {statusCounts[opt.value] ? (
-                  <span className="text-zinc-500"> ({statusCounts[opt.value]})</span>
+                {displayCounts[opt.value] ? (
+                  <span className="text-zinc-500"> ({displayCounts[opt.value]})</span>
                 ) : null}
               </button>
             ))}
@@ -562,8 +626,18 @@ export function JobList({
 
       {/* Job list */}
       {isLoading ? (
-        <div className="text-zinc-500 text-sm text-center py-8">
-          Loading...
+        <div data-testid="job-list-skeleton" className="p-2 space-y-1">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="px-3 py-1.5">
+              <div className="flex items-start gap-2">
+                <Skeleton className="w-3.5 h-3.5 mt-0.5 rounded-full shrink-0" />
+                <div className="flex-1 space-y-1.5">
+                  <Skeleton className="h-4 w-3/4" />
+                  <Skeleton className="h-3 w-1/2" />
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
       ) : filteredJobs.length === 0 ? (
         hasActiveFilter ? (
