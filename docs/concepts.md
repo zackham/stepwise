@@ -411,7 +411,7 @@ Agents interact with flows in five modes, all using the same flow definition:
 
 - **Stdout purity**: `--wait` prints ONLY the JSON payload to stdout. Zero logging, zero progress noise.
 - **Actionable errors**: Every error includes the fix. `Missing required input 'question'. Usage: --input question="..."`.
-- **Explicit exit codes**: 0=success, 1=failed, 2=input error, 3=timeout, 4=cancelled, 5=suspended.
+- **Explicit exit codes**: 0=success, 1=failed, 2=input error, 4=cancelled, 5=suspended.
 - **Partial outputs on failure**: Steps that completed before the failure are included in the response.
 - **`--input key=@path`**: Agents write long inputs to a temp file and pass the path — no shell escaping needed.
 - **Idempotent fulfill**: Double-fulfilling a step returns an error but doesn't corrupt state.

@@ -5,26 +5,135 @@ Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic V
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-03-27
+
+**Full-Stack Orchestration Platform** — from engine primitives to production-grade job management, a comprehensive web UI, and hardened agent reliability. 297 commits spanning 15 internal versions since 0.6.0.
+
+### Added
+
+#### Engine
+- **Job staging** — `STAGED` status, job groups, dependency edges, cross-job data wiring via `$job_ref` inputs, approval gates (`AWAITING_APPROVAL`)
+- **Derived outputs** — compute output fields from executor results using expressions
+- **Job metadata** — `--meta key=value` flag, metadata column, event envelopes with hook env vars
+- **Step result caching** — `cache:` config on steps, `stepwise cache` CLI commands, for-each batch cache, `--rerun` flag to bypass cache
+- **Multi-job wait** — `stepwise wait` with `--all` and `--any` flags for blocking on multiple jobs
+- **Orphan recovery** — auto-adopt orphaned CLI jobs on server startup and periodically
+- **Agent concurrency** — configurable `max_concurrent_agents` with stagger delay, semaphore-based dispatch
+- **Transient retry** — auto-applied retry decorator for agent executors with error classification and exponential backoff
+- **Server identity** — cross-project confusion prevention, global server registry with warnings
+- **DAG validation** — `stepwise check` with cycle detection, unreachable step detection, non-zero exit
+- **`stepwise validate --fix`** — auto-fix common YAML issues; `stepwise test-fixture` for test flow generation
+- **Premature launch detection** — warn on steps downstream of loop bodies that could fire too early
+- **`on_error: continue`** for parallel steps (not just for-each)
+- **Stall detection** — validate warns on steps that can never reach completion
+
+#### CLI
+- **`stepwise job`** subcommand group — `create`, `show`, `run`, `dep`, `cancel`, `rm` for job staging
+- **`stepwise tail`** — live event stream for running jobs
+- **`stepwise logs`** — chronological event dump for debugging
+- **`stepwise output`** — retrieve per-step outputs with positional step name
+- **`stepwise docs`** — browse bundled documentation with keyword search fallback
+- **`stepwise server log`** — view server log output
+- **`stepwise extensions list`** — show installed executor plugins
+- **`stepwise login/logout`** — Device Flow authentication for registry
+- **`stepwise preflight`** — ready-to-run assessment for flows
+- **`stepwise info`** — flow metadata and config init scaffolding
+- **`stepwise uninstall`** — clean removal command
+- **`stepwise help`** — interactive assistant
+- **`stepwise version`** — alias for `--version`
+
+#### Config System
+- **Config variables** — `ConfigVar` with types, defaults, descriptions, sensitive flag, choice options
+- **Flow requirements** — declare external dependencies with install hints and URLs
+- **`config.local.yaml`** — per-machine overrides, auto-excluded from bundles and git
+- **Project-level `notify_url`** — webhook notifications without per-run flags
+- **JSON Schema generation** for flow config inputs
+
+#### Web UI
+- **Orchestrator Canvas** — mini-DAG job cards in responsive CSS grid layout
+- **Virtualized job list** — handles thousands of jobs via `@tanstack/react-virtual`
+- **Command palette** — `Cmd+K` / `Ctrl+K` quick navigation
+- **Timeline/waterfall view** — step execution timing visualization
+- **Diff viewer** — output changes across retry attempts
+- **Log search** — regex filtering across all log viewers
+- **Breadcrumb navigation** — hierarchical page navigation
+- **Error recovery suggestions** — actionable fix hints on failure pages
+- **Live duration** — real-time elapsed time on running steps
+- **Browser notifications** — alerts for suspended steps
+- **Light/dark theme toggle** — full light mode support across all components
+- **Toast notifications** via sonner
+- **WebSocket status indicator** — connection health in header
+- **Status count badges** — aggregate counts on filter pills and nav links
+- **Quick-launch section** — recently-run flows on dashboard (later removed)
+- **Keyboard navigation** — arrow keys + Enter on job list
+- **Sort controls** — name, status, date sorting on job list
+- **Per-job action menu** — Cancel, Retry, Delete from job list
+- **Relative time grouping** — "Today", "Yesterday", "This week" in job list
+- **URL-persisted filters** — `?q=&status=` search params
+- **Error summary banner** — failed job diagnostics
+- **Collapsible for-each groups** — expandable step groups in DAG
+- **DAG polish** — rich tooltips, executor accents, animated edges, shareable screenshot export
+- **Responsive mobile layout** — full mobile support across all pages
+- **React error boundary** — prevents white-screen crashes
+- **404/Not Found page** — proper routing for missing resources
+- **Tabbed right sidebar** — unified editor panels
+- **Raw log viewer** — script step stdout/stderr
+- **Flow-not-found** message in editor
+- **Welcome banner** — shown when no jobs exist
+- **Cost attribution** — `$0 (Max)` display for subscription billing
+
+#### Eval Framework
+- **eval-1.0** — 16-step evaluation flow with preflight, discovery, security, migration, data integrity, quality testing, scoring, and HTML report generation
+
+### Changed
+- **Rename `executor: human` → `executor: external`** — breaking change; update all `.flow.yaml` files
+- **Rename `sequencing:` → `after:`** in flow YAML — breaking change; update all flow definitions
+- **Rename `--var`/`--var-file` → `--input`** with `@file` prefix detection
+- **Input names must be valid identifiers** (`[A-Za-z_][A-Za-z0-9_]*`) — use underscores instead of hyphens
+- **`$var` placeholders auto shell-quoted** — do not pre-quote placeholders in `command`/`check_command`
+- **Exit rule default: fail on no-match** when explicit `advance` rules exist but none match
+- **Remove default concurrency limit** — all jobs start immediately unless configured otherwise
+- **Jobs list endpoint** returns summary payload (1.8MB → 13KB) with limit parameter
+- **Require auth for `stepwise share`** — Device Flow login required for registry publishing
+- Install script uses `--force --reinstall` for reliable upgrades
+- Server defaults to detached start; binds 0.0.0.0 for container accessibility
+- `.step-io/` moved under `.stepwise/step-io/`
+
+### Removed
+- **Route system** (`RouteSpec`, `RouteDefinition`, `_launch_route`) — replaced by `when`-based branching
+- **`stepwise chain`** subcommand — replaced by `--after` + `--input` job staging
+- **QuickLaunch** from web dashboard
+
+### Fixed
+- Orphaned CLI jobs recovered on server restart instead of failing them
+- React Error #31 from object values rendered as JSX children
+- Light mode CSS variants across all web components
+- Terminal step detection for sub-flow loop cycles
+- Currentness invalidation cycles in circular dependency chains
+- Agent session name collisions across concurrent jobs
+- `acpx` session cleanup on job completion, failure, and cancellation
+- Script step output recovery on server restart
+- OpenRouter 400 errors from incorrect `tool_choice` on single-output LLM steps
+- Double-escaped JSON strings in LLM executor output
+- Expression namespace: `true`/`false`/`null` aliases for Python builtins
+- For-each all-fail correct behavior
+- Follow-flow mode ensures full input dialog visible for suspended steps
+- Canvas page crash from `job_group` accessed from wrong path
+- Harden exit rule and interpolated config rendering against unexpected types
+- Zombie job cleanup with PID verification
+- `stepwise update` blocked when running from editable install
+
 ### Security
-- Add AST validation to exit rule, `when`, and derived output expressions — blocks
-  `__class__`/`__bases__`/`__globals__` attribute traversal
-- Shell-escape user input values interpolated into `command` and `check_command`
-  config fields via `shlex.quote()` — prevents shell injection through crafted inputs
-- Namespace user step inputs under `STEPWISE_INPUT_` prefix in environment variables
+- AST validation on exit rule, `when`, and derived output expressions — blocks `__class__`/`__bases__`/`__globals__` traversal
+- Shell-escape user input values in `command`/`check_command` via `shlex.quote()`
+- Namespace step inputs under `STEPWISE_INPUT_` prefix in environment variables
+- Reject output file paths that escape working directory in AgentExecutor
 
 ### Deprecated
-- Bare input environment variables (`$url`, `os.environ["url"]`). Use
-  `$STEPWISE_INPUT_url` / `os.environ["STEPWISE_INPUT_url"]` instead. Bare names
-  still exported during deprecation (except system-critical names like PATH, HOME).
+- Bare input environment variables (`$url`). Use `$STEPWISE_INPUT_url` instead. Bare names still exported during deprecation period.
 
-### Changed
-- Input names must be valid identifiers (`[A-Za-z_][A-Za-z0-9_]*`). Use underscores
-  instead of hyphens.
-- `$var` placeholders in `command`/`check_command` fields are now automatically
-  shell-quoted. Do not pre-quote placeholders.
-
-### Changed
-- **Rename `executor: human` → `executor: external`** — The "human" executor type is now called "external" across the entire codebase. This is a breaking change: update `executor: human` to `executor: external` in all `.flow.yaml` files. The underlying suspend/fulfill mechanism is unchanged. Class `HumanExecutor` → `ExternalExecutor`, event `human.rerun` → `external.rerun`, schema key `humanSteps` → `externalSteps`, web component `HumanInputPanel` → `ExternalInputPanel`.
+### Development
+- 1980 Python tests, 310 frontend tests (2290 total, up from ~700 in 0.6.0)
 
 ## [0.6.0] — 2026-03-17
 

@@ -4,6 +4,7 @@ import type { JobStatus, StepRunStatus } from "./types";
 
 describe("JOB_STATUS_COLORS", () => {
   const allJobStatuses: JobStatus[] = [
+    "staged",
     "pending",
     "running",
     "paused",
