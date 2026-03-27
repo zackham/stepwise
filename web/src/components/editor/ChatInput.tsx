@@ -56,7 +56,7 @@ export function ChatInput({
   const isAgentMode = agentMode !== "simple";
 
   return (
-    <div className={floating ? "rounded-lg border border-zinc-700 bg-zinc-900 shadow-lg" : "border-t border-border"}>
+    <div className={floating ? "rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg" : "border-t border-border"}>
       {/* Permission disclosure */}
       {showDisclosure && isAgentMode && (
         <div className="px-3 py-2 border-b border-amber-900/30 bg-amber-950/20 text-[11px] text-amber-200/80">
@@ -76,25 +76,25 @@ export function ChatInput({
       )}
 
       {/* Header bar: mode selector + info */}
-      <div className="flex items-center justify-between px-2 py-1 bg-zinc-950/50">
+      <div className="flex items-center justify-between px-2 py-1 bg-zinc-50/50 dark:bg-zinc-950/50">
         <div className="flex items-center gap-1.5">
           <Sparkles className="w-3 h-3 text-violet-400" />
           <div className="relative">
           <button
             onClick={() => setShowModeSelect(!showModeSelect)}
-            className="flex items-center gap-1 text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
+            className="flex items-center gap-1 text-[11px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors"
           >
             {currentMode.label}
             <ChevronDown className="w-2.5 h-2.5" />
           </button>
           {showModeSelect && (
-            <div className="absolute bottom-full left-0 mb-1 bg-zinc-900 border border-zinc-700 rounded shadow-lg z-50 w-44">
+            <div className="absolute bottom-full left-0 mb-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded shadow-lg z-50 w-44">
               {AGENT_MODES.map((mode) => (
                 <button
                   key={mode.value}
                   onClick={() => { onModeChange(mode.value); setShowModeSelect(false); }}
-                  className={`block w-full text-left px-3 py-1.5 text-xs hover:bg-zinc-800 ${
-                    mode.value === agentMode ? "text-violet-300" : "text-zinc-300"
+                  className={`block w-full text-left px-3 py-1.5 text-xs hover:bg-zinc-100 dark:hover:bg-zinc-800 ${
+                    mode.value === agentMode ? "text-violet-300" : "text-zinc-700 dark:text-zinc-300"
                   }`}
                 >
                   <div className="font-medium">{mode.label}</div>
@@ -109,7 +109,7 @@ export function ChatInput({
           {sessionId && (
             <button
               onClick={onReset}
-              className="text-zinc-600 hover:text-zinc-400 p-0.5"
+              className="text-zinc-400 dark:text-zinc-600 hover:text-zinc-600 dark:hover:text-zinc-400 p-0.5"
               title="New conversation"
             >
               <RotateCcw className="w-3 h-3" />
@@ -118,7 +118,7 @@ export function ChatInput({
           {isAgentMode && (
             <button
               onClick={() => setShowDisclosure((v) => !v)}
-              className={`p-0.5 transition-colors ${showDisclosure ? "text-amber-400" : "text-zinc-600 hover:text-zinc-400"}`}
+              className={`p-0.5 transition-colors ${showDisclosure ? "text-amber-400" : "text-zinc-400 dark:text-zinc-600 hover:text-zinc-600 dark:hover:text-zinc-400"}`}
               title="Agent permissions info"
             >
               <Info className="w-3 h-3" />

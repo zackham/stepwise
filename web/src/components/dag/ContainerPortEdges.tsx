@@ -153,7 +153,7 @@ export function ContainerPortEdges({
                 className={
                   hasValue
                     ? "px-1.5 py-0.5 rounded text-[9px] font-mono bg-purple-500/10 text-purple-300/80 border border-purple-500/20 cursor-default whitespace-nowrap"
-                    : "px-1.5 py-0.5 rounded text-[9px] font-mono bg-zinc-800/60 text-zinc-500 border border-zinc-700/30 whitespace-nowrap"
+                    : "px-1.5 py-0.5 rounded text-[9px] font-mono bg-zinc-200/60 dark:bg-zinc-800/60 text-zinc-500 border border-zinc-300/30 dark:border-zinc-700/30 whitespace-nowrap"
                 }
                 onMouseEnter={(e) => {
                   if (!hasValue) return;
@@ -203,7 +203,7 @@ export function ContainerPortEdges({
                 className={
                   hasValue
                     ? "px-1.5 py-0.5 rounded text-[9px] font-mono bg-emerald-500/10 text-emerald-300/70 border border-emerald-500/20 cursor-default whitespace-nowrap"
-                    : "px-1.5 py-0.5 rounded text-[9px] font-mono bg-zinc-800/60 text-zinc-500 border border-zinc-700/30 whitespace-nowrap"
+                    : "px-1.5 py-0.5 rounded text-[9px] font-mono bg-zinc-200/60 dark:bg-zinc-800/60 text-zinc-500 border border-zinc-300/30 dark:border-zinc-700/30 whitespace-nowrap"
                 }
                 onMouseEnter={(e) => {
                   if (!hasValue) return;
@@ -243,11 +243,11 @@ export function ContainerPortEdges({
             transform: "translateX(-50%)",
           }}
         >
-          <div className="bg-zinc-900 border border-zinc-700 rounded-md shadow-xl p-2">
-            <div className="text-[10px] font-medium text-zinc-400 uppercase tracking-wide mb-1">
+          <div className="bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md shadow-xl p-2">
+            <div className="text-[10px] font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wide mb-1">
               {hover.field}
             </div>
-            <pre className="text-[11px] font-mono text-zinc-200 whitespace-pre-wrap break-words max-w-[280px] max-h-[200px] overflow-auto m-0">
+            <pre className="text-[11px] font-mono text-zinc-800 dark:text-zinc-200 whitespace-pre-wrap break-words max-w-[280px] max-h-[200px] overflow-auto m-0">
               {formatTooltipValue(hover.value)}
             </pre>
           </div>
