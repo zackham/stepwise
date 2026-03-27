@@ -358,6 +358,9 @@ def _serialize_job(job: Job, summary: bool = False) -> dict:
             "metadata": job.metadata,
             "has_suspended_steps": has_suspended,
             "current_step": current_step,
+            "workflow": job.workflow.to_dict() if job.workflow else None,
+            "job_group": job.job_group,
+            "depends_on": job.depends_on,
         }
     return job.to_dict()
 
