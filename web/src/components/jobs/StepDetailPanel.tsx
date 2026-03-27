@@ -605,12 +605,12 @@ export function StepDetailPanel({
                         {/* Resolved Prompt (interpolated) */}
                         {(() => {
                           const ic = run.executor_state?._interpolated_config as Record<string, unknown> | undefined;
-                          const resolvedPrompt = ic?.prompt as string | undefined;
-                          const resolvedCommand = ic?.command as string | undefined;
-                          const resolvedCheckCommand = ic?.check_command as string | undefined;
-                          const templatePrompt = stepDef.executor.config.prompt as string | undefined;
-                          const templateCommand = stepDef.executor.config.command as string | undefined;
-                          const templateCheckCommand = stepDef.executor.config.check_command as string | undefined;
+                          const resolvedPrompt = typeof ic?.prompt === 'string' ? ic.prompt : undefined;
+                          const resolvedCommand = typeof ic?.command === 'string' ? ic.command : undefined;
+                          const resolvedCheckCommand = typeof ic?.check_command === 'string' ? ic.check_command : undefined;
+                          const templatePrompt = typeof stepDef.executor.config.prompt === 'string' ? stepDef.executor.config.prompt : undefined;
+                          const templateCommand = typeof stepDef.executor.config.command === 'string' ? stepDef.executor.config.command : undefined;
+                          const templateCheckCommand = typeof stepDef.executor.config.check_command === 'string' ? stepDef.executor.config.check_command : undefined;
                           return (
                             <>
                               {resolvedPrompt && resolvedPrompt !== templatePrompt && (
