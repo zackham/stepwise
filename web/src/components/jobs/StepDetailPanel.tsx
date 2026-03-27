@@ -32,6 +32,7 @@ import {
 import { useState, useEffect, useRef } from "react";
 import { useAgentOutput } from "@/hooks/useStepwise";
 import { FulfillWatchDialog } from "./FulfillWatchDialog";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LiveDuration } from "@/components/LiveDuration";
@@ -118,6 +119,7 @@ function ScriptLogView({ run }: { run: StepRun }) {
   const handleCopy = () => {
     navigator.clipboard.writeText(fullText);
     setCopied(true);
+    toast.success("Copied to clipboard");
     setTimeout(() => setCopied(false), 2000);
   };
 
@@ -171,6 +173,7 @@ function AgentRawView({ runId }: { runId: string }) {
   const handleCopy = () => {
     navigator.clipboard.writeText(text);
     setCopied(true);
+    toast.success("Copied to clipboard");
     setTimeout(() => setCopied(false), 2000);
   };
 
@@ -545,6 +548,7 @@ export function StepDetailPanel({
                                 onClick={() => {
                                   navigator.clipboard.writeText(run.error!);
                                   setCopiedErrorRunId(run.id);
+                                  toast.success("Copied to clipboard");
                                   setTimeout(() => setCopiedErrorRunId(null), 2000);
                                 }}
                                 className="ml-auto flex items-center gap-1 text-[10px] text-red-400/60 hover:text-red-300 transition-colors"

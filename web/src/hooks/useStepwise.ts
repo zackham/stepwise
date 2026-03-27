@@ -163,12 +163,24 @@ export function useStepwiseMutations() {
 
   const pauseJobMutation = useMutation({
     mutationFn: api.pauseJob,
-    onSuccess: invalidateAll,
+    onSuccess: () => {
+      invalidateAll();
+      toast.success("Job paused");
+    },
+    onError: (error) => {
+      toast.error("Failed to pause job", { description: error.message });
+    },
   });
 
   const resumeJobMutation = useMutation({
     mutationFn: api.resumeJob,
-    onSuccess: invalidateAll,
+    onSuccess: () => {
+      invalidateAll();
+      toast.success("Job resumed");
+    },
+    onError: (error) => {
+      toast.error("Failed to resume job", { description: error.message });
+    },
   });
 
   const cancelJobMutation = useMutation({
@@ -202,7 +214,13 @@ export function useStepwiseMutations() {
       runId: string;
       payload: Record<string, unknown>;
     }) => api.fulfillWatch(runId, payload),
-    onSuccess: invalidateAll,
+    onSuccess: () => {
+      invalidateAll();
+      toast.success("Watch fulfilled");
+    },
+    onError: (error) => {
+      toast.error("Failed to fulfill watch", { description: error.message });
+    },
   });
 
   const injectContextMutation = useMutation({
@@ -213,35 +231,67 @@ export function useStepwiseMutations() {
 
   const cancelRunMutation = useMutation({
     mutationFn: api.cancelRun,
-    onSuccess: invalidateAll,
+    onSuccess: () => {
+      invalidateAll();
+      toast.success("Run cancelled");
+    },
+    onError: (error) => {
+      toast.error("Failed to cancel run", { description: error.message });
+    },
   });
 
   const deleteJobMutation = useMutation({
     mutationFn: api.deleteJob,
-    onSuccess: invalidateAll,
+    onSuccess: () => {
+      invalidateAll();
+      toast.success("Job deleted");
+    },
+    onError: (error) => {
+      toast.error("Failed to delete job", { description: error.message });
+    },
   });
 
   const deleteAllJobsMutation = useMutation({
     mutationFn: api.deleteAllJobs,
-    onSuccess: invalidateAll,
+    onSuccess: () => {
+      invalidateAll();
+      toast.success("All jobs deleted");
+    },
+    onError: (error) => {
+      toast.error("Failed to delete jobs", { description: error.message });
+    },
   });
 
   const saveTemplateMutation = useMutation({
     mutationFn: api.saveTemplate,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["templates"] });
+      toast.success("Template saved");
+    },
+    onError: (error) => {
+      toast.error("Failed to save template", { description: error.message });
     },
   });
 
   const adoptJobMutation = useMutation({
     mutationFn: api.adoptJob,
-    onSuccess: invalidateAll,
+    onSuccess: () => {
+      invalidateAll();
+      toast.success("Job adopted");
+    },
+    onError: (error) => {
+      toast.error("Failed to adopt job", { description: error.message });
+    },
   });
 
   const deleteTemplateMutation = useMutation({
     mutationFn: api.deleteTemplate,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["templates"] });
+      toast.success("Template deleted");
+    },
+    onError: (error) => {
+      toast.error("Failed to delete template", { description: error.message });
     },
   });
 
