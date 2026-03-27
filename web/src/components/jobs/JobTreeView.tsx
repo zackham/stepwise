@@ -45,9 +45,9 @@ function TreeNode({
   }
 
   return (
-    <div className={cn("ml-0", depth > 0 && "ml-4 border-l border-zinc-700/50 pl-3")}>
+    <div className={cn("ml-0", depth > 0 && "ml-4 border-l border-zinc-300/50 dark:border-zinc-700/50 pl-3")}>
       <Collapsible open={expanded} onOpenChange={setExpanded}>
-        <CollapsibleTrigger className="flex items-center gap-2 w-full py-1.5 hover:bg-zinc-800/50 rounded px-2 text-sm">
+        <CollapsibleTrigger className="flex items-center gap-2 w-full py-1.5 hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50 rounded px-2 text-sm">
           <ChevronRight
             className={cn(
               "w-3.5 h-3.5 text-zinc-500 transition-transform shrink-0",

@@ -148,7 +148,7 @@ function ScriptLogView({ run }: { run: StepRun }) {
         {truncated && (
           <button
             onClick={() => setShowAll(true)}
-            className="w-full text-[10px] text-zinc-500 hover:text-zinc-300 bg-zinc-100 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 py-1 px-2 text-center"
+            className="w-full text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 bg-zinc-100 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 py-1 px-2 text-center"
           >
             ↑ {lines.length - LOG_INITIAL_LINES} more lines — Show all
           </button>

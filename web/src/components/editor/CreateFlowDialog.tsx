@@ -90,7 +90,7 @@ export function CreateFlowDialog({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="my-flow"
-              className="text-sm bg-zinc-900 border-zinc-700"
+              className="text-sm bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700"
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleCreate();
               }}
@@ -110,7 +110,7 @@ export function CreateFlowDialog({
                       "flex flex-col items-start gap-1 rounded-lg border p-3 text-left text-sm transition-colors",
                       template === t.id
                         ? "border-blue-500 bg-blue-500/10 text-foreground"
-                        : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-500 hover:text-foreground"
+                        : "border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 text-zinc-500 dark:text-zinc-400 hover:border-zinc-400 dark:hover:border-zinc-500 hover:text-foreground"
                     )}
                   >
                     <div className="flex items-center gap-2">

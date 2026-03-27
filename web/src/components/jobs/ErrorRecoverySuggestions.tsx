@@ -65,7 +65,7 @@ export function ErrorRecoverySuggestions({
               "text-xs",
               guidance.retryable
                 ? "border-amber-500/30 text-amber-400 hover:bg-amber-500/10"
-                : "border-zinc-700 text-zinc-400 hover:bg-zinc-800",
+                : "border-zinc-300 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800",
             )}
             disabled={mutations.rerunStep.isPending}
             onClick={() =>
@@ -185,7 +185,7 @@ export function ErrorRecoverySuggestions({
                       key={f.run_id}
                       to="/jobs/$jobId"
                       params={{ jobId: f.job_id }}
-                      className="flex items-center gap-2 text-[11px] px-2 py-1 rounded hover:bg-zinc-800/50 group"
+                      className="flex items-center gap-2 text-[11px] px-2 py-1 rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50 group"
                     >
                       <span className="text-zinc-300 group-hover:text-blue-400 truncate max-w-[120px]">
                         {f.job_name || f.job_id.slice(0, 8)}

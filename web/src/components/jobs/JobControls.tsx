@@ -68,7 +68,7 @@ export function JobControls({ job, selectedStep, runs }: JobControlsProps) {
 
   return (
     <>
-      <div className="flex items-center gap-2 p-3 border-b border-border bg-zinc-900/50 overflow-x-auto flex-nowrap">
+      <div className="flex items-center gap-2 p-3 border-b border-border bg-zinc-50/50 dark:bg-zinc-900/50 overflow-x-auto flex-nowrap">
         {/* Job lifecycle actions */}
         {job.status === "pending" && (
           <Button

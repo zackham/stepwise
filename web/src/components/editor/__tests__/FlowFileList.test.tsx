@@ -69,7 +69,7 @@ describe("FlowFileList", () => {
       />
     );
     const button = screen.getByText("research").closest("button")!;
-    expect(button.className).toContain("bg-zinc-800");
+    expect(button.className).toContain("dark:bg-zinc-800");
   });
 
   it("calls onSelect when flow clicked", () => {

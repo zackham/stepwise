@@ -56,7 +56,7 @@ export function FlowFileList({
             placeholder="Filter flows..."
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            className="pl-8 h-8 text-sm bg-zinc-900 border-zinc-700"
+            className="pl-8 h-8 text-sm bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700"
           />
         </div>
       </div>
@@ -76,8 +76,8 @@ export function FlowFileList({
               className={cn(
                 "w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors",
                 isSelected
-                  ? "bg-zinc-800 text-foreground"
-                  : "text-zinc-400 hover:text-foreground hover:bg-zinc-800/50"
+                  ? "bg-zinc-200 dark:bg-zinc-800 text-foreground"
+                  : "text-zinc-500 dark:text-zinc-400 hover:text-foreground hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
               )}
             >
               {flow.is_directory ? (
@@ -127,7 +127,7 @@ export function FlowFileList({
                 rowContent
               )}
               {isExpandedDir && onSelectFile && (
-                <div className="ml-3 border-l border-zinc-800 pl-1">
+                <div className="ml-3 border-l border-zinc-200 dark:border-zinc-800 pl-1">
                   <FlowFileTree
                     files={flowFiles}
                     selectedFile={selectedFile ?? null}

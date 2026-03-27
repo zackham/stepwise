@@ -93,7 +93,7 @@ export function QuickLaunch({ onLaunched, onEditLaunch }: QuickLaunchProps) {
           return (
             <div
               key={item.last_job_id}
-              className="group flex items-start gap-2 rounded-md px-2 py-1.5 hover:bg-zinc-800/50 transition-colors"
+              className="group flex items-start gap-2 rounded-md px-2 py-1.5 hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50 transition-colors"
             >
               <button
                 onClick={() => handleLaunch(item)}
@@ -117,7 +117,7 @@ export function QuickLaunch({ onLaunched, onEditLaunch }: QuickLaunchProps) {
               </button>
               <button
                 onClick={() => handleEdit(item)}
-                className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-zinc-700 transition-opacity cursor-pointer shrink-0 mt-0.5"
+                className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-opacity cursor-pointer shrink-0 mt-0.5"
                 title="Edit & Run"
               >
                 <Pencil className="w-3 h-3 text-zinc-400" />

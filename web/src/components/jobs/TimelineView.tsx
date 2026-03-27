@@ -155,8 +155,8 @@ export function TimelineView({ job, runs, onSelectStep }: TimelineViewProps) {
   return (
     <div ref={containerRef} className="flex flex-col h-full overflow-auto">
       {/* Time axis header */}
-      <div className="flex border-b border-zinc-800 bg-zinc-950/50 sticky top-0 z-10">
-        <div className="w-40 shrink-0 px-3 py-1.5 text-[10px] text-zinc-600 uppercase tracking-wide border-r border-zinc-800">
+      <div className="flex border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-950/50 sticky top-0 z-10">
+        <div className="w-40 shrink-0 px-3 py-1.5 text-[10px] text-zinc-500 dark:text-zinc-600 uppercase tracking-wide border-r border-zinc-200 dark:border-zinc-800">
           Step
         </div>
         <div className="flex-1 relative h-7">
@@ -177,13 +177,13 @@ export function TimelineView({ job, runs, onSelectStep }: TimelineViewProps) {
       {/* Rows */}
       <div className="flex-1">
         {groups.map(({ stepName, rows }) => (
-          <div key={stepName} className="flex border-b border-zinc-800/50 hover:bg-zinc-900/30">
+          <div key={stepName} className="flex border-b border-zinc-200/50 dark:border-zinc-800/50 hover:bg-zinc-100/30 dark:hover:bg-zinc-900/30">
             {/* Step label */}
             <div
-              className="w-40 shrink-0 px-3 py-2 border-r border-zinc-800 flex items-start cursor-pointer"
+              className="w-40 shrink-0 px-3 py-2 border-r border-zinc-200 dark:border-zinc-800 flex items-start cursor-pointer"
               onClick={() => onSelectStep?.(stepName)}
             >
-              <span className="text-xs text-zinc-300 truncate" title={stepName}>
+              <span className="text-xs text-zinc-700 dark:text-zinc-300 truncate" title={stepName}>
                 {stepName}
               </span>
             </div>
@@ -194,7 +194,7 @@ export function TimelineView({ job, runs, onSelectStep }: TimelineViewProps) {
               {ticks.map((t) => (
                 <div
                   key={t}
-                  className="absolute top-0 bottom-0 w-px bg-zinc-800/40"
+                  className="absolute top-0 bottom-0 w-px bg-zinc-300/40 dark:bg-zinc-800/40"
                   style={{ left: `${(t / rangeMs) * 100}%` }}
                 />
               ))}
@@ -234,8 +234,8 @@ export function TimelineView({ job, runs, onSelectStep }: TimelineViewProps) {
 
                     {/* Tooltip */}
                     {isHovered && (
-                      <div className="absolute z-20 left-1/2 -translate-x-1/2 bottom-full mb-1 bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 shadow-xl pointer-events-none whitespace-nowrap">
-                        <div className="text-xs font-medium text-zinc-200">
+                      <div className="absolute z-20 left-1/2 -translate-x-1/2 bottom-full mb-1 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md px-3 py-2 shadow-xl pointer-events-none whitespace-nowrap">
+                        <div className="text-xs font-medium text-zinc-800 dark:text-zinc-200">
                           {stepName}
                           {row.run.attempt > 1 && (
                             <span className="text-zinc-500 ml-1">
