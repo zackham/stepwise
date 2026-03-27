@@ -155,7 +155,7 @@ function JobActions({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        className="p-1 rounded hover:bg-zinc-700/50 text-zinc-500 hover:text-zinc-300 transition-colors min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center"
+        className="p-1 rounded hover:bg-zinc-200/50 dark:hover:bg-zinc-700/50 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center"
         onClick={(e) => e.stopPropagation()}
       >
         <MoreVertical className="w-3.5 h-3.5" />
@@ -253,13 +253,13 @@ function VirtualJobList({
               onFocus={() => setFocusedIndex(index)}
               className={cn(
                 "absolute left-2 right-2 text-left px-3 py-1.5 rounded-md transition-colors",
-                "border-b border-zinc-800/50",
-                "hover:bg-zinc-800/50",
+                "border-b border-zinc-200/50 dark:border-zinc-800/50",
+                "hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
                 selectedJobId === job.id
-                  ? "bg-zinc-800 ring-1 ring-zinc-700"
+                  ? "bg-zinc-100 dark:bg-zinc-800 ring-1 ring-zinc-300 dark:ring-zinc-700"
                   : "bg-transparent",
                 focusedIndex === index && selectedJobId !== job.id
-                  && "bg-zinc-800/30 ring-1 ring-zinc-700/50",
+                  && "bg-zinc-100/30 dark:bg-zinc-800/30 ring-1 ring-zinc-300/50 dark:ring-zinc-700/50",
               )}
               style={{
                 top: virtualRow.start,
@@ -449,7 +449,7 @@ export function JobList({
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Filter jobs..."
-              className="w-full h-7 pl-7 pr-7 rounded-md border border-zinc-800 bg-zinc-900/50 text-xs text-foreground placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600 transition-colors"
+              className="w-full h-7 pl-7 pr-7 rounded-md border border-zinc-300 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50 text-xs text-foreground placeholder:text-zinc-500 dark:placeholder:text-zinc-600 focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-600 transition-colors"
             />
             {hasActiveFilter && (
               <button
@@ -483,7 +483,7 @@ export function JobList({
           ) : (
             <button
               onClick={() => setConfirmDelete(true)}
-              className="text-zinc-600 hover:text-red-400 p-1 rounded hover:bg-zinc-800/50 transition-colors shrink-0 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center"
+              className="text-zinc-600 hover:text-red-400 p-1 rounded hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 transition-colors shrink-0 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center"
               title="Delete all jobs"
             >
               <Trash2 className="w-3.5 h-3.5" />
@@ -526,8 +526,8 @@ export function JobList({
                 className={cn(
                   "px-1.5 py-0.5 rounded text-[10px] transition-colors shrink-0 min-h-[44px] md:min-h-0",
                   statusFilter === opt.value
-                    ? "bg-zinc-700 text-foreground"
-                    : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50",
+                    ? "bg-zinc-200 dark:bg-zinc-700 text-foreground"
+                    : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
                 )}
               >
                 {opt.label}
@@ -574,12 +574,12 @@ export function JobList({
           <div className="flex flex-col items-center justify-center py-12 px-4 text-center space-y-4">
             <img src="/logo.png" alt="Stepwise" className="w-10 h-10 opacity-60" />
             <div className="space-y-1">
-              <p className="text-sm font-medium text-zinc-400">No jobs yet</p>
+              <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">No jobs yet</p>
               <p className="text-xs text-zinc-600">
                 Run your first workflow from the terminal:
               </p>
             </div>
-            <code className="text-[11px] bg-zinc-800/80 text-zinc-400 px-3 py-1.5 rounded-md border border-zinc-700/50">
+            <code className="text-[11px] bg-zinc-100/80 dark:bg-zinc-800/80 text-zinc-600 dark:text-zinc-400 px-3 py-1.5 rounded-md border border-zinc-300/50 dark:border-zinc-700/50">
               stepwise run &lt;flow&gt; --watch
             </code>
             <a

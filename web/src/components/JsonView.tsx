@@ -43,12 +43,12 @@ function BlockString({ value, name }: { value: string; name?: string }) {
   return (
     <div>
       {name && (
-        <span className="text-zinc-400 text-sm block mb-1">{name}:</span>
+        <span className="text-zinc-500 dark:text-zinc-400 text-sm block mb-1">{name}:</span>
       )}
-      <div className="relative group rounded border border-zinc-700/30 bg-zinc-900/40 px-3 py-2">
+      <div className="relative group rounded border border-zinc-300/30 dark:border-zinc-700/30 bg-zinc-100/40 dark:bg-zinc-900/40 px-3 py-2">
         <button
           onClick={handleCopy}
-          className="absolute top-2 right-2 text-zinc-500 hover:text-zinc-300 opacity-0 group-hover:opacity-100 transition-opacity"
+          className="absolute top-2 right-2 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 opacity-0 group-hover:opacity-100 transition-opacity"
           title="Copy text"
         >
           {copied ? (
@@ -59,19 +59,19 @@ function BlockString({ value, name }: { value: string; name?: string }) {
         </button>
         <div
           className={cn(
-            "whitespace-pre-wrap break-words text-sm text-zinc-200 font-mono leading-relaxed",
+            "whitespace-pre-wrap break-words text-sm text-zinc-800 dark:text-zinc-200 font-mono leading-relaxed",
             !expanded && "max-h-[16rem] overflow-hidden"
           )}
         >
           {value}
         </div>
         {!expanded && (
-          <div className="absolute bottom-8 left-0 right-0 h-12 bg-gradient-to-t from-zinc-900/90 to-transparent pointer-events-none" />
+          <div className="absolute bottom-8 left-0 right-0 h-12 bg-gradient-to-t from-zinc-100/90 dark:from-zinc-900/90 to-transparent pointer-events-none" />
         )}
         {isLong && (
           <button
             onClick={() => setExpanded(!expanded)}
-            className="text-xs text-zinc-400 hover:text-zinc-200 mt-1"
+            className="text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 mt-1"
           >
             {expanded
               ? "Show less"
@@ -106,7 +106,7 @@ function JsonStringWrapper({
           className={cn(
             "inline-flex items-center gap-0.5 text-[10px] rounded px-1 py-0 transition-colors shrink-0 cursor-pointer",
             showRaw
-              ? "text-zinc-400 bg-zinc-500/10 border border-zinc-500/20 hover:text-zinc-200 hover:bg-zinc-500/20"
+              ? "text-zinc-500 dark:text-zinc-400 bg-zinc-500/10 border border-zinc-500/20 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-500/20"
               : "text-amber-400 bg-amber-500/10 border border-amber-500/20 hover:text-amber-300 hover:bg-amber-500/20"
           )}
         >
@@ -126,13 +126,13 @@ function JsonStringWrapper({
     return (
       <div>
         <div className="flex items-center gap-1.5 mb-0.5">
-          {name && <span className="text-zinc-400 text-sm mr-1">{name}:</span>}
+          {name && <span className="text-zinc-500 dark:text-zinc-400 text-sm mr-1">{name}:</span>}
           {badge}
         </div>
         {hasNewlines ? (
           <BlockString value={raw} />
         ) : (
-          <span className="text-zinc-200 text-sm break-all">{raw}</span>
+          <span className="text-zinc-800 dark:text-zinc-200 text-sm break-all">{raw}</span>
         )}
       </div>
     );
@@ -183,7 +183,7 @@ export function JsonView({
   if (data === null || data === undefined) {
     return (
       <span className="text-zinc-500 italic">
-        {name && <span className="text-zinc-400 mr-1">{name}:</span>}
+        {name && <span className="text-zinc-500 dark:text-zinc-400 mr-1">{name}:</span>}
         null
       </span>
     );
@@ -211,8 +211,8 @@ export function JsonView({
     // inline
     return (
       <span>
-        {name && <span className="text-zinc-400 mr-1">{name}:</span>}
-        <span className="text-zinc-200">{data}</span>
+        {name && <span className="text-zinc-500 dark:text-zinc-400 mr-1">{name}:</span>}
+        <span className="text-zinc-800 dark:text-zinc-200">{data}</span>
       </span>
     );
   }
@@ -220,8 +220,8 @@ export function JsonView({
   if (typeof data === "number" || typeof data === "boolean") {
     return (
       <span>
-        {name && <span className="text-zinc-400 mr-1">{name}:</span>}
-        <span className="text-blue-400">{String(data)}</span>
+        {name && <span className="text-zinc-500 dark:text-zinc-400 mr-1">{name}:</span>}
+        <span className="text-blue-600 dark:text-blue-400">{String(data)}</span>
       </span>
     );
   }
@@ -230,7 +230,7 @@ export function JsonView({
     if (data.length === 0) {
       return (
         <span>
-          {name && <span className="text-zinc-400 mr-1">{name}:</span>}
+          {name && <span className="text-zinc-500 dark:text-zinc-400 mr-1">{name}:</span>}
           <span className="text-zinc-500">[]</span>
         </span>
       );
@@ -240,7 +240,7 @@ export function JsonView({
       <div className={depth === 0 ? "overflow-x-auto" : undefined}>
         <button
           onClick={() => setExpanded(!expanded)}
-          className="flex items-center gap-1 hover:text-foreground text-zinc-400 text-sm"
+          className="flex items-center gap-1 hover:text-foreground text-zinc-500 dark:text-zinc-400 text-sm"
         >
           {expanded ? (
             <ChevronDown className="w-3 h-3" />
@@ -253,7 +253,7 @@ export function JsonView({
           </span>
         </button>
         {expanded && (
-          <div className="ml-4 border-l border-zinc-700/50 pl-3 mt-1 space-y-0.5 min-w-0">
+          <div className="ml-4 border-l border-zinc-300/50 dark:border-zinc-700/50 pl-3 mt-1 space-y-0.5 min-w-0">
             {data.map((item, i) => (
               <div key={i} className="text-sm min-w-0">
                 <JsonView
@@ -275,7 +275,7 @@ export function JsonView({
     if (entries.length === 0) {
       return (
         <span>
-          {name && <span className="text-zinc-400 mr-1">{name}:</span>}
+          {name && <span className="text-zinc-500 dark:text-zinc-400 mr-1">{name}:</span>}
           <span className="text-zinc-500">{"{}"}</span>
         </span>
       );
@@ -286,7 +286,7 @@ export function JsonView({
         <div className="flex items-center gap-1">
           <button
             onClick={() => setExpanded(!expanded)}
-            className="flex items-center gap-1 hover:text-foreground text-zinc-400 text-sm"
+            className="flex items-center gap-1 hover:text-foreground text-zinc-500 dark:text-zinc-400 text-sm"
           >
             {expanded ? (
               <ChevronDown className="w-3 h-3" />
@@ -303,7 +303,7 @@ export function JsonView({
           {depth === 0 && (
             <button
               onClick={handleCopy}
-              className="text-zinc-500 hover:text-zinc-300 ml-2"
+              className="text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 ml-2"
               title="Copy JSON"
             >
               {copied ? (
@@ -315,7 +315,7 @@ export function JsonView({
           )}
         </div>
         {expanded && (
-          <div className="ml-4 border-l border-zinc-700/50 pl-3 mt-1 space-y-0.5 min-w-0">
+          <div className="ml-4 border-l border-zinc-300/50 dark:border-zinc-700/50 pl-3 mt-1 space-y-0.5 min-w-0">
             {entries.map(([key, value]) => (
               <div key={key} className="text-sm min-w-0">
                 <JsonView
@@ -332,5 +332,5 @@ export function JsonView({
     );
   }
 
-  return <span className="text-zinc-400">{String(data)}</span>;
+  return <span className="text-zinc-500 dark:text-zinc-400">{String(data)}</span>;
 }

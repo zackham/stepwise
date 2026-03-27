@@ -36,7 +36,7 @@ export function RegistryBrowser({ selectedSlug, onSelect }: RegistryBrowserProps
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search flows..."
-            className="pl-8 h-8 text-xs bg-zinc-900 border-zinc-700"
+            className="pl-8 h-8 text-xs bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700"
           />
         </div>
         <div className="flex gap-1">
@@ -44,8 +44,8 @@ export function RegistryBrowser({ selectedSlug, onSelect }: RegistryBrowserProps
             onClick={() => setSort("downloads")}
             className={`text-[10px] px-2 py-0.5 rounded ${
               sort === "downloads"
-                ? "bg-zinc-700 text-zinc-200"
-                : "text-zinc-500 hover:text-zinc-300"
+                ? "bg-white dark:bg-zinc-700 text-zinc-800 dark:text-zinc-200 shadow-sm"
+                : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
             }`}
           >
             Popular
@@ -54,8 +54,8 @@ export function RegistryBrowser({ selectedSlug, onSelect }: RegistryBrowserProps
             onClick={() => setSort("newest")}
             className={`text-[10px] px-2 py-0.5 rounded ${
               sort === "newest"
-                ? "bg-zinc-700 text-zinc-200"
-                : "text-zinc-500 hover:text-zinc-300"
+                ? "bg-white dark:bg-zinc-700 text-zinc-800 dark:text-zinc-200 shadow-sm"
+                : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
             }`}
           >
             Newest

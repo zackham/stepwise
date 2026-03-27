@@ -12,7 +12,7 @@ interface TypedFieldProps {
 }
 
 const inputClass =
-  "w-full rounded-md border border-zinc-700 bg-zinc-800/80 px-2.5 py-1.5 text-sm text-foreground placeholder:text-zinc-600 focus:outline-none focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/20 transition-colors";
+  "w-full rounded-md border border-zinc-300 dark:border-zinc-700 bg-white/80 dark:bg-zinc-800/80 px-2.5 py-1.5 text-sm text-foreground placeholder:text-zinc-400 dark:placeholder:text-zinc-600 focus:outline-none focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/20 transition-colors";
 
 function FieldLabel({
   name,
@@ -136,7 +136,7 @@ function BoolField({
         ${
           checked
             ? "bg-amber-600/80 border-amber-500/50 text-white"
-            : "bg-zinc-800/80 border-zinc-700 text-zinc-400 hover:border-zinc-600"
+            : "bg-zinc-100/80 dark:bg-zinc-800/80 border-zinc-300 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 hover:border-zinc-400 dark:hover:border-zinc-600"
         }
       `}
     >
@@ -144,7 +144,7 @@ function BoolField({
         className={`w-3 h-3 rounded-sm border ${
           checked
             ? "bg-amber-400 border-amber-400"
-            : "bg-zinc-700 border-zinc-600"
+            : "bg-zinc-300 dark:bg-zinc-700 border-zinc-400 dark:border-zinc-600"
         }`}
       >
         {checked && (
@@ -180,7 +180,7 @@ function ChoiceSingleField({
       {options.map((opt) => (
         <label
           key={opt}
-          className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer hover:text-foreground"
+          className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300 cursor-pointer hover:text-foreground"
         >
           <input
             type="radio"
@@ -222,7 +222,7 @@ function ChoiceMultipleField({
       {options.map((opt) => (
         <label
           key={opt}
-          className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer hover:text-foreground"
+          className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300 cursor-pointer hover:text-foreground"
         >
           <input
             type="checkbox"
