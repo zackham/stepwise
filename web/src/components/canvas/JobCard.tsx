@@ -32,7 +32,7 @@ export const JobCard = memo(function JobCard({ job, runs, dependencyNames }: Job
       to="/jobs/$jobId"
       params={{ jobId: job.id }}
       className={cn(
-        "block w-full max-w-[340px] rounded-lg border transition-all duration-200 overflow-hidden",
+        "block w-full rounded-lg border transition-all duration-200 overflow-hidden",
         "bg-white/80 hover:bg-white dark:bg-zinc-900/80 dark:hover:bg-zinc-900",
         "border-zinc-300 hover:border-zinc-400 dark:border-zinc-800 dark:hover:border-zinc-700",
         isCompleted && "opacity-45 hover:opacity-70",
