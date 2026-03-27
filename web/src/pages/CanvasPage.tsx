@@ -79,16 +79,17 @@ export function CanvasPage() {
   }
 
   const renderCard = (job: Job) => (
-    <JobCard
-      key={job.id}
-      job={job}
-      runs={runsMap.get(job.id) ?? []}
-      dependencyNames={
-        job.depends_on
-          ?.map((id) => jobNameMap.get(id))
-          .filter(Boolean) as string[] | undefined
-      }
-    />
+    <div key={job.id} className="min-w-0">
+      <JobCard
+        job={job}
+        runs={runsMap.get(job.id) ?? []}
+        dependencyNames={
+          job.depends_on
+            ?.map((id) => jobNameMap.get(id))
+            .filter(Boolean) as string[] | undefined
+        }
+      />
+    </div>
   );
 
   return (
