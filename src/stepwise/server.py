@@ -445,6 +445,16 @@ async def _observe_external_jobs() -> None:
                              for j in stale],
                 })
 
+            # Auto-adopt CLI jobs stale >5 minutes — their runner is definitely gone
+            very_stale = engine.store.stale_jobs(max_age_seconds=300)
+            for job in very_stale:
+                _adopt_stale_cli_job(engine, job)
+                # Re-evaluate: fail dead steps, dispatch ready ones, check terminal
+                engine._recover_dead_script_runs(job)
+                engine._dispatch_ready(job.id)
+                engine._check_job_terminal(job.id)
+                _notify_change(job.id)
+
             # Clean up tracking for jobs no longer running
             active_ids = {j.id for j in external}
             for jid in list(last_seen):
@@ -542,6 +552,56 @@ def _job_looks_complete(store: ThreadSafeStore, job: Job) -> bool:
         if not latest:
             return False
     return True
+
+
+def _adopt_stale_cli_job(engine: AsyncEngine, job: Job) -> None:
+    """Adopt a single stale CLI-owned job, transferring ownership to the server.
+
+    Fails all RUNNING steps (their runner process is dead), transfers ownership,
+    and triggers engine re-evaluation so exit rules can recover.
+    """
+    from stepwise.agent import _is_pid_alive
+
+    logger.info(
+        "Auto-adopting stale CLI job %s (%s) — owner %s, last heartbeat %s",
+        job.id, job.objective, job.created_by,
+        job.heartbeat_at.isoformat() if job.heartbeat_at else "never",
+    )
+
+    # Fail all orphaned RUNNING steps whose process is dead
+    for run in engine.store.running_runs(job.id):
+        if run.pid and _is_pid_alive(run.pid):
+            continue  # process still alive — leave it
+        run.status = StepRunStatus.FAILED
+        run.error = "Runner died: CLI process lost, job adopted by server"
+        run.completed_at = _now()
+        engine.store.save_run(run)
+        logger.info(
+            "Failed orphaned step run %s (step %s) in adopted job %s",
+            run.id, run.step_name, job.id,
+        )
+
+    # Transfer ownership
+    job.created_by = "server"
+    job.runner_pid = None
+    job.updated_at = _now()
+    engine.store.save_job(job)
+
+
+def _auto_adopt_stale_cli_jobs(engine: AsyncEngine, max_age_seconds: int = 120) -> list[str]:
+    """Find and adopt CLI-owned jobs with stale heartbeats.
+
+    Returns list of adopted job IDs. After calling this, run recover_jobs()
+    to re-evaluate the newly server-owned jobs.
+    """
+    stale = engine.store.stale_jobs(max_age_seconds=max_age_seconds)
+    adopted = []
+    for job in stale:
+        _adopt_stale_cli_job(engine, job)
+        adopted.append(job.id)
+    if adopted:
+        logger.info("Auto-adopted %d stale CLI job(s): %s", len(adopted), adopted)
+    return adopted
 
 
 def _cleanup_stale_queue_owners(store: ThreadSafeStore) -> None:
@@ -742,7 +802,10 @@ async def lifespan(app: FastAPI):
 
     # Fail zombie jobs: server-owned jobs left in running/pending from a dead process
     _cleanup_zombie_jobs(store)
-    # Re-evaluate surviving RUNNING jobs (settle any that completed pre-crash)
+    # Auto-adopt CLI-owned jobs with stale heartbeats (>120s) — their runner is gone
+    adopted = _auto_adopt_stale_cli_jobs(_engine, max_age_seconds=120)
+    # Re-evaluate surviving RUNNING jobs (settle any that completed pre-crash).
+    # This also covers newly adopted jobs since they're now server-owned.
     _engine.recover_jobs()
 
     # Reattach monitoring for agent steps that survived the restart
@@ -1025,21 +1088,12 @@ def adopt_job(job_id: str):
     if job.status not in (JobStatus.RUNNING, JobStatus.PENDING):
         raise HTTPException(status_code=400, detail=f"Cannot adopt job in {job.status.value} state")
 
-    # Fail all orphaned RUNNING steps
-    for run in engine.store.running_runs(job_id):
-        run.status = StepRunStatus.FAILED
-        run.error = "Orphaned: owner process died"
-        run.completed_at = _now()
-        engine.store.save_run(run)
-
-    # Transfer ownership
-    job.created_by = "server"
-    job.runner_pid = None
-    job.updated_at = _now()
-    engine.store.save_job(job)
+    _adopt_stale_cli_job(engine, job)
 
     # Engine re-evaluates — exit rules handle recovery
-    engine.tick()
+    engine._recover_dead_script_runs(job)
+    engine._dispatch_ready(job_id)
+    engine._check_job_terminal(job_id)
     _notify_change(job_id)
     return {"status": "adopted", "job_id": job_id}
 
