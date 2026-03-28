@@ -3,6 +3,11 @@ import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { vi } from "vitest";
 
+vi.mock("@tanstack/react-router", () => ({
+  useSearch: () => ({}),
+  useNavigate: () => vi.fn(),
+}));
+
 // Mock the hooks to return loading state
 vi.mock("@/hooks/useStepwise", () => ({
   useJobs: () => ({ data: [], isLoading: true }),
