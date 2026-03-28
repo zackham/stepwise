@@ -875,6 +875,59 @@ class TestPauseResume:
         job = engine.get_job(job.id)
         assert job.status == JobStatus.RUNNING
 
+    def test_pause_cancels_running_executors(self):
+        """pause_job() should call executor.cancel() and suspend running runs."""
+        store = SQLiteStore(":memory:")
+        reg = ExecutorRegistry()
+
+        cancel_calls = []
+
+        class TrackingExecutor(Executor):
+            def start(self, inputs, context):
+                return ExecutorResult(type="watch", watch=WatchSpec(mode="external"))
+
+            def check_status(self, state):
+                return ExecutorStatus(state="running")
+
+            def cancel(self, state):
+                cancel_calls.append(state)
+
+        reg.register("tracking", lambda config: TrackingExecutor())
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["value"],
+                executor=ExecutorRef("tracking", {}),
+            ),
+        })
+
+        engine = Engine(store=store, registry=reg)
+        job = engine.create_job("Pause cancel test", w)
+        engine.start_job(job.id)
+
+        # start_job dispatches the step — the TrackingExecutor returns a watch
+        # so the run is SUSPENDED. Manually inject a RUNNING run to simulate
+        # an active subprocess.
+        run = StepRun(
+            id=_gen_id(),
+            job_id=job.id,
+            step_name="a",
+            attempt=1,
+            status=StepRunStatus.RUNNING,
+            executor_state={"pid": 12345, "pgid": 12345},
+        )
+        store.save_run(run)
+
+        engine.pause_job(job.id)
+
+        # Verify executor.cancel() was called with the state
+        assert len(cancel_calls) == 1
+        assert cancel_calls[0]["pid"] == 12345
+
+        # Verify the run was suspended (not failed)
+        updated_run = store.load_run(run.id)
+        assert updated_run.status == StepRunStatus.SUSPENDED
+
 
 # ── Test: Cancel job ─────────────────────────────────────────────────
 
@@ -900,4 +953,51 @@ class TestCancelJob:
         assert job.status == JobStatus.CANCELLED
 
         runs = engine.get_runs(job.id, "a")
-        assert runs[0].status == StepRunStatus.FAILED
+        assert runs[0].status == StepRunStatus.CANCELLED
+
+    def test_cancel_cancels_running_executors(self):
+        store = SQLiteStore(":memory:")
+        reg = ExecutorRegistry()
+
+        cancel_calls = []
+
+        class TrackingExecutor(Executor):
+            def start(self, inputs, context):
+                return ExecutorResult(type="watch", watch=WatchSpec(mode="external"))
+
+            def check_status(self, state):
+                return ExecutorStatus(state="running")
+
+            def cancel(self, state):
+                cancel_calls.append(state)
+
+        reg.register("tracking", lambda config: TrackingExecutor())
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["value"],
+                executor=ExecutorRef("tracking", {}),
+            ),
+        })
+
+        engine = Engine(store=store, registry=reg)
+        job = engine.create_job("Cancel executor test", w)
+        engine.start_job(job.id)
+
+        run = StepRun(
+            id=_gen_id(),
+            job_id=job.id,
+            step_name="a",
+            attempt=1,
+            status=StepRunStatus.RUNNING,
+            executor_state={"pid": 12345, "pgid": 12345},
+        )
+        store.save_run(run)
+
+        engine.cancel_job(job.id)
+
+        assert len(cancel_calls) == 1
+        assert cancel_calls[0]["pid"] == 12345
+
+        updated_run = store.load_run(run.id)
+        assert updated_run.status == StepRunStatus.CANCELLED

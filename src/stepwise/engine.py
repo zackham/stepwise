@@ -304,6 +304,23 @@ class Engine:
         job = self.store.load_job(job_id)
         if job.status != JobStatus.RUNNING:
             raise ValueError(f"Cannot pause job in status {job.status.value}")
+
+        # Cancel running subprocesses and suspend their runs
+        for run in self.store.running_runs(job_id):
+            step_def = job.workflow.steps.get(run.step_name)
+            if step_def:
+                try:
+                    executor = self.registry.create(step_def.executor)
+                    executor.cancel(run.executor_state or {})
+                except Exception:
+                    _engine_logger.warning(
+                        "Failed to cancel executor for step %s (run %s)",
+                        run.step_name, run.id, exc_info=True,
+                    )
+            run.status = StepRunStatus.SUSPENDED
+            run.completed_at = _now()
+            self.store.save_run(run)
+
         job.status = JobStatus.PAUSED
         job.updated_at = _now()
         self.store.save_job(job)
@@ -332,25 +349,38 @@ class Engine:
         for run in self.store.running_runs(job_id):
             step_def = job.workflow.steps.get(run.step_name)
             if step_def:
+                state = run.executor_state or {}
+                if not state.get("pid") and not state.get("pgid"):
+                    _engine_logger.warning(
+                        "No pid/pgid in executor_state for step %s (run %s) "
+                        "— subprocess may not be killed",
+                        run.step_name, run.id,
+                    )
                 try:
                     executor = self.registry.create(step_def.executor)
-                    executor.cancel(run.executor_state or {})
+                    executor.cancel(state)
                 except Exception:
-                    pass
-            run.status = StepRunStatus.FAILED
+                    _engine_logger.warning(
+                        "Failed to cancel executor for step %s (run %s)",
+                        run.step_name, run.id, exc_info=True,
+                    )
+            run.status = StepRunStatus.CANCELLED
             run.error = "Job cancelled"
+            run.pid = None
             run.completed_at = _now()
             self.store.save_run(run)
 
         for run in self.store.suspended_runs(job_id):
-            run.status = StepRunStatus.FAILED
+            run.status = StepRunStatus.CANCELLED
             run.error = "Job cancelled"
+            run.pid = None
             run.completed_at = _now()
             self.store.save_run(run)
 
         for run in self.store.delegated_runs(job_id):
-            run.status = StepRunStatus.FAILED
+            run.status = StepRunStatus.CANCELLED
             run.error = "Job cancelled"
+            run.pid = None
             run.completed_at = _now()
             self.store.save_run(run)
             # Cancel sub-job(s)
@@ -1347,9 +1377,16 @@ class Engine:
             name = es.get("session_name")
             if name and name not in sessions:
                 step_def = job.workflow.steps.get(run.step_name)
-                agent = "claude"
-                if step_def and step_def.executor and step_def.executor.config:
-                    agent = step_def.executor.config.get("agent", "claude")
+                agent = (
+                    es.get("agent")
+                    or (
+                        step_def.executor.config.get("agent")
+                        if step_def and step_def.executor and step_def.executor.config
+                        else None
+                    )
+                    or getattr(self.config, "default_agent", None)
+                    or "claude"
+                )
                 session_id = es.get("session_id")
                 sessions[name] = (agent, session_id)
 
@@ -3431,6 +3468,14 @@ class AsyncEngine(Engine):
         self._start_queued_jobs()
 
     def pause_job(self, job_id: str) -> None:
+        # Cancel running async tasks before pausing runs
+        for run in self.store.running_runs(job_id):
+            task = self._tasks.pop(run.id, None)
+            if task:
+                task.cancel()
+        # Cancel poll watch timers for suspended runs
+        for run in self.store.suspended_runs(job_id):
+            self._cancel_poll_task(run.id)
         super().pause_job(job_id)
         # A slot opened — start queued jobs
         self._start_queued_jobs()

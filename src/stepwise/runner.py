@@ -210,8 +210,8 @@ def _build_tree_from_dicts(runs: list[dict]) -> list[StepNode]:
     nodes = []
     for run in runs:
         status_map = {"running": "running", "completed": "completed",
-                      "failed": "failed", "suspended": "suspended",
-                      "delegated": "running"}
+                      "failed": "failed", "cancelled": "cancelled",
+                      "suspended": "suspended", "delegated": "running"}
         status = status_map.get(run["status"], "pending")
         duration = None
         if run.get("started_at") and run.get("completed_at"):
@@ -602,6 +602,7 @@ def _build_step_tree(
             StepRunStatus.RUNNING: "running",
             StepRunStatus.COMPLETED: "completed",
             StepRunStatus.FAILED: "failed",
+            StepRunStatus.CANCELLED: "cancelled",
             StepRunStatus.SUSPENDED: "suspended",
             StepRunStatus.DELEGATED: "running",
         }
