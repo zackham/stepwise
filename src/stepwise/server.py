@@ -863,7 +863,14 @@ async def _log_unhandled_error(request, exc):
 @app.get("/api/jobs")
 def list_jobs(request: Request, status: str | None = None, top_level: bool = False, limit: int = 50):
     engine = _get_engine()
-    job_status = JobStatus(status) if status else None
+    if status:
+        try:
+            job_status = JobStatus(status)
+        except ValueError:
+            valid = [s.value for s in JobStatus]
+            raise HTTPException(status_code=400, detail=f"Invalid status '{status}'. Valid: {valid}")
+    else:
+        job_status = None
     meta_filters = {
         k[5:]: v for k, v in request.query_params.items() if k.startswith("meta.")
     }
