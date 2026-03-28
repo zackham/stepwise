@@ -361,13 +361,7 @@ export function FlowsPage() {
                     filtered.map((flow) => (
                       <button
                         key={flow.path}
-                        onClick={() => {
-                          if (isMobile) {
-                            handleEdit(flow);
-                          } else {
-                            handleSelectLocalFlow(flow);
-                          }
-                        }}
+                        onClick={() => handleSelectLocalFlow(flow)}
                         onDoubleClick={() => handleEdit(flow)}
                         className={cn(
                           "w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors",
@@ -387,6 +381,7 @@ export function FlowsPage() {
                             {flow.executor_types?.includes("external") && (
                               <Tooltip>
                                 <TooltipTrigger
+                                  render={<span />}
                                   className="inline-flex items-center shrink-0"
                                   aria-label="Requires human input"
                                 >

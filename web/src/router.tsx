@@ -28,6 +28,28 @@ const JOB_ROUTE_STATUS_VALUES = new Set([
 
 const JOB_ROUTE_RANGE_VALUES = new Set(["today", "7d", "30d", "all"]);
 
+type JobsRouteSearch = {
+  q?: string;
+  status?: "running" | "awaiting_input" | "paused" | "completed" | "failed" | "pending" | "cancelled";
+  range?: "today" | "7d" | "30d";
+};
+
+function validateJobsSearch(search: Record<string, unknown>): JobsRouteSearch {
+  return {
+    q: typeof search.q === "string" && search.q.trim() ? search.q : undefined,
+    status:
+      typeof search.status === "string" && JOB_ROUTE_STATUS_VALUES.has(search.status)
+        ? search.status as JobsRouteSearch["status"]
+        : undefined,
+    range:
+      typeof search.range === "string"
+      && JOB_ROUTE_RANGE_VALUES.has(search.range)
+      && search.range !== "all"
+        ? search.range as JobsRouteSearch["range"]
+        : undefined,
+  };
+}
+
 // Root route
 const rootRoute = createRootRoute({
   component: AppLayout,
@@ -48,23 +70,7 @@ const jobsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/jobs",
   component: JobDashboard,
-  validateSearch: (search: Record<string, unknown>): {
-    q?: string;
-    status?: "running" | "awaiting_input" | "paused" | "completed" | "failed" | "pending" | "cancelled";
-    range?: "today" | "7d" | "30d";
-  } => ({
-    q: typeof search.q === "string" && search.q.trim() ? search.q : undefined,
-    status:
-      typeof search.status === "string" && JOB_ROUTE_STATUS_VALUES.has(search.status)
-        ? search.status as "running" | "awaiting_input" | "paused" | "completed" | "failed" | "pending" | "cancelled"
-        : undefined,
-    range:
-      typeof search.range === "string"
-      && JOB_ROUTE_RANGE_VALUES.has(search.range)
-      && search.range !== "all"
-        ? search.range as "today" | "7d" | "30d"
-        : undefined,
-  }),
+  validateSearch: validateJobsSearch,
 });
 
 // Job detail
@@ -72,6 +78,7 @@ const jobDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/jobs/$jobId",
   component: JobDetailPage,
+  validateSearch: validateJobsSearch,
 });
 
 // Job events

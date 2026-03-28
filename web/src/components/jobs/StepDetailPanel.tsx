@@ -252,7 +252,9 @@ export function StepDetailPanel({
   const canRerun =
     !latestRun ||
     latestRun.status === "completed" ||
-    latestRun.status === "failed";
+    latestRun.status === "failed" ||
+    latestRun.status === "cancelled" ||
+    latestRun.status === "skipped";
 
   const isSuspended =
     latestRun?.status === "suspended" && latestRun?.watch?.mode === "external";
@@ -457,6 +459,22 @@ export function StepDetailPanel({
 
           {/* Actions */}
           <div className="flex gap-2">
+            {canRerun && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={mutations.rerunStep.isPending}
+                onClick={() =>
+                  mutations.rerunStep.mutate({
+                    jobId,
+                    stepName: stepDef.name,
+                  })
+                }
+              >
+                <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+                Restart
+              </Button>
+            )}
             {activeRun && (
               <Button
                 variant="outline"

@@ -416,6 +416,74 @@ class Engine:
                 run.completed_at = _now()
             self.store.save_run(run)
 
+    def _cleanup_run_executor(self, job: Job, run: StepRun) -> None:
+        """Best-effort cleanup for executor-owned resources from a run."""
+        state = run.executor_state or {}
+        if not any(state.get(key) for key in ("pid", "pgid", "session_id", "session_name")):
+            return
+
+        step_def = job.workflow.steps.get(run.step_name)
+        if step_def is None:
+            return
+
+        try:
+            executor = self.registry.create(step_def.executor)
+            executor.cancel(state)
+        except Exception:
+            _engine_logger.warning(
+                "Failed to clean up executor resources for step %s (run %s)",
+                run.step_name, run.id, exc_info=True,
+            )
+
+    def _collect_descendant_job_ids(self, job_id: str) -> list[str]:
+        """Collect transitive descendant job IDs created under a job."""
+        descendants: list[str] = []
+        seen: set[str] = set()
+        queue = [job_id]
+
+        while queue:
+            current_id = queue.pop(0)
+            child_ids: set[str] = set()
+
+            for child in self.store.child_jobs(current_id):
+                child_ids.add(child.id)
+
+            for run in self.store.runs_for_job(current_id):
+                if run.sub_job_id:
+                    child_ids.add(run.sub_job_id)
+                child_ids.update((run.executor_state or {}).get("sub_job_ids", []))
+
+            for child_id in child_ids:
+                if child_id == job_id or child_id in seen:
+                    continue
+                seen.add(child_id)
+                descendants.append(child_id)
+                queue.append(child_id)
+
+        return descendants
+
+    def reset_job(self, job_id: str) -> None:
+        """Clear a job's runtime history and return it to PENDING."""
+        job = self.store.load_job(job_id)
+
+        for descendant_id in reversed(self._collect_descendant_job_ids(job_id)):
+            try:
+                descendant = self.store.load_job(descendant_id)
+            except KeyError:
+                continue
+            for run in self.store.runs_for_job(descendant_id):
+                self._cleanup_run_executor(descendant, run)
+            self.store.delete_job(descendant_id)
+            self._injected_contexts.pop(descendant_id, None)
+            self._rerun_steps.pop(descendant_id, None)
+
+        for run in self.store.runs_for_job(job_id):
+            self._cleanup_run_executor(job, run)
+
+        self.store.reset_job(job_id)
+        self._injected_contexts.pop(job_id, None)
+        self._rerun_steps.pop(job_id, None)
+
     # ── Step Control ──────────────────────────────────────────────────────
 
     def rerun_step(self, job_id: str, step_name: str) -> StepRun:
@@ -435,10 +503,18 @@ class Engine:
                 f"Cancel the active run first."
             )
 
+        if latest:
+            self._cleanup_run_executor(job, latest)
+
         self._emit(job_id, EXTERNAL_RERUN, {"step": step_name})
 
         # Make sure job is running
-        if job.status in (JobStatus.PAUSED, JobStatus.COMPLETED, JobStatus.FAILED):
+        if job.status in (
+            JobStatus.PAUSED,
+            JobStatus.COMPLETED,
+            JobStatus.FAILED,
+            JobStatus.CANCELLED,
+        ):
             job.status = JobStatus.RUNNING
             job.updated_at = _now()
             self.store.save_job(job)
@@ -3511,6 +3587,24 @@ class AsyncEngine(Engine):
         self._dispatch_ready(job_id)
         self._check_job_terminal(job_id)
         return run
+
+    def reset_job(self, job_id: str) -> None:
+        # Cancel running async tasks before clearing runs
+        for run in self.store.runs_for_job(job_id):
+            task = self._tasks.pop(run.id, None)
+            if task:
+                task.cancel()
+            self._cancel_poll_task(run.id)
+
+        for descendant_id in self._collect_descendant_job_ids(job_id):
+            for run in self.store.runs_for_job(descendant_id):
+                task = self._tasks.pop(run.id, None)
+                if task:
+                    task.cancel()
+                self._cancel_poll_task(run.id)
+
+        super().reset_job(job_id)
+        self._job_done[job_id] = asyncio.Event()
 
     async def wait_for_job(self, job_id: str, timeout: float | None = None) -> Job:
         """Wait for a job to reach a terminal state."""

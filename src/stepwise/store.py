@@ -261,9 +261,31 @@ class SQLiteStore:
                 "DELETE FROM job_dependencies WHERE job_id = ? OR depends_on_job_id = ?",
                 (job_id, job_id),
             )
+            self._conn.execute(
+                "DELETE FROM step_events WHERE run_id IN (SELECT id FROM step_runs WHERE job_id = ?)",
+                (job_id,),
+            )
             self._conn.execute("DELETE FROM events WHERE job_id = ?", (job_id,))
             self._conn.execute("DELETE FROM step_runs WHERE job_id = ?", (job_id,))
             self._conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+
+    def reset_job(self, job_id: str, *, status: JobStatus = JobStatus.PENDING) -> None:
+        """Clear runtime history for a job while preserving its definition."""
+        from stepwise.models import _now
+
+        with self._conn:
+            self._conn.execute(
+                "DELETE FROM step_events WHERE run_id IN (SELECT id FROM step_runs WHERE job_id = ?)",
+                (job_id,),
+            )
+            self._conn.execute("DELETE FROM events WHERE job_id = ?", (job_id,))
+            self._conn.execute("DELETE FROM step_runs WHERE job_id = ?", (job_id,))
+            self._conn.execute(
+                """UPDATE jobs
+                   SET status = ?, updated_at = ?, created_by = ?, runner_pid = NULL, heartbeat_at = NULL
+                   WHERE id = ?""",
+                (status.value, _now().isoformat(), "server", job_id),
+            )
 
     # ── Job Dependencies ─────────────────────────────────────────────────
 
@@ -336,6 +358,14 @@ class SQLiteStore:
         """Return Job objects that depend on the given job."""
         dep_ids = self.get_job_dependents(job_id)
         return [self.load_job(jid) for jid in dep_ids]
+
+    def child_jobs(self, parent_job_id: str) -> list[Job]:
+        """Return direct child jobs for the given parent job ID."""
+        rows = self._conn.execute(
+            "SELECT * FROM jobs WHERE parent_job_id = ? ORDER BY created_at",
+            (parent_job_id,),
+        ).fetchall()
+        return [self._row_to_job(r) for r in rows]
 
     def pending_jobs_with_deps_met(self) -> list[Job]:
         """Return PENDING jobs whose dependencies are all COMPLETED (or have no deps).

@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useJobs, useStepwiseMutations } from "@/hooks/useStepwise";
 import { JobStatusBadge } from "@/components/StatusBadge";
@@ -401,9 +402,10 @@ export function JobList({
   const dateRange = readDateRange(search.range);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState<number>(-1);
-  const { data: jobs = [], isLoading, isFetching, dataUpdatedAt, refetch } = useJobs();
+  const { data: jobs = [], isLoading, isFetching, dataUpdatedAt } = useJobs();
   const mutations = useStepwiseMutations();
   const wsStatus = useWsStatus();
+  const queryClient = useQueryClient();
   const listRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -411,39 +413,45 @@ export function JobList({
     ? formatLastUpdated(dataUpdatedAt)
     : "Not refreshed yet";
 
-  const setQuery = useCallback((value: string) => {
+  const updateSearch = useCallback((updater: (prev: {
+    q?: string;
+    status?: JobListStatusFilter;
+    range?: Exclude<JobListDateRange, "all">;
+  }) => {
+    q?: string;
+    status?: JobListStatusFilter;
+    range?: Exclude<JobListDateRange, "all">;
+  }) => {
     navigate({
-      search: (prev) => ({
-        ...prev,
-        q: value || undefined,
-      }),
+      search: updater as never,
       replace: true,
     });
   }, [navigate]);
+
+  const setQuery = useCallback((value: string) => {
+    updateSearch((prev) => ({
+      ...prev,
+      q: value || undefined,
+    }));
+  }, [updateSearch]);
 
   const setStatusFilter = useCallback((value: JobListStatusFilter | null) => {
-    navigate({
-      search: (prev) => ({
-        ...prev,
-        status: value || undefined,
-      }),
-      replace: true,
-    });
-  }, [navigate]);
+    updateSearch((prev) => ({
+      ...prev,
+      status: value || undefined,
+    }));
+  }, [updateSearch]);
 
   const setDateRange = useCallback((value: JobListDateRange) => {
-    navigate({
-      search: (prev) => ({
-        ...prev,
-        range: value === "all" ? undefined : value,
-      }),
-      replace: true,
-    });
-  }, [navigate]);
+    updateSearch((prev) => ({
+      ...prev,
+      range: value === "all" ? undefined : value,
+    }));
+  }, [updateSearch]);
 
   const refreshJobs = useCallback(() => {
-    void refetch();
-  }, [refetch]);
+    void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+  }, [queryClient]);
 
   // Jobs filtered by date range first (used for all downstream filtering)
   const dateFilteredJobs = useMemo(() => {
@@ -608,6 +616,7 @@ export function JobList({
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-600" />
             <input
               ref={searchInputRef}
+              data-hotkey-search-input="true"
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}

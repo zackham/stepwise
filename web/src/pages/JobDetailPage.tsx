@@ -265,7 +265,7 @@ export function JobDetailPage() {
             <JobList
               selectedJobId={jobId}
               onSelectJob={(id) =>
-                navigate({ to: "/jobs/$jobId", params: { jobId: id } })
+                navigate({ to: "/jobs/$jobId", params: { jobId: id }, search: true })
               }
             />
           </div>

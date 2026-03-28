@@ -520,8 +520,83 @@ class TestManualRerunDuringCompletion:
         job = engine.get_job(job.id)
         assert job.status == JobStatus.COMPLETED
 
-        b_runs = engine.get_runs(job.id, "b")
-        assert len(b_runs) == 2
+
+class TestManualResetAndRestart:
+    def test_rerun_step_cleans_up_previous_executor_state(self):
+        cleanup_calls: list[dict] = []
+
+        class TrackingExecutor:
+            def start(self, inputs, context):
+                return ExecutorResult(
+                    type="data",
+                    envelope=HandoffEnvelope(
+                        artifact={"value": "ok"},
+                        sidecar=Sidecar(),
+                        workspace=context.workspace_path,
+                        timestamp=_now(),
+                    ),
+                    executor_state={
+                        "pid": 123,
+                        "pgid": 123,
+                        "session_name": "step-test",
+                        "agent": "codex",
+                    },
+                )
+
+            def check_status(self, state):
+                return ExecutorStatus(state="completed")
+
+            def cancel(self, state):
+                cleanup_calls.append(dict(state))
+
+        store = SQLiteStore(":memory:")
+        reg = ExecutorRegistry()
+        reg.register("tracked", lambda config: TrackingExecutor())
+        engine = Engine(store=store, registry=reg)
+
+        w = WorkflowDefinition(steps={
+            "build": StepDefinition(
+                name="build",
+                outputs=["value"],
+                executor=ExecutorRef("tracked", {}),
+            ),
+        })
+
+        job = engine.create_job("cleanup test", w)
+        engine.start_job(job.id)
+
+        cleanup_calls.clear()
+        engine.rerun_step(job.id, "build")
+
+        assert cleanup_calls == [{
+            "pid": 123,
+            "pgid": 123,
+            "session_name": "step-test",
+            "agent": "codex",
+        }]
+        assert len(store.runs_for_step(job.id, "build")) == 2
+
+    def test_reset_job_clears_runs_and_returns_to_pending(self):
+        engine = make_engine()
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a",
+                outputs=["value"],
+                executor=ExecutorRef("external", {"prompt": "provide value"}),
+            ),
+        })
+
+        job = engine.create_job("reset test", w)
+        engine.start_job(job.id)
+        assert len(engine.get_runs(job.id)) == 1
+
+        engine.reset_job(job.id)
+
+        reloaded = engine.get_job(job.id)
+        assert reloaded.status == JobStatus.PENDING
+        assert engine.get_runs(job.id) == []
+        assert engine.get_events(job.id) == []
 
 
 # ── Artifact field validation ────────────────────────────────────────

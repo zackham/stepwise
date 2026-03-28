@@ -1,5 +1,4 @@
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import type { FlowDefinition } from "@/lib/types";
 
 /** Extract unique $job input field names from a flow definition. */
@@ -13,12 +12,6 @@ export function extractJobInputs(flow: FlowDefinition): string[] {
     }
   }
   return [...fields].sort();
-}
-
-const TEXTAREA_HINTS = ["prompt", "question", "description", "context", "spec"];
-
-function isTextArea(field: string): boolean {
-  return TEXTAREA_HINTS.some((h) => field.includes(h));
 }
 
 interface JobInputFormProps {
@@ -36,21 +29,12 @@ export function JobInputForm({ fields, values, onChange }: JobInputFormProps) {
           <label className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
             {field}
           </label>
-          {isTextArea(field) ? (
-            <Textarea
-              value={values[field] ?? ""}
-              onChange={(e) => onChange(field, e.target.value)}
-              placeholder={field}
-              className="text-xs min-h-[60px] bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700"
-            />
-          ) : (
-            <Input
-              value={values[field] ?? ""}
-              onChange={(e) => onChange(field, e.target.value)}
-              placeholder={field}
-              className="text-xs bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700"
-            />
-          )}
+          <Input
+            value={values[field] ?? ""}
+            onChange={(e) => onChange(field, e.target.value)}
+            placeholder={field}
+            className="text-xs bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700"
+          />
         </div>
       ))}
     </div>
