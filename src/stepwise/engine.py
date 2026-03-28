@@ -339,6 +339,7 @@ class Engine:
         job.status = JobStatus.RUNNING
         job.updated_at = _now()
         self.store.save_job(job)
+        self._prepare_suspended_runs_for_resume(job_id)
         self._emit(job_id, JOB_RESUMED)
         self.tick()
 
@@ -402,6 +403,18 @@ class Engine:
         job.updated_at = _now()
         self.store.save_job(job)
         self._cleanup_job_sessions(job.id, job)
+
+    def _prepare_suspended_runs_for_resume(self, job_id: str) -> None:
+        """Clear pause-only suspended runs so resume can relaunch them."""
+        for run in self.store.suspended_runs(job_id):
+            if run.watch:
+                continue
+            run.status = StepRunStatus.CANCELLED
+            run.error = "Paused and restarted on resume"
+            run.pid = None
+            if not run.completed_at:
+                run.completed_at = _now()
+            self.store.save_run(run)
 
     # ── Step Control ──────────────────────────────────────────────────────
 
@@ -3427,6 +3440,10 @@ class AsyncEngine(Engine):
         job.status = JobStatus.RUNNING
         job.updated_at = _now()
         self.store.save_job(job)
+        self._prepare_suspended_runs_for_resume(job_id)
+        for run in self.store.suspended_runs(job_id):
+            if run.watch and run.watch.mode == "poll" and run.id not in self._poll_tasks:
+                self._schedule_poll_watch(job_id, run.id, run.watch)
         self._emit(job_id, JOB_RESUMED)
         self._dispatch_ready(job_id)
 
