@@ -195,6 +195,46 @@ fi
                 pass
 
     @pytest.mark.asyncio
+    async def test_poll_watch_rescheduled_on_job_resume(self, async_engine):
+        """Pause cancels the timer and resume schedules it again."""
+        tmpdir = tempfile.mkdtemp()
+        check_script = Path(tmpdir) / "check.sh"
+        check_script.write_text("#!/bin/bash\necho ''")
+        check_script.chmod(0o755)
+
+        wf = WorkflowDefinition(steps={
+            "wait-step": StepDefinition(
+                name="wait-step",
+                executor=ExecutorRef("poll", {
+                    "check_command": str(check_script),
+                    "interval_seconds": 1,
+                }),
+                outputs=["result"],
+            ),
+        })
+        job = async_engine.create_job(objective="test poll", workflow=wf)
+
+        engine_task = asyncio.create_task(async_engine.run())
+        try:
+            async_engine.start_job(job.id)
+            await asyncio.sleep(1.5)
+            assert len(async_engine._poll_tasks) == 1
+
+            async_engine.pause_job(job.id)
+            assert async_engine.store.load_job(job.id).status == JobStatus.PAUSED
+            assert len(async_engine._poll_tasks) == 0
+
+            async_engine.resume_job(job.id)
+            assert async_engine.store.load_job(job.id).status == JobStatus.RUNNING
+            assert len(async_engine._poll_tasks) == 1
+        finally:
+            engine_task.cancel()
+            try:
+                await engine_task
+            except asyncio.CancelledError:
+                pass
+
+    @pytest.mark.asyncio
     async def test_poll_with_upstream_input(self, async_engine):
         """Poll step receives inputs from upstream step."""
         from tests.conftest import register_step_fn

@@ -928,6 +928,66 @@ class TestPauseResume:
         updated_run = store.load_run(run.id)
         assert updated_run.status == StepRunStatus.SUSPENDED
 
+    def test_resume_restarts_paused_subprocess_runs(self):
+        store = SQLiteStore(":memory:")
+        reg = ExecutorRegistry()
+
+        start_attempts = []
+
+        class TrackingExecutor(Executor):
+            def start(self, inputs, context):
+                start_attempts.append(context.attempt)
+                return ExecutorResult(
+                    type="data",
+                    envelope=HandoffEnvelope(
+                        artifact={"value": "ok"},
+                        sidecar=Sidecar(),
+                        workspace=context.workspace_path,
+                        timestamp=_now(),
+                    ),
+                )
+
+            def check_status(self, state):
+                return ExecutorStatus(state="completed")
+
+            def cancel(self, state):
+                pass
+
+        reg.register("tracking", lambda config: TrackingExecutor())
+
+        w = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["value"],
+                executor=ExecutorRef("tracking", {}),
+            ),
+        })
+
+        engine = Engine(store=store, registry=reg)
+        job = engine.create_job("Pause resume restart test", w)
+        job.status = JobStatus.RUNNING
+        store.save_job(job)
+
+        run = StepRun(
+            id=_gen_id(),
+            job_id=job.id,
+            step_name="a",
+            attempt=1,
+            status=StepRunStatus.RUNNING,
+            executor_state={"pid": 12345, "pgid": 12345},
+            started_at=_now(),
+        )
+        store.save_run(run)
+
+        engine.pause_job(job.id)
+        engine.resume_job(job.id)
+
+        runs = store.runs_for_step(job.id, "a")
+        assert len(runs) == 2
+        assert runs[0].status == StepRunStatus.CANCELLED
+        assert runs[0].error == "Paused and restarted on resume"
+        assert runs[1].status == StepRunStatus.COMPLETED
+        assert start_attempts == [2]
+
 
 # ── Test: Cancel job ─────────────────────────────────────────────────
 
