@@ -9,6 +9,7 @@ import { ChatSidebar } from "@/components/editor/ChatSidebar";
 import { FlowFileViewer } from "@/components/editor/FlowFileViewer";
 import { FlowFileTree } from "@/components/editor/FlowFileTree";
 import { useEditorChat } from "@/hooks/useEditorChat";
+import { JobInputForm, extractJobInputs } from "@/components/jobs/JobInputForm";
 import {
   useLocalFlows,
   useLocalFlow,
@@ -21,7 +22,17 @@ import {
 import { useStepwiseMutations } from "@/hooks/useStepwise";
 import { Code, Workflow, FolderTree } from "lucide-react";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
-import { RunConfigDialog } from "@/components/editor/RunConfigDialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { cn } from "@/lib/utils";
 import type { FlowDefinition, ParseResult } from "@/lib/types";
@@ -268,39 +279,104 @@ export function EditorPage() {
   // Run flow directly from editor
   const mutations = useStepwiseMutations();
   const [showRunConfig, setShowRunConfig] = useState(false);
+  const [runJobName, setRunJobName] = useState("");
+  const [runInputValues, setRunInputValues] = useState<Record<string, string>>({});
+  const [runWorkspacePath, setRunWorkspacePath] = useState("");
+  const jobInputFields = useMemo(
+    () => (parsedFlow ? extractJobInputs(parsedFlow) : []),
+    [parsedFlow]
+  );
+  const hasWorkingDirInput = jobInputFields.includes("working_dir");
+  const runFormFields = useMemo(
+    () => jobInputFields.filter((field) => field !== "working_dir"),
+    [jobInputFields]
+  );
 
-  const launchJob = useCallback((inputs: Record<string, unknown>) => {
-    if (!parsedFlow || !flowName) return;
-    mutations.createJob.mutate(
-      { objective: flowName, workflow: parsedFlow, inputs, workspace_path: undefined },
-      {
-        onSuccess: (job) => {
-          setShowRunConfig(false);
-          navigate({ to: "/jobs/$jobId", params: { jobId: job.id } });
+  const launchJob = useCallback(
+    (
+      inputs: Record<string, unknown>,
+      options?: { workspacePath?: string; name?: string }
+    ) => {
+      if (!parsedFlow || !flowName) return;
+      mutations.createJob.mutate(
+        {
+          objective: flowName,
+          workflow: parsedFlow,
+          inputs,
+          workspace_path: options?.workspacePath,
+          name: options?.name?.trim() || undefined,
         },
-      }
-    );
-  }, [parsedFlow, flowName, mutations, navigate]);
+        {
+          onSuccess: (job) => {
+            setShowRunConfig(false);
+            navigate({ to: "/jobs/$jobId", params: { jobId: job.id } });
+          },
+        }
+      );
+    },
+    [parsedFlow, flowName, mutations, navigate]
+  );
 
   const handleRun = useCallback(() => {
     if (!parsedFlow || !flowName) return;
-    const vars = parsedFlow.config_vars ?? [];
-    const needsInput = vars.some(
-      (v) => v.required !== false && (v.default === undefined || v.default === null)
-    );
-    if (needsInput) {
-      setShowRunConfig(true);
-    } else {
-      // Pre-fill defaults and run immediately
-      const inputs: Record<string, unknown> = {};
-      for (const v of vars) {
-        if (v.default !== undefined && v.default !== null) {
-          inputs[v.name] = v.default;
-        }
-      }
-      launchJob(inputs);
+    if (jobInputFields.length === 0) {
+      launchJob({});
+      return;
     }
-  }, [parsedFlow, flowName, launchJob]);
+
+    const initialValues: Record<string, string> = {};
+    for (const field of runFormFields) {
+      initialValues[field] = "";
+    }
+
+    setRunInputValues(initialValues);
+    setRunWorkspacePath("");
+    setRunJobName(flowName);
+    setShowRunConfig(true);
+  }, [parsedFlow, flowName, jobInputFields.length, launchJob, runFormFields]);
+
+  const handleRunInputChange = useCallback((field: string, value: string) => {
+    setRunInputValues((prev) => ({ ...prev, [field]: value }));
+  }, []);
+
+  const handleRunDialogChange = useCallback(
+    (open: boolean) => {
+      if (!open && !mutations.createJob.isPending) {
+        setRunJobName(flowName ?? "");
+        setRunInputValues({});
+        setRunWorkspacePath("");
+      }
+      setShowRunConfig(open);
+    },
+    [flowName, mutations.createJob.isPending]
+  );
+
+  const handleRunSubmit = useCallback(() => {
+    const inputs: Record<string, unknown> = {};
+    for (const field of runFormFields) {
+      const value = runInputValues[field]?.trim();
+      if (value) {
+        inputs[field] = value;
+      }
+    }
+
+    const workspacePath = runWorkspacePath.trim();
+    if (hasWorkingDirInput && workspacePath) {
+      inputs.working_dir = workspacePath;
+    }
+
+    launchJob(inputs, {
+      workspacePath: hasWorkingDirInput && workspacePath ? workspacePath : undefined,
+      name: runJobName,
+    });
+  }, [
+    hasWorkingDirInput,
+    launchJob,
+    runFormFields,
+    runInputValues,
+    runJobName,
+    runWorkspacePath,
+  ]);
 
   // Click file in tree → open source tab with that file
   const handleSelectFile = useCallback((filePath: string | null) => {
@@ -575,16 +651,64 @@ export function EditorPage() {
         )}
       </div>
 
-      {/* Run config dialog for flows with required inputs */}
-      {parsedFlow?.config_vars && parsedFlow.config_vars.length > 0 && (
-        <RunConfigDialog
-          open={showRunConfig}
-          onOpenChange={setShowRunConfig}
-          configVars={parsedFlow.config_vars}
-          onRun={launchJob}
-          isPending={mutations.createJob.isPending}
-        />
-      )}
+      <Dialog open={showRunConfig} onOpenChange={handleRunDialogChange}>
+        <DialogContent className="sm:max-w-md max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Run flow</DialogTitle>
+            <DialogDescription>
+              Provide job inputs before starting this flow.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Name</Label>
+              <Input
+                value={runJobName}
+                onChange={(e) => setRunJobName(e.target.value)}
+                placeholder="Human-friendly job name"
+                className="text-xs"
+              />
+            </div>
+
+            {runFormFields.length > 0 && (
+              <div className="space-y-3">
+                <Label className="text-zinc-400">Inputs</Label>
+                <JobInputForm
+                  fields={runFormFields}
+                  values={runInputValues}
+                  onChange={handleRunInputChange}
+                />
+              </div>
+            )}
+
+            {hasWorkingDirInput && (
+              <div className="space-y-2">
+                <Label>Workspace Path</Label>
+                <Input
+                  value={runWorkspacePath}
+                  onChange={(e) => setRunWorkspacePath(e.target.value)}
+                  placeholder="/home/zack/work/stepwise"
+                  className="font-mono text-xs"
+                />
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => handleRunDialogChange(false)}
+              disabled={mutations.createJob.isPending}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleRunSubmit} disabled={mutations.createJob.isPending}>
+              {mutations.createJob.isPending ? "Starting..." : "Run"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

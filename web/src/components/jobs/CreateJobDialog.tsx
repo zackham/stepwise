@@ -24,21 +24,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { JobInputForm, extractJobInputs } from "@/components/jobs/JobInputForm";
 import { Plus } from "lucide-react";
 import type { FlowDefinition } from "@/lib/types";
-
-/** Extract unique $job input field names from a flow definition. */
-function extractJobInputs(flow: FlowDefinition): string[] {
-  const fields = new Set<string>();
-  for (const step of Object.values(flow.steps)) {
-    for (const binding of step.inputs ?? []) {
-      if (binding.source_step === "$job") {
-        fields.add(binding.source_field);
-      }
-    }
-  }
-  return [...fields].sort();
-}
 
 export interface CreateJobPrefill {
   workflow: FlowDefinition;
@@ -280,28 +268,11 @@ export function CreateJobDialog({ onCreated, prefill, open: controlledOpen, onOp
               {jobInputFields.length > 0 && (
                 <div className="space-y-3">
                   <Label className="text-zinc-400">Inputs</Label>
-                  {jobInputFields.map((field) => (
-                    <div key={field} className="space-y-1">
-                      <label className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
-                        {field}
-                      </label>
-                      {field.includes("prompt") || field.includes("question") || field.includes("description") || field.includes("context") ? (
-                        <Textarea
-                          value={inputValues[field] ?? ""}
-                          onChange={(e) => handleInputChange(field, e.target.value)}
-                          placeholder={field}
-                          className="text-xs min-h-[60px] bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700"
-                        />
-                      ) : (
-                        <Input
-                          value={inputValues[field] ?? ""}
-                          onChange={(e) => handleInputChange(field, e.target.value)}
-                          placeholder={field}
-                          className="text-xs bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700"
-                        />
-                      )}
-                    </div>
-                  ))}
+                  <JobInputForm
+                    fields={jobInputFields}
+                    values={inputValues}
+                    onChange={handleInputChange}
+                  />
                 </div>
               )}
 
