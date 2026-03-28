@@ -166,7 +166,7 @@ export function CreateJobDialog({ onCreated, prefill, open: controlledOpen, onOp
     <Dialog open={open} onOpenChange={setOpen}>
       {controlledOpen === undefined && (
         <DialogTrigger
-          className="inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow-xs hover:bg-primary/90 h-8 px-3 cursor-pointer"
+          className="inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent px-3 text-sm font-medium text-primary-foreground shadow-xs transition-all disabled:pointer-events-none disabled:opacity-50 bg-[linear-gradient(var(--primary),var(--primary))_padding-box,linear-gradient(135deg,rgba(6,232,184,0.32),rgba(80,128,224,0.34),rgba(192,96,216,0.32))_border-box] [background-clip:padding-box,border-box] hover:opacity-95"
         >
           <Plus className="w-3.5 h-3.5" />
           New Job
