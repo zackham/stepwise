@@ -75,6 +75,11 @@ export function useConfigMutations() {
     onSuccess: invalidateConfig,
   });
 
+  const setDefaultAgent = useMutation({
+    mutationFn: (agent: string) => api.setDefaultAgent(agent),
+    onSuccess: invalidateConfig,
+  });
+
   return {
     createLabel,
     updateLabel,
@@ -83,5 +88,6 @@ export function useConfigMutations() {
     removeModel,
     setApiKey,
     setDefaultModel,
+    setDefaultAgent,
   };
 }

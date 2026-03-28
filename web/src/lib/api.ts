@@ -91,6 +91,10 @@ export function cancelJob(jobId: string): Promise<{ status: string }> {
   return request(`/jobs/${jobId}/cancel`, { method: "POST" });
 }
 
+export function resetJob(jobId: string): Promise<{ status: string }> {
+  return request(`/jobs/${jobId}/reset`, { method: "POST" });
+}
+
 export function adoptJob(jobId: string): Promise<{ status: string; job_id: string }> {
   return request(`/jobs/${jobId}/adopt`, { method: "POST" });
 }
@@ -478,6 +482,7 @@ export interface ConfigResponse {
   api_key_source: string | null;
   model_registry: ModelInfo[];
   default_model: string;
+  default_agent: string;
   labels: LabelInfo[];
   billing_mode: string;
 }
@@ -535,6 +540,13 @@ export function setDefaultModel(model: string): Promise<{ status: string }> {
   return request("/config/default-model", {
     method: "PUT",
     body: JSON.stringify({ model }),
+  });
+}
+
+export function setDefaultAgent(agent: string): Promise<{ status: string }> {
+  return request("/config/default-agent", {
+    method: "PUT",
+    body: JSON.stringify({ agent }),
   });
 }
 

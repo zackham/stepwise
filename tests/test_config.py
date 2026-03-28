@@ -90,6 +90,7 @@ class TestStepwiseConfig:
                 ModelEntry("openai/gpt-4o", "GPT-4o", "openai"),
             ],
             default_model="balanced",
+            default_agent="codex",
             labels={
                 "code": "google/gemini-3-flash-preview",
             },
@@ -140,6 +141,7 @@ class TestStepwiseConfig:
         assert restored.openrouter_api_key == "sk-test"
         assert len(restored.model_registry) == 2
         assert restored.default_model == "balanced"
+        assert restored.default_agent == "codex"
         assert restored.labels == {"code": "google/gemini-3-flash-preview"}
 
     def test_empty_config(self):
@@ -182,6 +184,7 @@ class TestConfigHierarchy:
         assert cfg.resolve_model("balanced") == "google/gemini-3-flash-preview"
         assert cfg.resolve_model("strong") == "google/gemini-3.1-pro-preview"
         assert cfg.default_model == "balanced"
+        assert cfg.default_agent == "claude"
 
     def test_user_overrides_defaults(self, tmp_path):
         """User-level labels override defaults."""
@@ -356,13 +359,19 @@ class TestProjectConfig:
         project_dir.mkdir()
         (project_dir / ".stepwise").mkdir()
 
-        save_project_config(project_dir, {"code": "google/gemini-3-flash-preview"}, "balanced")
+        save_project_config(
+            project_dir,
+            {"code": "google/gemini-3-flash-preview"},
+            "balanced",
+            "codex",
+        )
 
         path = project_dir / ".stepwise" / "config.yaml"
         assert path.exists()
         data = yaml.safe_load(path.read_text())
         assert data["labels"]["code"] == "google/gemini-3-flash-preview"
         assert data["default_model"] == "balanced"
+        assert data["default_agent"] == "codex"
 
     def test_save_project_local_config(self, tmp_path):
         project_dir = tmp_path / "project"

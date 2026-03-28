@@ -247,6 +247,23 @@ def _notify_change(job_id: str) -> None:
         )
 
 
+def _reload_engine_config() -> StepwiseConfig:
+    """Reload merged config and refresh the in-memory engine registry."""
+    global _engine
+
+    cfg = load_config(_project_dir)
+    if _engine is not None:
+        from stepwise.registry_factory import create_default_registry
+
+        _engine.config = cfg
+        _engine.registry = create_default_registry(cfg)
+        _engine.billing_mode = cfg.billing
+        _engine.max_concurrent_jobs = cfg.max_concurrent_jobs
+        if hasattr(_engine, "_agent_semaphore"):
+            _engine._agent_semaphore = asyncio.Semaphore(cfg.max_concurrent_agents)
+    return cfg
+
+
 # ── Agent output streaming ───────────────────────────────────────────
 
 
@@ -1031,6 +1048,19 @@ def cancel_job(job_id: str):
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
 
 
+@app.post("/api/jobs/{job_id}/reset")
+def reset_job(job_id: str):
+    engine = _get_engine()
+    try:
+        engine.reset_job(job_id)
+        _notify_change(job_id)
+        return {"status": "reset"}
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.post("/api/jobs/{job_id}/adopt")
 def adopt_job(job_id: str):
     """Take over an orphaned job from a dead CLI process."""
@@ -1635,6 +1665,10 @@ class UpdateLabelRequest(BaseModel):
     model: str
 
 
+class UpdateDefaultAgentRequest(BaseModel):
+    agent: str
+
+
 class SetApiKeyRequest(BaseModel):
     key: str  # "openrouter" or "anthropic"
     value: str
@@ -1652,6 +1686,7 @@ def get_config():
         "api_key_source": cs.api_key_source,
         "model_registry": [m.to_dict() for m in enriched],
         "default_model": cfg.default_model,
+        "default_agent": cfg.default_agent,
         "labels": [li.to_dict() for li in cs.label_info],
         "billing_mode": cfg.billing,
     }
@@ -1685,7 +1720,13 @@ def create_label(req: CreateLabelRequest):
     if req.name in labels:
         raise HTTPException(status_code=409, detail=f"Label '{req.name}' already exists at project level.")
     labels[req.name] = req.model
-    save_project_config(_project_dir, labels, data.get("default_model"))
+    save_project_config(
+        _project_dir,
+        labels,
+        data.get("default_model"),
+        data.get("default_agent"),
+    )
+    _reload_engine_config()
     return {"status": "created", "name": req.name, "model": req.model}
 
 
@@ -1698,7 +1739,13 @@ def update_label(name: str, req: UpdateLabelRequest):
         data = yaml_lib.safe_load(path.read_text()) or {}
     labels = data.get("labels", {})
     labels[name] = req.model
-    save_project_config(_project_dir, labels, data.get("default_model"))
+    save_project_config(
+        _project_dir,
+        labels,
+        data.get("default_model"),
+        data.get("default_agent"),
+    )
+    _reload_engine_config()
     return {"status": "updated", "name": name, "model": req.model}
 
 
@@ -1715,7 +1762,13 @@ def delete_label(name: str):
     if name not in labels:
         raise HTTPException(status_code=404, detail=f"Label '{name}' not found at project level.")
     del labels[name]
-    save_project_config(_project_dir, labels, data.get("default_model"))
+    save_project_config(
+        _project_dir,
+        labels,
+        data.get("default_model"),
+        data.get("default_agent"),
+    )
+    _reload_engine_config()
     return {"status": "deleted", "name": name}
 
 
@@ -1749,6 +1802,7 @@ def update_models(req: UpdateModelsRequest):
     if req.default_model is not None:
         cfg.default_model = req.default_model
     save_config(cfg)
+    _reload_engine_config()
     return {"status": "updated", "models": [m.to_dict() for m in cfg.model_registry]}
 
 
@@ -1766,6 +1820,7 @@ def add_model(req: ModelEntryRequest):
     )
     cfg.model_registry.append(entry)
     save_config(cfg)
+    _reload_engine_config()
     return {"status": "added", "model": entry.to_dict()}
 
 
@@ -1777,6 +1832,7 @@ def delete_model(model_id: str):
     if len(cfg.model_registry) == orig_len:
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not in registry.")
     save_config(cfg)
+    _reload_engine_config()
     return {"status": "deleted", "model_id": model_id}
 
 
@@ -1795,6 +1851,7 @@ def set_api_key(req: SetApiKeyRequest):
         else:
             cfg.anthropic_api_key = req.value
         save_config(cfg)
+    _reload_engine_config()
     return {"status": "updated"}
 
 
@@ -1807,8 +1864,33 @@ def set_default_model(req: UpdateLabelRequest):
     if path.exists():
         data = yaml_lib.safe_load(path.read_text()) or {}
     labels = data.get("labels", {})
-    save_project_config(_project_dir, labels, req.model)
-    return {"status": "updated", "default_model": req.model}
+    save_project_config(
+        _project_dir,
+        labels,
+        req.model,
+        data.get("default_agent"),
+    )
+    cfg = _reload_engine_config()
+    return {"status": "updated", "default_model": cfg.default_model}
+
+
+@app.put("/api/config/default-agent")
+def set_default_agent(req: UpdateDefaultAgentRequest):
+    """Set the default ACP agent backend for agent executor steps."""
+    import yaml as yaml_lib
+    path = _project_dir / ".stepwise" / "config.yaml"
+    data: dict = {}
+    if path.exists():
+        data = yaml_lib.safe_load(path.read_text()) or {}
+    labels = data.get("labels", {})
+    save_project_config(
+        _project_dir,
+        labels,
+        data.get("default_model"),
+        req.agent,
+    )
+    cfg = _reload_engine_config()
+    return {"status": "updated", "default_agent": cfg.default_agent}
 
 
 # ── Editor (flow listing / loading / saving) ─────────────────────────

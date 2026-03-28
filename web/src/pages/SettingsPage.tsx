@@ -627,6 +627,18 @@ export function SettingsPage() {
               </select>
               <span className="text-[10px] text-zinc-600">Used when step omits model:</span>
             </div>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-zinc-500 w-28">Default Agent</span>
+              <select
+                value={config.default_agent}
+                onChange={(e) => mutations.setDefaultAgent.mutate(e.target.value)}
+                className="text-xs bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-700 dark:text-zinc-300"
+              >
+                <option value="claude">claude</option>
+                <option value="codex">codex</option>
+              </select>
+              <span className="text-[10px] text-zinc-600">Used when agent step omits backend:</span>
+            </div>
           </div>
         </Section>
       </div>

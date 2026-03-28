@@ -33,7 +33,7 @@ export function JobDashboard() {
           <JobList
             selectedJobId={null}
             onSelectJob={(jobId) =>
-              navigate({ to: "/jobs/$jobId", params: { jobId } })
+              navigate({ to: "/jobs/$jobId", params: { jobId }, search: true })
             }
           />
         </div>

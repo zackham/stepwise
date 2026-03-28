@@ -194,15 +194,26 @@ export function useStepwiseMutations() {
     },
   });
 
+  const resetJobMutation = useMutation({
+    mutationFn: api.resetJob,
+    onSuccess: () => {
+      invalidateAll();
+      toast.success("Job reset");
+    },
+    onError: (error) => {
+      toast.error("Failed to reset job", { description: error.message });
+    },
+  });
+
   const rerunStepMutation = useMutation({
     mutationFn: ({ jobId, stepName }: { jobId: string; stepName: string }) =>
       api.rerunStep(jobId, stepName),
     onSuccess: () => {
       invalidateAll();
-      toast.success("Step rerun started");
+      toast.success("Step restart started");
     },
     onError: (error) => {
-      toast.error("Failed to rerun step", { description: error.message });
+      toast.error("Failed to restart step", { description: error.message });
     },
   });
 
@@ -301,6 +312,7 @@ export function useStepwiseMutations() {
     pauseJob: pauseJobMutation,
     resumeJob: resumeJobMutation,
     cancelJob: cancelJobMutation,
+    resetJob: resetJobMutation,
     rerunStep: rerunStepMutation,
     fulfillWatch: fulfillWatchMutation,
     injectContext: injectContextMutation,

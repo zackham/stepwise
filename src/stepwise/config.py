@@ -329,7 +329,7 @@ def load_config(project_dir: Path | None = None) -> StepwiseConfig:
         labels=labels,
         billing=billing,
         default_agent=(local.default_agent or project.default_agent
-                       or user.default_agent),
+                       or user.default_agent or "claude"),
         notify_url=(local.notify_url or project.notify_url or user.notify_url),
         notify_context=(local.notify_context or project.notify_context
                         or user.notify_context),
@@ -412,7 +412,7 @@ def load_config_with_sources(project_dir: Path | None = None) -> ConfigWithSourc
         labels=merged_labels,
         billing=billing,
         default_agent=(local.default_agent or project.default_agent
-                       or user.default_agent),
+                       or user.default_agent or "claude"),
         notify_url=(local.notify_url or project.notify_url or user.notify_url),
         notify_context=(local.notify_context or project.notify_context
                         or user.notify_context),
@@ -431,7 +431,8 @@ def save_config(config: StepwiseConfig) -> None:
 
 
 def save_project_config(project_dir: Path, labels: dict[str, str | dict],
-                         default_model: str | None = None) -> None:
+                         default_model: str | None = None,
+                         default_agent: str | None = None) -> None:
     """Save labels and settings to project config (.stepwise/config.yaml)."""
     path = project_dir / ".stepwise" / "config.yaml"
     data: dict[str, Any] = {}
@@ -440,6 +441,8 @@ def save_project_config(project_dir: Path, labels: dict[str, str | dict],
     data["labels"] = labels
     if default_model is not None:
         data["default_model"] = default_model
+    if default_agent is not None:
+        data["default_agent"] = default_agent
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
 
