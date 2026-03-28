@@ -51,6 +51,7 @@ class AgentProcess:
     session_id: str | None = None
     session_name: str | None = None
     capture_transcript: bool = True
+    agent: str | None = None
 
 
 @dataclass
@@ -533,6 +534,7 @@ class AcpxBackend:
             working_dir=working_dir,
             session_id=session_id,
             session_name=session_name,
+            agent=agent,
         )
 
     def wait(self, process: AgentProcess) -> AgentStatus:
@@ -577,35 +579,63 @@ class AcpxBackend:
         )
 
     def cancel(self, process: AgentProcess) -> None:
-        # Try cooperative ACP cancel first
-        if process.session_name:
-            try:
-                agent = self.default_agent
-                env = {k: v for k, v in os.environ.items()
-                       if k not in ("CLAUDECODE", "STEPWISE_OUTPUT_FILE")}
-                subprocess.run(
-                    [self.acpx_path, agent, "cancel", "-s", process.session_name],
-                    cwd=process.working_dir,
-                    capture_output=True,
-                    timeout=5,
-                    env=env,
-                )
-                return
-            except (subprocess.TimeoutExpired, FileNotFoundError):
-                pass
+        # Nothing to kill if no pid/pgid
+        if not process.pid and not process.pgid:
+            logger.warning("cancel() called with no pid/pgid — nothing to kill")
+        else:
+            cooperative_cancelled = False
 
-        # Fall back to SIGTERM
-        try:
-            os.killpg(process.pgid, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            pass
+            # Try cooperative ACP cancel first
+            if process.session_name:
+                try:
+                    agent = process.agent or self.default_agent
+                    env = {k: v for k, v in os.environ.items()
+                           if k not in ("CLAUDECODE", "STEPWISE_OUTPUT_FILE")}
+                    result = subprocess.run(
+                        [self.acpx_path, agent, "cancel", "-s", process.session_name],
+                        cwd=process.working_dir,
+                        capture_output=True,
+                        timeout=5,
+                        env=env,
+                    )
+                    cooperative_cancelled = result.returncode == 0
+                except (subprocess.TimeoutExpired, FileNotFoundError):
+                    pass
+
+            # Fall back to SIGTERM → SIGKILL
+            if not cooperative_cancelled:
+                pgid = process.pgid or process.pid
+                try:
+                    os.killpg(pgid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                else:
+                    # Brief wait, then SIGKILL if still alive
+                    try:
+                        time.sleep(0.5)
+                        os.killpg(pgid, signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        pass  # Already dead — good
+
+        if process.session_name or process.session_id:
+            try:
+                self.cleanup_session_queue_owner(
+                    process.session_id,
+                    session_name=process.session_name,
+                    agent=process.agent,
+                )
+            except Exception:
+                logger.debug("Queue owner cleanup after cancel failed", exc_info=True)
 
     @property
     def supports_resume(self) -> bool:
         return True
 
     def cleanup_session_queue_owner(
-        self, session_id: str | None, session_name: str | None = None,
+        self,
+        session_id: str | None,
+        session_name: str | None = None,
+        agent: str | None = None,
     ) -> None:
         """Cleanly shut down the queue owner for a completed session.
 
@@ -618,7 +648,7 @@ class AcpxBackend:
                 env = {k: v for k, v in os.environ.items()
                        if k not in ("CLAUDECODE", "STEPWISE_OUTPUT_FILE")}
                 result = subprocess.run(
-                    [self.acpx_path, self.default_agent, "sessions", "close",
+                    [self.acpx_path, agent or self.default_agent, "sessions", "close",
                      "--name", session_name],
                     capture_output=True, timeout=10, env=env,
                 )
@@ -791,7 +821,7 @@ class AcpxBackend:
                    if k not in ("CLAUDECODE", "STEPWISE_OUTPUT_FILE")}
             result = subprocess.run(
                 [self.acpx_path, "--format", "json",
-                 self.default_agent, "sessions", "show",
+                 process.agent or self.default_agent, "sessions", "show",
                  "--name", process.session_name],
                 cwd=process.working_dir,
                 capture_output=True, text=True, timeout=30, env=env,
@@ -947,6 +977,7 @@ class MockAgentBackend:
             output_path=output_path,
             working_dir=working_dir,
             session_name=session_name,
+            agent=config.get("agent"),
         )
 
     def wait(self, process: AgentProcess) -> AgentStatus:
@@ -1104,6 +1135,7 @@ class AgentExecutor(Executor):
                 "working_dir": process.working_dir,
                 "session_id": process.session_id,
                 "session_name": process.session_name,
+                "agent": process.agent,
                 "output_mode": self.output_mode,
                 "output_file": output_file,
             })
@@ -1136,7 +1168,9 @@ class AgentExecutor(Executor):
                 and not self.continue_session):
             try:
                 self.backend.cleanup_session_queue_owner(
-                    agent_status.session_id, session_name=process.session_name,
+                    agent_status.session_id,
+                    session_name=process.session_name,
+                    agent=process.agent,
                 )
             except Exception as e:
                 logger.warning(f"[{step_id}] cleanup_session_queue_owner failed: {e}")
@@ -1148,6 +1182,7 @@ class AgentExecutor(Executor):
             "working_dir": process.working_dir,
             "session_id": agent_status.session_id or process.session_id,
             "session_name": process.session_name,
+            "agent": process.agent,
             "output_mode": self.output_mode,
             "output_file": output_file,
             "capture_transcript": process.capture_transcript,
@@ -1220,6 +1255,7 @@ class AgentExecutor(Executor):
             session_id=executor_state.get("session_id"),
             session_name=executor_state.get("session_name"),
             capture_transcript=executor_state.get("capture_transcript", True),
+            agent=executor_state.get("agent"),
         )
         agent_status = self.backend.wait(process)
         output_file = executor_state.get("output_file")
@@ -1299,6 +1335,7 @@ class AgentExecutor(Executor):
             session_id=state.get("session_id"),
             session_name=state.get("session_name"),
             capture_transcript=state.get("capture_transcript", True),
+            agent=state.get("agent"),
         )
 
         agent_status = self.backend.check(process)
@@ -1330,12 +1367,17 @@ class AgentExecutor(Executor):
         )
 
     def cancel(self, state: dict) -> None:
+        if not state:
+            logger.warning("AgentExecutor.cancel() called with empty state")
+            return
         process = AgentProcess(
             pid=state.get("pid", 0),
             pgid=state.get("pgid", 0),
             output_path=state.get("output_path", ""),
             working_dir=state.get("working_dir", ""),
+            session_id=state.get("session_id"),
             session_name=state.get("session_name"),
+            agent=state.get("agent"),
         )
         self.backend.cancel(process)
 

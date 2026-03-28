@@ -806,6 +806,24 @@ class TestAgentExecutor:
         executor.cancel(result.executor_state)
         assert mock_backend.cancel_count == 1
 
+    def test_agent_executor_state_tracks_agent_backend(self, mock_backend):
+        """executor_state records the concrete agent backend used for launch."""
+        mock_backend.set_auto_complete()
+        executor = AgentExecutor(backend=mock_backend, prompt="test", agent="codex")
+        ctx = ExecutionContext(
+            job_id="job-1", step_name="test", attempt=1,
+            workspace_path="/tmp/test", idempotency="idempotent",
+        )
+        result = executor.start({}, ctx)
+
+        assert result.executor_state["agent"] == "codex"
+
+    def test_agent_executor_cancel_empty_state(self, mock_backend):
+        """cancel() with empty state should not crash or call backend."""
+        executor = AgentExecutor(backend=mock_backend, prompt="test")
+        executor.cancel({})
+        assert mock_backend.cancel_count == 0
+
     def test_prompt_template_rendering(self, mock_backend):
         """Prompt template renders with input values."""
         mock_backend.set_auto_complete()
@@ -907,7 +925,7 @@ class TestCancelStep:
         assert job.status == JobStatus.CANCELLED
 
         run = store.latest_run(job.id, "slow_step")
-        assert run.status == StepRunStatus.FAILED
+        assert run.status == StepRunStatus.CANCELLED
         assert "cancelled" in run.error.lower()
 
 
