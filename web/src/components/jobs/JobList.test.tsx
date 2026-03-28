@@ -4,6 +4,48 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { JobList } from "./JobList";
 import type { Job } from "@/lib/types";
 
+type MockSearchState = {
+  q?: string;
+  status?: string;
+  range?: string;
+};
+
+let mockSearchState: MockSearchState = {};
+const searchListeners = new Set<() => void>();
+
+function setMockSearchState(next: MockSearchState = {}) {
+  mockSearchState = next;
+}
+
+vi.mock("@tanstack/react-router", async () => {
+  const React = await import("react");
+  const actual = await vi.importActual<typeof import("@tanstack/react-router")>("@tanstack/react-router");
+
+  return {
+    ...actual,
+    useSearch: () =>
+      React.useSyncExternalStore(
+        (listener) => {
+          searchListeners.add(listener);
+          return () => searchListeners.delete(listener);
+        },
+        () => mockSearchState,
+        () => mockSearchState,
+      ),
+    useNavigate: () =>
+      ({
+        search,
+      }: {
+        search?: MockSearchState | ((prev: MockSearchState) => MockSearchState);
+      }) => {
+        if (!search) return Promise.resolve();
+        mockSearchState = typeof search === "function" ? search(mockSearchState) : search;
+        for (const listener of searchListeners) listener();
+        return Promise.resolve();
+      },
+  };
+});
+
 // ── ResizeObserver polyfill (jsdom lacks it) ────────────────────────────
 
 // jsdom doesn't implement scrollTo on elements
@@ -110,6 +152,8 @@ function renderJobList(props: Partial<Parameters<typeof JobList>[0]> = {}) {
 beforeEach(() => {
   mockJobs = [];
   jobCounter = 0;
+  setMockSearchState();
+  searchListeners.clear();
 });
 
 describe("JobList", () => {
@@ -139,7 +183,8 @@ describe("JobList", () => {
       makeJob({ name: "Run Tests" }),
       makeJob({ name: "Deploy Frontend" }),
     ];
-    renderJobList({ query: "deploy", onQueryChange: vi.fn() });
+    setMockSearchState({ q: "deploy" });
+    renderJobList();
 
     expect(screen.getByText("Deploy API")).toBeInTheDocument();
     expect(screen.getByText("Deploy Frontend")).toBeInTheDocument();
@@ -158,6 +203,7 @@ describe("JobList", () => {
     const runningPill = screen.getByRole("button", { name: /Running/i });
     fireEvent.click(runningPill);
 
+    expect(mockSearchState.status).toBe("running");
     expect(screen.getByText("Job A")).toBeInTheDocument();
     expect(screen.getByText("Job C")).toBeInTheDocument();
     expect(screen.queryByText("Job B")).not.toBeInTheDocument();
@@ -172,9 +218,27 @@ describe("JobList", () => {
 
   it("shows filtered empty state when filter matches nothing", () => {
     mockJobs = [makeJob({ name: "Deploy API" })];
-    renderJobList({ query: "zzzzz", onQueryChange: vi.fn() });
+    setMockSearchState({ q: "zzzzz" });
+    renderJobList();
 
     expect(screen.getByText("No matching jobs")).toBeInTheDocument();
+  });
+
+  it("filters by selected date range", () => {
+    mockJobs = [
+      makeJob({ name: "Recent Job", created_at: new Date().toISOString() }),
+      makeJob({
+        name: "Old Job",
+        created_at: new Date(Date.now() - 40 * 86400000).toISOString(),
+      }),
+    ];
+    renderJobList();
+
+    fireEvent.click(screen.getByRole("button", { name: "30 days" }));
+
+    expect(mockSearchState.range).toBe("30d");
+    expect(screen.getByText("Recent Job")).toBeInTheDocument();
+    expect(screen.queryByText("Old Job")).not.toBeInTheDocument();
   });
 
   it("has correct accessibility attributes", () => {

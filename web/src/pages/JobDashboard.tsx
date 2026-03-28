@@ -1,5 +1,5 @@
-import { useNavigate, useSearch } from "@tanstack/react-router";
-import { useCallback, useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
+import { useState } from "react";
 import { JobList } from "@/components/jobs/JobList";
 import { JobSummaryBar } from "@/components/jobs/JobSummaryBar";
 import { CreateJobDialog, type CreateJobPrefill } from "@/components/jobs/CreateJobDialog";
@@ -9,33 +9,10 @@ import { Workflow } from "lucide-react";
 
 export function JobDashboard() {
   const navigate = useNavigate();
-  const { q, status } = useSearch({ from: "/jobs" });
   const { data: jobs = [] } = useJobs();
 
   const [editPrefill, setEditPrefill] = useState<CreateJobPrefill | undefined>();
   const [editDialogOpen, setEditDialogOpen] = useState(false);
-
-  const setQuery = useCallback(
-    (value: string) => {
-      navigate({
-        to: "/jobs",
-        search: (prev) => ({ ...prev, q: value || undefined }),
-        replace: true,
-      });
-    },
-    [navigate],
-  );
-
-  const setStatusFilter = useCallback(
-    (value: string | null) => {
-      navigate({
-        to: "/jobs",
-        search: (prev) => ({ ...prev, status: value || undefined }),
-        replace: true,
-      });
-    },
-    [navigate],
-  );
 
   const handleEditDialogChange = (open: boolean) => {
     setEditDialogOpen(open);
@@ -58,10 +35,6 @@ export function JobDashboard() {
             onSelectJob={(jobId) =>
               navigate({ to: "/jobs/$jobId", params: { jobId } })
             }
-            query={q ?? ""}
-            statusFilter={status ?? null}
-            onQueryChange={setQuery}
-            onStatusFilterChange={setStatusFilter}
           />
         </div>
       </div>

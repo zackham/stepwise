@@ -1,7 +1,9 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useJobs, useStepwiseMutations } from "@/hooks/useStepwise";
 import { JobStatusBadge } from "@/components/StatusBadge";
+import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -16,13 +18,24 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import { AlertTriangle, Briefcase, CirclePause, Clock, Monitor, Terminal, Trash2, Search, X, MoreVertical, XCircle, RefreshCw, ArrowUpDown } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { AlertTriangle, CirclePause, Clock, Monitor, Terminal, Trash2, Search, X, MoreVertical, XCircle, RefreshCw, ArrowUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LiveDuration } from "@/components/LiveDuration";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { Job } from "@/lib/types";
+import type { Job, JobStatus } from "@/lib/types";
+import { JOB_STATUS_COLORS } from "@/lib/status-colors";
+import { useWsStatus } from "@/hooks/useStepwiseWebSocket";
+import { useQueryClient } from "@tanstack/react-query";
 
 type SortOption = "recent" | "oldest" | "name" | "duration" | "status";
+type JobListStatusFilter = "running" | "awaiting_input" | "paused" | "completed" | "failed" | "pending" | "cancelled";
+type JobListDateRange = "today" | "7d" | "30d" | "all";
 
 const SORT_OPTIONS: { value: SortOption; label: string }[] = [
   { value: "recent", label: "Recent" },
@@ -41,6 +54,39 @@ const STATUS_ORDER: Record<string, number> = {
   failed: 5,
   cancelled: 6,
 };
+
+const STATUS_FILTER_VALUES = new Set<JobListStatusFilter>([
+  "running",
+  "awaiting_input",
+  "paused",
+  "completed",
+  "failed",
+  "pending",
+  "cancelled",
+]);
+
+const DATE_RANGE_VALUES = new Set<JobListDateRange>(["today", "7d", "30d", "all"]);
+
+const DATE_RANGE_OPTIONS: { value: JobListDateRange; label: string }[] = [
+  { value: "today", label: "Today" },
+  { value: "7d", label: "7 days" },
+  { value: "30d", label: "30 days" },
+  { value: "all", label: "All" },
+];
+
+function getDateRangeStart(range: JobListDateRange): Date | null {
+  const now = new Date();
+  switch (range) {
+    case "today":
+      return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    case "7d":
+      return new Date(now.getTime() - 7 * 86400000);
+    case "30d":
+      return new Date(now.getTime() - 30 * 86400000);
+    default:
+      return null;
+  }
+}
 
 function getSavedSort(): SortOption {
   try {
@@ -76,14 +122,9 @@ function sortJobs(jobs: Job[], sort: SortOption): Job[] {
 interface JobListProps {
   selectedJobId: string | null;
   onSelectJob: (jobId: string) => void;
-  /** Controlled text filter (synced to URL in JobDashboard) */
-  query?: string;
-  statusFilter?: string | null;
-  onQueryChange?: (value: string) => void;
-  onStatusFilterChange?: (value: string | null) => void;
 }
 
-const STATUS_OPTIONS: { value: string; label: string }[] = [
+const STATUS_OPTIONS: { value: JobListStatusFilter; label: string }[] = [
   { value: "running", label: "Running" },
   { value: "awaiting_input", label: "Awaiting Fulfillment" },
   { value: "paused", label: "Paused" },
@@ -114,24 +155,27 @@ function timeAgo(ts: string): string {
   return `${Math.floor(diff / 86400000)}d ago`;
 }
 
-type TimeGroup = "Today" | "Yesterday" | "This Week" | "Older";
+function readQueryParam(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
 
-function getTimeGroup(ts: string): TimeGroup {
-  const now = new Date();
-  const date = new Date(ts);
+function readStatusFilter(value: unknown): JobListStatusFilter | null {
+  return typeof value === "string" && STATUS_FILTER_VALUES.has(value as JobListStatusFilter)
+    ? value as JobListStatusFilter
+    : null;
+}
 
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const startOfYesterday = new Date(startOfToday.getTime() - 86400000);
+function readDateRange(value: unknown): JobListDateRange {
+  return typeof value === "string" && DATE_RANGE_VALUES.has(value as JobListDateRange)
+    ? value as JobListDateRange
+    : "all";
+}
 
-  // Start of this week (Monday)
-  const dayOfWeek = now.getDay();
-  const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-  const startOfWeek = new Date(startOfToday.getTime() - mondayOffset * 86400000);
-
-  if (date >= startOfToday) return "Today";
-  if (date >= startOfYesterday) return "Yesterday";
-  if (date >= startOfWeek) return "This Week";
-  return "Older";
+function formatLastUpdated(timestamp: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(timestamp);
 }
 
 function canCancel(status: string): boolean {
@@ -267,7 +311,13 @@ function VirtualJobList({
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="flex items-start gap-2 min-w-0 flex-1">
-                  <Briefcase className="w-3.5 h-3.5 text-zinc-500 mt-0.5 shrink-0" />
+                  <span
+                    className={cn(
+                      "w-2.5 h-2.5 rounded-full mt-1 shrink-0",
+                      JOB_STATUS_COLORS[job.status as JobStatus]?.dot ?? "bg-zinc-400",
+                      job.status === "running" && "animate-pulse",
+                    )}
+                  />
                   <div className="min-w-0">
                     <div className="text-sm text-foreground truncate">
                       {job.name || job.objective || "Untitled Job"}
@@ -338,46 +388,90 @@ function VirtualJobList({
 export function JobList({
   selectedJobId,
   onSelectJob,
-  query: controlledQuery,
-  statusFilter: controlledStatusFilter,
-  onQueryChange,
-  onStatusFilterChange,
 }: JobListProps) {
-  const [localQuery, setLocalQuery] = useState("");
-  const [localStatusFilter, setLocalStatusFilter] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const search = useSearch({ strict: false }) as {
+    q?: unknown;
+    status?: unknown;
+    range?: unknown;
+  };
   const [sortBy, setSortBy] = useState<SortOption>(getSavedSort);
-
-  const isControlled = onQueryChange !== undefined;
-  const query = isControlled ? (controlledQuery ?? "") : localQuery;
-  const statusFilter = isControlled ? (controlledStatusFilter ?? null) : localStatusFilter;
-  const setQuery = isControlled ? onQueryChange! : setLocalQuery;
-  const setStatusFilter = isControlled ? onStatusFilterChange! : setLocalStatusFilter;
+  const query = readQueryParam(search.q);
+  const statusFilter = readStatusFilter(search.status);
+  const dateRange = readDateRange(search.range);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState<number>(-1);
-  const { data: jobs = [], isLoading } = useJobs();
+  const { data: jobs = [], isLoading, isFetching, dataUpdatedAt } = useJobs();
   const mutations = useStepwiseMutations();
+  const wsStatus = useWsStatus();
+  const queryClient = useQueryClient();
   const listRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const lastUpdatedLabel = dataUpdatedAt > 0
+    ? formatLastUpdated(dataUpdatedAt)
+    : "Not refreshed yet";
 
-  // Count jobs per status (from full, unfiltered list) for filter pill badges
+  const setQuery = useCallback((value: string) => {
+    navigate({
+      search: (prev) => ({
+        ...prev,
+        q: value || undefined,
+      }),
+      replace: true,
+    });
+  }, [navigate]);
+
+  const setStatusFilter = useCallback((value: JobListStatusFilter | null) => {
+    navigate({
+      search: (prev) => ({
+        ...prev,
+        status: value || undefined,
+      }),
+      replace: true,
+    });
+  }, [navigate]);
+
+  const setDateRange = useCallback((value: JobListDateRange) => {
+    navigate({
+      search: (prev) => ({
+        ...prev,
+        range: value === "all" ? undefined : value,
+      }),
+      replace: true,
+    });
+  }, [navigate]);
+
+  const refreshJobs = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+  }, [queryClient]);
+
+  // Jobs filtered by date range first (used for all downstream filtering)
+  const dateFilteredJobs = useMemo(() => {
+    if (dateRange === "all") return jobs;
+    const rangeStart = getDateRangeStart(dateRange);
+    if (!rangeStart) return jobs;
+    return jobs.filter((job) => new Date(job.created_at) >= rangeStart);
+  }, [jobs, dateRange]);
+
+  // Count jobs per status (from date-filtered list) for filter pill badges
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const job of jobs) {
+    for (const job of dateFilteredJobs) {
       counts[job.status] = (counts[job.status] || 0) + 1;
       if (job.has_suspended_steps) {
         counts["awaiting_input"] = (counts["awaiting_input"] || 0) + 1;
       }
     }
     return counts;
-  }, [jobs]);
+  }, [dateFilteredJobs]);
 
   // When a text query is active, recount statuses from query-matched jobs only
   const filteredStatusCounts = useMemo(() => {
     const q = query.toLowerCase().trim();
     if (!q) return statusCounts;
     const counts: Record<string, number> = {};
-    for (const job of jobs) {
+    for (const job of dateFilteredJobs) {
       const nameMatch = (job.name || "").toLowerCase().includes(q);
       const objMatch = (job.objective || "").toLowerCase().includes(q);
       if (!nameMatch && !objMatch) continue;
@@ -387,14 +481,14 @@ export function JobList({
       }
     }
     return counts;
-  }, [jobs, query, statusCounts]);
+  }, [dateFilteredJobs, query, statusCounts]);
 
   const displayCounts = query.trim() ? filteredStatusCounts : statusCounts;
 
   // Filter jobs by query (matches name or objective) and status toggle, then sort
   const filteredJobs = useMemo(() => {
     const q = query.toLowerCase().trim();
-    const filtered = jobs.filter((job) => {
+    const filtered = dateFilteredJobs.filter((job) => {
       if (statusFilter) {
         if (statusFilter === "awaiting_input") {
           if (!job.has_suspended_steps) return false;
@@ -410,13 +504,13 @@ export function JobList({
       return true;
     });
     return sortJobs(filtered, sortBy);
-  }, [jobs, query, statusFilter, sortBy]);
+  }, [dateFilteredJobs, query, statusFilter, sortBy]);
 
   // Reset focused index and scroll position when filtered list changes
   useEffect(() => {
     setFocusedIndex(-1);
     scrollRef.current?.scrollTo({ top: 0 });
-  }, [filteredJobs.length, query, statusFilter, sortBy]);
+  }, [filteredJobs.length, query, statusFilter, dateRange, sortBy]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -479,18 +573,24 @@ export function JobList({
         e.preventDefault();
         searchInputRef.current?.focus();
       } else if (e.key === "Escape") {
-        if (query || statusFilter) {
+        if (query || statusFilter || dateRange !== "all") {
           e.preventDefault();
           setQuery("");
           setStatusFilter(null);
+          setDateRange("all");
         }
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [filteredJobs, onSelectJob, query, statusFilter, setQuery, setStatusFilter]);
+  }, [filteredJobs, onSelectJob, query, statusFilter, dateRange, setQuery, setStatusFilter, setDateRange]);
 
-  const hasActiveFilter = !!query || !!statusFilter;
+  const hasActiveFilter = !!query || !!statusFilter || dateRange !== "all";
+  const liveStatusLabel = wsStatus === "connected"
+    ? "Live"
+    : wsStatus === "reconnecting"
+      ? "Reconnecting"
+      : "Offline";
 
   return (
     <div
@@ -517,13 +617,49 @@ export function JobList({
             />
             {hasActiveFilter && (
               <button
-                onClick={() => { setQuery(""); setStatusFilter(null); }}
+                onClick={() => {
+                  setQuery("");
+                  setStatusFilter(null);
+                  setDateRange("all");
+                }}
                 className="absolute right-1.5 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-400 p-1"
               >
                 <X className="w-3 h-3" />
               </button>
             )}
           </div>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger
+                aria-label={liveStatusLabel}
+                className="shrink-0 inline-flex min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 items-center justify-center rounded-md"
+              >
+                <span
+                  className={cn(
+                    "h-2.5 w-2.5 rounded-full",
+                    wsStatus === "connected" ? "bg-emerald-400" : "bg-zinc-400",
+                  )}
+                />
+              </TooltipTrigger>
+              <TooltipContent>{liveStatusLabel}</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label="Refresh jobs"
+                    onClick={refreshJobs}
+                    className="text-zinc-600 hover:text-zinc-300"
+                  >
+                    <RefreshCw className={cn("w-3.5 h-3.5", isFetching && "animate-spin")} />
+                  </Button>
+                }
+              />
+              <TooltipContent>Last updated {lastUpdatedLabel}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           {confirmDelete ? (
             <div className="flex items-center gap-1 shrink-0">
               <button
@@ -621,6 +757,23 @@ export function JobList({
               ))}
             </SelectContent>
           </Select>
+        </div>
+
+        <div className="flex gap-1 overflow-x-auto scrollbar-none">
+          {DATE_RANGE_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => setDateRange(opt.value)}
+              className={cn(
+                "px-1.5 py-0.5 rounded text-[10px] transition-colors shrink-0 min-h-[44px] md:min-h-0",
+                dateRange === opt.value
+                  ? "bg-zinc-200 dark:bg-zinc-700 text-foreground"
+                  : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
         </div>
       </div>
 
