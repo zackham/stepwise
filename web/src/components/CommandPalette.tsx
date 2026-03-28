@@ -27,8 +27,18 @@ const STATUS_ICON: Record<JobStatus, typeof Circle> = {
   cancelled: CircleX,
 };
 
-export function CommandPalette() {
-  const [open, setOpen] = useState(false);
+interface CommandPaletteProps {
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}
+
+export function CommandPalette({
+  open: controlledOpen,
+  onOpenChange,
+}: CommandPaletteProps) {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = onOpenChange ?? setInternalOpen;
   const navigate = useNavigate();
   const { data: jobs } = useJobs();
   const { data: flows } = useLocalFlows();
@@ -38,12 +48,12 @@ export function CommandPalette() {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
-        setOpen((prev) => !prev);
+        setOpen(!open);
       }
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [open, setOpen]);
 
   const recentJobs = useMemo(() => {
     if (!jobs) return [];
@@ -90,6 +100,7 @@ export function CommandPalette() {
             <Command.Input
               placeholder="Search jobs, flows, pages..."
               className="flex-1 h-11 bg-transparent text-sm outline-none placeholder:text-zinc-500"
+              data-hotkey-search-input="true"
               autoFocus
             />
           </div>
