@@ -200,6 +200,9 @@ export function JobDetailPage() {
     selection?.kind === "edge-field" ||
     selection?.kind === "flow-input" ||
     selection?.kind === "flow-output";
+  const isRootWorkflowStepSelection =
+    selection?.kind === "step" &&
+    Boolean(job.workflow.steps[selection.stepName]);
   const showRightPanel = rightPanelOpen || !!resolvedStep || isDataFlowSelection;
 
   return (
@@ -483,20 +486,20 @@ export function JobDetailPage() {
       {/* Right sidebar: step details, data flow, or job details */}
       {(() => {
         const panelContent = showRightPanel ? (
-          resolvedStep ? (
-            <StepDetailPanel
-              jobId={resolvedStep.jobId}
-              stepDef={resolvedStep.stepDef}
-              onClose={() => setSelection(null)}
-              onExpand={() => setExpandedStep(true)}
-            />
-          ) : isDataFlowSelection && selection ? (
+          (isDataFlowSelection || isRootWorkflowStepSelection) && selection ? (
             <DataFlowPanel
               selection={selection}
               job={job}
               latestRuns={latestRuns}
               outputs={outputs ?? null}
               onClose={() => setSelection(null)}
+            />
+          ) : resolvedStep ? (
+            <StepDetailPanel
+              jobId={resolvedStep.jobId}
+              stepDef={resolvedStep.stepDef}
+              onClose={() => setSelection(null)}
+              onExpand={() => setExpandedStep(true)}
             />
           ) : (
             <>

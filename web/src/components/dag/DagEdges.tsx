@@ -88,6 +88,54 @@ function edgeMidpoint(
 }
 
 const LABEL_LINE_HEIGHT = 14;
+const LABEL_FONT = "10px monospace";
+const LABEL_PADDING_X = 12;
+const labelWidthCache = new Map<string, number>();
+let labelMeasureContext:
+  | CanvasRenderingContext2D
+  | OffscreenCanvasRenderingContext2D
+  | null
+  | undefined;
+
+function estimateLabelWidth(text: string): number {
+  return text.length * 6.5 + LABEL_PADDING_X;
+}
+
+function getLabelMeasureContext() {
+  if (labelMeasureContext !== undefined) return labelMeasureContext;
+
+  if (typeof OffscreenCanvas !== "undefined") {
+    labelMeasureContext = new OffscreenCanvas(1, 1).getContext("2d");
+  } else if (typeof document !== "undefined") {
+    labelMeasureContext = document.createElement("canvas").getContext("2d");
+  } else {
+    labelMeasureContext = null;
+  }
+
+  if (labelMeasureContext) {
+    labelMeasureContext.font = LABEL_FONT;
+  }
+  return labelMeasureContext;
+}
+
+function measureLabelWidth(text: string): number {
+  const cached = labelWidthCache.get(text);
+  if (cached != null) return cached;
+
+  const context = getLabelMeasureContext();
+  let width = estimateLabelWidth(text);
+
+  if (context) {
+    context.font = LABEL_FONT;
+    const measured = context.measureText(text).width;
+    if (isFinite(measured) && measured > 0) {
+      width = Math.ceil(measured) + LABEL_PADDING_X;
+    }
+  }
+
+  labelWidthCache.set(text, width);
+  return width;
+}
 
 export function DagEdges({ edges, loopEdges, width, height, onClickLabel, selectedLabel, latestRuns, onHoverLabel, onLeaveLabel }: DagEdgesProps) {
   return (
@@ -258,10 +306,7 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
               const artifactValue = latestRuns?.[edge.from]?.result?.artifact?.[field];
               const hasValue = artifactValue !== undefined;
               const valuePreview = hasValue ? `: ${formatPreviewValue(artifactValue, 12)}` : "";
-              const displayLen = field.length + valuePreview.length;
-
-              // Estimate text width (~6px per char at 10px mono)
-              const textW = displayLen * 6.5 + 12;
+              const textW = measureLabelWidth(`${field}${valuePreview}`);
               const textH = 14;
               return (
                 <g
