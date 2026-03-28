@@ -31,7 +31,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { Job, JobStatus } from "@/lib/types";
 import { JOB_STATUS_COLORS } from "@/lib/status-colors";
 import { useWsStatus } from "@/hooks/useStepwiseWebSocket";
-import { useQueryClient } from "@tanstack/react-query";
 
 type SortOption = "recent" | "oldest" | "name" | "duration" | "status";
 type JobListStatusFilter = "running" | "awaiting_input" | "paused" | "completed" | "failed" | "pending" | "cancelled";
@@ -286,12 +285,13 @@ function VirtualJobList({
           const job = filteredJobs[virtualRow.index];
           const index = virtualRow.index;
           return (
-            <button
+            <div
               key={job.id}
               id={`job-${job.id}`}
               ref={virtualizer.measureElement}
               data-index={index}
               role="option"
+              tabIndex={-1}
               aria-selected={selectedJobId === job.id}
               onClick={() => onSelectJob(job.id)}
               onFocus={() => setFocusedIndex(index)}
@@ -377,7 +377,7 @@ function VirtualJobList({
                   <JobActions job={job} mutations={mutations} />
                 </div>
               </div>
-            </button>
+            </div>
           );
         })}
       </div>
@@ -401,10 +401,9 @@ export function JobList({
   const dateRange = readDateRange(search.range);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState<number>(-1);
-  const { data: jobs = [], isLoading, isFetching, dataUpdatedAt } = useJobs();
+  const { data: jobs = [], isLoading, isFetching, dataUpdatedAt, refetch } = useJobs();
   const mutations = useStepwiseMutations();
   const wsStatus = useWsStatus();
-  const queryClient = useQueryClient();
   const listRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -443,8 +442,8 @@ export function JobList({
   }, [navigate]);
 
   const refreshJobs = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ["jobs"] });
-  }, [queryClient]);
+    void refetch();
+  }, [refetch]);
 
   // Jobs filtered by date range first (used for all downstream filtering)
   const dateFilteredJobs = useMemo(() => {
