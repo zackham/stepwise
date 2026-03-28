@@ -3041,7 +3041,7 @@ from stepwise.project import get_web_dir
 
 _web_dist = get_web_dir()
 if _web_dist.exists():
-    from fastapi.responses import FileResponse
+    from fastapi.responses import FileResponse, JSONResponse
 
     # Serve static assets directly
     app.mount("/assets", StaticFiles(directory=str(_web_dist / "assets")), name="assets")
@@ -3049,6 +3049,8 @@ if _web_dist.exists():
     # SPA fallback: any non-API route serves index.html
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
+        if full_path.startswith("api/"):
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
         # Try serving a static file first
         file_path = _web_dist / full_path
         if full_path and file_path.is_file():

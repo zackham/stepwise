@@ -54,6 +54,40 @@ function resolveStep(
   return null;
 }
 
+function parseJsonString(value: string): unknown {
+  const trimmed = value.trimStart();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      return JSON.parse(value);
+    } catch {
+      // Leave invalid JSON-like strings unchanged.
+    }
+  }
+  return value;
+}
+
+function normalizeOutputValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    const parsed = parseJsonString(value);
+    return parsed === value ? value : normalizeOutputValue(parsed);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeOutputValue(item));
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+        key,
+        normalizeOutputValue(item),
+      ])
+    );
+  }
+
+  return value;
+}
+
 export function JobDetailPage() {
   const { jobId } = useParams({ from: "/jobs/$jobId" });
   const navigate = useNavigate();
@@ -94,6 +128,10 @@ export function JobDetailPage() {
     }
     return map;
   }, [runs]);
+  const normalizedOutputs = useMemo(
+    () => (outputs ? normalizeOutputValue(outputs) as Record<string, unknown> : null),
+    [outputs]
+  );
 
   const handleSelectStep = useCallback((stepName: string | null) => {
     setSelection(stepName ? { kind: "step", stepName } : null);
@@ -191,7 +229,7 @@ export function JobDetailPage() {
 
   const stepCount = Object.keys(job.workflow.steps).length;
   const hasInputs = job.inputs && Object.keys(job.inputs).length > 0;
-  const hasOutputs = outputs && Object.keys(outputs).length > 0;
+  const hasOutputs = normalizedOutputs && Object.keys(normalizedOutputs).length > 0;
   const stale = job.status === "running" && job.created_by !== "server" &&
     (!job.heartbeat_at || Date.now() - new Date(job.heartbeat_at).getTime() > 60_000);
 
@@ -491,7 +529,7 @@ export function JobDetailPage() {
               selection={selection}
               job={job}
               latestRuns={latestRuns}
-              outputs={outputs ?? null}
+              outputs={normalizedOutputs}
               onClose={() => setSelection(null)}
             />
           ) : resolvedStep ? (
@@ -602,7 +640,7 @@ export function JobDetailPage() {
                       Outputs
                     </div>
                     <div className="max-h-40 overflow-y-auto bg-zinc-50/50 dark:bg-zinc-900/50 rounded border border-zinc-200 dark:border-zinc-800 p-2">
-                      <JsonView data={outputs} defaultExpanded={false} />
+                      <JsonView data={normalizedOutputs} defaultExpanded={false} />
                     </div>
                   </div>
                 )}
