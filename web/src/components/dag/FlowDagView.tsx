@@ -10,8 +10,9 @@ import { ExpandedStepContainer } from "./ExpandedStepContainer";
 import { ForEachExpandedContainer } from "./ForEachExpandedContainer";
 import { FlowPortNode } from "./FlowPortNode";
 import { ExternalInputPanel, getWatchProps } from "./ExternalInputPanel";
+import { CanvasJobControls } from "./CanvasJobControls";
 import type { FlowDefinition, StepRun, JobTreeNode, JobStatus } from "@/lib/types";
-import { Share2, Download, Check } from "lucide-react";
+import { Share2, Download, Check, RefreshCw, XCircle } from "lucide-react";
 import { computeCriticalPath } from "@/lib/critical-path";
 import type { CriticalPathResult } from "@/lib/critical-path";
 import { toBlob } from "html-to-image";
@@ -54,6 +55,20 @@ const STATUS_LABELS: Record<JobStatus, string> = {
   cancelled: "Cancelled",
 };
 
+interface JobActionCallbacks {
+  onPauseJob?: () => void;
+  onResumeJob?: () => void;
+  onCancelJob?: () => void;
+  onRetryJob?: () => void;
+  onStartJob?: () => void;
+  onRerunStep?: (stepName: string) => void;
+  onCancelRun?: (runId: string) => void;
+  isPausePending?: boolean;
+  isResumePending?: boolean;
+  isCancelPending?: boolean;
+  isRetryPending?: boolean;
+}
+
 interface FlowDagViewProps {
   workflow: FlowDefinition;
   runs: StepRun[];
@@ -69,6 +84,7 @@ interface FlowDagViewProps {
   onSelectDataFlow?: (selection: DagSelection) => void;
   flowName?: string;
   jobStatus?: JobStatus;
+  jobActions?: JobActionCallbacks;
 }
 
 export function FlowDagView({
@@ -86,6 +102,7 @@ export function FlowDagView({
   onSelectDataFlow,
   flowName,
   jobStatus,
+  jobActions,
 }: FlowDagViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -93,6 +110,45 @@ export function FlowDagView({
   const edgeTooltipRef = useRef<HTMLDivElement>(null);
   const [hoveredLabel, setHoveredLabel] = useState<HoveredLabelInfo | null>(null);
   const [showCriticalPath, setShowCriticalPath] = useState(false);
+  const [multiSelected, setMultiSelected] = useState<Set<string>>(new Set());
+
+  // Clear multi-select when clicking canvas background
+  const handleCanvasClick = useCallback(() => {
+    if (multiSelected.size > 0) {
+      setMultiSelected(new Set());
+    }
+  }, [multiSelected]);
+
+  const handleMultiSelectToggle = useCallback((stepName: string) => {
+    setMultiSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(stepName)) {
+        next.delete(stepName);
+      } else {
+        next.add(stepName);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleBulkRerun = useCallback(() => {
+    if (!jobActions?.onRerunStep) return;
+    for (const stepName of multiSelected) {
+      jobActions.onRerunStep(stepName);
+    }
+    setMultiSelected(new Set());
+  }, [multiSelected, jobActions]);
+
+  const handleBulkCancelRun = useCallback(() => {
+    if (!jobActions?.onCancelRun) return;
+    for (const stepName of multiSelected) {
+      const run = runs.find(
+        (r) => r.step_name === stepName && (r.status === "running" || r.status === "suspended"),
+      );
+      if (run) jobActions.onCancelRun(run.id);
+    }
+    setMultiSelected(new Set());
+  }, [multiSelected, jobActions, runs]);
 
   const [shareState, setShareState] = useState<"idle" | "capturing" | "copied">("idle");
   const logoRef = useRef<HTMLImageElement | null>(null);
@@ -469,12 +525,28 @@ export function FlowDagView({
       {/* Grid background */}
       <div
         className="absolute inset-0 opacity-[0.03]"
+        onClick={handleCanvasClick}
         style={{
           backgroundImage:
             "radial-gradient(circle, currentColor 1px, transparent 1px)",
           backgroundSize: "24px 24px",
         }}
       />
+
+      {/* Canvas job controls */}
+      {jobStatus && jobActions && (
+        <CanvasJobControls
+          jobStatus={jobStatus}
+          onPause={() => jobActions.onPauseJob?.()}
+          onResume={() => (jobStatus === "pending" || jobStatus === "staged" ? jobActions.onStartJob?.() : jobActions.onResumeJob?.())}
+          onCancel={() => jobActions.onCancelJob?.()}
+          onRetry={() => jobActions.onRetryJob?.()}
+          isPausePending={jobActions.isPausePending}
+          isResumePending={jobActions.isResumePending}
+          isCancelPending={jobActions.isCancelPending}
+          isRetryPending={jobActions.isRetryPending}
+        />
+      )}
 
       <div
         ref={canvasRef}
@@ -568,9 +640,13 @@ export function FlowDagView({
                 latestRuns={latestRuns}
                 maxAttempts={maxAttemptsMap[node.id] ?? null}
                 isSelected={selectedStep === node.id}
+                isMultiSelected={multiSelected.has(node.id)}
                 onClick={() =>
                   onSelectStep(selectedStep === node.id ? null : node.id)
                 }
+                onMultiSelectToggle={() => handleMultiSelectToggle(node.id)}
+                onRerunStep={jobActions?.onRerunStep}
+                onCancelRun={jobActions?.onCancelRun}
                 onNavigateSubJob={onNavigateSubJob}
                 onToggleExpand={
                   node.hasSubFlow ? () => onToggleExpand(node.id) : undefined
@@ -645,6 +721,44 @@ export function FlowDagView({
           </div>
         )}
       </div>
+
+      {/* Bulk action bar for multi-select */}
+      {multiSelected.size > 0 && (
+        <div
+          className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-white/90 dark:bg-zinc-900/90 backdrop-blur-sm rounded-lg border border-purple-500/30 shadow-lg px-3 py-1.5"
+          data-capture-hide
+        >
+          <span className="text-xs text-purple-400 font-medium">
+            {multiSelected.size} step{multiSelected.size > 1 ? "s" : ""} selected
+          </span>
+          <div className="w-px h-4 bg-zinc-300/50 dark:bg-zinc-700/50" />
+          {jobActions?.onRerunStep && (
+            <button
+              onClick={handleBulkRerun}
+              className="flex items-center gap-1 text-xs text-blue-400 hover:bg-blue-500/15 rounded px-2 py-0.5 transition-colors"
+            >
+              <RefreshCw className="w-3 h-3" />
+              Rerun All
+            </button>
+          )}
+          {jobActions?.onCancelRun && (
+            <button
+              onClick={handleBulkCancelRun}
+              className="flex items-center gap-1 text-xs text-red-400 hover:bg-red-500/15 rounded px-2 py-0.5 transition-colors"
+            >
+              <XCircle className="w-3 h-3" />
+              Cancel All
+            </button>
+          )}
+          <div className="w-px h-4 bg-zinc-300/50 dark:bg-zinc-700/50" />
+          <button
+            onClick={() => setMultiSelected(new Set())}
+            className="text-xs text-zinc-400 hover:text-zinc-300 transition-colors"
+          >
+            Clear
+          </button>
+        </div>
+      )}
 
       {/* Zoom controls + follow flow */}
       <div className="absolute bottom-3 left-3 flex items-center gap-3 z-10">
