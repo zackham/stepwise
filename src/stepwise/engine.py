@@ -3236,6 +3236,7 @@ class AsyncEngine(Engine):
                             "no executor task found, failing run",
                             job.id, run.step_name, run.id, age,
                         )
+                        self._task_exec_types.pop(run.id, None)
                         run.status = StepRunStatus.FAILED
                         run.error = "Executor task lost (possible thread pool crash)"
                         run.completed_at = _now()
@@ -3505,6 +3506,7 @@ class AsyncEngine(Engine):
                         job.id, run.step_name, run.id, run.executor_state, exec_ref)
                 )
                 self._tasks[run.id] = task
+                self._task_exec_types[run.id] = exec_ref.type
                 reattached += 1
                 _async_logger.info(
                     "Reattaching surviving run %s (job %s step %s, PID %d)",
@@ -3542,6 +3544,7 @@ class AsyncEngine(Engine):
         # Cancel running async tasks before cancelling runs
         for run in self.store.running_runs(job_id):
             task = self._tasks.pop(run.id, None)
+            self._task_exec_types.pop(run.id, None)
             if task:
                 task.cancel()
         # Cancel poll watch timers for suspended runs
@@ -3579,6 +3582,7 @@ class AsyncEngine(Engine):
         # Cancel running async tasks before pausing runs
         for run in self.store.running_runs(job_id):
             task = self._tasks.pop(run.id, None)
+            self._task_exec_types.pop(run.id, None)
             if task:
                 task.cancel()
         # Cancel poll watch timers for suspended runs
@@ -3607,6 +3611,7 @@ class AsyncEngine(Engine):
         # Cancel running async tasks before clearing runs
         for run in self.store.runs_for_job(job_id):
             task = self._tasks.pop(run.id, None)
+            self._task_exec_types.pop(run.id, None)
             if task:
                 task.cancel()
             self._cancel_poll_task(run.id)
@@ -3614,6 +3619,7 @@ class AsyncEngine(Engine):
         for descendant_id in self._collect_descendant_job_ids(job_id):
             for run in self.store.runs_for_job(descendant_id):
                 task = self._tasks.pop(run.id, None)
+                self._task_exec_types.pop(run.id, None)
                 if task:
                     task.cancel()
                 self._cancel_poll_task(run.id)
