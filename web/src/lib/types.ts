@@ -18,7 +18,8 @@ export type StepRunStatus =
   | "failed"
   | "cancelled"
   | "skipped"
-  | "throttled";
+  | "throttled"
+  | "waiting_reset";
 
 export interface ThrottleInfo {
   executor_type: string;

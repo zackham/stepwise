@@ -41,6 +41,7 @@ describe("STEP_STATUS_COLORS", () => {
     "cancelled",
     "skipped",
     "throttled",
+    "waiting_reset",
   ];
 
   it("has a color definition for every StepRunStatus", () => {

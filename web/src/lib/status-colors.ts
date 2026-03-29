@@ -106,6 +106,12 @@ export const STEP_STATUS_COLORS: Record<
     border: "border-orange-500/40",
     ring: "ring-orange-500/50",
   },
+  waiting_reset: {
+    bg: "bg-amber-100 dark:bg-amber-600/15",
+    text: "text-amber-700 dark:text-amber-300",
+    border: "border-amber-600/40",
+    ring: "ring-amber-600/50",
+  },
 };
 
 // For steps with no run yet (pending)
