@@ -10,8 +10,10 @@ import subprocess
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from pathlib import Path
 from string import Template
+from zoneinfo import ZoneInfo
 import logging as _logging
 from typing import Any, Callable
 
@@ -74,12 +76,53 @@ class ExecutorStatus:
 _AUTH_PATTERNS = ("401", "unauthorized", "403", "forbidden")
 _QUOTA_PATTERNS = ("usage limit", "quota exceeded", "billing")
 
+_USAGE_RESET_RE = re.compile(
+    r"(?:out of extra usage|usage limit).*resets?\s+"
+    r"(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)"
+    r"(?:\s*\(([^)]+)\))?",
+    re.IGNORECASE,
+)
+_DEFAULT_RESET_WAIT_MINUTES = 5
+
+
+def parse_usage_reset_time(error_msg: str) -> datetime | None:
+    """Parse reset time from a usage limit error message.
+
+    Returns a timezone-aware datetime, or None if the message doesn't match.
+    Rolls forward to next day if parsed time is in the past.
+    """
+    m = _USAGE_RESET_RE.search(error_msg)
+    if not m:
+        return None
+    time_str, tz_str = m.group(1).strip(), (m.group(2) or "").strip()
+    try:
+        tz = ZoneInfo(tz_str) if tz_str else ZoneInfo("UTC")
+    except (KeyError, ValueError):
+        tz = ZoneInfo("UTC")
+    now = datetime.now(tz)
+    t = None
+    for fmt in ("%I:%M%p", "%I%p", "%I:%M %p", "%I %p"):
+        try:
+            t = datetime.strptime(time_str.upper().replace(" ", ""), fmt.replace(" ", "")).time()
+            break
+        except ValueError:
+            continue
+    if t is None:
+        try:
+            t = datetime.strptime(time_str.strip(), "%H:%M").time()
+        except ValueError:
+            return None
+    result = now.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
+    if result <= now:
+        result += timedelta(days=1)
+    return result
+
 
 def classify_api_error(error_msg: str) -> str:
     """Classify an API/executor error message for retry decisions.
 
-    Returns one of: "auth_error", "quota_error", "timeout", "context_length",
-    "infra_failure", or "unknown".
+    Returns one of: "auth_error", "usage_limit_reset", "quota_error",
+    "timeout", "context_length", "infra_failure", or "unknown".
     """
     lower = error_msg.lower()
 
@@ -87,6 +130,10 @@ def classify_api_error(error_msg: str) -> str:
     for pat in _AUTH_PATTERNS:
         if pat in lower:
             return "auth_error"
+
+    # Usage limit with reset time — can wait and resume
+    if _USAGE_RESET_RE.search(error_msg):
+        return "usage_limit_reset"
 
     # Quota/billing errors — non-transient, fail immediately
     for pat in _QUOTA_PATTERNS:
