@@ -11,6 +11,7 @@ const DISPLAY_ORDER: JobStatus[] = [
   "completed",
   "failed",
   "cancelled",
+  "archived",
 ];
 
 interface JobSummaryBarProps {

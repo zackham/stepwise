@@ -2405,7 +2405,8 @@ def cmd_jobs(args: argparse.Namespace) -> int:
                 key, value = item.split("=", 1)
                 meta_filters[key] = value
 
-        jobs = store.all_jobs(status=status_filter, top_level_only=True, meta_filters=meta_filters)
+        include_archived = getattr(args, "archived", False)
+        jobs = store.all_jobs(status=status_filter, top_level_only=True, meta_filters=meta_filters, include_archived=include_archived)
 
         if getattr(args, "filter_name", None):
             pattern = args.filter_name.lower()
@@ -2612,6 +2613,217 @@ def _relative_time(dt) -> str:
     else:
         days = int(seconds / 86400)
         return f"{days} days ago"
+
+
+def cmd_archive(args: argparse.Namespace) -> int:
+    """Archive completed/failed/cancelled jobs."""
+    from stepwise.models import JobStatus
+    from stepwise.store import SQLiteStore
+
+    io = _io(args)
+    TERMINAL = {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}
+
+    # Server delegation
+    server_url = _detect_server_url(args)
+    if server_url:
+        from stepwise.api_client import StepwiseClient, StepwiseAPIError
+        client = StepwiseClient(server_url)
+        try:
+            body: dict = {}
+            if getattr(args, "job_ids", None):
+                body["job_ids"] = args.job_ids
+            if getattr(args, "status", None):
+                body["status"] = args.status
+            if getattr(args, "group", None):
+                body["group"] = args.group
+            result = client._request("POST", "/api/jobs/archive", json=body)
+            if args.output == "json":
+                print(json.dumps(result, indent=2, default=str))
+            else:
+                count = result.get("count", 0)
+                io.log("success", f"Archived {count} job(s)")
+            return EXIT_SUCCESS
+        except StepwiseAPIError as e:
+            io.log("error", e.detail)
+            return EXIT_JOB_FAILED
+
+    project = _find_project_or_exit(args)
+    store = SQLiteStore(str(project.db_path))
+    try:
+        to_archive: list = []
+
+        if getattr(args, "job_ids", None):
+            for jid in args.job_ids:
+                try:
+                    job = store.load_job(jid)
+                except KeyError:
+                    io.log("error", f"Job not found: {jid}")
+                    return EXIT_JOB_FAILED
+                if job.status not in TERMINAL:
+                    io.log("error", f"Can only archive terminal jobs (job {jid} is {job.status.value})")
+                    return EXIT_USAGE_ERROR
+                to_archive.append(job)
+        elif getattr(args, "status", None):
+            try:
+                status = JobStatus(args.status)
+            except ValueError:
+                io.log("error", f"Invalid status: {args.status}")
+                return EXIT_USAGE_ERROR
+            if status not in TERMINAL:
+                io.log("error", f"Can only archive terminal statuses (completed, failed, cancelled)")
+                return EXIT_USAGE_ERROR
+            to_archive = store.all_jobs(status=status, top_level_only=True)
+        elif getattr(args, "group", None):
+            all_jobs = store.all_jobs(top_level_only=True)
+            to_archive = [j for j in all_jobs if j.job_group == args.group and j.status in TERMINAL]
+        else:
+            io.log("error", "Specify job IDs, --status, or --group")
+            return EXIT_USAGE_ERROR
+
+        for job in to_archive:
+            store.archive_job(job.id)
+
+        if args.output == "json":
+            print(json.dumps({"count": len(to_archive), "archived": [j.id for j in to_archive]}))
+        else:
+            io.log("success", f"Archived {len(to_archive)} job(s)")
+        return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def cmd_unarchive(args: argparse.Namespace) -> int:
+    """Restore archived jobs."""
+    from stepwise.models import JobStatus
+    from stepwise.store import SQLiteStore
+
+    io = _io(args)
+
+    # Server delegation
+    server_url = _detect_server_url(args)
+    if server_url:
+        from stepwise.api_client import StepwiseClient, StepwiseAPIError
+        client = StepwiseClient(server_url)
+        try:
+            result = client._request("POST", "/api/jobs/unarchive", json={"job_ids": args.job_ids})
+            if args.output == "json":
+                print(json.dumps(result, indent=2, default=str))
+            else:
+                count = result.get("count", 0)
+                io.log("success", f"Unarchived {count} job(s)")
+            return EXIT_SUCCESS
+        except StepwiseAPIError as e:
+            io.log("error", e.detail)
+            return EXIT_JOB_FAILED
+
+    project = _find_project_or_exit(args)
+    store = SQLiteStore(str(project.db_path))
+    try:
+        restored = []
+        for jid in args.job_ids:
+            try:
+                job = store.load_job(jid)
+            except KeyError:
+                io.log("error", f"Job not found: {jid}")
+                return EXIT_JOB_FAILED
+            if job.status != JobStatus.ARCHIVED:
+                io.log("error", f"Job {jid} is not archived (status: {job.status.value})")
+                return EXIT_USAGE_ERROR
+            store.unarchive_job(jid)
+            restored.append(jid)
+
+        if args.output == "json":
+            print(json.dumps({"count": len(restored), "unarchived": restored}))
+        else:
+            io.log("success", f"Unarchived {len(restored)} job(s)")
+        return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def cmd_rm(args: argparse.Namespace) -> int:
+    """Permanently delete jobs."""
+    from stepwise.models import JobStatus
+    from stepwise.store import SQLiteStore
+
+    io = _io(args)
+    ACTIVE = {JobStatus.RUNNING, JobStatus.PENDING}
+
+    # Server delegation
+    server_url = _detect_server_url(args)
+    if server_url:
+        from stepwise.api_client import StepwiseClient, StepwiseAPIError
+        client = StepwiseClient(server_url)
+        try:
+            body: dict = {}
+            if getattr(args, "job_ids", None):
+                body["job_ids"] = args.job_ids
+            if getattr(args, "status", None):
+                body["status"] = args.status
+            if getattr(args, "group", None):
+                body["group"] = args.group
+            if getattr(args, "archived", False):
+                body["archived"] = True
+            result = client._request("POST", "/api/jobs/bulk-delete", json=body)
+            if args.output == "json":
+                print(json.dumps(result, indent=2, default=str))
+            else:
+                count = result.get("count", 0)
+                io.log("success", f"Deleted {count} job(s)")
+            return EXIT_SUCCESS
+        except StepwiseAPIError as e:
+            io.log("error", e.detail)
+            return EXIT_JOB_FAILED
+
+    project = _find_project_or_exit(args)
+    store = SQLiteStore(str(project.db_path))
+    try:
+        to_delete: list = []
+
+        if getattr(args, "job_ids", None):
+            for jid in args.job_ids:
+                try:
+                    job = store.load_job(jid)
+                except KeyError:
+                    io.log("error", f"Job not found: {jid}")
+                    return EXIT_JOB_FAILED
+                if job.status in ACTIVE:
+                    io.log("error", f"Cannot delete active job {jid} (status: {job.status.value}). Cancel it first.")
+                    return EXIT_USAGE_ERROR
+                to_delete.append(job)
+        elif getattr(args, "archived", False):
+            to_delete = store.all_jobs(status=JobStatus.ARCHIVED, top_level_only=True)
+        elif getattr(args, "status", None):
+            try:
+                status = JobStatus(args.status)
+            except ValueError:
+                io.log("error", f"Invalid status: {args.status}")
+                return EXIT_USAGE_ERROR
+            if status in ACTIVE:
+                io.log("error", f"Cannot bulk-delete active jobs. Cancel them first.")
+                return EXIT_USAGE_ERROR
+            to_delete = store.all_jobs(status=status, top_level_only=True)
+        elif getattr(args, "group", None):
+            all_jobs = store.all_jobs(top_level_only=True, include_archived=True)
+            to_delete = [j for j in all_jobs if j.job_group == args.group and j.status not in ACTIVE]
+        else:
+            io.log("error", "Specify job IDs, --status, --group, or --archived")
+            return EXIT_USAGE_ERROR
+
+        if len(to_delete) > 1 and not getattr(args, "force", False):
+            io.log("warning", f"About to permanently delete {len(to_delete)} job(s). Use --force to skip confirmation.")
+            return EXIT_USAGE_ERROR
+
+        for job in to_delete:
+            store.delete_job(job.id)
+
+        if args.output == "json":
+            print(json.dumps({"count": len(to_delete), "deleted": [j.id for j in to_delete]}))
+        else:
+            io.log("success", f"Deleted {len(to_delete)} job(s)")
+        return EXIT_SUCCESS
+    finally:
+        store.close()
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -4247,6 +4459,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_jobs.add_argument("--output", choices=["table", "json"], default="table")
     p_jobs.add_argument("--limit", type=int, default=20)
     p_jobs.add_argument("--all", action="store_true")
+    p_jobs.add_argument("--archived", action="store_true", help="Include archived jobs")
     p_jobs.add_argument("--status", help="Filter by status")
     p_jobs.add_argument("--name", dest="filter_name", help="Filter by name (substring match)")
     p_jobs.add_argument("--meta", action="append", default=[], dest="meta",
@@ -4263,6 +4476,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_cancel.add_argument("job_id", help="Job ID")
     p_cancel.add_argument("--output", choices=["table", "json"], default="table",
                           help="Output format")
+
+    # archive
+    p_archive = sub.add_parser("archive", help="Archive completed/failed/cancelled jobs")
+    p_archive.add_argument("job_ids", nargs="*", metavar="JOB_ID", help="Job ID(s) to archive")
+    p_archive.add_argument("--status", help="Archive all jobs with this status (completed, failed, cancelled)")
+    p_archive.add_argument("--group", "-g", help="Archive all terminal jobs in this group")
+    p_archive.add_argument("--output", choices=["table", "json"], default="table")
+
+    # unarchive
+    p_unarchive = sub.add_parser("unarchive", help="Restore archived jobs")
+    p_unarchive.add_argument("job_ids", nargs="+", metavar="JOB_ID", help="Job ID(s) to unarchive")
+    p_unarchive.add_argument("--output", choices=["table", "json"], default="table")
+
+    # rm
+    p_rm = sub.add_parser("rm", help="Permanently delete jobs")
+    p_rm.add_argument("job_ids", nargs="*", metavar="JOB_ID", help="Job ID(s) to delete")
+    p_rm.add_argument("--status", help="Delete all jobs with this status")
+    p_rm.add_argument("--group", "-g", help="Delete all jobs in this group")
+    p_rm.add_argument("--archived", action="store_true", help="Delete all archived jobs")
+    p_rm.add_argument("--force", "-f", action="store_true", help="Skip confirmation for bulk deletes")
+    p_rm.add_argument("--output", choices=["table", "json"], default="table")
 
     # schema
     p_schema = sub.add_parser("schema", help="Generate JSON tool contract from a flow file")
@@ -5368,6 +5602,9 @@ def main(argv: list[str] | None = None) -> int:
         "jobs": cmd_jobs,
         "status": cmd_status,
         "cancel": cmd_cancel,
+        "archive": cmd_archive,
+        "unarchive": cmd_unarchive,
+        "rm": cmd_rm,
         "list": cmd_list,
         "wait": cmd_wait,
         "schema": cmd_schema,

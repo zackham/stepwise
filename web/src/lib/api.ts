@@ -40,10 +40,11 @@ async function request<T>(
 
 // ── Jobs ──────────────────────────────────────────────────────────────
 
-export function fetchJobs(status?: string, topLevel?: boolean): Promise<Job[]> {
+export function fetchJobs(status?: string, topLevel?: boolean, includeArchived?: boolean): Promise<Job[]> {
   const searchParams = new URLSearchParams();
   if (status) searchParams.set("status", status);
   if (topLevel) searchParams.set("top_level", "true");
+  if (includeArchived) searchParams.set("include_archived", "true");
   const qs = searchParams.toString();
   return request<Job[]>(`/jobs${qs ? `?${qs}` : ""}`);
 }
@@ -165,6 +166,35 @@ export function deleteJob(jobId: string): Promise<{ status: string }> {
 
 export function deleteAllJobs(): Promise<{ status: string; count: number }> {
   return request("/jobs", { method: "DELETE" });
+}
+
+export function archiveJob(jobId: string): Promise<{ status: string }> {
+  return request(`/jobs/${jobId}/archive`, { method: "POST" });
+}
+
+export function unarchiveJob(jobId: string): Promise<{ status: string }> {
+  return request(`/jobs/${jobId}/unarchive`, { method: "POST" });
+}
+
+export function archiveJobs(jobIds: string[]): Promise<{ count: number; archived: string[] }> {
+  return request("/jobs/archive", {
+    method: "POST",
+    body: JSON.stringify({ job_ids: jobIds }),
+  });
+}
+
+export function unarchiveJobs(jobIds: string[]): Promise<{ count: number; unarchived: string[] }> {
+  return request("/jobs/unarchive", {
+    method: "POST",
+    body: JSON.stringify({ job_ids: jobIds }),
+  });
+}
+
+export function bulkDeleteJobs(jobIds: string[]): Promise<{ count: number; deleted: string[] }> {
+  return request("/jobs/bulk-delete", {
+    method: "POST",
+    body: JSON.stringify({ job_ids: jobIds }),
+  });
 }
 
 export function fetchJobCost(

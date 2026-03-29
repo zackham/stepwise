@@ -351,7 +351,7 @@ def _serialize_job(job: Job, summary: bool = False) -> dict:
                     "status": r.status.value,
                     "started_at": r.started_at.isoformat() if r.started_at else None,
                 }
-        elif job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.PAUSED):
+        elif job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.PAUSED, JobStatus.ARCHIVED):
             runs = engine.store.runs_for_job(job.id)
             terminal = [r for r in runs if r.completed_at]
             if terminal:
@@ -878,7 +878,7 @@ async def _log_unhandled_error(request, exc):
 
 
 @app.get("/api/jobs")
-def list_jobs(request: Request, status: str | None = None, top_level: bool = False, limit: int = 50):
+def list_jobs(request: Request, status: str | None = None, top_level: bool = False, limit: int = 50, include_archived: bool = False):
     engine = _get_engine()
     if status:
         try:
@@ -894,6 +894,7 @@ def list_jobs(request: Request, status: str | None = None, top_level: bool = Fal
     jobs = engine.store.all_jobs(
         job_status, top_level_only=top_level, limit=limit,
         meta_filters=meta_filters or None,
+        include_archived=include_archived,
     )
     return [_serialize_job(j, summary=True) for j in jobs]
 
@@ -1108,7 +1109,7 @@ def delete_job(job_id: str):
 @app.delete("/api/jobs")
 def delete_all_jobs():
     engine = _get_engine()
-    jobs = engine.store.all_jobs()
+    jobs = engine.store.all_jobs(include_archived=True)
     for job in jobs:
         engine.store.delete_job(job.id)
     if _event_loop is not None:
@@ -1117,6 +1118,159 @@ def delete_all_jobs():
             _broadcast({"type": "jobs_changed"}),
         )
     return {"status": "deleted", "count": len(jobs)}
+
+
+# ── Archive & bulk operations ───────────────────────────────────────
+
+
+class ArchiveRequest(BaseModel):
+    job_ids: list[str] | None = None
+    status: str | None = None
+    group: str | None = None
+
+
+class UnarchiveRequest(BaseModel):
+    job_ids: list[str]
+
+
+class BulkDeleteRequest(BaseModel):
+    job_ids: list[str] | None = None
+    status: str | None = None
+    group: str | None = None
+    archived: bool = False
+
+
+@app.post("/api/jobs/{job_id}/archive")
+def archive_single_job(job_id: str):
+    engine = _get_engine()
+    try:
+        job = engine.store.load_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    terminal = {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}
+    if job.status not in terminal:
+        raise HTTPException(status_code=400, detail=f"Can only archive terminal jobs (job is {job.status.value})")
+    engine.store.archive_job(job_id)
+    _notify_change(job_id)
+    return {"status": "archived"}
+
+
+@app.post("/api/jobs/{job_id}/unarchive")
+def unarchive_single_job(job_id: str):
+    engine = _get_engine()
+    try:
+        job = engine.store.load_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    if job.status != JobStatus.ARCHIVED:
+        raise HTTPException(status_code=400, detail=f"Job is not archived (status: {job.status.value})")
+    engine.store.unarchive_job(job_id)
+    _notify_change(job_id)
+    return {"status": "unarchived"}
+
+
+@app.post("/api/jobs/archive")
+def archive_jobs(req: ArchiveRequest):
+    engine = _get_engine()
+    terminal = {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}
+    to_archive = []
+
+    if req.job_ids:
+        for jid in req.job_ids:
+            try:
+                job = engine.store.load_job(jid)
+            except KeyError:
+                raise HTTPException(status_code=404, detail=f"Job not found: {jid}")
+            if job.status not in terminal:
+                raise HTTPException(status_code=400, detail=f"Can only archive terminal jobs (job {jid} is {job.status.value})")
+            to_archive.append(job)
+    elif req.status:
+        try:
+            status = JobStatus(req.status)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid status: {req.status}")
+        if status not in terminal:
+            raise HTTPException(status_code=400, detail="Can only archive terminal statuses")
+        to_archive = engine.store.all_jobs(status=status, top_level_only=True)
+    elif req.group:
+        all_jobs = engine.store.all_jobs(top_level_only=True)
+        to_archive = [j for j in all_jobs if j.job_group == req.group and j.status in terminal]
+    else:
+        raise HTTPException(status_code=400, detail="Specify job_ids, status, or group")
+
+    for job in to_archive:
+        engine.store.archive_job(job.id)
+
+    if to_archive and _event_loop is not None:
+        _event_loop.call_soon_threadsafe(
+            _event_loop.create_task,
+            _broadcast({"type": "jobs_changed"}),
+        )
+    return {"count": len(to_archive), "archived": [j.id for j in to_archive]}
+
+
+@app.post("/api/jobs/unarchive")
+def unarchive_jobs(req: UnarchiveRequest):
+    engine = _get_engine()
+    restored = []
+    for jid in req.job_ids:
+        try:
+            job = engine.store.load_job(jid)
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"Job not found: {jid}")
+        if job.status != JobStatus.ARCHIVED:
+            raise HTTPException(status_code=400, detail=f"Job {jid} is not archived")
+        engine.store.unarchive_job(jid)
+        restored.append(jid)
+
+    if restored and _event_loop is not None:
+        _event_loop.call_soon_threadsafe(
+            _event_loop.create_task,
+            _broadcast({"type": "jobs_changed"}),
+        )
+    return {"count": len(restored), "unarchived": restored}
+
+
+@app.post("/api/jobs/bulk-delete")
+def bulk_delete_jobs(req: BulkDeleteRequest):
+    engine = _get_engine()
+    active = {JobStatus.RUNNING, JobStatus.PENDING}
+    to_delete = []
+
+    if req.job_ids:
+        for jid in req.job_ids:
+            try:
+                job = engine.store.load_job(jid)
+            except KeyError:
+                raise HTTPException(status_code=404, detail=f"Job not found: {jid}")
+            if job.status in active:
+                raise HTTPException(status_code=400, detail=f"Cannot delete active job {jid}. Cancel it first.")
+            to_delete.append(job)
+    elif req.archived:
+        to_delete = engine.store.all_jobs(status=JobStatus.ARCHIVED, top_level_only=True)
+    elif req.status:
+        try:
+            status = JobStatus(req.status)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid status: {req.status}")
+        if status in active:
+            raise HTTPException(status_code=400, detail="Cannot bulk-delete active jobs")
+        to_delete = engine.store.all_jobs(status=status, top_level_only=True)
+    elif req.group:
+        all_jobs = engine.store.all_jobs(top_level_only=True, include_archived=True)
+        to_delete = [j for j in all_jobs if j.job_group == req.group and j.status not in active]
+    else:
+        raise HTTPException(status_code=400, detail="Specify job_ids, status, group, or archived")
+
+    for job in to_delete:
+        engine.store.delete_job(job.id)
+
+    if to_delete and _event_loop is not None:
+        _event_loop.call_soon_threadsafe(
+            _event_loop.create_task,
+            _broadcast({"type": "jobs_changed"}),
+        )
+    return {"count": len(to_delete), "deleted": [j.id for j in to_delete]}
 
 
 # ── Job staging & dependency endpoints ──────────────────────────────

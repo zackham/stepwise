@@ -4,10 +4,10 @@ import * as api from "@/lib/api";
 
 // ── Query hooks ──────────────────────────────────────────────────────
 
-export function useJobs(status?: string, topLevel: boolean = true) {
+export function useJobs(status?: string, topLevel: boolean = true, includeArchived: boolean = false) {
   return useQuery({
-    queryKey: ["jobs", status, topLevel],
-    queryFn: () => api.fetchJobs(status, topLevel),
+    queryKey: ["jobs", status, topLevel, includeArchived],
+    queryFn: () => api.fetchJobs(status, topLevel, includeArchived),
   });
 }
 
@@ -273,6 +273,50 @@ export function useStepwiseMutations() {
     },
   });
 
+  const archiveJobMutation = useMutation({
+    mutationFn: api.archiveJob,
+    onSuccess: () => {
+      invalidateAll();
+      toast.success("Job archived");
+    },
+    onError: (error) => {
+      toast.error("Failed to archive job", { description: error.message });
+    },
+  });
+
+  const unarchiveJobMutation = useMutation({
+    mutationFn: api.unarchiveJob,
+    onSuccess: () => {
+      invalidateAll();
+      toast.success("Job unarchived");
+    },
+    onError: (error) => {
+      toast.error("Failed to unarchive job", { description: error.message });
+    },
+  });
+
+  const archiveJobsMutation = useMutation({
+    mutationFn: api.archiveJobs,
+    onSuccess: (data) => {
+      invalidateAll();
+      toast.success(`Archived ${data.count} job(s)`);
+    },
+    onError: (error) => {
+      toast.error("Failed to archive jobs", { description: error.message });
+    },
+  });
+
+  const bulkDeleteJobsMutation = useMutation({
+    mutationFn: api.bulkDeleteJobs,
+    onSuccess: (data) => {
+      invalidateAll();
+      toast.success(`Deleted ${data.count} job(s)`);
+    },
+    onError: (error) => {
+      toast.error("Failed to delete jobs", { description: error.message });
+    },
+  });
+
   const saveTemplateMutation = useMutation({
     mutationFn: api.saveTemplate,
     onSuccess: () => {
@@ -319,6 +363,10 @@ export function useStepwiseMutations() {
     cancelRun: cancelRunMutation,
     deleteJob: deleteJobMutation,
     deleteAllJobs: deleteAllJobsMutation,
+    archiveJob: archiveJobMutation,
+    unarchiveJob: unarchiveJobMutation,
+    archiveJobs: archiveJobsMutation,
+    bulkDeleteJobs: bulkDeleteJobsMutation,
     adoptJob: adoptJobMutation,
     saveTemplate: saveTemplateMutation,
     deleteTemplate: deleteTemplateMutation,
