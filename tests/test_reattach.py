@@ -113,7 +113,7 @@ class ReattachMockBackend(MockAgentBackend):
             state="completed", exit_code=0, result={},
         )
 
-    def wait(self, process: AgentProcess) -> AgentStatus:
+    def wait(self, process: AgentProcess, on_usage_limit=None) -> AgentStatus:
         """Return immediately for reattach testing."""
         return self._finalize_result
 
