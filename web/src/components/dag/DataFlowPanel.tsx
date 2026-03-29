@@ -218,6 +218,9 @@ function StepSummaryPanel({
         <h2 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">
           {stepDef.name}
         </h2>
+        {stepDef.description && (
+          <p className="text-sm text-muted-foreground">{stepDef.description}</p>
+        )}
         <div className="flex items-center gap-1.5 text-xs text-zinc-500">
           <span className="text-zinc-400">
             {executorIcon(stepDef.executor.type, "w-3.5 h-3.5")}
