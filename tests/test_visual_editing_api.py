@@ -155,6 +155,43 @@ class TestAddStep:
         )
         assert resp.status_code == 404
 
+    def test_add_poll_step(self, client):
+        resp = client.post(
+            "/api/flows/add-step",
+            json={"flow_path": FLOW_PATH, "name": "wait_for_it", "executor": "poll"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "wait_for_it" in data["raw_yaml"]
+        assert "check_command" in data["raw_yaml"]
+        assert "interval_seconds" in data["raw_yaml"]
+        step_names = [n["id"] for n in data["graph"]["nodes"]]
+        assert "wait_for_it" in step_names
+
+    def test_add_agent_step(self, client):
+        resp = client.post(
+            "/api/flows/add-step",
+            json={"flow_path": FLOW_PATH, "name": "plan", "executor": "agent"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "plan" in data["raw_yaml"]
+        assert "prompt" in data["raw_yaml"]
+
+    def test_add_step_to_empty_flow(self, client, project_dir):
+        """Adding a step to a flow with zero steps should succeed."""
+        empty_flow = project_dir / "flows" / "empty" / "FLOW.yaml"
+        empty_flow.parent.mkdir(parents=True, exist_ok=True)
+        empty_flow.write_text("name: empty-flow\nsteps: {}\n")
+        resp = client.post(
+            "/api/flows/add-step",
+            json={"flow_path": "flows/empty/FLOW.yaml", "name": "first", "executor": "script"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "first" in data["raw_yaml"]
+        assert len(data["graph"]["nodes"]) == 1
+
 
 class TestDeleteStep:
     def test_delete_step(self, client):

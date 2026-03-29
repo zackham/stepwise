@@ -101,6 +101,7 @@ export function usePatchStep() {
 }
 
 export function useAddStep() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({
       flowPath,
@@ -111,6 +112,13 @@ export function useAddStep() {
       name: string;
       executor: string;
     }) => api.addStep(flowPath, name, executor),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["localFlows"] });
+      queryClient.invalidateQueries({ queryKey: ["localFlow"] });
+    },
+    onError: (error) => {
+      toast.error("Failed to add step", { description: error.message });
+    },
   });
 }
 
