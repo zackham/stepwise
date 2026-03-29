@@ -12,6 +12,7 @@ const mockFlows: LocalFlow[] = [
     modified_at: "2026-03-11T10:00:00",
     is_directory: true,
     executor_types: ["script", "llm"],
+    visibility: "interactive",
   },
   {
     path: "flows/deploy.flow.yaml",
@@ -21,6 +22,7 @@ const mockFlows: LocalFlow[] = [
     modified_at: "2026-03-10T08:00:00",
     is_directory: false,
     executor_types: ["script"],
+    visibility: "interactive",
   },
   {
     path: "flows/review/FLOW.yaml",
@@ -30,6 +32,7 @@ const mockFlows: LocalFlow[] = [
     modified_at: "2026-03-09T14:00:00",
     is_directory: true,
     executor_types: ["external", "llm"],
+    visibility: "interactive",
   },
 ];
 

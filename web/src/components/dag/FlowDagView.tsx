@@ -43,6 +43,7 @@ const STATUS_COLORS: Record<JobStatus, string> = {
   completed: "#10b981",
   failed: "#ef4444",
   cancelled: "#71717a",
+  archived: "#52525b",
 };
 
 const STATUS_LABELS: Record<JobStatus, string> = {
@@ -53,6 +54,7 @@ const STATUS_LABELS: Record<JobStatus, string> = {
   completed: "Completed",
   failed: "Failed",
   cancelled: "Cancelled",
+  archived: "Archived",
 };
 
 interface JobActionCallbacks {
