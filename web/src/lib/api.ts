@@ -264,6 +264,20 @@ export function fetchFlowStats(): Promise<FlowStats[]> {
   return request<FlowStats[]>("/flow-stats");
 }
 
+export interface FlowJob {
+  id: string;
+  name: string | null;
+  objective: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export function fetchFlowJobs(flowDir: string, limit: number = 10): Promise<FlowJob[]> {
+  const params = new URLSearchParams({ flow_dir: flowDir, limit: String(limit) });
+  return request<FlowJob[]>(`/flow-jobs?${params}`);
+}
+
 // ── Editor / Local Flows ─────────────────────────────────────────────
 
 export function fetchLocalFlows(): Promise<LocalFlow[]> {
