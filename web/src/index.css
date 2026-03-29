@@ -39,6 +39,13 @@
     --sidebar-accent-foreground: oklch(0.205 0 0);
     --sidebar-border: oklch(0.922 0 0);
     --sidebar-ring: oklch(0.708 0 0);
+    --dag-edge: oklch(0.65 0 0);
+    --dag-edge-completed: oklch(0.35 0.12 160);
+    --dag-node-stroke: oklch(0.7 0 0);
+    --dag-canvas-bg: #ffffff;
+    --dag-canvas-border: #e4e4e7;
+    --dag-canvas-text: #18181b;
+    --dag-canvas-muted: #a1a1aa;
 }
 
 .dark {
@@ -73,6 +80,13 @@
     --sidebar-accent-foreground: oklch(0.985 0 0);
     --sidebar-border: oklch(1 0 0 / 10%);
     --sidebar-ring: oklch(0.556 0 0);
+    --dag-edge: oklch(0.35 0 0);
+    --dag-edge-completed: oklch(0.5 0.1 160);
+    --dag-node-stroke: oklch(0.4 0 0);
+    --dag-canvas-bg: #09090b;
+    --dag-canvas-border: #27272a;
+    --dag-canvas-text: #fafafa;
+    --dag-canvas-muted: #52525b;
 }
 
 @theme inline {
@@ -141,7 +155,7 @@
 
 /* Custom scrollbar styling for dark mode */
 * {
-  scrollbar-color: oklch(0.552 0 0) transparent;
+  scrollbar-color: oklch(0.8 0 0) transparent;
   scrollbar-width: thin;
 }
 
@@ -155,12 +169,12 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: oklch(0.552 0 0);
+  background: oklch(0.8 0 0);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.65 0 0);
+  background: oklch(0.7 0 0);
 }
 
 .dark ::-webkit-scrollbar-thumb {

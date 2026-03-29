@@ -2,6 +2,7 @@ import type { DagEdge, LoopEdge } from "@/lib/dag-layout";
 import type { StepRun } from "@/lib/types";
 import type { CriticalPathResult } from "@/lib/critical-path";
 import { tryParseJsonValue } from "@/lib/utils";
+import { useTheme } from "@/hooks/useTheme";
 
 interface SelectedLabel {
   fromStep: string;
@@ -140,6 +141,16 @@ function measureLabelWidth(text: string): number {
 }
 
 export function DagEdges({ edges, loopEdges, width, height, onClickLabel, selectedLabel, latestRuns, onHoverLabel, onLeaveLabel, criticalPath }: DagEdgesProps) {
+  const theme = useTheme();
+  const isDark = theme === "dark";
+
+  const inactiveEdge = isDark ? "oklch(0.35 0 0)" : "oklch(0.7 0 0)";
+  const inactiveEdgeData = isDark ? "oklch(0.4 0 0)" : "oklch(0.65 0 0)";
+  const completedEdge = isDark ? "oklch(0.5 0.1 160)" : "oklch(0.35 0.12 160)";
+  const arrowFill = isDark ? "oklch(0.5 0 0)" : "oklch(0.7 0 0)";
+  const completedArrowFill = isDark ? "oklch(0.5 0.1 160)" : "oklch(0.35 0.12 160)";
+  const selectedLabelBg = isDark ? "oklch(0.25 0.08 250)" : "oklch(0.92 0.04 250)";
+
   return (
     <svg
       className="absolute inset-0 pointer-events-none"
@@ -159,7 +170,7 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
         >
           <polygon
             points="0 0, 8 3, 0 6"
-            fill="oklch(0.5 0 0)"
+            fill={arrowFill}
             opacity="0.6"
           />
         </marker>
@@ -202,7 +213,7 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
         >
           <polygon
             points="0 0, 8 3, 0 6"
-            fill="oklch(0.5 0.1 160)"
+            fill={completedArrowFill}
             opacity="0.7"
           />
         </marker>
@@ -263,7 +274,7 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
 
         // Data edges are always blue when active (loop edges are orange)
         const activeColor = "oklch(0.6 0.15 250)";
-        const completedColor = "oklch(0.5 0.1 160)"; // muted emerald
+        const completedColor = completedEdge;
         const isCritical = criticalPath?.edges.has(`${edge.from}->${edge.to}`) ?? false;
 
         const pathD = buildPath(edge.points);
@@ -312,7 +323,7 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
                   ? activeColor
                   : isCompleted
                     ? completedColor
-                    : isSequencingOnly ? "oklch(0.35 0 0)" : "oklch(0.4 0 0)"
+                    : isSequencingOnly ? inactiveEdge : inactiveEdgeData
               }
               strokeWidth={isActive ? 2 : isCompleted ? 1.5 : isSequencingOnly ? 1 : 1.5}
               strokeDasharray={isActive ? "8 12" : isSequencingOnly ? "4 3" : "none"}
@@ -358,7 +369,7 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
                     width={textW}
                     height={textH}
                     rx={3}
-                    fill={isSelected ? "oklch(0.25 0.08 250)" : "transparent"}
+                    fill={isSelected ? selectedLabelBg : "transparent"}
                     className={onClickLabel ? "hover:fill-zinc-800/60" : ""}
                   />
                   <text

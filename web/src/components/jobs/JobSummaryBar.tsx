@@ -32,16 +32,16 @@ export function JobSummaryBar({ jobs }: JobSummaryBarProps) {
 
   if (isMobile) {
     return (
-      <div className="flex items-center px-3 h-8 border-b border-border text-xs text-zinc-400">
-        <span className="font-medium text-zinc-300">{jobs.length} jobs</span>
+      <div className="flex items-center px-3 h-8 border-b border-border text-xs text-zinc-500 dark:text-zinc-400">
+        <span className="font-medium text-zinc-700 dark:text-zinc-300">{jobs.length} jobs</span>
       </div>
     );
   }
 
   return (
-    <div className="flex items-center gap-3 px-3 h-8 border-b border-border text-xs text-zinc-400">
-      <span className="font-medium text-zinc-300">{jobs.length} jobs</span>
-      <span className="text-zinc-700">|</span>
+    <div className="flex items-center gap-3 px-3 h-8 border-b border-border text-xs text-zinc-500 dark:text-zinc-400">
+      <span className="font-medium text-zinc-700 dark:text-zinc-300">{jobs.length} jobs</span>
+      <span className="text-zinc-300 dark:text-zinc-700">|</span>
       {DISPLAY_ORDER.filter((s) => counts[s]).map((status) => (
         <span key={status} className="flex items-center gap-1.5">
           <span

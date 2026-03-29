@@ -459,7 +459,7 @@ export function JobDetailPage() {
         <span className="text-sm">Job not found</span>
         <Link
           to="/jobs"
-          className="text-sm text-blue-400 hover:text-blue-300 underline underline-offset-2"
+          className="text-sm text-blue-600 dark:text-blue-400 hover:text-blue-500 dark:hover:text-blue-300 underline underline-offset-2"
         >
           Back to Jobs
         </Link>
@@ -553,13 +553,13 @@ export function JobDetailPage() {
               <div className="flex items-center justify-between mt-1">
                 <div className="flex items-center gap-2">
                   {job.status !== "pending" && job.status !== "staged" && (
-                    <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
+                    <span className="text-[10px] text-zinc-500 dark:text-zinc-600 flex items-center gap-0.5">
                       <Clock className="w-2.5 h-2.5" />
                       {formatDuration(job.created_at, job.updated_at)}
                     </span>
                   )}
                   {costData && (costData.cost_usd > 0 || costData.billing_mode === "subscription") && (
-                    <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
+                    <span className="text-[10px] text-zinc-500 dark:text-zinc-600 flex items-center gap-0.5">
                       <DollarSign className="w-2.5 h-2.5" />
                       {costData.billing_mode === "subscription"
                         ? "$0 (Max)"
@@ -623,7 +623,7 @@ export function JobDetailPage() {
                     </span>
                   )}
                   {job.status !== "pending" && job.status !== "staged" && (
-                    <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
+                    <span className="text-[10px] text-zinc-500 dark:text-zinc-600 flex items-center gap-0.5">
                       <Clock className="w-2.5 h-2.5" />
                       {formatDuration(job.created_at, job.updated_at)}
                     </span>
@@ -642,7 +642,7 @@ export function JobDetailPage() {
                     </span>
                   )}
                 </div>
-                <div className="text-[10px] font-mono text-zinc-600 mt-0.5 break-all flex items-center gap-2 flex-wrap">
+                <div className="text-[10px] font-mono text-zinc-500 dark:text-zinc-600 mt-0.5 break-all flex items-center gap-2 flex-wrap">
                   {job.name && job.objective && (
                     <span className="font-sans text-zinc-500">{job.objective}</span>
                   )}
@@ -650,7 +650,7 @@ export function JobDetailPage() {
                     <Link
                       to="/flows/$flowName"
                       params={{ flowName: job.workflow.metadata.name }}
-                      className="font-sans text-blue-400 hover:text-blue-300 underline underline-offset-2"
+                      className="font-sans text-blue-600 dark:text-blue-400 hover:text-blue-500 dark:hover:text-blue-300 underline underline-offset-2"
                     >
                       {job.workflow.metadata.name}
                     </Link>
@@ -713,21 +713,21 @@ export function JobDetailPage() {
 
         {/* Error summary banner */}
         {failedRun && (
-          <div className="flex items-center gap-2 px-4 py-2 border-b border-red-900/50 bg-red-950/30 text-xs">
-            <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+          <div className="flex items-center gap-2 px-4 py-2 border-b border-red-300/50 dark:border-red-900/50 bg-red-100/30 dark:bg-red-950/30 text-xs">
+            <AlertTriangle className="w-3.5 h-3.5 text-red-500 dark:text-red-400 shrink-0" />
             <div className="flex-1 min-w-0">
-              <span className="text-red-300 font-medium">
+              <span className="text-red-700 dark:text-red-300 font-medium">
                 Step "{failedRun.step_name}" failed
               </span>
               {failedRun.error && (
-                <span className="text-red-400/70 font-mono ml-2 truncate">
+                <span className="text-red-500/70 dark:text-red-400/70 font-mono ml-2 truncate">
                   — {failedRun.error.split("\n")[0]}
                 </span>
               )}
             </div>
             <button
               type="button"
-              className="text-amber-400 hover:text-amber-300 text-xs font-medium whitespace-nowrap shrink-0"
+              className="text-amber-600 dark:text-amber-400 hover:text-amber-500 dark:hover:text-amber-300 text-xs font-medium whitespace-nowrap shrink-0"
               onClick={() =>
                 mutations.rerunStep.mutate({
                   jobId: job.id,
@@ -815,7 +815,7 @@ export function JobDetailPage() {
                   setAutoOpenedPanel(false);
                   navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined, panel: undefined }), replace: true });
                 }}
-                className="text-zinc-600 hover:text-zinc-300 p-0.5 mr-2"
+                className="text-zinc-500 dark:text-zinc-600 hover:text-zinc-700 dark:hover:text-zinc-300 p-0.5 mr-2"
               >
                 <PanelRightOpen className="w-3.5 h-3.5" />
               </button>

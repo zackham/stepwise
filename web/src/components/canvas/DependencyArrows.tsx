@@ -1,5 +1,6 @@
 import { memo } from "react";
 import type { CardEdge } from "./CanvasLayout";
+import { useTheme } from "@/hooks/useTheme";
 
 interface DependencyArrowsProps {
   edges: CardEdge[];
@@ -12,6 +13,10 @@ export const DependencyArrows = memo(function DependencyArrows({
   width,
   height,
 }: DependencyArrowsProps) {
+  const theme = useTheme();
+  const isDark = theme === "dark";
+  const satisfiedColor = isDark ? "#3f3f46" : "#a1a1aa";
+
   if (edges.length === 0) return null;
 
   return (
@@ -31,7 +36,7 @@ export const DependencyArrows = memo(function DependencyArrows({
           markerHeight="6"
           orient="auto"
         >
-          <path d="M 0 0 L 10 3 L 0 6 z" fill="#3f3f46" fillOpacity={0.5} />
+          <path d="M 0 0 L 10 3 L 0 6 z" fill={satisfiedColor} fillOpacity={0.5} />
         </marker>
         <marker
           id="canvas-arrow-blocking"
@@ -55,7 +60,7 @@ export const DependencyArrows = memo(function DependencyArrows({
             key={`${edge.from}->${edge.to}`}
             d={path}
             fill="none"
-            stroke={isSatisfied ? "#3f3f46" : "#f59e0b"}
+            stroke={isSatisfied ? satisfiedColor : "#f59e0b"}
             strokeWidth={isSatisfied ? 1.5 : 2}
             strokeDasharray={isSatisfied ? "6 4" : undefined}
             markerEnd={`url(#canvas-arrow-${isSatisfied ? "satisfied" : "blocking"})`}

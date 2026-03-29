@@ -25,7 +25,7 @@ function ToolActivitiesBlock({ tools, isStreaming }: { tools: ToolActivity[]; is
     return (
       <button
         onClick={() => setExpanded(true)}
-        className="flex items-center gap-1.5 text-[11px] text-zinc-600 hover:text-zinc-400 transition-colors"
+        className="flex items-center gap-1.5 text-[11px] text-zinc-500 dark:text-zinc-600 hover:text-zinc-700 dark:hover:text-zinc-400 transition-colors"
       >
         <ChevronRight className="w-3 h-3" />
         <Check className="w-3 h-3 text-green-600" />
@@ -39,7 +39,7 @@ function ToolActivitiesBlock({ tools, isStreaming }: { tools: ToolActivity[]; is
       {allDone && (
         <button
           onClick={() => setExpanded(false)}
-          className="flex items-center gap-1.5 text-[11px] text-zinc-600 hover:text-zinc-400 transition-colors"
+          className="flex items-center gap-1.5 text-[11px] text-zinc-500 dark:text-zinc-600 hover:text-zinc-700 dark:hover:text-zinc-400 transition-colors"
         >
           <ChevronDown className="w-3 h-3" />
           <span>{tools.filter(t => t.done).length} tool {tools.filter(t => t.done).length === 1 ? "call" : "calls"}</span>
@@ -191,7 +191,7 @@ export function ChatMessages({ messages, isStreaming, onApplyYaml, emptyMessage 
                   <Pencil className="w-3 h-3" />
                   {msg.filesChanged.length === 1 ? "1 file written" : `${msg.filesChanged.length} files written`}
                 </div>
-                <div className="mt-1 space-y-0.5 text-green-400/60">
+                <div className="mt-1 space-y-0.5 text-green-600/60 dark:text-green-400/60">
                   {msg.filesChanged.map((path) => (
                     <div key={path} className="font-mono truncate">{path}</div>
                   ))}

@@ -113,8 +113,8 @@ export function ArtifactDiffPanel({
               onClick={() => setSelectedField(field)}
               className={`text-[10px] px-2 py-0.5 rounded font-mono transition-colors ${
                 selectedField === field
-                  ? "bg-zinc-700 text-zinc-200"
-                  : "text-zinc-500 hover:text-zinc-300 bg-zinc-800"
+                  ? "bg-zinc-200 dark:bg-zinc-700 text-zinc-800 dark:text-zinc-200"
+                  : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 bg-zinc-100 dark:bg-zinc-800"
               }`}
             >
               {field}

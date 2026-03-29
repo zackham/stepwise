@@ -357,8 +357,8 @@ export function FlowsPage() {
                       {flows.length === 0 ? (
                         <>
                           <img src="/stepwise-icon-64.png" alt="Stepwise" className="w-12 h-12 opacity-40 mb-3" />
-                          <p className="text-sm font-medium text-zinc-400 mb-1">Create your first flow</p>
-                          <p className="text-xs text-zinc-600 mb-4">
+                          <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400 mb-1">Create your first flow</p>
+                          <p className="text-xs text-zinc-500 dark:text-zinc-600 mb-4">
                             Flows define multi-step workflows for agents and humans.
                           </p>
                           <div className="flex flex-col gap-2">
@@ -383,8 +383,8 @@ export function FlowsPage() {
                         </>
                       ) : (
                         <>
-                          <FileText className="w-8 h-8 mb-2 opacity-40 text-zinc-600" />
-                          <p className="text-xs text-zinc-600">No matching flows</p>
+                          <FileText className="w-8 h-8 mb-2 opacity-40 text-zinc-500 dark:text-zinc-600" />
+                          <p className="text-xs text-zinc-500 dark:text-zinc-600">No matching flows</p>
                         </>
                       )}
                     </div>
@@ -428,18 +428,18 @@ export function FlowsPage() {
                             )}
                           </span>
                           {flow.description && (
-                            <span className="text-[10px] text-zinc-600 truncate leading-tight">
+                            <span className="text-[10px] text-zinc-500 dark:text-zinc-600 truncate leading-tight">
                               {flow.description}
                             </span>
                           )}
                         </div>
                         <div className="ml-auto flex items-center gap-2 shrink-0">
                           {(statsMap.get(flowDirKey(flow.path))?.job_count ?? 0) > 0 && (
-                            <span className="text-[10px] text-zinc-600">
+                            <span className="text-[10px] text-zinc-500 dark:text-zinc-600">
                               {statsMap.get(flowDirKey(flow.path))!.job_count} jobs
                             </span>
                           )}
-                          <span className="text-xs text-zinc-600">
+                          <span className="text-xs text-zinc-500 dark:text-zinc-600">
                             {sortBy === "recent"
                               ? statsMap.get(flowDirKey(flow.path))?.last_run_at
                                 ? formatRelativeTime(statsMap.get(flowDirKey(flow.path))!.last_run_at!)
@@ -458,13 +458,13 @@ export function FlowsPage() {
                 selectedLocalFlow ? (
                   <div className="flex-1 min-w-0 overflow-y-auto p-4 sm:p-6">
                     <div className="flex h-full min-h-0 flex-col gap-4">
-                      <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4">
+                      <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 p-4">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
-                            <h2 className="text-lg font-semibold text-zinc-100 break-words">
+                            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 break-words">
                               {selectedLocalFlow.name}
                             </h2>
-                            <p className="mt-1 text-sm text-zinc-400">
+                            <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
                               {localDescription}
                             </p>
                           </div>
@@ -480,13 +480,13 @@ export function FlowsPage() {
                         </div>
                         <div className="mt-4 flex flex-wrap items-center gap-2">
                           {localMetadata?.author && (
-                            <span className="inline-flex items-center gap-1 rounded-md border border-zinc-700 bg-zinc-950/70 px-2 py-1 text-xs text-zinc-300">
+                            <span className="inline-flex items-center gap-1 rounded-md border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-950/70 px-2 py-1 text-xs text-zinc-700 dark:text-zinc-300">
                               <User className="w-3 h-3" />
                               {localMetadata.author}
                             </span>
                           )}
                           {localMetadata?.version && (
-                            <span className="inline-flex items-center rounded-md border border-zinc-700 bg-zinc-950/70 px-2 py-1 text-xs text-zinc-300">
+                            <span className="inline-flex items-center rounded-md border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-950/70 px-2 py-1 text-xs text-zinc-700 dark:text-zinc-300">
                               v{localMetadata.version}
                             </span>
                           )}
@@ -510,7 +510,7 @@ export function FlowsPage() {
                         <FlowConfigPanel flowPath={selectedLocalFlow.path} />
                       )}
 
-                      <div className="flex-1 min-h-0 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/30">
+                      <div className="flex-1 min-h-0 overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-950/30">
                         {localHasSteps ? (
                           <FlowDagView
                             workflow={localDagWorkflow}
@@ -522,7 +522,7 @@ export function FlowsPage() {
                             onSelectStep={() => {}}
                           />
                         ) : (
-                          <div className="flex items-center justify-center h-full text-zinc-600 text-sm">
+                          <div className="flex items-center justify-center h-full text-zinc-500 dark:text-zinc-600 text-sm">
                             {localFlowDetail ? "No steps defined" : "Loading preview..."}
                           </div>
                         )}
@@ -530,7 +530,7 @@ export function FlowsPage() {
                     </div>
                   </div>
                 ) : (
-                  <div className="flex-1 flex items-center justify-center text-zinc-600 text-sm">
+                  <div className="flex-1 flex items-center justify-center text-zinc-500 dark:text-zinc-600 text-sm">
                     Select a flow to preview
                   </div>
                 )
@@ -547,16 +547,16 @@ export function FlowsPage() {
                   {selectedLocalFlow && (
                     <div className="flex flex-col h-full">
                       <div className="p-4 space-y-3">
-                        <p className="text-sm text-zinc-400">{localDescription}</p>
+                        <p className="text-sm text-zinc-500 dark:text-zinc-400">{localDescription}</p>
                         <div className="flex flex-wrap items-center gap-2">
                           {localMetadata?.author && (
-                            <span className="inline-flex items-center gap-1 rounded-md border border-zinc-700 bg-zinc-950/70 px-2 py-1 text-xs text-zinc-300">
+                            <span className="inline-flex items-center gap-1 rounded-md border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-950/70 px-2 py-1 text-xs text-zinc-700 dark:text-zinc-300">
                               <User className="w-3 h-3" />
                               {localMetadata.author}
                             </span>
                           )}
                           {localMetadata?.version && (
-                            <span className="inline-flex items-center rounded-md border border-zinc-700 bg-zinc-950/70 px-2 py-1 text-xs text-zinc-300">
+                            <span className="inline-flex items-center rounded-md border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-950/70 px-2 py-1 text-xs text-zinc-700 dark:text-zinc-300">
                               v{localMetadata.version}
                             </span>
                           )}
@@ -598,7 +598,7 @@ export function FlowsPage() {
                             onSelectStep={() => {}}
                           />
                         ) : (
-                          <div className="flex items-center justify-center h-full text-zinc-600 text-sm">
+                          <div className="flex items-center justify-center h-full text-zinc-500 dark:text-zinc-600 text-sm">
                             {localFlowDetail ? "No steps defined" : "Loading preview..."}
                           </div>
                         )}
@@ -633,7 +633,7 @@ export function FlowsPage() {
                           onSelectStep={() => {}}
                         />
                       ) : (
-                        <div className="flex items-center justify-center h-full text-zinc-600 text-sm">
+                        <div className="flex items-center justify-center h-full text-zinc-500 dark:text-zinc-600 text-sm">
                           Loading preview...
                         </div>
                       )}
@@ -648,7 +648,7 @@ export function FlowsPage() {
                     </div>
                   </>
                 ) : (
-                  <div className="flex-1 flex items-center justify-center text-zinc-600 text-sm">
+                  <div className="flex-1 flex items-center justify-center text-zinc-500 dark:text-zinc-600 text-sm">
                     Select a flow from the registry
                   </div>
                 )
