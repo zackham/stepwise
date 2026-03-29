@@ -14,6 +14,7 @@ export interface CardEdge {
   to: string;
   fromPos: { x: number; y: number };
   toPos: { x: number; y: number };
+  satisfied: boolean;
 }
 
 export interface GroupCluster {
@@ -44,7 +45,7 @@ function cardSize(jobCount: number): { width: number; height: number } {
 /**
  * Compute spatial layout for all job cards using dagre.
  *
- * Jobs are connected by parent_job_id relationships.
+ * Jobs are connected by depends_on and parent_job_id relationships.
  * Jobs in the same job_group are clustered together.
  */
 export function computeCanvasLayout(jobs: Job[]): CanvasLayoutResult {
@@ -55,11 +56,35 @@ export function computeCanvasLayout(jobs: Job[]): CanvasLayoutResult {
   const { width: cardW, height: cardH } = cardSize(jobs.length);
   const jobIds = new Set(jobs.map((j) => j.id));
 
-  // Build dependency map from parent_job_id
-  const parentEdges: Array<{ from: string; to: string }> = [];
+  // Build status lookup for satisfied/blocking classification
+  const statusMap = new Map<string, string>();
   for (const job of jobs) {
+    statusMap.set(job.id, job.status);
+  }
+
+  // Build dependency edges from depends_on + parent_job_id
+  const edgeSet = new Set<string>();
+  const depEdges: Array<{ from: string; to: string; satisfied: boolean }> = [];
+  for (const job of jobs) {
+    // depends_on edges
+    for (const depId of job.depends_on ?? []) {
+      if (jobIds.has(depId)) {
+        const key = `${depId}->${job.id}`;
+        if (!edgeSet.has(key)) {
+          edgeSet.add(key);
+          const depStatus = statusMap.get(depId) ?? "pending";
+          depEdges.push({ from: depId, to: job.id, satisfied: depStatus === "completed" });
+        }
+      }
+    }
+    // parent_job_id as fallback edge
     if (job.parent_job_id && jobIds.has(job.parent_job_id)) {
-      parentEdges.push({ from: job.parent_job_id, to: job.id });
+      const key = `${job.parent_job_id}->${job.id}`;
+      if (!edgeSet.has(key)) {
+        edgeSet.add(key);
+        const depStatus = statusMap.get(job.parent_job_id) ?? "pending";
+        depEdges.push({ from: job.parent_job_id, to: job.id, satisfied: depStatus === "completed" });
+      }
     }
   }
 
@@ -88,7 +113,7 @@ export function computeCanvasLayout(jobs: Job[]): CanvasLayoutResult {
     g.setNode(job.id, { width: cardW, height: cardH });
   }
 
-  for (const edge of parentEdges) {
+  for (const edge of depEdges) {
     g.setEdge(edge.from, edge.to);
   }
 
@@ -113,13 +138,14 @@ export function computeCanvasLayout(jobs: Job[]): CanvasLayoutResult {
 
   // Build edges with positions
   const edges: CardEdge[] = [];
-  for (const edge of parentEdges) {
+  for (const edge of depEdges) {
     const fromCard = cardMap.get(edge.from);
     const toCard = cardMap.get(edge.to);
     if (fromCard && toCard) {
       edges.push({
         from: edge.from,
         to: edge.to,
+        satisfied: edge.satisfied,
         fromPos: {
           x: fromCard.x + fromCard.width,
           y: fromCard.y + fromCard.height / 2,
