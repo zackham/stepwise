@@ -3543,8 +3543,13 @@ class AsyncEngine(Engine):
         self._dispatch_ready(job_id)
 
     def cancel_job(self, job_id: str) -> None:
+        from stepwise.process_lifecycle import kill_job_processes
+
+        # Snapshot running runs before cancel mutates their status
+        running_runs = list(self.store.running_runs(job_id))
+
         # Cancel running async tasks before cancelling runs
-        for run in self.store.running_runs(job_id):
+        for run in running_runs:
             task = self._tasks.pop(run.id, None)
             self._task_exec_types.pop(run.id, None)
             if task:
@@ -3552,6 +3557,17 @@ class AsyncEngine(Engine):
         # Cancel poll watch timers for suspended runs
         for run in self.store.suspended_runs(job_id):
             self._cancel_poll_task(run.id)
+
+        # Kill runner processes directly (SIGTERM → 5s grace → SIGKILL).
+        # This runs before super().cancel_job() to ensure processes are killed
+        # even if executor.cancel() fails due to missing/incomplete state.
+        killed = kill_job_processes(running_runs, grace_seconds=5)
+        if killed:
+            _async_logger.info(
+                "Killed %d runner process(es) for cancelled job %s: %s",
+                len(killed), job_id, killed,
+            )
+
         super().cancel_job(job_id)
         self._signal_job_done(job_id)
         # Recursive cascade: cancel all STAGED/PENDING transitive dependents
@@ -3581,8 +3597,13 @@ class AsyncEngine(Engine):
         self._start_queued_jobs()
 
     def pause_job(self, job_id: str) -> None:
+        from stepwise.process_lifecycle import kill_job_processes
+
+        # Snapshot running runs before pause mutates their status
+        running_runs = list(self.store.running_runs(job_id))
+
         # Cancel running async tasks before pausing runs
-        for run in self.store.running_runs(job_id):
+        for run in running_runs:
             task = self._tasks.pop(run.id, None)
             self._task_exec_types.pop(run.id, None)
             if task:
@@ -3590,6 +3611,15 @@ class AsyncEngine(Engine):
         # Cancel poll watch timers for suspended runs
         for run in self.store.suspended_runs(job_id):
             self._cancel_poll_task(run.id)
+
+        # Kill runner processes directly (SIGTERM only — job may be resumed).
+        killed = kill_job_processes(running_runs, grace_seconds=0)
+        if killed:
+            _async_logger.info(
+                "Killed %d runner process(es) for paused job %s: %s",
+                len(killed), job_id, killed,
+            )
+
         super().pause_job(job_id)
         # A slot opened — start queued jobs
         self._start_queued_jobs()
