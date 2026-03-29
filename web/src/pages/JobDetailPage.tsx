@@ -769,6 +769,19 @@ export function JobDetailPage() {
             onSelectDataFlow={handleSelectDataFlow}
             flowName={job.workflow.metadata?.name || job.name || job.objective || "Flow"}
             jobStatus={job.status}
+            jobActions={{
+              onPauseJob: () => mutations.pauseJob.mutate(job.id),
+              onResumeJob: () => mutations.resumeJob.mutate(job.id),
+              onCancelJob: () => mutations.cancelJob.mutate(job.id),
+              onRetryJob: () => mutations.resumeJob.mutate(job.id),
+              onStartJob: () => mutations.startJob.mutate(job.id),
+              onRerunStep: (stepName) => mutations.rerunStep.mutate({ jobId: job.id, stepName }),
+              onCancelRun: (runId) => mutations.cancelRun.mutate(runId),
+              isPausePending: mutations.pauseJob.isPending,
+              isResumePending: mutations.resumeJob.isPending || mutations.startJob.isPending,
+              isCancelPending: mutations.cancelJob.isPending,
+              isRetryPending: mutations.resumeJob.isPending,
+            }}
           />
         </div>
       </div>
