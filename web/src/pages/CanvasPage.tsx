@@ -61,6 +61,21 @@ export function CanvasPage() {
     return map;
   }, [visibleJobs, runsQueries]);
 
+  // Compute which PENDING jobs are queued due to group concurrency limit
+  const groupQueuedSet = useMemo(() => {
+    const set = new Set<string>();
+    for (const g of groups) {
+      if (g.max_concurrent > 0 && g.active_count >= g.max_concurrent) {
+        for (const job of visibleJobs) {
+          if (job.job_group === g.group && job.status === "pending") {
+            set.add(job.id);
+          }
+        }
+      }
+    }
+    return set;
+  }, [groups, visibleJobs]);
+
   // Compute dagre layout
   const layout = useMemo(() => computeCanvasLayout(visibleJobs, groupSettings), [visibleJobs, groupSettings]);
 
@@ -120,6 +135,7 @@ export function CanvasPage() {
             ?.map((id) => jobNameMap.get(id))
             .filter(Boolean) as string[] | undefined
         }
+        isGroupQueued={groupQueuedSet.has(job.id)}
       />
     </div>
   );
@@ -224,6 +240,7 @@ export function CanvasPage() {
                         ?.map((id) => jobNameMap.get(id))
                         .filter(Boolean) as string[] | undefined
                     }
+                    isGroupQueued={groupQueuedSet.has(job.id)}
                   />
                 </div>
               );
