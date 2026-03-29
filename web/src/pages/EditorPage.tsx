@@ -738,19 +738,21 @@ export function EditorPage() {
           </Sheet>
         ) : (
           chatOpen && (
-            <ChatSidebar
-              messages={chat.messages}
-              isStreaming={chat.isStreaming}
-              onSend={chat.send}
-              onReset={chat.reset}
-              onApplyYaml={chat.applyYaml}
-              agentMode={chat.agentMode}
-              onModeChange={chat.setAgentMode}
-              sessionId={chat.sessionId}
-              flowPath={selectedFlow?.path ?? null}
-              stepContext={stepContext}
-              onRemoveStepContext={() => setStepContext(null)}
-            />
+            <div className="w-80 border-l border-border shrink-0 flex flex-col min-h-0">
+              <ChatSidebar
+                messages={chat.messages}
+                isStreaming={chat.isStreaming}
+                onSend={chat.send}
+                onReset={chat.reset}
+                onApplyYaml={chat.applyYaml}
+                agentMode={chat.agentMode}
+                onModeChange={chat.setAgentMode}
+                sessionId={chat.sessionId}
+                flowPath={selectedFlow?.path ?? null}
+                stepContext={stepContext}
+                onRemoveStepContext={() => setStepContext(null)}
+              />
+            </div>
           )
         )}
       </div>
