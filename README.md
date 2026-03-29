@@ -56,6 +56,7 @@ steps:
     executor: agent
     prompt: "These tests failed: $failures — fix them."
     inputs:
+      status: run-tests.status
       failures: run-tests.failures
     when: "status == 'fail'"
     outputs: [fixes]
