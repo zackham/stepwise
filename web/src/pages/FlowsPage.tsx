@@ -53,6 +53,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import { cn } from "@/lib/utils";
+import { FlowConfigPanel } from "@/components/editor/FlowConfigPanel";
 import type { LocalFlow, RegistryFlow } from "@/lib/types";
 
 const EMPTY_RUNS: never[] = [];
@@ -478,6 +479,10 @@ export function FlowsPage() {
                         </div>
                       </div>
 
+                      {selectedLocalFlow && (
+                        <FlowConfigPanel flowPath={selectedLocalFlow.path} />
+                      )}
+
                       <div className="flex-1 min-h-0 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/30">
                         {localHasSteps ? (
                           <FlowDagView
@@ -549,6 +554,11 @@ export function FlowsPage() {
                           </Button>
                         </div>
                       </div>
+                      {selectedLocalFlow && (
+                        <div className="px-4">
+                          <FlowConfigPanel flowPath={selectedLocalFlow.path} />
+                        </div>
+                      )}
                       <div className="flex-1 min-h-0 border-t border-border">
                         {localHasSteps ? (
                           <FlowDagView
