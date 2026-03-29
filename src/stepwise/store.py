@@ -254,6 +254,24 @@ class SQLiteStore:
         ).fetchall()
         return [self._row_to_job(r) for r in rows]
 
+    def archive_job(self, job_id: str) -> None:
+        """Set a job's status to ARCHIVED."""
+        from stepwise.models import _now
+        with self._conn:
+            self._conn.execute(
+                "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?",
+                (JobStatus.ARCHIVED.value, _now().isoformat(), job_id),
+            )
+
+    def unarchive_job(self, job_id: str, restore_status: JobStatus = JobStatus.COMPLETED) -> None:
+        """Restore an archived job to the given status."""
+        from stepwise.models import _now
+        with self._conn:
+            self._conn.execute(
+                "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?",
+                (restore_status.value, _now().isoformat(), job_id),
+            )
+
     def delete_job(self, job_id: str) -> None:
         """Delete a job and all associated runs, events, and dependency edges."""
         with self._conn:
@@ -454,12 +472,15 @@ class SQLiteStore:
         """, (limit,)).fetchall()
         return [self._row_to_job(r) for r in rows]
 
-    def all_jobs(self, status: JobStatus | None = None, top_level_only: bool = False, limit: int = 0, meta_filters: dict[str, str] | None = None) -> list[Job]:
+    def all_jobs(self, status: JobStatus | None = None, top_level_only: bool = False, limit: int = 0, meta_filters: dict[str, str] | None = None, include_archived: bool = False) -> list[Job]:
         clauses = []
         params: list = []
         if status:
             clauses.append("status = ?")
             params.append(status.value)
+        elif not include_archived:
+            clauses.append("status != ?")
+            params.append(JobStatus.ARCHIVED.value)
         if top_level_only:
             clauses.append("parent_job_id IS NULL")
         if meta_filters:

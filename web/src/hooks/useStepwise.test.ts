@@ -66,7 +66,7 @@ describe("useJobs", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(result.current.data).toEqual(jobs);
-    expect(mockedApi.fetchJobs).toHaveBeenCalledWith(undefined, true);
+    expect(mockedApi.fetchJobs).toHaveBeenCalledWith(undefined, true, false);
   });
 
   it("passes status filter to API", async () => {
@@ -77,7 +77,7 @@ describe("useJobs", () => {
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockedApi.fetchJobs).toHaveBeenCalledWith("running", true);
+    expect(mockedApi.fetchJobs).toHaveBeenCalledWith("running", true, false);
   });
 
   it("has a 5-second refetch interval", () => {

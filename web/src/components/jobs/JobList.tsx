@@ -25,7 +25,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { AlertTriangle, CirclePause, Clock, Monitor, Terminal, Trash2, Search, X, MoreVertical, XCircle, RefreshCw, ArrowUpDown } from "lucide-react";
+import { AlertTriangle, Archive, ArchiveRestore, CirclePause, Clock, Monitor, Terminal, Trash2, Search, X, MoreVertical, XCircle, RefreshCw, ArrowUpDown, CheckSquare, Square } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LiveDuration } from "@/components/LiveDuration";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -35,7 +35,7 @@ import { JOB_STATUS_COLORS } from "@/lib/status-colors";
 import { useWsStatus } from "@/hooks/useStepwiseWebSocket";
 
 type SortOption = "recent" | "oldest" | "name" | "duration" | "status";
-type JobListStatusFilter = "running" | "awaiting_input" | "paused" | "completed" | "failed" | "pending" | "cancelled";
+type JobListStatusFilter = "running" | "awaiting_input" | "paused" | "completed" | "failed" | "pending" | "cancelled" | "archived";
 type JobListDateRange = "today" | "7d" | "30d" | "all";
 
 const SORT_OPTIONS: { value: SortOption; label: string }[] = [
@@ -54,6 +54,7 @@ const STATUS_ORDER: Record<string, number> = {
   completed: 4,
   failed: 5,
   cancelled: 6,
+  archived: 7,
 };
 
 const STATUS_FILTER_VALUES = new Set<JobListStatusFilter>([
@@ -64,6 +65,7 @@ const STATUS_FILTER_VALUES = new Set<JobListStatusFilter>([
   "failed",
   "pending",
   "cancelled",
+  "archived",
 ]);
 
 const DATE_RANGE_VALUES = new Set<JobListDateRange>(["today", "7d", "30d", "all"]);
@@ -133,6 +135,7 @@ const STATUS_OPTIONS: { value: JobListStatusFilter; label: string }[] = [
   { value: "failed", label: "Failed" },
   { value: "pending", label: "Pending" },
   { value: "cancelled", label: "Cancelled" },
+  { value: "archived", label: "Archived" },
 ];
 
 function isStale(job: { status: string; created_by: string; heartbeat_at: string | null }): boolean {
@@ -187,6 +190,10 @@ function canRetry(status: string): boolean {
   return status === "paused" || status === "failed";
 }
 
+function canArchive(status: string): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}
+
 function JobActions({
   job,
   mutations,
@@ -196,6 +203,8 @@ function JobActions({
 }) {
   const showCancel = canCancel(job.status);
   const showRetry = canRetry(job.status);
+  const showArchive = canArchive(job.status);
+  const showUnarchive = job.status === "archived";
 
   return (
     <DropdownMenu>
@@ -228,7 +237,29 @@ function JobActions({
             Cancel
           </DropdownMenuItem>
         )}
-        {(showRetry || showCancel) && <DropdownMenuSeparator />}
+        {showArchive && (
+          <DropdownMenuItem
+            onClick={(e) => {
+              e.stopPropagation();
+              mutations.archiveJob.mutate(job.id);
+            }}
+          >
+            <Archive className="w-3.5 h-3.5" />
+            Archive
+          </DropdownMenuItem>
+        )}
+        {showUnarchive && (
+          <DropdownMenuItem
+            onClick={(e) => {
+              e.stopPropagation();
+              mutations.unarchiveJob.mutate(job.id);
+            }}
+          >
+            <ArchiveRestore className="w-3.5 h-3.5" />
+            Unarchive
+          </DropdownMenuItem>
+        )}
+        {(showRetry || showCancel || showArchive || showUnarchive) && <DropdownMenuSeparator />}
         <DropdownMenuItem
           variant="destructive"
           onClick={(e) => {
@@ -254,6 +285,9 @@ function VirtualJobList({
   setFocusedIndex,
   mutations,
   scrollRef,
+  selectedIds,
+  onToggleSelect,
+  bulkMode,
 }: {
   filteredJobs: Job[];
   selectedJobId: string | null;
@@ -262,6 +296,9 @@ function VirtualJobList({
   setFocusedIndex: (index: number) => void;
   mutations: ReturnType<typeof useStepwiseMutations>;
   scrollRef: React.RefObject<HTMLDivElement | null>;
+  selectedIds: Set<string>;
+  onToggleSelect: (jobId: string) => void;
+  bulkMode: boolean;
 }) {
   const virtualizer = useVirtualizer({
     count: filteredJobs.length,
@@ -295,7 +332,7 @@ function VirtualJobList({
               role="option"
               tabIndex={-1}
               aria-selected={selectedJobId === job.id}
-              onClick={() => onSelectJob(job.id)}
+              onClick={() => bulkMode ? onToggleSelect(job.id) : onSelectJob(job.id)}
               onFocus={() => setFocusedIndex(index)}
               className={cn(
                 "absolute left-2 right-2 text-left px-3 py-1.5 rounded-md transition-colors",
@@ -306,6 +343,7 @@ function VirtualJobList({
                   : "bg-transparent",
                 focusedIndex === index && selectedJobId !== job.id
                   && "bg-zinc-100/30 dark:bg-zinc-800/30 ring-1 ring-zinc-300/50 dark:ring-zinc-700/50",
+                selectedIds.has(job.id) && "bg-blue-500/10 ring-1 ring-blue-500/30",
               )}
               style={{
                 top: virtualRow.start,
@@ -313,6 +351,16 @@ function VirtualJobList({
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="flex items-start gap-2 min-w-0 flex-1">
+                  {bulkMode && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onToggleSelect(job.id); }}
+                      className="mt-0.5 shrink-0 text-zinc-500 hover:text-zinc-300"
+                    >
+                      {selectedIds.has(job.id)
+                        ? <CheckSquare className="w-3.5 h-3.5 text-blue-400" />
+                        : <Square className="w-3.5 h-3.5" />}
+                    </button>
+                  )}
                   <span
                     className={cn(
                       "w-2.5 h-2.5 rounded-full mt-1 shrink-0",
@@ -403,7 +451,10 @@ export function JobList({
   const dateRange = readDateRange(search.range);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState<number>(-1);
-  const { data: jobs = [], isLoading, isFetching, dataUpdatedAt } = useJobs();
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkMode, setBulkMode] = useState(false);
+  const showArchived = statusFilter === "archived";
+  const { data: jobs = [], isLoading, isFetching, dataUpdatedAt } = useJobs(undefined, true, showArchived);
   const mutations = useStepwiseMutations();
   const wsStatus = useWsStatus();
   const queryClient = useQueryClient();
@@ -453,6 +504,32 @@ export function JobList({
   const refreshJobs = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["jobs"] });
   }, [queryClient]);
+
+  const toggleSelect = useCallback((jobId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(jobId)) next.delete(jobId);
+      else next.add(jobId);
+      return next;
+    });
+  }, []);
+
+  const exitBulkMode = useCallback(() => {
+    setBulkMode(false);
+    setSelectedIds(new Set());
+  }, []);
+
+  const handleBulkArchive = useCallback(() => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    mutations.archiveJobs.mutate(ids, { onSuccess: () => exitBulkMode() });
+  }, [selectedIds, mutations.archiveJobs, exitBulkMode]);
+
+  const handleBulkDelete = useCallback(() => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    mutations.bulkDeleteJobs.mutate(ids, { onSuccess: () => exitBulkMode() });
+  }, [selectedIds, mutations.bulkDeleteJobs, exitBulkMode]);
 
   // Jobs filtered by date range first (used for all downstream filtering)
   const dateFilteredJobs = useMemo(() => {
@@ -669,36 +746,80 @@ export function JobList({
               <TooltipContent>Last updated {lastUpdatedLabel}</TooltipContent>
             </Tooltip>
           </TooltipProvider>
-          {confirmDelete ? (
-            <div className="flex items-center gap-1 shrink-0">
-              <button
-                onClick={() => {
-                  mutations.deleteAllJobs.mutate(undefined, {
-                    onSuccess: () => setConfirmDelete(false),
-                  });
-                }}
-                disabled={mutations.deleteAllJobs.isPending}
-                className="text-[10px] text-red-400 hover:text-red-300 px-1.5 py-1 rounded border border-red-500/30 hover:bg-red-500/10 transition-colors"
-              >
-                Confirm
-              </button>
-              <button
-                onClick={() => setConfirmDelete(false)}
-                className="text-[10px] text-zinc-500 hover:text-zinc-300 px-1.5 py-1"
-              >
-                Cancel
-              </button>
-            </div>
-          ) : (
+          {bulkMode ? (
             <button
-              onClick={() => setConfirmDelete(true)}
-              className="text-zinc-600 hover:text-red-400 p-1 rounded hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 transition-colors shrink-0 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center"
-              title="Delete all jobs"
+              onClick={exitBulkMode}
+              className="text-[10px] text-zinc-500 hover:text-zinc-300 px-1.5 py-1 shrink-0"
             >
-              <Trash2 className="w-3.5 h-3.5" />
+              Cancel
             </button>
+          ) : (
+            <>
+              {confirmDelete ? (
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={() => {
+                      mutations.deleteAllJobs.mutate(undefined, {
+                        onSuccess: () => setConfirmDelete(false),
+                      });
+                    }}
+                    disabled={mutations.deleteAllJobs.isPending}
+                    className="text-[10px] text-red-400 hover:text-red-300 px-1.5 py-1 rounded border border-red-500/30 hover:bg-red-500/10 transition-colors"
+                  >
+                    Confirm
+                  </button>
+                  <button
+                    onClick={() => setConfirmDelete(false)}
+                    className="text-[10px] text-zinc-500 hover:text-zinc-300 px-1.5 py-1"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <button
+                    onClick={() => setBulkMode(true)}
+                    className="text-zinc-600 hover:text-zinc-300 p-1 rounded hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 transition-colors shrink-0 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center"
+                    title="Select multiple jobs"
+                  >
+                    <CheckSquare className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setConfirmDelete(true)}
+                    className="text-zinc-600 hover:text-red-400 p-1 rounded hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 transition-colors shrink-0 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center"
+                    title="Delete all jobs"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </>
+              )}
+            </>
           )}
         </div>
+
+        {/* Bulk action bar */}
+        {bulkMode && selectedIds.size > 0 && (
+          <div className="flex items-center gap-1.5 px-1 py-1 rounded-md bg-zinc-100/80 dark:bg-zinc-800/80 border border-zinc-300/50 dark:border-zinc-700/50">
+            <span className="text-[10px] text-zinc-400 px-1">
+              {selectedIds.size} selected
+            </span>
+            <div className="flex-1" />
+            <button
+              onClick={handleBulkArchive}
+              className="text-[10px] text-zinc-400 hover:text-zinc-200 px-2 py-1 rounded hover:bg-zinc-700/50 transition-colors flex items-center gap-1"
+            >
+              <Archive className="w-3 h-3" />
+              Archive
+            </button>
+            <button
+              onClick={handleBulkDelete}
+              className="text-[10px] text-red-400 hover:text-red-300 px-2 py-1 rounded hover:bg-red-500/10 transition-colors flex items-center gap-1"
+            >
+              <Trash2 className="w-3 h-3" />
+              Delete
+            </button>
+          </div>
+        )}
 
         {/* Awaiting Fulfillment priority filter */}
         {(displayCounts["awaiting_input"] ?? 0) > 0 && (
@@ -830,6 +951,9 @@ export function JobList({
           setFocusedIndex={setFocusedIndex}
           mutations={mutations}
           scrollRef={scrollRef}
+          selectedIds={selectedIds}
+          onToggleSelect={toggleSelect}
+          bulkMode={bulkMode}
         />
       )}
     </div>
