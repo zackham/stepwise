@@ -13,6 +13,8 @@ import { FlowPortNode } from "./FlowPortNode";
 import { ExternalInputPanel, getWatchProps } from "./ExternalInputPanel";
 import type { FlowDefinition, StepRun, JobTreeNode, JobStatus } from "@/lib/types";
 import { Share2, Download, Check } from "lucide-react";
+import { computeCriticalPath } from "@/lib/critical-path";
+import type { CriticalPathResult } from "@/lib/critical-path";
 import { toBlob } from "html-to-image";
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -101,6 +103,7 @@ export function FlowDagView({
   const [zoomDisplay, setZoomDisplay] = useState(100);
   const hasCenteredRef = useRef(false);
   const [followFlow, setFollowFlow] = useState(true);
+  const [showCriticalPath, setShowCriticalPath] = useState(false);
   const followAnimRef = useRef<number | null>(null);
   const cameraRef = useRef(new DagCamera());
   const lastFrameTimeRef = useRef<number | null>(null);
@@ -384,6 +387,14 @@ export function FlowDagView({
     }
     return map;
   }, [runs]);
+
+  // Critical path computation (only for terminal jobs when toggled on)
+  const criticalPath: CriticalPathResult | null = useMemo(() => {
+    if (!showCriticalPath) return null;
+    const isTerminal = jobStatus === "completed" || jobStatus === "failed";
+    if (!isTerminal) return null;
+    return computeCriticalPath(workflow, latestRuns);
+  }, [showCriticalPath, jobStatus, workflow, latestRuns]);
 
   // Fallback screen-pixel height of the ExternalInputPanel popover
   const EXTERNAL_PANEL_SCREEN_HEIGHT_FALLBACK = 280;
@@ -865,6 +876,7 @@ export function FlowDagView({
           latestRuns={latestRuns}
           onHoverLabel={handleHoverLabel}
           onLeaveLabel={handleLeaveLabel}
+          criticalPath={criticalPath}
         />
 
         {/* Flow port nodes (input/output) */}
@@ -946,6 +958,7 @@ export function FlowDagView({
                 }
                 childStepCount={node.childStepCount}
                 childJobStatus={subTrees?.[0]?.job.status ?? null}
+                isCritical={criticalPath?.steps.has(node.id) ?? false}
                 x={node.x}
                 y={node.y}
                 width={node.width}
@@ -1027,6 +1040,17 @@ export function FlowDagView({
           />
           <span className="text-zinc-400 text-xs">Follow flow</span>
         </label>
+        {(jobStatus === "completed" || jobStatus === "failed") && (
+          <label className="flex items-center gap-1.5 bg-white/80 dark:bg-zinc-900/80 rounded-md border border-zinc-300/50 dark:border-zinc-700/50 px-2 py-1 cursor-pointer select-none min-h-[44px] md:min-h-0">
+            <input
+              type="checkbox"
+              checked={showCriticalPath}
+              onChange={(e) => setShowCriticalPath(e.target.checked)}
+              className="accent-amber-400 w-3 h-3"
+            />
+            <span className="text-zinc-400 text-xs">Critical path</span>
+          </label>
+        )}
         <div className="flex items-center gap-1 bg-white/80 dark:bg-zinc-900/80 rounded-md border border-zinc-300/50 dark:border-zinc-700/50 px-2 py-1">
           <button
             onClick={() => {

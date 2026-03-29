@@ -41,6 +41,7 @@ interface StepNodeProps {
   childStepCount?: number;
   childJobStatus?: string | null;
   flowStatus?: string;
+  isCritical?: boolean;
   x: number;
   y: number;
   width: number;
@@ -272,6 +273,7 @@ export function StepNode({
   childStepCount,
   childJobStatus,
   flowStatus,
+  isCritical,
   x,
   y,
   width,
@@ -331,7 +333,8 @@ export function StepNode({
         getExecutorAccent(stepDef.executor.type),
         isSelected && `ring-2 ${colors.ring} shadow-lg`,
         !isSelected && "hover:shadow-md hover:brightness-110 focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:shadow-lg",
-        status === "running" && "shadow-blue-500/20 shadow-md"
+        status === "running" && "shadow-blue-500/20 shadow-md",
+        isCritical && !isSelected && "ring-1 ring-amber-400/60"
       )}
       role="button"
       tabIndex={0}
