@@ -235,6 +235,16 @@ def _format_json(obj: object, max_depth: int = 3) -> str:
         return str(obj)
 
 
+def _copyable_pre(content: str, css_class: str = "detail-code") -> str:
+    """Wrap a <pre> block with a copy button."""
+    return (
+        f'<div class="copyable">'
+        f'<pre class="{css_class}">{content}</pre>'
+        f'<button class="copy-btn">Copy</button>'
+        f'</div>'
+    )
+
+
 def _html_head(metadata: FlowMetadata, job: Job) -> str:
     title = _e(metadata.name or job.objective or "Stepwise Report")
     return f"""<!DOCTYPE html>
@@ -545,6 +555,52 @@ pre.detail-code {{
   color: var(--text3);
 }}
 
+/* Sub-job details */
+.sub-job-detail {{
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 6px 0;
+  overflow: hidden;
+}}
+.sub-job-detail > summary {{
+  padding: 8px 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+  list-style: none;
+  font-size: 13px;
+}}
+.sub-job-detail > summary::-webkit-details-marker {{
+  display: none;
+}}
+.sub-job-detail > summary:hover {{
+  background: var(--border);
+}}
+.sub-job-step-table {{
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin: 0;
+}}
+.sub-job-step-table th {{
+  text-align: left;
+  padding: 6px 10px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border);
+}}
+.sub-job-step-table td {{
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text2);
+}}
+
 /* YAML appendix */
 .yaml-appendix > summary {{
   padding: 12px 16px;
@@ -600,6 +656,9 @@ pre.detail-code {{
 }}
 
 /* Copy button */
+.copyable {{
+  position: relative;
+}}
 .copy-btn {{
   position: absolute;
   top: 6px;
@@ -613,9 +672,9 @@ pre.detail-code {{
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.15s;
+  z-index: 1;
 }}
-pre:hover .copy-btn,
-.yaml-body:hover .copy-btn {{
+.copyable:hover .copy-btn {{
   opacity: 1;
 }}
 .copy-btn:hover {{
@@ -983,17 +1042,50 @@ def _html_timeline(
 # ── Step Details ─────────────────────────────────────────────────────
 
 
+def _collect_sub_jobs(
+    job_id: str, store: SQLiteStore, step_reports: dict[str, StepReport],
+) -> dict[str, list[Job]]:
+    """Map step names to their child jobs (for-each fan-out or delegation)."""
+    result: dict[str, list[Job]] = {}
+    for sr in step_reports.values():
+        children: list[Job] = []
+        for run in sr.runs:
+            # Delegation sub-job (single child)
+            if run.sub_job_id:
+                try:
+                    children.append(store.load_job(run.sub_job_id))
+                except (KeyError, Exception):
+                    pass
+            # For-each sub-jobs (multiple children from executor_state)
+            elif run.executor_state and run.executor_state.get("sub_job_ids"):
+                for sjid in run.executor_state["sub_job_ids"]:
+                    try:
+                        children.append(store.load_job(sjid))
+                    except (KeyError, Exception):
+                        pass
+        if children:
+            result[sr.name] = children
+    return result
+
+
 def _html_step_details(
     workflow: WorkflowDefinition,
     step_reports: dict[str, StepReport],
     store: SQLiteStore,
 ) -> str:
+    # Collect sub-jobs for all steps
+    sub_jobs_map = _collect_sub_jobs(
+        next(iter(step_reports.values())).runs[0].job_id if step_reports and next(iter(step_reports.values())).runs else "",
+        store, step_reports,
+    )
+
     parts = ['<div class="section">']
     parts.append('<h2>Step Details</h2>')
 
     for step_name, step_def in workflow.steps.items():
         sr = step_reports[step_name]
-        parts.append(_html_one_step_detail(step_def, sr, store))
+        child_jobs = sub_jobs_map.get(step_name, [])
+        parts.append(_html_one_step_detail(step_def, sr, store, child_jobs))
 
     parts.append("</div>")
     return "\n".join(parts)
@@ -1003,6 +1095,7 @@ def _html_one_step_detail(
     step_def: StepDefinition,
     sr: StepReport,
     store: SQLiteStore,
+    child_jobs: list[Job] | None = None,
 ) -> str:
     if not sr.runs:
         status = "pending"
@@ -1046,7 +1139,7 @@ def _html_one_step_detail(
         if run.inputs:
             parts.append('<div class="detail-section">')
             parts.append('<div class="detail-label">Inputs</div>')
-            parts.append(f'<pre class="detail-code">{_e(_format_json(run.inputs))}</pre>')
+            parts.append(_copyable_pre(_e(_format_json(run.inputs))))
             parts.append("</div>")
 
         # Result / Output
@@ -1055,7 +1148,7 @@ def _html_one_step_detail(
             if artifact:
                 parts.append('<div class="detail-section">')
                 parts.append('<div class="detail-label">Output</div>')
-                parts.append(f'<pre class="detail-code">{_e(_format_json(artifact))}</pre>')
+                parts.append(_copyable_pre(_e(_format_json(artifact))))
                 parts.append("</div>")
 
             # Sidecar
@@ -1085,7 +1178,7 @@ def _html_one_step_detail(
             if run.result.executor_meta:
                 parts.append('<div class="detail-section">')
                 parts.append('<div class="detail-label">Executor</div>')
-                parts.append(f'<pre class="detail-code">{_e(_format_json(run.result.executor_meta))}</pre>')
+                parts.append(_copyable_pre(_e(_format_json(run.result.executor_meta))))
                 parts.append("</div>")
 
         # Error
@@ -1128,8 +1221,99 @@ def _html_one_step_detail(
         if len(sr.runs) > 1:
             parts.append("</div>")  # attempt wrapper
 
+    # Sub-job visualization
+    if child_jobs:
+        parts.append(_html_sub_jobs(child_jobs, store))
+
     parts.append("</div>")  # step-detail-body
     parts.append("</details>")  # step-detail
+    return "\n".join(parts)
+
+
+# ── Sub-Job Rendering ────────────────────────────────────────────────
+
+
+def _html_sub_jobs(child_jobs: list[Job], store: SQLiteStore, depth: int = 0) -> str:
+    """Render child jobs (for-each or delegation) as nested detail sections."""
+    if depth > 4:  # safety limit
+        return ""
+
+    parts = ['<div class="detail-section">']
+    parts.append(f'<div class="detail-label">Sub-Jobs ({len(child_jobs)})</div>')
+
+    for idx, child in enumerate(child_jobs):
+        child_status = child.status.value
+        color = _status_color(child_status)
+
+        # Label: use job name, or "Item N" for for-each
+        label = child.name or child.objective or f"Item {idx + 1}"
+
+        # Get child runs
+        try:
+            child_runs = store.runs_for_job(child.id)
+        except Exception:
+            child_runs = []
+
+        # Compute duration
+        started_times = [r.started_at for r in child_runs if r.started_at]
+        completed_times = [r.completed_at for r in child_runs if r.completed_at]
+        duration_str = ""
+        if started_times and completed_times:
+            dur = (max(completed_times) - min(started_times)).total_seconds()
+            duration_str = f" &mdash; {_format_duration(dur)}"
+
+        parts.append(f'<details class="sub-job-detail">')
+        parts.append(
+            f'<summary>'
+            f'<span class="status-badge" style="background: {_status_bg(child_status)}; '
+            f'color: {color}; font-size: 11px; padding: 1px 8px;">'
+            f'{_status_icon(child_status)} {_e(child_status)}</span> '
+            f'<span style="font-weight: 600; font-size: 13px;">{_e(label)}</span>'
+            f'<span style="color: var(--text3); font-size: 12px;">{duration_str}</span>'
+            f'</summary>'
+        )
+
+        if child_runs:
+            parts.append('<table class="sub-job-step-table">')
+            parts.append('<tr><th>Step</th><th>Status</th><th>Duration</th><th>Output</th></tr>')
+            for run in child_runs:
+                run_status = run.status.value
+                run_color = _status_color(run_status)
+                run_dur = ""
+                if run.started_at and run.completed_at:
+                    run_dur = _format_duration((run.completed_at - run.started_at).total_seconds())
+
+                output_preview = ""
+                if run.result and run.result.artifact:
+                    preview = json.dumps(run.result.artifact, default=str)
+                    if len(preview) > 80:
+                        preview = preview[:80] + "..."
+                    output_preview = _e(preview)
+                elif run.error:
+                    output_preview = f'<span style="color: var(--red);">{_e(run.error[:80])}</span>'
+
+                parts.append(
+                    f'<tr>'
+                    f'<td style="font-weight: 500;">{_e(run.step_name)}</td>'
+                    f'<td style="color: {run_color};">{_status_icon(run_status)} {_e(run_status)}</td>'
+                    f'<td>{run_dur}</td>'
+                    f'<td style="font-size: 11px; font-family: var(--mono); max-width: 300px; '
+                    f'overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{output_preview}</td>'
+                    f'</tr>'
+                )
+            parts.append('</table>')
+
+        # Recurse for nested sub-jobs
+        try:
+            grandchildren = store.child_jobs(child.id)
+            if grandchildren:
+                parts.append(_html_sub_jobs(grandchildren, store, depth + 1))
+        except Exception:
+            pass
+
+        parts.append('</details>')
+
+    parts.append('</div>')
     return "\n".join(parts)
 
 
@@ -1144,8 +1328,8 @@ def _html_yaml_appendix(yaml_source: str, flow_path: Path | None) -> str:
     parts = ['<div class="section">']
     parts.append(f'<details class="yaml-appendix">')
     parts.append(f'<summary><span class="chevron">&#x25b6;</span> Flow Source &mdash; {_e(filename)}</summary>')
-    parts.append('<div class="yaml-body" style="position: relative;">')
-    parts.append(f'<pre>{_e(yaml_source)}</pre>')
+    parts.append('<div class="yaml-body">')
+    parts.append(_copyable_pre(_e(yaml_source), css_class=""))
     parts.append("</div>")
     parts.append("</details>")
     parts.append("</div>")
@@ -1171,6 +1355,32 @@ def _html_footer(job: Job, step_reports: dict[str, StepReport]) -> str:
 
 def _html_tail() -> str:
     return """
+<script>
+document.querySelectorAll('.copy-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    var pre = btn.closest('.copyable').querySelector('pre');
+    if (!pre) return;
+    var text = pre.textContent;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function() {
+        btn.textContent = 'Copied';
+        setTimeout(function() { btn.textContent = 'Copy'; }, 1500);
+      });
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      btn.textContent = 'Copied';
+      setTimeout(function() { btn.textContent = 'Copy'; }, 1500);
+    }
+  });
+});
+</script>
 </div>
 </body>
 </html>"""
