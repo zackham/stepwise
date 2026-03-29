@@ -7,6 +7,8 @@ import {
   ArrowRight,
   ArrowLeft,
   Layers,
+  RefreshCw,
+  XCircle,
 } from "lucide-react";
 import { StepStatusBadge } from "@/components/StatusBadge";
 import { STEP_STATUS_COLORS, STEP_PENDING_COLORS } from "@/lib/status-colors";
@@ -35,7 +37,11 @@ interface StepNodeProps {
   latestRuns?: Record<string, StepRun>;
   maxAttempts: number | null;
   isSelected: boolean;
+  isMultiSelected?: boolean;
   onClick: () => void;
+  onMultiSelectToggle?: () => void;
+  onRerunStep?: (stepName: string) => void;
+  onCancelRun?: (runId: string) => void;
   onNavigateSubJob?: (subJobId: string) => void;
   onToggleExpand?: () => void;
   childStepCount?: number;
@@ -267,7 +273,11 @@ export function StepNode({
   latestRuns,
   maxAttempts,
   isSelected,
+  isMultiSelected,
   onClick,
+  onMultiSelectToggle,
+  onRerunStep,
+  onCancelRun,
   onNavigateSubJob,
   onToggleExpand,
   childStepCount,
@@ -280,6 +290,7 @@ export function StepNode({
   height,
 }: StepNodeProps) {
   const [showTooltip, setShowTooltip] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -289,6 +300,15 @@ export function StepNode({
     }
   };
 
+  const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if ((e.metaKey || e.ctrlKey) && onMultiSelectToggle) {
+      e.stopPropagation();
+      onMultiSelectToggle();
+      return;
+    }
+    onClick();
+  };
+
   const status: StepRunStatus | "pending" =
     latestRun?.status ?? (flowStatus === "throttled" ? "throttled" : "pending");
   const subJobId = latestRun?.sub_job_id ?? null;
@@ -296,6 +316,15 @@ export function StepNode({
     status === "pending"
       ? STEP_PENDING_COLORS
       : STEP_STATUS_COLORS[status];
+
+  const canRerun =
+    !latestRun ||
+    latestRun.status === "completed" ||
+    latestRun.status === "failed" ||
+    latestRun.status === "cancelled";
+  const canCancelRun =
+    latestRun?.status === "running" || latestRun?.status === "suspended";
+  const showActions = isHovered && (canRerun || canCancelRun);
 
   const isSuspended =
     latestRun?.status === "suspended" &&
@@ -311,11 +340,13 @@ export function StepNode({
     !!stepDef.when;
 
   const handleMouseEnter = () => {
+    setIsHovered(true);
     if (!hasTooltipContent) return;
     hoverTimerRef.current = setTimeout(() => setShowTooltip(true), 300);
   };
 
   const handleMouseLeave = () => {
+    setIsHovered(false);
     if (hoverTimerRef.current) {
       clearTimeout(hoverTimerRef.current);
       hoverTimerRef.current = null;
@@ -332,14 +363,15 @@ export function StepNode({
         colors.border,
         getExecutorAccent(stepDef.executor.type),
         isSelected && `ring-2 ${colors.ring} shadow-lg`,
-        !isSelected && "hover:shadow-md hover:brightness-110 focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:shadow-lg",
+        isMultiSelected && "ring-2 ring-purple-400/70 shadow-lg shadow-purple-500/10",
+        !isSelected && !isMultiSelected && "hover:shadow-md hover:brightness-110 focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:shadow-lg",
         status === "running" && "shadow-blue-500/20 shadow-md",
-        isCritical && !isSelected && "ring-1 ring-amber-400/60"
+        isCritical && !isSelected && !isMultiSelected && "ring-1 ring-amber-400/60"
       )}
       role="button"
       tabIndex={0}
       style={{ left: x, top: y, width, height }}
-      onClick={onClick}
+      onClick={handleClick}
       onKeyDown={handleKeyDown}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
@@ -444,8 +476,43 @@ export function StepNode({
         "bg-zinc-700 border-zinc-600"
       )} />
 
+      {/* Hover action buttons */}
+      {showActions && (
+        <div
+          className="absolute -top-8 right-0 flex items-center gap-0.5 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-sm rounded-md border border-zinc-300 dark:border-zinc-700 shadow-lg px-0.5 py-0.5"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {canRerun && onRerunStep && (
+            <button
+              className="flex items-center gap-1 text-[10px] text-blue-400 hover:bg-blue-500/15 rounded px-1.5 py-0.5 transition-colors"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRerunStep(stepDef.name);
+              }}
+              title="Rerun step"
+            >
+              <RefreshCw className="w-3 h-3" />
+              Rerun
+            </button>
+          )}
+          {canCancelRun && onCancelRun && latestRun && (
+            <button
+              className="flex items-center gap-1 text-[10px] text-red-400 hover:bg-red-500/15 rounded px-1.5 py-0.5 transition-colors"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCancelRun(latestRun.id);
+              }}
+              title="Cancel run"
+            >
+              <XCircle className="w-3 h-3" />
+              Cancel
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Rich step tooltip on hover */}
-      {showTooltip && hasTooltipContent && (
+      {showTooltip && hasTooltipContent && !showActions && (
         <StepTooltip
           stepDef={stepDef}
           latestRun={latestRun}

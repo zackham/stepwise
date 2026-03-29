@@ -8,9 +8,6 @@ import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
 import { FlowDagView } from "@/components/dag/FlowDagView";
 import { StepDetailPanel } from "@/components/jobs/StepDetailPanel";
 import { DataFlowPanel } from "@/components/dag/DataFlowPanel";
-import { EventLog } from "@/components/events/EventLog";
-import { TimelineView } from "@/components/jobs/TimelineView";
-import { JobTreeView } from "@/components/jobs/JobTreeView";
 import { JobControls } from "@/components/jobs/JobControls";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { JsonView } from "@/components/JsonView";
@@ -238,7 +235,6 @@ export function JobDetailPage() {
 
   // Derive state from URL search params
   const selectedStep = searchParams.step ?? null;
-  const activeView = searchParams.view ?? "dag";
   const selection: DagSelection = dataFlowSelection ?? (selectedStep ? { kind: "step", stepName: selectedStep } : null);
 
   // Derive activeTab: URL tab param > auto-derive from selection kind > default "job"
@@ -572,39 +568,33 @@ export function JobDetailPage() {
                   )}
                 </div>
                 <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => navigate({ search: (prev: JobDetailSearch) => ({ ...prev, view: "events" as const }), replace: true })}
-                    className={cn(
-                      "flex items-center justify-center min-w-[44px] min-h-[44px] text-xs rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
-                      activeView === "events" ? "text-foreground" : "text-zinc-500 hover:text-foreground"
-                    )}
+                  <Link
+                    to="/jobs/$jobId/events"
+                    params={{ jobId }}
+                    className="flex items-center justify-center min-w-[44px] min-h-[44px] text-xs text-zinc-500 hover:text-foreground rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
                     aria-label="Events"
                     title="Events"
                   >
                     <ScrollText className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    onClick={() => navigate({ search: (prev: JobDetailSearch) => ({ ...prev, view: "timeline" as const }), replace: true })}
-                    className={cn(
-                      "flex items-center justify-center min-w-[44px] min-h-[44px] text-xs rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
-                      activeView === "timeline" ? "text-foreground" : "text-zinc-500 hover:text-foreground"
-                    )}
+                  </Link>
+                  <Link
+                    to="/jobs/$jobId/timeline"
+                    params={{ jobId }}
+                    className="flex items-center justify-center min-w-[44px] min-h-[44px] text-xs text-zinc-500 hover:text-foreground rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
                     aria-label="Timeline"
                     title="Timeline"
                   >
                     <GanttChart className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    onClick={() => navigate({ search: (prev: JobDetailSearch) => ({ ...prev, view: "tree" as const }), replace: true })}
-                    className={cn(
-                      "flex items-center justify-center min-w-[44px] min-h-[44px] text-xs rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
-                      activeView === "tree" ? "text-foreground" : "text-zinc-500 hover:text-foreground"
-                    )}
+                  </Link>
+                  <Link
+                    to="/jobs/$jobId/tree"
+                    params={{ jobId }}
+                    className="flex items-center justify-center min-w-[44px] min-h-[44px] text-xs text-zinc-500 hover:text-foreground rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
                     aria-label="Tree"
                     title="Tree"
                   >
                     <GitBranch className="w-3.5 h-3.5" />
-                  </button>
+                  </Link>
                   {!showRightPanel && (
                     <button
                       onClick={() => navigate({ search: (prev: JobDetailSearch) => ({ ...prev, panel: "open" as const }), replace: true })}
@@ -680,45 +670,30 @@ export function JobDetailPage() {
               </div>
 
               <div className="flex items-center gap-1 shrink-0">
-                <button
-                  onClick={() => navigate({ search: (prev: JobDetailSearch) => ({ ...prev, view: undefined }), replace: true })}
-                  className={cn(
-                    "flex items-center gap-1 text-xs px-2 py-1 rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
-                    activeView === "dag" ? "text-foreground font-medium" : "text-zinc-500 hover:text-foreground"
-                  )}
-                >
-                  DAG
-                </button>
-                <button
-                  onClick={() => navigate({ search: (prev: JobDetailSearch) => ({ ...prev, view: "events" as const }), replace: true })}
-                  className={cn(
-                    "flex items-center gap-1 text-xs px-2 py-1 rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
-                    activeView === "events" ? "text-foreground font-medium" : "text-zinc-500 hover:text-foreground"
-                  )}
+                <Link
+                  to="/jobs/$jobId/events"
+                  params={{ jobId }}
+                  className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
                 >
                   <ScrollText className="w-3.5 h-3.5" />
                   Events
-                </button>
-                <button
-                  onClick={() => navigate({ search: (prev: JobDetailSearch) => ({ ...prev, view: "timeline" as const }), replace: true })}
-                  className={cn(
-                    "flex items-center gap-1 text-xs px-2 py-1 rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
-                    activeView === "timeline" ? "text-foreground font-medium" : "text-zinc-500 hover:text-foreground"
-                  )}
+                </Link>
+                <Link
+                  to="/jobs/$jobId/timeline"
+                  params={{ jobId }}
+                  className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
                 >
                   <GanttChart className="w-3.5 h-3.5" />
                   Timeline
-                </button>
-                <button
-                  onClick={() => navigate({ search: (prev: JobDetailSearch) => ({ ...prev, view: "tree" as const }), replace: true })}
-                  className={cn(
-                    "flex items-center gap-1 text-xs px-2 py-1 rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
-                    activeView === "tree" ? "text-foreground font-medium" : "text-zinc-500 hover:text-foreground"
-                  )}
+                </Link>
+                <Link
+                  to="/jobs/$jobId/tree"
+                  params={{ jobId }}
+                  className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
                 >
                   <GitBranch className="w-3.5 h-3.5" />
                   Tree
-                </button>
+                </Link>
                 {!showRightPanel && (
                   <button
                     onClick={() => navigate({ search: (prev: JobDetailSearch) => ({ ...prev, panel: "open" as const }), replace: true })}
@@ -773,44 +748,41 @@ export function JobDetailPage() {
           </div>
         )}
 
-        {/* Main content area — view tabs */}
+        {/* DAG */}
         <div className="flex-1 overflow-hidden">
-          {activeView === "dag" && (
-            <FlowDagView
-              workflow={job.workflow}
-              runs={runs}
-              jobTree={jobTree ?? null}
-              expandedSteps={expandedSteps}
-              onToggleExpand={toggleExpand}
-              selectedStep={selectedStep}
-              onSelectStep={handleSelectStep}
-              onNavigateSubJob={(subJobId) =>
-                navigate({ to: "/jobs/$jobId", params: { jobId: subJobId } })
-              }
-              onFulfillWatch={(runId, payload) =>
-                mutations.fulfillWatch.mutate({ runId, payload })
-              }
-              isFulfilling={mutations.fulfillWatch.isPending}
-              selection={selection}
-              onSelectDataFlow={handleSelectDataFlow}
-              flowName={job.workflow.metadata?.name || job.name || job.objective || "Flow"}
-              jobStatus={job.status}
-            />
-          )}
-          {activeView === "events" && (
-            <EventLog jobId={jobId} />
-          )}
-          {activeView === "timeline" && (
-            <TimelineView job={job} runs={runs} onSelectStep={handleSelectStep} />
-          )}
-          {activeView === "tree" && (
-            <JobTreeView
-              jobId={jobId}
-              onNavigateToJob={(id) =>
-                navigate({ to: "/jobs/$jobId", params: { jobId: id } })
-              }
-            />
-          )}
+          <FlowDagView
+            workflow={job.workflow}
+            runs={runs}
+            jobTree={jobTree ?? null}
+            expandedSteps={expandedSteps}
+            onToggleExpand={toggleExpand}
+            selectedStep={selectedStep}
+            onSelectStep={handleSelectStep}
+            onNavigateSubJob={(subJobId) =>
+              navigate({ to: "/jobs/$jobId", params: { jobId: subJobId } })
+            }
+            onFulfillWatch={(runId, payload) =>
+              mutations.fulfillWatch.mutate({ runId, payload })
+            }
+            isFulfilling={mutations.fulfillWatch.isPending}
+            selection={selection}
+            onSelectDataFlow={handleSelectDataFlow}
+            flowName={job.workflow.metadata?.name || job.name || job.objective || "Flow"}
+            jobStatus={job.status}
+            jobActions={{
+              onPauseJob: () => mutations.pauseJob.mutate(job.id),
+              onResumeJob: () => mutations.resumeJob.mutate(job.id),
+              onCancelJob: () => mutations.cancelJob.mutate(job.id),
+              onRetryJob: () => mutations.resumeJob.mutate(job.id),
+              onStartJob: () => mutations.startJob.mutate(job.id),
+              onRerunStep: (stepName) => mutations.rerunStep.mutate({ jobId: job.id, stepName }),
+              onCancelRun: (runId) => mutations.cancelRun.mutate(runId),
+              isPausePending: mutations.pauseJob.isPending,
+              isResumePending: mutations.resumeJob.isPending || mutations.startJob.isPending,
+              isCancelPending: mutations.cancelJob.isPending,
+              isRetryPending: mutations.resumeJob.isPending,
+            }}
+          />
         </div>
       </div>
 
