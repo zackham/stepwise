@@ -1,17 +1,41 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useQueries } from "@tanstack/react-query";
-import { useJobs } from "@/hooks/useStepwise";
+import { useJobs, useGroups, useStepwiseMutations } from "@/hooks/useStepwise";
 import { JobCard } from "@/components/canvas/JobCard";
 import { DependencyArrows } from "@/components/canvas/DependencyArrows";
 import { computeCanvasLayout } from "@/components/canvas/CanvasLayout";
 import { fetchRuns } from "@/lib/api";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, Minus, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Job, StepRun } from "@/lib/types";
 
 export function CanvasPage() {
   const { data: jobs = [], isLoading } = useJobs(undefined, true);
+  const { data: groups = [] } = useGroups();
+  const { updateGroupLimit } = useStepwiseMutations();
   const [hideCompleted, setHideCompleted] = useState(false);
+
+  // Build group_name -> max_concurrent map for layout
+  const groupSettings = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const g of groups) {
+      map[g.group] = g.max_concurrent;
+    }
+    return map;
+  }, [groups]);
+
+  // Build group_name -> GroupInfo lookup for rendering
+  const groupInfoMap = useMemo(() => {
+    const map = new Map<string, { max_concurrent: number; active_count: number; pending_count: number }>();
+    for (const g of groups) {
+      map.set(g.group, { max_concurrent: g.max_concurrent, active_count: g.active_count, pending_count: g.pending_count });
+    }
+    return map;
+  }, [groups]);
+
+  const handleUpdateLimit = useCallback((group: string, newLimit: number) => {
+    updateGroupLimit.mutate({ group, maxConcurrent: Math.max(0, newLimit) });
+  }, [updateGroupLimit]);
 
   // Filter jobs
   const visibleJobs = useMemo(() => {
@@ -37,8 +61,23 @@ export function CanvasPage() {
     return map;
   }, [visibleJobs, runsQueries]);
 
+  // Compute which PENDING jobs are queued due to group concurrency limit
+  const groupQueuedSet = useMemo(() => {
+    const set = new Set<string>();
+    for (const g of groups) {
+      if (g.max_concurrent > 0 && g.active_count >= g.max_concurrent) {
+        for (const job of visibleJobs) {
+          if (job.job_group === g.group && job.status === "pending") {
+            set.add(job.id);
+          }
+        }
+      }
+    }
+    return set;
+  }, [groups, visibleJobs]);
+
   // Compute dagre layout
-  const layout = useMemo(() => computeCanvasLayout(visibleJobs), [visibleJobs]);
+  const layout = useMemo(() => computeCanvasLayout(visibleJobs, groupSettings), [visibleJobs, groupSettings]);
 
   // Check if there are any dependency edges
   const hasDeps = layout.edges.length > 0;
@@ -96,6 +135,7 @@ export function CanvasPage() {
             ?.map((id) => jobNameMap.get(id))
             .filter(Boolean) as string[] | undefined
         }
+        isGroupQueued={groupQueuedSet.has(job.id)}
       />
     </div>
   );
@@ -151,6 +191,30 @@ export function CanvasPage() {
                   <span className="text-[10px] text-zinc-400 dark:text-zinc-600">
                     {group.completedCount}/{group.totalCount}
                   </span>
+                  {group.maxConcurrent > 0 && (
+                    <span className="text-[10px] text-zinc-400 dark:text-zinc-600">
+                      · {group.activeCount}/{group.maxConcurrent} running
+                    </span>
+                  )}
+                  <div className="flex items-center gap-0.5 ml-auto">
+                    <button
+                      onClick={() => handleUpdateLimit(group.label, group.maxConcurrent - 1)}
+                      className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors"
+                      title="Decrease concurrency limit"
+                    >
+                      <Minus className="w-3 h-3" />
+                    </button>
+                    <span className="text-[10px] text-zinc-500 dark:text-zinc-400 min-w-[20px] text-center">
+                      {group.maxConcurrent || "∞"}
+                    </span>
+                    <button
+                      onClick={() => handleUpdateLimit(group.label, group.maxConcurrent + 1)}
+                      className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors"
+                      title="Increase concurrency limit"
+                    >
+                      <Plus className="w-3 h-3" />
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}
@@ -176,6 +240,7 @@ export function CanvasPage() {
                         ?.map((id) => jobNameMap.get(id))
                         .filter(Boolean) as string[] | undefined
                     }
+                    isGroupQueued={groupQueuedSet.has(job.id)}
                   />
                 </div>
               );
@@ -187,6 +252,7 @@ export function CanvasPage() {
         <div className="p-6 space-y-8">
           {grouped.map(([groupLabel, groupJobs]) => {
             const completedCount = groupJobs.filter((j) => j.status === "completed").length;
+            const gInfo = groupInfoMap.get(groupLabel);
             return (
               <section key={groupLabel}>
                 <div className="mb-3 flex items-center gap-2">
@@ -194,6 +260,30 @@ export function CanvasPage() {
                   <span className="text-xs text-zinc-400 dark:text-zinc-600">
                     {completedCount}/{groupJobs.length} complete
                   </span>
+                  {gInfo && gInfo.max_concurrent > 0 && (
+                    <span className="text-xs text-zinc-400 dark:text-zinc-600">
+                      · {gInfo.active_count}/{gInfo.max_concurrent} running
+                    </span>
+                  )}
+                  <div className="flex items-center gap-0.5 ml-auto">
+                    <button
+                      onClick={() => handleUpdateLimit(groupLabel, (gInfo?.max_concurrent ?? 0) - 1)}
+                      className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors"
+                      title="Decrease concurrency limit"
+                    >
+                      <Minus className="w-3 h-3" />
+                    </button>
+                    <span className="text-[10px] text-zinc-500 dark:text-zinc-400 min-w-[20px] text-center">
+                      {gInfo?.max_concurrent || "∞"}
+                    </span>
+                    <button
+                      onClick={() => handleUpdateLimit(groupLabel, (gInfo?.max_concurrent ?? 0) + 1)}
+                      className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors"
+                      title="Increase concurrency limit"
+                    >
+                      <Plus className="w-3 h-3" />
+                    </button>
+                  </div>
                 </div>
                 <div className="rounded-xl border border-dashed border-zinc-300/60 dark:border-zinc-800/60 bg-zinc-100/20 dark:bg-zinc-900/20 p-4">
                   <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">

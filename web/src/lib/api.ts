@@ -17,6 +17,7 @@ import type {
   RegistrySearchResult,
   QuickLaunchItem,
   StepDefinition,
+  GroupInfo,
 } from "./types";
 
 const BASE_URL = "/api";
@@ -257,6 +258,23 @@ export function fetchStatus(): Promise<EngineStatus> {
 
 export function fetchExecutors(): Promise<{ executors: string[] }> {
   return request<{ executors: string[] }>("/executors");
+}
+
+// ── Groups ────────────────────────────────────────────────────────────
+
+export function fetchGroups(): Promise<GroupInfo[]> {
+  return request<GroupInfo[]>("/groups");
+}
+
+export function fetchGroup(group: string): Promise<GroupInfo> {
+  return request<GroupInfo>(`/groups/${encodeURIComponent(group)}`);
+}
+
+export function updateGroup(group: string, maxConcurrent: number): Promise<{ group: string; max_concurrent: number }> {
+  return request(`/groups/${encodeURIComponent(group)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ max_concurrent: maxConcurrent }),
+  });
 }
 
 // ── Templates ─────────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 import { memo } from "react";
 import { Link } from "@tanstack/react-router";
+import { Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MiniDag } from "./MiniDag";
 import { JobStatusBadge } from "@/components/StatusBadge";
@@ -10,12 +11,13 @@ export interface JobCardProps {
   job: Job;
   runs: StepRun[];
   dependencyNames?: string[];
+  isGroupQueued?: boolean;
 }
 
 const DAG_W = 268;
 const DAG_H = 90;
 
-export const JobCard = memo(function JobCard({ job, runs, dependencyNames }: JobCardProps) {
+export const JobCard = memo(function JobCard({ job, runs, dependencyNames, isGroupQueued }: JobCardProps) {
   const isCompleted = job.status === "completed";
   const isFailed = job.status === "failed";
   const isActive = job.status === "running" || job.status === "paused";
@@ -52,7 +54,15 @@ export const JobCard = memo(function JobCard({ job, runs, dependencyNames }: Job
             </p>
           )}
         </div>
-        <JobStatusBadge status={job.status} />
+        <div className="flex items-center gap-1">
+          {isGroupQueued && (
+            <span className="flex items-center gap-0.5 text-[10px] text-amber-500 dark:text-amber-400" title="Queued — group at concurrency limit">
+              <Clock className="w-3 h-3" />
+              queued
+            </span>
+          )}
+          <JobStatusBadge status={job.status} />
+        </div>
       </div>
 
       {/* Mini DAG */}

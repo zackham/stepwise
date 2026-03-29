@@ -3271,6 +3271,16 @@ class AsyncEngine(Engine):
                 job_id, self.max_concurrent_jobs,
             )
             return  # stays PENDING, started later by _start_queued_jobs
+        # Group concurrency limit
+        if job.job_group:
+            group_limit = self.store.get_group_max_concurrent(job.job_group)
+            if group_limit > 0 and len(self.store.active_jobs_in_group(job.job_group)) >= group_limit:
+                self._emit(job_id, JOB_QUEUED)
+                _async_logger.info(
+                    "Job %s queued: group '%s' at capacity (%d/%d)",
+                    job_id, job.job_group, group_limit, group_limit,
+                )
+                return
         # Resolve cross-job data references before running
         self._resolve_job_ref_inputs(job)
         job.status = JobStatus.RUNNING
@@ -4039,15 +4049,27 @@ class AsyncEngine(Engine):
         active_count = len(self.store.active_jobs())
         if self.max_concurrent_jobs > 0 and active_count >= self.max_concurrent_jobs:
             return
+        # Pre-load group limits and active counts for efficient checking
+        group_limits = self.store.list_group_settings()
+        group_active: dict[str, int] = {}
         for pending_job in self.store.pending_jobs_with_deps_met():
             if self.max_concurrent_jobs > 0 and active_count >= self.max_concurrent_jobs:
                 break
             # Only auto-start top-level pending jobs (sub-jobs are managed by parent)
             if pending_job.parent_job_id:
                 continue
+            # Check group concurrency limit
+            grp = pending_job.job_group
+            if grp and grp in group_limits and group_limits[grp] > 0:
+                if grp not in group_active:
+                    group_active[grp] = len(self.store.active_jobs_in_group(grp))
+                if group_active[grp] >= group_limits[grp]:
+                    continue  # skip — group at capacity
             try:
                 self.start_job(pending_job.id)
                 active_count += 1
+                if grp:
+                    group_active[grp] = group_active.get(grp, 0) + 1
             except ValueError:
                 pass  # job status changed between query and start
 
