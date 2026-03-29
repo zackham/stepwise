@@ -2097,6 +2097,7 @@ def list_local_flows():
         steps_count = 0
         description = ""
         executor_types: list[str] = []
+        visibility = "interactive"
         try:
             wf = load_workflow_yaml(flow_info.path)
             steps_count = len(wf.steps)
@@ -2104,6 +2105,7 @@ def list_local_flows():
             executor_types = sorted(
                 {s.executor.type for s in wf.steps.values() if s.executor}
             )
+            visibility = wf.metadata.visibility or "interactive"
         except (YAMLLoadError, Exception):
             pass
 
@@ -2121,6 +2123,7 @@ def list_local_flows():
             "modified_at": modified_at,
             "is_directory": flow_info.is_directory,
             "executor_types": executor_types,
+            "visibility": visibility,
         })
 
     return result

@@ -599,6 +599,79 @@ steps:
         assert code == EXIT_SUCCESS
         assert "custom-flow" in output
 
+    def test_agent_help_excludes_background_flows(self, tmp_project):
+        """Background flows are excluded from agent-help output."""
+        flow_interactive = tmp_project / "visible.flow.yaml"
+        flow_interactive.write_text("""\
+name: visible-flow
+description: An interactive flow
+steps:
+  hello:
+    run: 'echo "{\\"msg\\": \\"hi\\"}"'
+    outputs: [msg]
+""")
+        flow_bg = tmp_project / "bg.flow.yaml"
+        flow_bg.write_text("""\
+name: background-flow
+description: A background flow
+visibility: background
+steps:
+  hello:
+    run: 'echo "{\\"msg\\": \\"hi\\"}"'
+    outputs: [msg]
+""")
+        flow_internal = tmp_project / "int.flow.yaml"
+        flow_internal.write_text("""\
+name: internal-flow
+visibility: internal
+steps:
+  hello:
+    run: 'echo "{\\"msg\\": \\"hi\\"}"'
+    outputs: [msg]
+""")
+
+        code, output = _capture_stdout([
+            "--project-dir", str(tmp_project),
+            "agent-help",
+        ])
+
+        assert code == EXIT_SUCCESS
+        assert "visible-flow" in output
+        assert "background-flow" not in output
+        assert "internal-flow" not in output
+
+    def test_agent_help_json_excludes_non_interactive(self, tmp_project):
+        """JSON format also respects visibility filtering."""
+        flow = tmp_project / "vis.flow.yaml"
+        flow.write_text("""\
+name: vis-flow
+steps:
+  hello:
+    run: 'echo "{\\"msg\\": \\"hi\\"}"'
+    outputs: [msg]
+""")
+        bg_flow = tmp_project / "bgflow.flow.yaml"
+        bg_flow.write_text("""\
+name: bg-flow
+visibility: background
+steps:
+  hello:
+    run: 'echo "{\\"msg\\": \\"hi\\"}"'
+    outputs: [msg]
+""")
+
+        code, output = _capture_stdout([
+            "--project-dir", str(tmp_project),
+            "agent-help",
+            "--format", "json",
+        ])
+
+        assert code == EXIT_SUCCESS
+        data = json.loads(output)
+        names = [f["name"] for f in data["flows"]]
+        assert "vis-flow" in names
+        assert "bg-flow" not in names
+
 
 # ── Var-File Tests ──────────────────────────────────────────────────────
 

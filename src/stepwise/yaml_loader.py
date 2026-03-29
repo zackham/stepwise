@@ -28,6 +28,7 @@ from stepwise.models import (
     StepDefinition,
     StepLimits,
     VALID_FIELD_TYPES,
+    VALID_VISIBILITY,
     WorkflowDefinition,
     parse_duration,
 )
@@ -1015,6 +1016,13 @@ def _parse_metadata(data: dict, source_path: Path | None = None) -> FlowMetadata
             stem = stem[:-5]
         name = stem
 
+    visibility = data.get("visibility", "interactive")
+    if visibility not in VALID_VISIBILITY:
+        raise YAMLLoadError([
+            f"Invalid visibility '{visibility}' "
+            f"(valid: {', '.join(sorted(VALID_VISIBILITY))})"
+        ])
+
     return FlowMetadata(
         name=name,
         description=data.get("description", ""),
@@ -1022,6 +1030,7 @@ def _parse_metadata(data: dict, source_path: Path | None = None) -> FlowMetadata
         version=data.get("version", ""),
         tags=data.get("tags", []) if isinstance(data.get("tags"), list) else [],
         forked_from=data.get("forked_from", ""),
+        visibility=visibility,
     )
 
 
