@@ -28,7 +28,9 @@ from stepwise.executors import (
     Executor,
     ExecutorResult,
     ExecutorStatus,
+    _USAGE_RESET_RE,
     classify_api_error,
+    parse_usage_reset_time,
 )
 from stepwise.models import HandoffEnvelope, Sidecar, SubJobDefinition, _now
 
@@ -36,6 +38,34 @@ from stepwise.models import HandoffEnvelope, Sidecar, SubJobDefinition, _now
 EMIT_FLOW_FILENAME = "emit.flow.yaml"
 EMIT_FLOW_DIR = ".stepwise"
 ACPX_QUEUES_DIR = os.path.expanduser("~/.acpx/queues")
+
+
+def _detect_usage_limit_in_line(line: str, parse_json: bool) -> str | None:
+    """Check a single line for usage limit patterns.
+
+    parse_json=True for NDJSON stdout, False for plain stderr.
+    Returns the matching message string, or None.
+    """
+    if parse_json:
+        try:
+            data = json.loads(line)
+            error = data.get("error", {})
+            if isinstance(error, dict):
+                msg = error.get("message", "")
+                if _USAGE_RESET_RE.search(msg):
+                    return msg
+            params = data.get("params", {})
+            update = params.get("update", {})
+            if update.get("sessionUpdate") == "agent_message_chunk":
+                text = update.get("content", {}).get("text", "")
+                if _USAGE_RESET_RE.search(text):
+                    return text
+        except (json.JSONDecodeError, AttributeError):
+            pass
+    else:
+        if _USAGE_RESET_RE.search(line):
+            return line.strip()
+    return None
 
 
 # ── Agent Backend Protocol ────────────────────────────────────────────
@@ -71,7 +101,7 @@ class AgentBackend(Protocol):
     def spawn(self, prompt: str, config: dict, context: ExecutionContext) -> AgentProcess:
         ...
 
-    def wait(self, process: AgentProcess) -> AgentStatus:
+    def wait(self, process: AgentProcess, on_usage_limit=None) -> AgentStatus:
         """Block until the agent process exits. Returns final status."""
         ...
 
@@ -537,25 +567,61 @@ class AcpxBackend:
             agent=agent,
         )
 
-    def wait(self, process: AgentProcess) -> AgentStatus:
-        """Block until agent subprocess exits. Safe to call from thread pool."""
+    def wait(self, process: AgentProcess, on_usage_limit=None) -> AgentStatus:
+        """Block until agent subprocess exits. Tails output for usage limit detection.
+
+        Args:
+            process: The agent subprocess handle.
+            on_usage_limit: Optional callback(reset_at: datetime|None, message: str)
+                fired once when usage limit detected in output. Does not interrupt wait.
+        """
         t0 = time.monotonic()
         thread = threading.current_thread().name
         logger.info(f"[pid={process.pid}] wait started (session={process.session_name}, thread={thread})")
-        try:
-            _, status = os.waitpid(process.pid, 0)  # blocking wait
-            exit_code = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
-        except ChildProcessError:
-            # Not our child — poll until process disappears
-            while self._is_process_alive(process.pid):
-                time.sleep(0.5)
-            exit_code = 0
-            elapsed = time.monotonic() - t0
-            logger.info(f"[pid={process.pid}] wait done exit_code={exit_code} (non-child, {elapsed:.1f}s)")
-            return self._completed_status(process, exit_code, exit_code_reliable=False)
+
+        exit_event = threading.Event()
+        exit_info: dict = {}
+
+        def _waiter():
+            try:
+                _, status = os.waitpid(process.pid, 0)
+                exit_info["exit_code"] = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
+            except ChildProcessError:
+                while self._is_process_alive(process.pid):
+                    time.sleep(0.5)
+                exit_info["exit_code"] = 0
+                exit_info["unreliable"] = True
+            exit_event.set()
+
+        waiter_thread = threading.Thread(target=_waiter, daemon=True,
+                                          name=f"waitpid-{process.pid}")
+        waiter_thread.start()
+
+        ndjson_offset = 0
+        stderr_offset = 0
+        limit_signaled = False
+        stderr_path = process.output_path + ".stderr"
+
+        while not exit_event.wait(timeout=2.0):
+            if on_usage_limit and not limit_signaled:
+                ndjson_offset, ndjson_hit = self._tail_for_usage_limit(
+                    process.output_path, ndjson_offset, parse_json=True)
+                stderr_offset, stderr_hit = self._tail_for_usage_limit(
+                    stderr_path, stderr_offset, parse_json=False)
+                hit = ndjson_hit or stderr_hit
+                if hit:
+                    reset_at = parse_usage_reset_time(hit)
+                    logger.info(f"[pid={process.pid}] Usage limit detected: {hit}")
+                    logger.info(f"[pid={process.pid}] Reset at: {reset_at}")
+                    on_usage_limit(reset_at, hit)
+                    limit_signaled = True
+
         elapsed = time.monotonic() - t0
-        logger.info(f"[pid={process.pid}] wait done exit_code={exit_code} ({elapsed:.1f}s)")
-        return self._completed_status(process, exit_code)
+        ec = exit_info.get("exit_code", -1)
+        reliable = not exit_info.get("unreliable", False)
+        logger.info(f"[pid={process.pid}] wait done exit_code={ec} "
+                    f"({'reliable' if reliable else 'non-child'}, {elapsed:.1f}s)")
+        return self._completed_status(process, ec, exit_code_reliable=reliable)
 
     def check(self, process: AgentProcess) -> AgentStatus:
         # Try waitpid first (works when we're the parent)
@@ -899,6 +965,31 @@ class AcpxBackend:
         except FileNotFoundError:
             return None
 
+    @staticmethod
+    def _tail_for_usage_limit(path: str, offset: int,
+                               parse_json: bool) -> tuple[int, str | None]:
+        """Read new content from file starting at offset, check for usage limit.
+
+        Returns (new_offset, matching_message_or_None).
+        """
+        try:
+            with open(path) as f:
+                f.seek(offset)
+                new_data = f.read()
+                if not new_data:
+                    return offset, None
+                new_offset = f.tell()
+                for line in new_data.split("\n"):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    hit = _detect_usage_limit_in_line(line, parse_json)
+                    if hit:
+                        return new_offset, hit
+                return new_offset, None
+        except FileNotFoundError:
+            return offset, None
+
     def _extract_final_text(self, output_path: str) -> str:
         """Extract the final assistant text from ACP NDJSON output."""
         chunks: list[str] = []
@@ -980,7 +1071,7 @@ class MockAgentBackend:
             agent=config.get("agent"),
         )
 
-    def wait(self, process: AgentProcess) -> AgentStatus:
+    def wait(self, process: AgentProcess, on_usage_limit=None) -> AgentStatus:
         """Block until process is marked complete via complete_process() or fail_process()."""
         import time
         while process.pid not in self._completions:
@@ -1140,8 +1231,43 @@ class AgentExecutor(Executor):
                 "output_file": output_file,
             })
 
+        # Callback for usage limit detection — updates executor_state for UI
+        def _on_usage_limit(reset_at, message):
+            logger.info(f"[{step_id}] Usage limit detected, reset_at={reset_at}")
+            if context.state_update_fn:
+                context.state_update_fn({
+                    "pid": process.pid,
+                    "pgid": process.pgid,
+                    "output_path": process.output_path,
+                    "working_dir": process.working_dir,
+                    "session_id": process.session_id,
+                    "session_name": process.session_name,
+                    "agent": process.agent,
+                    "output_mode": self.output_mode,
+                    "output_file": output_file,
+                    "usage_limit_waiting": True,
+                    "reset_at": reset_at.isoformat() if reset_at else None,
+                    "usage_limit_message": message,
+                })
+
         # Block until agent exits (safe — AsyncEngine runs this in thread pool)
-        agent_status = self.backend.wait(process)
+        agent_status = self.backend.wait(process, on_usage_limit=_on_usage_limit)
+
+        # Clear usage limit flag after process exits
+        if context.state_update_fn:
+            context.state_update_fn({
+                "pid": process.pid,
+                "pgid": process.pgid,
+                "output_path": process.output_path,
+                "working_dir": process.working_dir,
+                "session_id": process.session_id,
+                "session_name": process.session_name,
+                "agent": process.agent,
+                "output_mode": self.output_mode,
+                "output_file": output_file,
+                "usage_limit_waiting": False,
+            })
+
         logger.info(f"[{step_id}] executor done ({time.monotonic() - t0:.1f}s total, status={agent_status.state})")
 
         return self._finalize_after_wait(process, agent_status, inputs, context, output_file)
