@@ -41,6 +41,19 @@ class JobStatus(Enum):
     ARCHIVED = "archived"
 
 
+def _safe_job_status(raw: str | None) -> JobStatus:
+    """Parse a job status string, defaulting to FAILED for unknown values."""
+    if not raw:
+        return JobStatus.PENDING
+    try:
+        return JobStatus(raw)
+    except ValueError:
+        logging.getLogger("stepwise.models").warning(
+            "Unknown job status %r, defaulting to FAILED", raw
+        )
+        return JobStatus.FAILED
+
+
 class StepRunStatus(Enum):
     RUNNING = "running"
     SUSPENDED = "suspended"
@@ -1695,7 +1708,7 @@ class Job:
             objective=d["objective"],
             name=d.get("name"),
             workflow=WorkflowDefinition.from_dict(d["workflow"]),
-            status=JobStatus(d["status"]),
+            status=_safe_job_status(d.get("status")),
             inputs=d.get("inputs", {}),
             parent_job_id=d.get("parent_job_id"),
             parent_step_run_id=d.get("parent_step_run_id"),

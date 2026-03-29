@@ -8,6 +8,8 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
+import logging
+
 from stepwise.models import (
     Event,
     HandoffEnvelope,
@@ -20,6 +22,8 @@ from stepwise.models import (
     WorkflowDefinition,
 )
 
+logger = logging.getLogger("stepwise.store")
+
 
 def _dumps(obj: Any) -> str:
     return json.dumps(obj, default=str)
@@ -30,6 +34,17 @@ def _parse_dt(s: str) -> datetime:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+def _safe_job_status(raw: str | None) -> JobStatus:
+    """Parse a job status string, defaulting to FAILED for unknown values."""
+    if not raw:
+        return JobStatus.PENDING
+    try:
+        return JobStatus(raw)
+    except ValueError:
+        logger.warning("Unknown job status %r in database, defaulting to FAILED", raw)
+        return JobStatus.FAILED
 
 
 class SQLiteStore:
@@ -222,7 +237,7 @@ class SQLiteStore:
             objective=row["objective"] or "",
             name=row["name"] if "name" in row.keys() else None,
             workflow=WorkflowDefinition.from_dict(json.loads(row["workflow"])) if row["workflow"] else WorkflowDefinition(),
-            status=JobStatus(row["status"]) if row["status"] else JobStatus.PENDING,
+            status=_safe_job_status(row["status"]),
             inputs=json.loads(row["inputs"]) if row["inputs"] else {},
             parent_job_id=row["parent_job_id"],
             parent_step_run_id=row["parent_step_run_id"],
