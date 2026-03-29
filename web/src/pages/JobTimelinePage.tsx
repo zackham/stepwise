@@ -4,7 +4,7 @@ import { useJob, useRuns } from "@/hooks/useStepwise";
 import { TimelineView } from "@/components/jobs/TimelineView";
 import { StepDetailPanel } from "@/components/jobs/StepDetailPanel";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
-import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { MobileFullScreen } from "@/components/layout/MobileFullScreen";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import type { StepDefinition } from "@/lib/types";
 
@@ -55,14 +55,13 @@ export function JobTimelinePage() {
 
       {/* Step detail panel */}
       {isMobile ? (
-        <Sheet
+        <MobileFullScreen
           open={!!panel}
-          onOpenChange={(open) => { if (!open) setSelectedStep(null); }}
+          onClose={() => setSelectedStep(null)}
+          title={selectedStep ?? "Step Detail"}
         >
-          <SheetContent side="right" showCloseButton={false} className="w-[90vw] sm:max-w-sm p-0 overflow-y-auto">
-            {panel}
-          </SheetContent>
-        </Sheet>
+          {panel}
+        </MobileFullScreen>
       ) : panel ? (
         <div className="w-80 border-l border-border shrink-0 flex flex-col overflow-hidden" style={{ maxHeight: "calc(100vh - 3rem)" }}>
           {panel}

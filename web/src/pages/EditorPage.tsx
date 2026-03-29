@@ -22,6 +22,8 @@ import {
 import { useStepwiseMutations } from "@/hooks/useStepwise";
 import { Code, Workflow, FolderTree } from "lucide-react";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { MobileFullScreen } from "@/components/layout/MobileFullScreen";
+import { useIsMobile } from "@/hooks/useMediaQuery";
 import {
   Dialog,
   DialogContent,
@@ -99,6 +101,7 @@ export function EditorPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const isCompact = useMediaQuery("(max-width: 1023px)");
+  const isMobile = useIsMobile();
 
   const params = useParams({ strict: false }) as { flowName?: string };
   const flowName = params.flowName;
@@ -439,7 +442,23 @@ export function EditorPage() {
       />
       <div className="flex-1 flex min-h-0">
         {/* File tree for directory flows — toggled */}
-        {isCompact ? (
+        {isMobile ? (
+          <MobileFullScreen
+            open={showFileTree && isDirectoryFlow && !!flowFilesData?.files}
+            onClose={() => setShowFileTree(false)}
+            title="Files"
+          >
+            {flowFilesData?.files && (
+              <FlowFileTree
+                files={flowFilesData.files}
+                selectedFile={viewingFile}
+                onSelectFile={(f) => { handleSelectFile(f); setShowFileTree(false); }}
+                onRefresh={() => refetchFiles()}
+                isRefreshing={isRefetchingFiles}
+              />
+            )}
+          </MobileFullScreen>
+        ) : isCompact ? (
           <Sheet open={showFileTree && isDirectoryFlow && !!flowFilesData?.files} onOpenChange={setShowFileTree}>
             <SheetContent side="left" showCloseButton={false} className="w-[70vw] sm:max-w-xs p-0 overflow-y-auto">
               {flowFilesData?.files && (
@@ -552,7 +571,40 @@ export function EditorPage() {
         </div>
 
         {/* Step inspector */}
-        {isCompact ? (
+        {isMobile ? (
+          <MobileFullScreen
+            open={!!selectedStepDef}
+            onClose={() => {
+              setSelectedStep(null);
+              setEditingPrompt(null);
+              setViewingFile("FLOW.yaml");
+            }}
+            title={selectedStepDef?.name ?? "Step"}
+          >
+            {selectedStepDef && (
+              <StepDefinitionPanel
+                stepDef={selectedStepDef}
+                onClose={() => {
+                  setSelectedStep(null);
+                  setEditingPrompt(null);
+                  setViewingFile("FLOW.yaml");
+                }}
+                onDelete={handleDeleteStep}
+                onViewFile={(path) => {
+                  setViewingFile(path);
+                  setCenterTab("source");
+                  setSelectedStep(null);
+                }}
+                onViewSource={(field) => {
+                  setEditingPrompt({ step: selectedStep!, field });
+                  setViewingFile(null);
+                  setCenterTab("source");
+                  setSelectedStep(null);
+                }}
+              />
+            )}
+          </MobileFullScreen>
+        ) : isCompact ? (
           <Sheet
             open={!!selectedStepDef}
             onOpenChange={(open) => {
@@ -614,7 +666,27 @@ export function EditorPage() {
         )}
 
         {/* Chat sidebar */}
-        {isCompact ? (
+        {isMobile ? (
+          <MobileFullScreen
+            open={chatOpen}
+            onClose={() => setChatOpen(false)}
+            title="Chat"
+          >
+            <ChatSidebar
+              messages={chat.messages}
+              isStreaming={chat.isStreaming}
+              onSend={chat.send}
+              onReset={chat.reset}
+              onApplyYaml={chat.applyYaml}
+              agentMode={chat.agentMode}
+              onModeChange={chat.setAgentMode}
+              sessionId={chat.sessionId}
+              flowPath={selectedFlow?.path ?? null}
+              stepContext={stepContext}
+              onRemoveStepContext={() => setStepContext(null)}
+            />
+          </MobileFullScreen>
+        ) : isCompact ? (
           <Sheet open={chatOpen} onOpenChange={setChatOpen}>
             <SheetContent side="right" showCloseButton={false} className="w-[90vw] sm:max-w-md p-0 overflow-y-auto">
               <ChatSidebar
