@@ -197,6 +197,37 @@ export function useDeleteFlowFile() {
   });
 }
 
+// ── Flow Config ──────────────────────────────────────────────────────
+
+export function useFlowConfig(flowPath: string | undefined) {
+  return useQuery({
+    queryKey: ["flowConfig", flowPath],
+    queryFn: () => api.fetchFlowConfig(flowPath!),
+    enabled: !!flowPath,
+    staleTime: 5000,
+  });
+}
+
+export function useSaveFlowConfig() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      flowPath,
+      data,
+    }: {
+      flowPath: string;
+      data: { values?: Record<string, unknown>; raw_yaml?: string };
+    }) => api.saveFlowConfig(flowPath, data),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["flowConfig", variables.flowPath] });
+      toast.success("Config saved");
+    },
+    onError: (error) => {
+      toast.error("Failed to save config", { description: error.message });
+    },
+  });
+}
+
 // ── Registry ──────────────────────────────────────────────────────────
 
 export function useRegistrySearch(query: string, sort: string = "downloads") {

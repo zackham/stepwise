@@ -11,7 +11,6 @@ import {
   useRegistryFlow,
   useInstallFlow,
   useFlowStats,
-  useFlowJobs,
 } from "@/hooks/useEditor";
 import { useStepwiseMutations } from "@/hooks/useStepwise";
 import {
@@ -54,8 +53,8 @@ import {
 } from "@/components/ui/tooltip";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import { cn } from "@/lib/utils";
-import type { LocalFlow, RegistryFlow, JobStatus } from "@/lib/types";
-import { JOB_STATUS_COLORS } from "@/lib/status-colors";
+import { FlowConfigPanel } from "@/components/editor/FlowConfigPanel";
+import type { LocalFlow, RegistryFlow } from "@/lib/types";
 
 const EMPTY_RUNS: never[] = [];
 
@@ -97,8 +96,6 @@ export function FlowsPage() {
   const [selectedLocalFlow, setSelectedLocalFlow] = useState<LocalFlow | null>(null);
   const [pendingDeleteFlow, setPendingDeleteFlow] = useState<LocalFlow | null>(null);
   const { data: localFlowDetail } = useLocalFlow(selectedLocalFlow?.path);
-  const selectedFlowDir = selectedLocalFlow ? flowDirKey(selectedLocalFlow.path) : undefined;
-  const { data: flowJobs = [] } = useFlowJobs(selectedFlowDir);
 
   useEffect(() => {
     if (!selectedFlowName) {
@@ -482,30 +479,8 @@ export function FlowsPage() {
                         </div>
                       </div>
 
-                      {flowJobs.length > 0 && (
-                        <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4">
-                          <h3 className="text-xs font-medium text-zinc-400 uppercase tracking-wide mb-2">Recent Jobs</h3>
-                          <div className="space-y-1">
-                            {flowJobs.slice(0, 5).map((job) => {
-                              const colors = JOB_STATUS_COLORS[job.status as JobStatus] ?? JOB_STATUS_COLORS.pending;
-                              return (
-                                <button
-                                  key={job.id}
-                                  onClick={() => navigate({ to: "/jobs/$jobId", params: { jobId: job.id } })}
-                                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm hover:bg-zinc-800/60 transition-colors group"
-                                >
-                                  <span className={cn("w-2 h-2 rounded-full shrink-0", colors.dot)} />
-                                  <span className="truncate flex-1 text-zinc-300 group-hover:text-zinc-100">
-                                    {job.name || job.objective}
-                                  </span>
-                                  <span className="text-[10px] text-zinc-600 shrink-0">
-                                    {formatRelativeTime(job.created_at)}
-                                  </span>
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
+                      {selectedLocalFlow && (
+                        <FlowConfigPanel flowPath={selectedLocalFlow.path} />
                       )}
 
                       <div className="flex-1 min-h-0 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/30">
@@ -579,29 +554,9 @@ export function FlowsPage() {
                           </Button>
                         </div>
                       </div>
-                      {flowJobs.length > 0 && (
-                        <div className="px-4 py-3 border-t border-border">
-                          <h3 className="text-xs font-medium text-zinc-400 uppercase tracking-wide mb-2">Recent Jobs</h3>
-                          <div className="space-y-1">
-                            {flowJobs.slice(0, 5).map((job) => {
-                              const colors = JOB_STATUS_COLORS[job.status as JobStatus] ?? JOB_STATUS_COLORS.pending;
-                              return (
-                                <button
-                                  key={job.id}
-                                  onClick={() => navigate({ to: "/jobs/$jobId", params: { jobId: job.id } })}
-                                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm hover:bg-zinc-800/60 transition-colors group"
-                                >
-                                  <span className={cn("w-2 h-2 rounded-full shrink-0", colors.dot)} />
-                                  <span className="truncate flex-1 text-zinc-300 group-hover:text-zinc-100">
-                                    {job.name || job.objective}
-                                  </span>
-                                  <span className="text-[10px] text-zinc-600 shrink-0">
-                                    {formatRelativeTime(job.created_at)}
-                                  </span>
-                                </button>
-                              );
-                            })}
-                          </div>
+                      {selectedLocalFlow && (
+                        <div className="px-4">
+                          <FlowConfigPanel flowPath={selectedLocalFlow.path} />
                         </div>
                       )}
                       <div className="flex-1 min-h-0 border-t border-border">
