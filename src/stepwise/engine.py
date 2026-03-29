@@ -3282,17 +3282,28 @@ class AsyncEngine(Engine):
     def recover_jobs(self) -> None:
         """Re-evaluate all RUNNING server-owned jobs after startup.
 
-        Catches jobs whose steps all completed but the job wasn't settled
-        before the server crashed. Also recovers script steps whose
-        subprocess completed but whose pipe output was lost (issue #4).
+        Three phases:
+        1. Recover dead script runs (stdout file recovery for crashed subprocesses).
+        2. Settle terminal jobs (complete or fail jobs whose steps are all done).
+        3. Dispatch ready steps (launch steps whose deps completed while server was down).
 
-        Safe to call multiple times — _check_job_terminal is idempotent.
+        Also reconciles PENDING jobs whose queue deps may have completed.
+
+        Safe to call multiple times — all operations are idempotent.
         """
         for job in self.store.active_jobs():
             if job.created_by != "server":
                 continue
             self._recover_dead_script_runs(job)
             self._check_job_terminal(job.id)
+        # Dispatch ready steps for RUNNING jobs — catches steps that became ready
+        # while the server was down (e.g. upstream completed, downstream never launched).
+        # _dispatch_ready is idempotent: skips jobs that aren't RUNNING and steps
+        # that already have active runs, so this is safe after reattach.
+        for job in self.store.active_jobs():
+            if job.created_by != "server":
+                continue
+            self._dispatch_ready(job.id)
         # Reconcile pending jobs with deps — a dep may have completed while server was down
         self._start_queued_jobs()
 
