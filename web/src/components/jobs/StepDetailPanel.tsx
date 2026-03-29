@@ -30,7 +30,8 @@ import {
   Terminal,
   StickyNote,
 } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
+import { useLiveSource } from "@/hooks/useLiveSource";
 import { useAgentOutput } from "@/hooks/useStepwise";
 import { FulfillWatchDialog } from "./FulfillWatchDialog";
 import { toast } from "sonner";
@@ -45,6 +46,7 @@ interface StepDetailPanelProps {
   onClose: () => void;
   onExpand?: () => void;
   expanded?: boolean;
+  hasLiveSource?: boolean;
 }
 
 export function StepDetailSkeleton() {
@@ -204,6 +206,7 @@ export function StepDetailPanel({
   onClose,
   onExpand,
   expanded,
+  hasLiveSource,
 }: StepDetailPanelProps) {
   const { data: runs = [] } = useRuns(jobId, stepDef.name);
   const { data: events = [] } = useEvents(jobId);
@@ -211,6 +214,19 @@ export function StepDetailPanel({
   const [fulfillDialogOpen, setFulfillDialogOpen] = useState(false);
   const [agentViewMode, setAgentViewMode] = useState<"stream" | "raw">("stream");
   const [copiedErrorRunId, setCopiedErrorRunId] = useState<string | null>(null);
+
+  const { liveSteps, hasUpdate, updatedAt } = useLiveSource(jobId, !!hasLiveSource);
+  const liveStepDef = liveSteps?.[stepDef.name] ?? null;
+  const [showLiveIndicator, setShowLiveIndicator] = useState(false);
+
+  // Animate the "Updated" indicator when live source changes
+  useEffect(() => {
+    if (hasUpdate && updatedAt) {
+      setShowLiveIndicator(true);
+      const timer = setTimeout(() => setShowLiveIndicator(false), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [hasUpdate, updatedAt]);
 
   const { data: configData } = useConfig();
   const isSubscription = configData?.billing_mode === "subscription";
@@ -259,6 +275,25 @@ export function StepDetailPanel({
 
   const isSuspended =
     latestRun?.status === "suspended" && latestRun?.watch?.mode === "external";
+
+  // Compute effective source (prefer live over original) and detect changes
+  const effectiveCommand = useMemo(() => {
+    const original = String(stepDef.executor.config.command ?? "");
+    const live = liveStepDef?.executor?.config?.command;
+    if (live != null && String(live) !== original) {
+      return { value: String(live), changed: true };
+    }
+    return { value: original, changed: false };
+  }, [stepDef.executor.config.command, liveStepDef]);
+
+  const effectivePrompt = useMemo(() => {
+    const original = String(stepDef.executor.config.prompt ?? "");
+    const live = liveStepDef?.executor?.config?.prompt;
+    if (live != null && String(live) !== original) {
+      return { value: String(live), changed: true };
+    }
+    return { value: original, changed: false };
+  }, [stepDef.executor.config.prompt, liveStepDef]);
 
   return (
     <div className="flex flex-col h-full">
@@ -319,18 +354,51 @@ export function StepDetailPanel({
             {stepDef.executor.type === "script" &&
               Boolean(stepDef.executor.config.command) && (
                 <div className="mt-2">
-                  <div className="text-zinc-500 text-sm mb-1">Command</div>
-                  <pre className="text-xs font-mono bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded p-2 text-green-600 dark:text-green-400 whitespace-pre-wrap break-all">
-                    {String(stepDef.executor.config.command)}
+                  <div className="flex items-center gap-2 text-zinc-500 text-sm mb-1">
+                    Command
+                    {effectiveCommand.changed && (
+                      <span className={cn(
+                        "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20",
+                        showLiveIndicator && "animate-pulse"
+                      )}>
+                        <RefreshCw className="w-2.5 h-2.5" />
+                        Updated
+                      </span>
+                    )}
+                  </div>
+                  <pre className={cn(
+                    "text-xs font-mono bg-zinc-50 dark:bg-zinc-900 border rounded p-2 text-green-600 dark:text-green-400 whitespace-pre-wrap break-all",
+                    effectiveCommand.changed
+                      ? "border-cyan-500/30"
+                      : "border-zinc-200 dark:border-zinc-800"
+                  )}>
+                    {effectiveCommand.value}
                   </pre>
                 </div>
               )}
             {stepDef.executor.type === "external" &&
               Boolean(stepDef.executor.config.prompt) && (
                 <div className="mt-2">
-                  <div className="text-zinc-500 text-sm mb-1">Prompt</div>
-                  <pre className={cn("text-xs font-mono bg-zinc-50 dark:bg-zinc-900 border border-amber-500/20 rounded p-2 text-amber-700 dark:text-amber-300 whitespace-pre-wrap break-words", !expanded && "max-h-32 overflow-auto")}>
-{String(stepDef.executor.config.prompt).trim()}
+                  <div className="flex items-center gap-2 text-zinc-500 text-sm mb-1">
+                    Prompt
+                    {effectivePrompt.changed && (
+                      <span className={cn(
+                        "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20",
+                        showLiveIndicator && "animate-pulse"
+                      )}>
+                        <RefreshCw className="w-2.5 h-2.5" />
+                        Updated
+                      </span>
+                    )}
+                  </div>
+                  <pre className={cn(
+                    "text-xs font-mono bg-zinc-50 dark:bg-zinc-900 rounded p-2 text-amber-700 dark:text-amber-300 whitespace-pre-wrap break-words",
+                    effectivePrompt.changed
+                      ? "border border-cyan-500/30"
+                      : "border border-amber-500/20",
+                    !expanded && "max-h-32 overflow-auto"
+                  )}>
+{effectivePrompt.value.trim()}
                   </pre>
                 </div>
               )}
@@ -338,9 +406,26 @@ export function StepDetailPanel({
               <div className="mt-2 space-y-2">
                 {Boolean(stepDef.executor.config.prompt) && (
                   <div>
-                    <div className="text-zinc-500 text-sm mb-1">Agent Prompt</div>
-                    <pre className={cn("text-xs font-mono bg-zinc-50 dark:bg-zinc-900 border border-blue-500/20 rounded p-2 text-blue-700 dark:text-blue-300 whitespace-pre-wrap break-all", !expanded && "max-h-32 overflow-auto")}>
-                      {safeRenderValue(stepDef.executor.config.prompt)}
+                    <div className="flex items-center gap-2 text-zinc-500 text-sm mb-1">
+                      Agent Prompt
+                      {effectivePrompt.changed && (
+                        <span className={cn(
+                          "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20",
+                          showLiveIndicator && "animate-pulse"
+                        )}>
+                          <RefreshCw className="w-2.5 h-2.5" />
+                          Updated
+                        </span>
+                      )}
+                    </div>
+                    <pre className={cn(
+                      "text-xs font-mono bg-zinc-50 dark:bg-zinc-900 rounded p-2 text-blue-700 dark:text-blue-300 whitespace-pre-wrap break-all",
+                      effectivePrompt.changed
+                        ? "border border-cyan-500/30"
+                        : "border border-blue-500/20",
+                      !expanded && "max-h-32 overflow-auto"
+                    )}>
+                      {safeRenderValue(effectivePrompt.value)}
                     </pre>
                   </div>
                 )}
