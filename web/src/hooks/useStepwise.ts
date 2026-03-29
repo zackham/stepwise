@@ -107,12 +107,12 @@ export function useJobOutput(jobId: string | undefined, enabled: boolean = true)
   });
 }
 
-export function useAgentOutput(runId: string | undefined) {
+export function useAgentOutput(runId: string | undefined, options?: { staleTime?: number }) {
   return useQuery({
     queryKey: ["agentOutput", runId],
     queryFn: () => api.fetchAgentOutput(runId!),
     enabled: !!runId,
-    staleTime: Infinity,
+    staleTime: options?.staleTime ?? Infinity,
   });
 }
 
