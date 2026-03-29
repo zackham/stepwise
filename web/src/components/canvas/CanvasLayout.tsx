@@ -25,6 +25,9 @@ export interface GroupCluster {
   height: number;
   completedCount: number;
   totalCount: number;
+  maxConcurrent: number;
+  activeCount: number;
+  pendingCount: number;
 }
 
 export interface CanvasLayoutResult {
@@ -48,7 +51,7 @@ function cardSize(jobCount: number): { width: number; height: number } {
  * Jobs are connected by depends_on and parent_job_id relationships.
  * Jobs in the same job_group are clustered together.
  */
-export function computeCanvasLayout(jobs: Job[]): CanvasLayoutResult {
+export function computeCanvasLayout(jobs: Job[], groupSettings?: Record<string, number>): CanvasLayoutResult {
   if (jobs.length === 0) {
     return { cards: [], edges: [], groups: [], width: 0, height: 0 };
   }
@@ -180,6 +183,9 @@ export function computeCanvasLayout(jobs: Job[]): CanvasLayoutResult {
         height: maxY - minY + pad * 2 + 24,
         completedCount: groupJobs.filter((j) => j.status === "completed").length,
         totalCount: groupJobs.length,
+        maxConcurrent: groupSettings?.[label] ?? 0,
+        activeCount: groupJobs.filter((j) => j.status === "running" && !j.parent_job_id).length,
+        pendingCount: groupJobs.filter((j) => j.status === "pending").length,
       });
     }
   }

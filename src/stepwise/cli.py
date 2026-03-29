@@ -4636,6 +4636,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_job_run = job_sub.add_parser("run", help="Run staged jobs")
     p_job_run.add_argument("job_id", nargs="?", help="Run a single staged job")
     p_job_run.add_argument("--group", "-g", help="Run all staged jobs in group")
+    p_job_run.add_argument("--max-concurrent", type=int, default=None,
+                           help="Max concurrent jobs in group (0=unlimited, requires --group)")
     p_job_run.add_argument("--output", choices=["table", "json"], default="table")
 
     # job dep
@@ -4955,6 +4957,11 @@ def _cmd_job_run(args) -> int:
     from stepwise.store import SQLiteStore
 
     io = _io(args)
+    max_concurrent = getattr(args, "max_concurrent", None)
+
+    if max_concurrent is not None and not getattr(args, "group", None):
+        io.log("error", "--max-concurrent requires --group")
+        return EXIT_USAGE_ERROR
 
     if not args.job_id and not getattr(args, "group", None):
         io.log("error", "Specify a job ID or --group")
@@ -4969,7 +4976,10 @@ def _cmd_job_run(args) -> int:
             if args.job_id:
                 result = client._request("POST", f"/api/jobs/{args.job_id}/run")
             else:
-                result = client._request("POST", "/api/jobs/run-group", {"group": args.group})
+                payload = {"group": args.group}
+                if max_concurrent is not None:
+                    payload["max_concurrent"] = max_concurrent
+                result = client._request("POST", "/api/jobs/run-group", payload)
             if args.output == "json":
                 print(json.dumps(result, indent=2, default=str))
             else:
@@ -4998,6 +5008,8 @@ def _cmd_job_run(args) -> int:
             else:
                 io.log("success", f"Job {args.job_id} is now PENDING")
         else:
+            if max_concurrent is not None:
+                store.set_group_max_concurrent(args.group, max_concurrent)
             job_ids = store.transition_group_to_pending(args.group)
             # Check for cross-group unmet deps
             cross_group_count = 0

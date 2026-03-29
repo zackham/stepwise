@@ -1419,6 +1419,7 @@ class StageJobRequest(BaseModel):
 
 class RunGroupRequest(BaseModel):
     group: str
+    max_concurrent: int | None = None
 
 
 class AddDepRequest(BaseModel):
@@ -1475,11 +1476,75 @@ def approve_job_route(job_id: str):
 def run_group(req: RunGroupRequest):
     """Transition all staged jobs in a group to PENDING."""
     engine = _get_engine()
+    if req.max_concurrent is not None:
+        engine.store.set_group_max_concurrent(req.group, req.max_concurrent)
     job_ids = engine.store.transition_group_to_pending(req.group)
     engine._start_queued_jobs()
     for jid in job_ids:
         _notify_change(jid)
     return {"status": "pending", "group": req.group, "count": len(job_ids), "job_ids": job_ids}
+
+
+# ── Group settings endpoints ─────────────────────────────────────────
+
+
+class UpdateGroupRequest(BaseModel):
+    max_concurrent: int
+
+
+@app.get("/api/groups")
+def list_groups():
+    """List all known groups with settings and job counts."""
+    engine = _get_engine()
+    settings = engine.store.list_group_settings()
+    all_groups: dict[str, dict] = {}
+    for job in engine.store.all_jobs():
+        grp = job.job_group
+        if grp and grp not in all_groups:
+            all_groups[grp] = {"group": grp, "max_concurrent": 0,
+                               "active_count": 0, "pending_count": 0, "total_count": 0}
+    for grp, limit in settings.items():
+        if grp not in all_groups:
+            all_groups[grp] = {"group": grp, "max_concurrent": limit,
+                               "active_count": 0, "pending_count": 0, "total_count": 0}
+        else:
+            all_groups[grp]["max_concurrent"] = limit
+    for job in engine.store.all_jobs():
+        grp = job.job_group
+        if grp and grp in all_groups:
+            g = all_groups[grp]
+            g["total_count"] += 1
+            if job.status == JobStatus.RUNNING and not job.parent_job_id:
+                g["active_count"] += 1
+            elif job.status == JobStatus.PENDING:
+                g["pending_count"] += 1
+    return list(all_groups.values())
+
+
+@app.get("/api/groups/{group}")
+def get_group(group: str):
+    """Get settings and counts for a single group."""
+    engine = _get_engine()
+    max_concurrent = engine.store.get_group_max_concurrent(group)
+    jobs = engine.store.jobs_in_group(group)
+    active = sum(1 for j in jobs if j.status == JobStatus.RUNNING and not j.parent_job_id)
+    pending = sum(1 for j in jobs if j.status == JobStatus.PENDING)
+    return {"group": group, "max_concurrent": max_concurrent,
+            "active_count": active, "pending_count": pending, "total_count": len(jobs)}
+
+
+@app.patch("/api/groups/{group}")
+def update_group(group: str, req: UpdateGroupRequest):
+    """Update group concurrency limit. Re-evaluates queued jobs immediately."""
+    engine = _get_engine()
+    engine.store.set_group_max_concurrent(group, req.max_concurrent)
+    engine._start_queued_jobs()
+    if _event_loop is not None:
+        _event_loop.call_soon_threadsafe(
+            _event_loop.create_task,
+            _broadcast({"type": "group_changed", "group": group}),
+        )
+    return {"group": group, "max_concurrent": req.max_concurrent}
 
 
 @app.post("/api/jobs/{job_id}/deps")
