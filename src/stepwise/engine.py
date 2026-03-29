@@ -3840,6 +3840,9 @@ class AsyncEngine(Engine):
                     if "pid" in state:
                         run.pid = state["pid"]
                     self.store.save_run(run)
+                    # Broadcast tick when usage limit state changes so UI refreshes
+                    if "usage_limit_waiting" in state and self.on_broadcast:
+                        self.on_broadcast({"job_id": job_id})
                 if _loop and _loop.is_running():
                     _loop.call_soon_threadsafe(_do_update)
                 else:

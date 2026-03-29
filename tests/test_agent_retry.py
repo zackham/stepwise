@@ -497,6 +497,14 @@ class TestQuotaErrorSkipsRetry:
         assert classify_api_error("429 billing limit reached") == "quota_error"
         assert classify_api_error("usage limit exceeded (429)") == "quota_error"
 
+    def test_usage_limit_reset_distinct_from_quota(self):
+        """Usage limit with reset time gets distinct category."""
+        assert classify_api_error(
+            "You're out of extra usage · resets 3pm (America/Los_Angeles)"
+        ) == "usage_limit_reset"
+        # Without reset time, still quota_error
+        assert classify_api_error("usage limit exceeded") == "quota_error"
+
 
 class TestTransientRetryStillWorks:
     """Test that genuinely transient errors still retry up to the cap."""
