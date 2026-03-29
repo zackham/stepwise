@@ -100,6 +100,7 @@ export interface FlowMetadata {
   version?: string;
   tags?: string[];
   forked_from?: string;
+  visibility?: "interactive" | "background" | "internal";
 }
 
 // ── Config Variable ──────────────────────────────────────────────────
@@ -329,6 +330,7 @@ export interface LocalFlow {
   modified_at: string;
   is_directory: boolean;
   executor_types: string[];
+  visibility: "interactive" | "background" | "internal";
 }
 
 export interface FlowGraphNode {
