@@ -3177,6 +3177,7 @@ class AsyncEngine(Engine):
         # Per-executor-type dispatch gating
         self._executor_limits: dict[str, int] = {}
         self._task_exec_types: dict[str, str] = {}  # run_id → executor type name
+        self._throttled_jobs: set[str] = set()  # job IDs with steps waiting for executor capacity
         if config and hasattr(config, "resolved_executor_limits"):
             self._executor_limits = config.resolved_executor_limits()
         self._agent_last_launch: float = 0.0  # monotonic timestamp
@@ -3191,6 +3192,7 @@ class AsyncEngine(Engine):
         for task in self._poll_tasks.values():
             task.cancel()
         self._task_exec_types.clear()
+        self._throttled_jobs.clear()
 
     # ── Main loop ────────────────────────────────────────────────────────
 
@@ -3653,6 +3655,7 @@ class AsyncEngine(Engine):
         ready = self._find_ready(job)
         if ready:
             _async_logger.info(f"Dispatching {len(ready)} ready step(s) for job {job_id}: {ready}")
+        throttled = False
         for step_name in ready:
             step_def = job.workflow.steps[step_name]
             exec_type = step_def.executor.type
@@ -3663,12 +3666,19 @@ class AsyncEngine(Engine):
                     self._running_count_for_type(exec_type),
                     self._executor_limits.get(exec_type, 0),
                 )
+                throttled = True
                 continue
             self._launch(job, step_name)
             # Reload — _launch may change job status (for_each, route, sub_flow)
             job = self.store.load_job(job_id)
             if job.status != JobStatus.RUNNING:
+                self._throttled_jobs.discard(job_id)
                 return
+        # Track whether this job has steps waiting for executor capacity
+        if throttled:
+            self._throttled_jobs.add(job_id)
+        else:
+            self._throttled_jobs.discard(job_id)
 
     def _launch(self, job: Job, step_name: str) -> StepRun:
         """Override: dispatch normal-step executors to thread pool."""
@@ -3944,6 +3954,9 @@ class AsyncEngine(Engine):
             self._cleanup_job_sessions(job.id, job)
             self._check_dependent_jobs(job.id)
         elif job.status == JobStatus.RUNNING:
+            # Don't kill jobs that have steps waiting for executor capacity
+            if job_id in self._throttled_jobs:
+                return
             # Check for settled-but-failed: nothing active, nothing ready, no terminal completed
             if (not self.store.running_runs(job.id) and
                     not self.store.suspended_runs(job.id) and
