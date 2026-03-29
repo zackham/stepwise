@@ -293,7 +293,6 @@ export function FlowDagView({
     handleTouchStart,
     handleTouchMove,
     handleTouchEnd,
-    fitToView,
     initView,
   } = useDagCamera({
     containerRef,
