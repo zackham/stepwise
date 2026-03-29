@@ -16,6 +16,7 @@ import { Share2, Download, Check, RefreshCw, XCircle } from "lucide-react";
 import { computeCriticalPath } from "@/lib/critical-path";
 import type { CriticalPathResult } from "@/lib/critical-path";
 import { toBlob } from "html-to-image";
+import { useTheme } from "@/hooks/useTheme";
 
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -35,16 +36,18 @@ function formatTooltipValue(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
-const STATUS_COLORS: Record<JobStatus, string> = {
-  staged: "#8b5cf6",
-  pending: "#71717a",
-  running: "#3b82f6",
-  paused: "#f59e0b",
-  completed: "#10b981",
-  failed: "#ef4444",
-  cancelled: "#71717a",
-  archived: "#52525b",
-};
+function getStatusColors(isDark: boolean): Record<JobStatus, string> {
+  return {
+    staged: "#8b5cf6",
+    pending: isDark ? "#71717a" : "#a1a1aa",
+    running: "#3b82f6",
+    paused: "#f59e0b",
+    completed: "#10b981",
+    failed: "#ef4444",
+    cancelled: isDark ? "#71717a" : "#a1a1aa",
+    archived: isDark ? "#52525b" : "#71717a",
+  };
+}
 
 const STATUS_LABELS: Record<JobStatus, string> = {
   staged: "Staged",
@@ -106,6 +109,8 @@ export function FlowDagView({
   jobStatus,
   jobActions,
 }: FlowDagViewProps) {
+  const theme = useTheme();
+  const isDark = theme === "dark";
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const inputPanelRef = useRef<HTMLDivElement>(null);
@@ -181,9 +186,15 @@ export function FlowDagView({
       if (inputPanelRef.current) inputPanelRef.current.style.display = "none";
       if (edgeTooltipRef.current) edgeTooltipRef.current.style.display = "none";
 
+      const computedStyle = getComputedStyle(document.documentElement);
+      const canvasBg = computedStyle.getPropertyValue("--dag-canvas-bg").trim() || "#09090b";
+      const canvasBorder = computedStyle.getPropertyValue("--dag-canvas-border").trim() || "#27272a";
+      const canvasText = computedStyle.getPropertyValue("--dag-canvas-text").trim() || "#fafafa";
+      const canvasMuted = computedStyle.getPropertyValue("--dag-canvas-muted").trim() || "#52525b";
+
       const pixelRatio = 2;
       const blob = await toBlob(canvas, {
-        backgroundColor: "#09090b",
+        backgroundColor: canvasBg,
         pixelRatio,
         filter: (node: HTMLElement) => {
           // Filter out counter-scaled overlays
@@ -225,17 +236,17 @@ export function FlowDagView({
       const ctx = offscreen.getContext("2d")!;
 
       // Background
-      ctx.fillStyle = "#09090b";
+      ctx.fillStyle = canvasBg;
       ctx.fillRect(0, 0, outW, outH);
 
       // Subtle border
-      ctx.strokeStyle = "#27272a";
+      ctx.strokeStyle = canvasBorder;
       ctx.lineWidth = pixelRatio;
       ctx.strokeRect(0, 0, outW, outH);
 
       // Header
       const headerY = HEADER_H / 2;
-      ctx.fillStyle = "#fafafa";
+      ctx.fillStyle = canvasText;
       ctx.font = `bold ${20 * pixelRatio}px system-ui, -apple-system, sans-serif`;
       ctx.textBaseline = "middle";
       const title = flowName || "Flow";
@@ -245,7 +256,7 @@ export function FlowDagView({
       if (jobStatus) {
         const titleWidth = ctx.measureText(title).width;
         const badgeX = PAD + titleWidth + 12 * pixelRatio;
-        const badgeColor = STATUS_COLORS[jobStatus];
+        const badgeColor = getStatusColors(isDark)[jobStatus];
         const badgeLabel = STATUS_LABELS[jobStatus];
         ctx.font = `${12 * pixelRatio}px system-ui, -apple-system, sans-serif`;
         const badgeTextW = ctx.measureText(badgeLabel).width;
@@ -267,7 +278,7 @@ export function FlowDagView({
       }
 
       // Header divider
-      ctx.strokeStyle = "#27272a";
+      ctx.strokeStyle = canvasBorder;
       ctx.lineWidth = pixelRatio;
       ctx.beginPath();
       ctx.moveTo(PAD, HEADER_H - pixelRatio);
@@ -281,7 +292,7 @@ export function FlowDagView({
       // Footer watermark
       const footerY = HEADER_H + scaledH + FOOTER_H / 2;
       const logoSize = 20 * pixelRatio;
-      ctx.fillStyle = "#52525b";
+      ctx.fillStyle = canvasMuted;
       ctx.font = `${13 * pixelRatio}px system-ui, -apple-system, sans-serif`;
       ctx.textBaseline = "middle";
       const stepwiseTextW = ctx.measureText("stepwise").width;
@@ -328,7 +339,7 @@ export function FlowDagView({
       console.error("DAG capture failed:", err);
       setShareState("idle");
     }
-  }, [flowName, jobStatus]);
+  }, [flowName, jobStatus, isDark]);
 
   const rawLayout = useMemo(
     () => computeHierarchicalLayout(workflow, expandedSteps, jobTree),

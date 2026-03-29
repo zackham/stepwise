@@ -16,10 +16,10 @@ interface DataFlowPanelProps {
 }
 
 const ACTION_COLORS: Record<string, string> = {
-  advance: "text-emerald-400",
-  loop: "text-purple-400",
-  escalate: "text-red-400",
-  abandon: "text-red-500",
+  advance: "text-emerald-600 dark:text-emerald-400",
+  loop: "text-purple-600 dark:text-purple-400",
+  escalate: "text-red-600 dark:text-red-400",
+  abandon: "text-red-600 dark:text-red-500",
 };
 
 const AGENT_REF_RE = /(\$[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)/g;
@@ -38,7 +38,7 @@ function CopyButton({ value }: { value: unknown }) {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
       }}
-      className="text-zinc-500 hover:text-zinc-300 p-0.5"
+      className="text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 p-0.5"
       title="Copy value"
     >
       {copied ? (
@@ -75,7 +75,7 @@ function PanelHeader({
       </div>
       <button
         onClick={onClose}
-        className="text-zinc-600 hover:text-zinc-300 p-0.5 shrink-0"
+        className="text-zinc-600 hover:text-zinc-900 dark:hover:text-zinc-300 p-0.5 shrink-0"
       >
         <X className="w-3.5 h-3.5" />
       </button>
@@ -262,7 +262,7 @@ function StepSummaryPanel({
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0 flex-1 flex flex-wrap items-baseline gap-1 text-[11px] font-mono">
-                      <span className="text-cyan-400">{binding.local_name}</span>
+                      <span className="text-cyan-600 dark:text-cyan-400">{binding.local_name}</span>
                       <span className="text-zinc-600">←</span>
                       <span className="text-zinc-500 break-all">
                         {formatBindingSource(binding)}
@@ -285,12 +285,12 @@ function StepSummaryPanel({
                     <span className="text-zinc-500">local_name</span>
                     <span className="text-cyan-400 break-all">{binding.local_name}</span>
                     <span className="text-zinc-500">source_step</span>
-                    <span className="text-zinc-400 break-all">{bindingSourceStep(binding)}</span>
+                    <span className="text-zinc-500 dark:text-zinc-400 break-all">{bindingSourceStep(binding)}</span>
                     <span className="text-zinc-500">source_field</span>
-                    <span className="text-zinc-400 break-all">{bindingSourceField(binding)}</span>
+                    <span className="text-zinc-500 dark:text-zinc-400 break-all">{bindingSourceField(binding)}</span>
                   </div>
                   {hasResolvedValue && isStructuredValue(resolvedValue) && (
-                    <div className="mt-2 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-950/30 p-2 overflow-x-auto">
+                    <div className="mt-2 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-100/30 dark:bg-zinc-950/30 p-2 overflow-x-auto">
                       <JsonView data={resolvedValue} defaultExpanded={true} />
                     </div>
                   )}
@@ -314,7 +314,7 @@ function StepSummaryPanel({
                   className={cn(
                     "text-[11px] font-mono rounded px-2 py-1 border",
                     hasValue
-                      ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/20"
+                      ? "text-emerald-600 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-500/10 border-emerald-500/20"
                       : "text-zinc-500 bg-zinc-100/70 dark:bg-zinc-900/70 border-zinc-200 dark:border-zinc-800",
                   )}
                 >

@@ -59,7 +59,7 @@ export function FlowPortNode({ port, selection, onSelect, latestRuns }: FlowPort
         className={cn(
           "flex flex-col items-center justify-center rounded-md border px-3 py-2",
           allOutputsReady
-            ? "border-emerald-500/40 bg-emerald-950/40 shadow-lg shadow-emerald-500/5"
+            ? "border-emerald-500/40 bg-emerald-100/40 dark:bg-emerald-950/40 shadow-lg shadow-emerald-500/5"
             : "border-dashed border-zinc-400/50 dark:border-zinc-600/50 bg-zinc-100/30 dark:bg-zinc-900/30 px-2 py-1",
         )}
       >
@@ -103,14 +103,14 @@ export function FlowPortNode({ port, selection, onSelect, latestRuns }: FlowPort
                   isSelected
                     ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
                     : hasValue
-                      ? "bg-emerald-500/10 text-emerald-300/80 border border-emerald-500/20 hover:text-emerald-200 hover:border-emerald-500/40"
+                      ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300/80 border border-emerald-500/20 hover:text-emerald-600 dark:hover:text-emerald-200 hover:border-emerald-500/40"
                       : "bg-zinc-200/60 dark:bg-zinc-800/60 text-zinc-500 dark:text-zinc-400 border border-zinc-300/40 dark:border-zinc-700/40 hover:text-zinc-700 dark:hover:text-zinc-200 hover:border-zinc-400/60 dark:hover:border-zinc-600/60",
                 )}
               >
                 {hasValue ? (
                   <>
-                    <span className="text-emerald-400/70">{field}: </span>
-                    <span className="text-emerald-200/60">{formatPreview(value, 24)}</span>
+                    <span className="text-emerald-600 dark:text-emerald-400/70">{field}: </span>
+                    <span className="text-emerald-500 dark:text-emerald-200/60">{formatPreview(value, 24)}</span>
                   </>
                 ) : (
                   field

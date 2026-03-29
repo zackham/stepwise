@@ -78,7 +78,7 @@ function PromptEditor({
       <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-zinc-50/50 dark:bg-zinc-950/50">
         <div className="flex items-center gap-2 text-sm">
           <span className="text-zinc-500">{stepName}</span>
-          <span className="text-zinc-600">→</span>
+          <span className="text-zinc-400 dark:text-zinc-600">→</span>
           <span className="text-foreground font-medium">{fieldName}</span>
         </div>
         <button
@@ -439,10 +439,10 @@ export function EditorPage() {
     return (
       <div className="h-full flex items-center justify-center">
         <div className="text-center space-y-3">
-          <p className="text-zinc-400 text-lg">
+          <p className="text-zinc-500 dark:text-zinc-400 text-lg">
             Flow <span className="text-foreground font-medium">"{flowName}"</span> not found
           </p>
-          <Link to="/flows" className="text-sm text-blue-400 hover:text-blue-300">
+          <Link to="/flows" className="text-sm text-blue-600 dark:text-blue-400 hover:text-blue-500 dark:hover:text-blue-300">
             Back to flows
           </Link>
         </div>
@@ -541,7 +541,7 @@ export function EditorPage() {
                 onClick={() => setShowFileTree((s) => !s)}
                 className={cn(
                   "ml-2 px-2 py-2 text-xs transition-colors flex items-center gap-1",
-                  showFileTree ? "text-foreground" : "text-zinc-600 hover:text-zinc-400"
+                  showFileTree ? "text-foreground" : "text-zinc-500 dark:text-zinc-600 hover:text-zinc-700 dark:hover:text-zinc-400"
                 )}
                 title="Toggle file tree"
               >
@@ -779,7 +779,7 @@ export function EditorPage() {
 
             {runFormFields.length > 0 && (
               <div className="space-y-3">
-                <Label className="text-zinc-400">Inputs</Label>
+                <Label className="text-zinc-500 dark:text-zinc-400">Inputs</Label>
                 <JobInputForm
                   fields={runFormFields}
                   values={runInputValues}

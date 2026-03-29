@@ -99,10 +99,10 @@ function executorSubtitle(stepDef: StepDefinition): string {
 }
 
 const ACTION_COLORS: Record<string, string> = {
-  advance: "text-emerald-400",
-  loop: "text-purple-400",
-  escalate: "text-red-400",
-  abandon: "text-red-500",
+  advance: "text-emerald-600 dark:text-emerald-400",
+  loop: "text-purple-600 dark:text-purple-400",
+  escalate: "text-red-600 dark:text-red-400",
+  abandon: "text-red-600 dark:text-red-500",
 };
 
 function formatTooltipValue(value: unknown, maxLen = 60): string {
@@ -123,7 +123,7 @@ function formatTooltipValue(value: unknown, maxLen = 60): string {
 function ExitRulesSection({ rules }: { rules: ExitRule[] }) {
   return (
     <>
-      <div className="text-[10px] font-medium text-zinc-400 uppercase tracking-wide mb-1">
+      <div className="text-[10px] font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wide mb-1">
         Exit Rules
       </div>
       <table className="w-full text-[10px]">
@@ -189,7 +189,7 @@ function StepTooltip({
       {/* Inputs */}
       {hasInputs && (
         <div className="mb-2">
-          <div className="flex items-center gap-1 text-[10px] font-medium text-zinc-400 uppercase tracking-wide mb-0.5">
+          <div className="flex items-center gap-1 text-[10px] font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wide mb-0.5">
             <ArrowRight className="w-2.5 h-2.5" />
             Inputs
           </div>
@@ -225,7 +225,7 @@ function StepTooltip({
       {/* Outputs */}
       {hasOutputs && (
         <div className="mb-2">
-          <div className="flex items-center gap-1 text-[10px] font-medium text-zinc-400 uppercase tracking-wide mb-0.5">
+          <div className="flex items-center gap-1 text-[10px] font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wide mb-0.5">
             <ArrowLeft className="w-2.5 h-2.5" />
             Outputs
           </div>
@@ -379,13 +379,13 @@ export function StepNode({
       {/* Top handle — color-matched to status */}
       <div className={cn(
         "absolute -top-1.5 left-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full border-2",
-        status === "pending" ? "bg-zinc-700 border-zinc-600" :
+        status === "pending" ? "bg-zinc-300 border-zinc-400 dark:bg-zinc-700 dark:border-zinc-600" :
         status === "running" ? "bg-blue-500/60 border-blue-400/60" :
         status === "completed" ? "bg-emerald-500/60 border-emerald-400/60" :
         status === "failed" ? "bg-red-500/60 border-red-400/60" :
         status === "suspended" ? "bg-amber-500/60 border-amber-400/60" :
         status === "throttled" ? "bg-orange-500/60 border-orange-400/60" :
-        "bg-zinc-700 border-zinc-600"
+        "bg-zinc-300 border-zinc-400 dark:bg-zinc-700 dark:border-zinc-600"
       )} />
 
       {/* Content */}
@@ -419,7 +419,7 @@ export function StepNode({
 
       {/* Description */}
       {stepDef.description && (
-        <div className="mt-1 text-[11px] text-zinc-400 truncate leading-tight">
+        <div className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400 truncate leading-tight">
           {stepDef.description}
         </div>
       )}
@@ -467,13 +467,13 @@ export function StepNode({
       {/* Bottom handle — color-matched to status */}
       <div className={cn(
         "absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full border-2",
-        status === "pending" ? "bg-zinc-700 border-zinc-600" :
+        status === "pending" ? "bg-zinc-300 border-zinc-400 dark:bg-zinc-700 dark:border-zinc-600" :
         status === "running" ? "bg-blue-500/60 border-blue-400/60" :
         status === "completed" ? "bg-emerald-500/60 border-emerald-400/60" :
         status === "failed" ? "bg-red-500/60 border-red-400/60" :
         status === "suspended" ? "bg-amber-500/60 border-amber-400/60" :
         status === "throttled" ? "bg-orange-500/60 border-orange-400/60" :
-        "bg-zinc-700 border-zinc-600"
+        "bg-zinc-300 border-zinc-400 dark:bg-zinc-700 dark:border-zinc-600"
       )} />
 
       {/* Hover action buttons */}

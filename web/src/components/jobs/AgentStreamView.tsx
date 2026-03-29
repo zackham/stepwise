@@ -83,12 +83,12 @@ function ToolCard({ tool }: { tool: ToolCallState }) {
             )}
           />
         )}
-        <span className={isRunning ? "text-blue-400" : isFailed ? "text-red-400" : "text-zinc-500"}>
+        <span className={isRunning ? "text-blue-600 dark:text-blue-400" : isFailed ? "text-red-600 dark:text-red-400" : "text-zinc-500"}>
           {toolIcon(tool.kind)}
         </span>
         <span className={cn(
           "truncate",
-          isRunning ? "text-blue-300" : isFailed ? "text-red-300" : "text-zinc-500",
+          isRunning ? "text-blue-700 dark:text-blue-300" : isFailed ? "text-red-700 dark:text-red-300" : "text-zinc-500",
         )}>
           {tool.title || tool.kind}
         </span>

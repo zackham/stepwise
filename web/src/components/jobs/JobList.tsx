@@ -354,7 +354,7 @@ function VirtualJobList({
                   {bulkMode && (
                     <button
                       onClick={(e) => { e.stopPropagation(); onToggleSelect(job.id); }}
-                      className="mt-0.5 shrink-0 text-zinc-500 hover:text-zinc-300"
+                      className="mt-0.5 shrink-0 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
                     >
                       {selectedIds.has(job.id)
                         ? <CheckSquare className="w-3.5 h-3.5 text-blue-400" />
@@ -737,7 +737,7 @@ export function JobList({
                     size="icon-xs"
                     aria-label="Refresh jobs"
                     onClick={refreshJobs}
-                    className="text-zinc-600 hover:text-zinc-300"
+                    className="text-zinc-600 hover:text-zinc-900 dark:hover:text-zinc-300"
                   >
                     <RefreshCw className={cn("w-3.5 h-3.5", isFetching && "animate-spin")} />
                   </Button>
@@ -749,7 +749,7 @@ export function JobList({
           {bulkMode ? (
             <button
               onClick={exitBulkMode}
-              className="text-[10px] text-zinc-500 hover:text-zinc-300 px-1.5 py-1 shrink-0"
+              className="text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 px-1.5 py-1 shrink-0"
             >
               Cancel
             </button>
@@ -770,7 +770,7 @@ export function JobList({
                   </button>
                   <button
                     onClick={() => setConfirmDelete(false)}
-                    className="text-[10px] text-zinc-500 hover:text-zinc-300 px-1.5 py-1"
+                    className="text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 px-1.5 py-1"
                   >
                     Cancel
                   </button>
@@ -779,14 +779,14 @@ export function JobList({
                 <>
                   <button
                     onClick={() => setBulkMode(true)}
-                    className="text-zinc-600 hover:text-zinc-300 p-1 rounded hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 transition-colors shrink-0 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center"
+                    className="text-zinc-600 hover:text-zinc-900 dark:hover:text-zinc-300 p-1 rounded hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 transition-colors shrink-0 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center"
                     title="Select multiple jobs"
                   >
                     <CheckSquare className="w-3.5 h-3.5" />
                   </button>
                   <button
                     onClick={() => setConfirmDelete(true)}
-                    className="text-zinc-600 hover:text-red-400 p-1 rounded hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 transition-colors shrink-0 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center"
+                    className="text-zinc-500 hover:text-red-400 p-1 rounded hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 transition-colors shrink-0 min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center"
                     title="Delete all jobs"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -800,13 +800,13 @@ export function JobList({
         {/* Bulk action bar */}
         {bulkMode && selectedIds.size > 0 && (
           <div className="flex items-center gap-1.5 px-1 py-1 rounded-md bg-zinc-100/80 dark:bg-zinc-800/80 border border-zinc-300/50 dark:border-zinc-700/50">
-            <span className="text-[10px] text-zinc-400 px-1">
+            <span className="text-[10px] text-zinc-500 dark:text-zinc-400 px-1">
               {selectedIds.size} selected
             </span>
             <div className="flex-1" />
             <button
               onClick={handleBulkArchive}
-              className="text-[10px] text-zinc-400 hover:text-zinc-200 px-2 py-1 rounded hover:bg-zinc-700/50 transition-colors flex items-center gap-1"
+              className="text-[10px] text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200 px-2 py-1 rounded hover:bg-zinc-200/50 dark:hover:bg-zinc-700/50 transition-colors flex items-center gap-1"
             >
               <Archive className="w-3 h-3" />
               Archive
@@ -875,7 +875,7 @@ export function JobList({
               try { localStorage.setItem("stepwise-job-sort", val); } catch {}
             }}
           >
-            <SelectTrigger className="h-5 w-auto gap-1 px-1.5 border-none bg-transparent text-[10px] text-zinc-500 hover:text-zinc-300 focus:ring-0 shadow-none min-h-[44px] md:min-h-0">
+            <SelectTrigger className="h-5 w-auto gap-1 px-1.5 border-none bg-transparent text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 focus:ring-0 shadow-none min-h-[44px] md:min-h-0">
               <ArrowUpDown className="w-2.5 h-2.5 shrink-0" />
               <SelectValue />
             </SelectTrigger>
@@ -931,7 +931,7 @@ export function JobList({
           <div className="flex flex-col items-center justify-center py-12 px-4 text-center max-w-sm mx-auto space-y-4">
             <img src="/stepwise-icon-64.png" alt="Stepwise" className="w-12 h-12 opacity-40" />
             <div className="space-y-1">
-              <p className="text-sm font-medium text-zinc-400">Start your first workflow</p>
+              <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">Start your first workflow</p>
               <p className="text-xs text-zinc-600">
                 Create a job from the UI or run one from the terminal.
               </p>

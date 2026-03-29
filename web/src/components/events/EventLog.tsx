@@ -224,8 +224,8 @@ export function EventLog({ jobId }: EventLogProps) {
                 key={evt.id}
                 className={cn(
                   "rounded text-sm",
-                  "hover:bg-zinc-800/50 group",
-                  isExpanded && "bg-zinc-800/30"
+                  "hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50 group",
+                  isExpanded && "bg-zinc-100/30 dark:bg-zinc-800/30"
                 )}
               >
                 <button
@@ -333,8 +333,8 @@ export function EventLog({ jobId }: EventLogProps) {
                 </button>
 
                 {hasData && isExpanded && (
-                  <div className="mx-2 mb-2 ml-8 p-2 rounded bg-zinc-900 border border-zinc-800">
-                    <pre className="text-xs font-mono text-zinc-300 whitespace-pre-wrap break-all">
+                  <div className="mx-2 mb-2 ml-8 p-2 rounded bg-zinc-100 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-800">
+                    <pre className="text-xs font-mono text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap break-all">
                       {highlightMatches(JSON.stringify(evt.data, null, 2), search.compiledRegex)}
                     </pre>
                   </div>

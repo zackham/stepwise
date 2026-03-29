@@ -11,7 +11,7 @@ export function LogSearchBar({ search, className }: LogSearchBarProps) {
   return (
     <div
       className={cn(
-        "flex items-center gap-1.5 px-2 py-1 border-b border-zinc-800/50",
+        "flex items-center gap-1.5 px-2 py-1 border-b border-zinc-300/50 dark:border-zinc-800/50",
         className
       )}
     >
@@ -30,7 +30,7 @@ export function LogSearchBar({ search, className }: LogSearchBarProps) {
         placeholder="Search logs..."
         aria-invalid={search.regexError || undefined}
         className={cn(
-          "flex-1 min-w-0 bg-transparent text-xs text-zinc-300 placeholder:text-zinc-600 outline-none",
+          "flex-1 min-w-0 bg-transparent text-xs text-zinc-700 dark:text-zinc-300 placeholder:text-zinc-400 dark:placeholder:text-zinc-600 outline-none",
           "border-none ring-0 focus:ring-0",
           search.regexError && "text-red-400"
         )}
@@ -43,7 +43,7 @@ export function LogSearchBar({ search, className }: LogSearchBarProps) {
           "text-[11px] font-mono px-1 py-0.5 rounded transition-colors shrink-0",
           search.caseSensitive
             ? "text-blue-400 bg-blue-500/10"
-            : "text-zinc-600 hover:text-zinc-400"
+            : "text-zinc-400 dark:text-zinc-600 hover:text-zinc-700 dark:hover:text-zinc-400"
         )}
       >
         Aa
@@ -56,7 +56,7 @@ export function LogSearchBar({ search, className }: LogSearchBarProps) {
           "text-[11px] font-mono px-1 py-0.5 rounded transition-colors shrink-0",
           search.regexMode
             ? "text-blue-400 bg-blue-500/10"
-            : "text-zinc-600 hover:text-zinc-400"
+            : "text-zinc-400 dark:text-zinc-600 hover:text-zinc-700 dark:hover:text-zinc-400"
         )}
       >
         .*
