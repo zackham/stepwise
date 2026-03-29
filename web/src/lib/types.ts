@@ -242,6 +242,7 @@ export interface Job {
   current_step?: JobCurrentStep | null;
   job_group: string | null;
   depends_on: string[];
+  flow_source_path?: string | null;
 }
 
 // ── Event ──────────────────────────────────────────────────────────────
@@ -317,7 +318,13 @@ export interface TickMessage {
   timestamp: string;
 }
 
-export type WebSocketMessage = TickMessage | AgentOutputMessage;
+export interface FlowSourceChangedMessage {
+  type: "flow_source_changed";
+  job_ids: string[];
+  timestamp: string;
+}
+
+export type WebSocketMessage = TickMessage | AgentOutputMessage | FlowSourceChangedMessage;
 
 // ── Editor / Local Flow ──────────────────────────────────────────────
 

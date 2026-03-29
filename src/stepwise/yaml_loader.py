@@ -1245,11 +1245,14 @@ def load_workflow_yaml(
 
     # M10: Record the source directory for script path resolution
     source_dir_str: str | None = None
+    source_path_str: str | None = None
     if source_path is not None:
         source_dir_str = str(source_path.parent.resolve())
+        source_path_str = str(source_path.resolve())
 
     workflow = WorkflowDefinition(
         steps=steps, metadata=metadata, chains=chains, source_dir=source_dir_str,
+        source_path=source_path_str,
         config_vars=config_vars, requires=requires, readme=readme,
     )
 

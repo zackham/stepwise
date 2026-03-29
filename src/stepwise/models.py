@@ -568,6 +568,7 @@ class WorkflowDefinition:
     metadata: FlowMetadata = field(default_factory=FlowMetadata)
     chains: dict[str, ChainConfig] = field(default_factory=dict)  # M7a
     source_dir: str | None = None  # M10: directory containing the flow file
+    source_path: str | None = None  # Full path to the flow YAML file
     config_vars: list[ConfigVar] = field(default_factory=list)
     requires: list[FlowRequirement] = field(default_factory=list)
     readme: str = ""
@@ -1341,6 +1342,8 @@ class WorkflowDefinition:
             d["chains"] = {n: c.to_dict() for n, c in self.chains.items()}
         if self.source_dir is not None:
             d["source_dir"] = self.source_dir
+        if self.source_path is not None:
+            d["source_path"] = self.source_path
         if self.config_vars:
             d["config_vars"] = [v.to_dict() for v in self.config_vars]
         if self.requires:
@@ -1365,6 +1368,7 @@ class WorkflowDefinition:
             metadata=metadata,
             chains=chains,
             source_dir=d.get("source_dir"),
+            source_path=d.get("source_path"),
             config_vars=config_vars,
             requires=requires,
             readme=d.get("readme", ""),

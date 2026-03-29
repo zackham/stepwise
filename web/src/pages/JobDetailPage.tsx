@@ -821,6 +821,7 @@ export function JobDetailPage() {
                   stepDef={resolvedStep.stepDef}
                   onClose={() => { setDataFlowSelection(null); navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: "job" as const }), replace: true }); }}
                   onExpand={() => setExpandedStep(true)}
+                  hasLiveSource={!!job?.flow_source_path}
                 />
               )}
             </TabsContent>
@@ -897,6 +898,7 @@ export function JobDetailPage() {
               onClose={() => { setExpandedStep(false); setDataFlowSelection(null); navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined, panel: undefined }), replace: true }); }}
               onExpand={() => setExpandedStep(false)}
               expanded={true}
+              hasLiveSource={!!job?.flow_source_path}
             />
           )}
         </MobileFullScreen>
@@ -910,6 +912,7 @@ export function JobDetailPage() {
                 onClose={() => { setExpandedStep(false); setDataFlowSelection(null); navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined, panel: undefined }), replace: true }); }}
                 onExpand={() => setExpandedStep(false)}
                 expanded={true}
+                hasLiveSource={!!job?.flow_source_path}
               />
             )}
           </SheetContent>

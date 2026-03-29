@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, createContext, useContext } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { AgentOutputMessage, TickMessage } from "@/lib/types";
+import type { AgentOutputMessage, TickMessage, FlowSourceChangedMessage } from "@/lib/types";
 
 export type WsStatus = "connected" | "disconnected" | "reconnecting";
 export interface StepwiseWebSocketState {
@@ -26,6 +26,17 @@ export function subscribeTickMessages(fn: (msg: TickMessage) => void) {
   tickListeners.add(fn);
   return () => {
     tickListeners.delete(fn);
+  };
+}
+
+// ── Flow source changed pub/sub ────────────────────────────────────
+
+const flowSourceListeners = new Set<(msg: FlowSourceChangedMessage) => void>();
+
+export function subscribeFlowSourceChanged(fn: (msg: FlowSourceChangedMessage) => void) {
+  flowSourceListeners.add(fn);
+  return () => {
+    flowSourceListeners.delete(fn);
   };
 }
 
@@ -89,6 +100,8 @@ export function useStepwiseWebSocket(): StepwiseWebSocketState {
               queryClient.invalidateQueries({ queryKey: ["job", stale.id] });
             }
           }
+        } else if (msg.type === "flow_source_changed") {
+          for (const fn of flowSourceListeners) fn(msg as FlowSourceChangedMessage);
         } else if (msg.type === "agent_output") {
           for (const fn of agentOutputListeners) fn(msg);
         }
