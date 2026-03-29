@@ -525,6 +525,9 @@ class StepDefinition:
 # ── Workflow Definition ────────────────────────────────────────────────
 
 
+VALID_VISIBILITY = {"interactive", "background", "internal"}
+
+
 @dataclass
 class FlowMetadata:
     """Optional metadata parsed from flow YAML header."""
@@ -534,6 +537,7 @@ class FlowMetadata:
     version: str = ""
     tags: list[str] = field(default_factory=list)
     forked_from: str = ""  # e.g. "@bob:code-review" — provenance for forked flows
+    visibility: str = "interactive"  # "interactive" | "background" | "internal"
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -549,6 +553,8 @@ class FlowMetadata:
             d["tags"] = self.tags
         if self.forked_from:
             d["forked_from"] = self.forked_from
+        if self.visibility != "interactive":
+            d["visibility"] = self.visibility
         return d
 
     @classmethod
@@ -560,6 +566,7 @@ class FlowMetadata:
             version=d.get("version", ""),
             tags=d.get("tags", []),
             forked_from=d.get("forked_from", ""),
+            visibility=d.get("visibility", "interactive"),
         )
 
 

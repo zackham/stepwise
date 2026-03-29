@@ -18,9 +18,14 @@ from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
 
 
 def _build_flow_entries(
-    flows: list[FlowInfo | Path], project_dir: Path
+    flows: list[FlowInfo | Path], project_dir: Path,
+    visibility_filter: set[str] | None = None,
 ) -> list[dict]:
-    """Parse flows and return structured entries."""
+    """Parse flows and return structured entries.
+
+    Args:
+        visibility_filter: If set, only include flows whose visibility is in this set.
+    """
     entries = []
     for item in flows:
         # Accept both FlowInfo objects and raw Path objects
@@ -35,6 +40,10 @@ def _build_flow_entries(
             wf = load_workflow_yaml(str(flow_path))
             schema = generate_schema(wf)
         except (YAMLLoadError, Exception):
+            continue
+
+        # Filter by visibility
+        if visibility_filter and wf.metadata.visibility not in visibility_filter:
             continue
 
         name = schema["name"] or flow_name or flow_path.stem.replace(".flow", "")
@@ -174,7 +183,9 @@ def generate_agent_help(
             return json.dumps({"flows": [], "count": 0})
         return "No flows found. Create one with `stepwise new <name>` or install from the registry with `stepwise get @author:name`."
 
-    entries = _build_flow_entries(flows, project_dir)
+    # Agent-help only shows interactive flows (not background/internal)
+    agent_visibility = {"interactive"}
+    entries = _build_flow_entries(flows, project_dir, visibility_filter=agent_visibility)
     registry_entries = _build_registry_entries(registry_flows, project_dir)
 
     all_entries = entries + registry_entries

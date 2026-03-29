@@ -1418,12 +1418,14 @@ def cmd_flows(args: argparse.Namespace) -> int:
                     name = raw.get("name") or entry.name
                     desc = raw.get("description", "")
                     tags = raw.get("tags") or []
+                    visibility = raw.get("visibility", "interactive")
                     steps = raw.get("steps") or {}
                     found.append({
                         "name": name,
                         "description": desc,
                         "steps": len(steps),
                         "tags": tags,
+                        "visibility": visibility,
                     })
 
     # 2. Scan *.flow.yaml in the project root
@@ -1435,16 +1437,26 @@ def cmd_flows(args: argparse.Namespace) -> int:
         name = raw.get("name") or flow_file.stem.replace(".flow", "")
         desc = raw.get("description", "")
         tags = raw.get("tags") or []
+        visibility = raw.get("visibility", "interactive")
         steps = raw.get("steps") or {}
         found.append({
             "name": name,
             "description": desc,
             "steps": len(steps),
             "tags": tags,
+            "visibility": visibility,
         })
 
     # Sort alphabetically by name
     found.sort(key=lambda f: f["name"].lower())
+
+    # Filter by visibility (default: show all except internal)
+    vis_filter = getattr(args, "visibility", None)
+    if vis_filter and vis_filter != "all":
+        found = [f for f in found if f["visibility"] == vis_filter]
+    elif not vis_filter:
+        # By default hide internal flows
+        found = [f for f in found if f["visibility"] != "internal"]
 
     if not found:
         io.log("info", "No flows found. Create one with: stepwise new <name>")
@@ -1454,9 +1466,11 @@ def cmd_flows(args: argparse.Namespace) -> int:
     for f in found:
         tags_str = ", ".join(f["tags"]) if f["tags"] else ""
         desc = (f["description"] or "")[:50]
-        rows.append([f["name"], desc, str(f["steps"]), tags_str])
+        vis = f["visibility"]
+        vis_label = vis if vis != "interactive" else ""
+        rows.append([f["name"], desc, str(f["steps"]), tags_str, vis_label])
 
-    io.table(["NAME", "DESCRIPTION", "STEPS", "TAGS"], rows)
+    io.table(["NAME", "DESCRIPTION", "STEPS", "TAGS", "VISIBILITY"], rows)
     return EXIT_SUCCESS
 
 
@@ -4418,7 +4432,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("templates", help="List available templates")
 
     # flows
-    sub.add_parser("flows", help="List flows in this project")
+    p_flows = sub.add_parser("flows", help="List flows in this project")
+    p_flows.add_argument("--visibility", choices=["interactive", "background", "internal", "all"],
+                         help="Filter by visibility category (default: hide internal)")
 
     # config
     p_config = sub.add_parser("config", help="Manage configuration")
