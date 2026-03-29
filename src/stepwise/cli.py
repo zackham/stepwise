@@ -2587,6 +2587,7 @@ def _job_summary(job) -> dict:
         "status": job.status.value,
         "objective": job.objective,
         "steps": len(job.workflow.steps),
+        "depends_on": job.depends_on,
         "created_at": str(job.created_at) if job.created_at else None,
     }
 

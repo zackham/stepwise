@@ -472,7 +472,10 @@ class SQLiteStore:
             f"SELECT * FROM jobs{where} ORDER BY created_at DESC{limit_clause}",
             params,
         ).fetchall()
-        return [self._row_to_job(r) for r in rows]
+        jobs = [self._row_to_job(r) for r in rows]
+        for job in jobs:
+            job.depends_on = self.get_job_dependencies(job.id)
+        return jobs
 
     # ── Step Runs ─────────────────────────────────────────────────────────
 

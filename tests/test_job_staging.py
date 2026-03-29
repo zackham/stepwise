@@ -107,6 +107,17 @@ class TestCycleDetection:
         assert store.would_create_cycle(j3.id, j1.id) is False
 
 
+class TestAllJobsIncludesDeps:
+    def test_all_jobs_populates_depends_on(self, store):
+        j1 = _make_job(store, "a")
+        j2 = _make_job(store, "b")
+        store.add_job_dependency(j2.id, j1.id)
+        jobs = store.all_jobs()
+        by_id = {j.id: j for j in jobs}
+        assert by_id[j1.id].depends_on == []
+        assert by_id[j2.id].depends_on == [j1.id]
+
+
 class TestPendingJobsWithDepsMet:
     def test_no_deps_returns_pending(self, store):
         j1 = _make_job(store, "a", status=JobStatus.PENDING)
