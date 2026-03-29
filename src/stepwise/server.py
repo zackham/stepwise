@@ -435,6 +435,52 @@ async def _agent_stream_monitor() -> None:
             await asyncio.sleep(5.0)
 
 
+async def _process_health_check() -> None:
+    """Periodic health check: detect dead runner processes and enforce TTL.
+
+    Runs every 60s. Detects:
+    - RUNNING step runs whose PID is no longer alive (clean up state)
+    - RUNNING step runs that have exceeded the agent TTL (SIGTERM + cleanup)
+
+    Logs all process lifecycle events for debugging.
+    """
+    from stepwise.process_lifecycle import (
+        HEALTH_CHECK_INTERVAL_SECONDS,
+        DEFAULT_AGENT_TTL_SECONDS,
+        run_health_check,
+    )
+
+    engine = _get_engine()
+    ttl = int(os.environ.get("STEPWISE_AGENT_TTL", str(DEFAULT_AGENT_TTL_SECONDS)))
+    interval = int(os.environ.get("STEPWISE_HEALTH_CHECK_INTERVAL", str(HEALTH_CHECK_INTERVAL_SECONDS)))
+    logger.info("Process health check started (interval=%ds, agent_ttl=%ds)", interval, ttl)
+
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            result = run_health_check(engine.store, ttl_seconds=ttl)
+
+            # Re-evaluate affected jobs so exit rules / settlement can proceed
+            affected_job_ids: set[str] = set()
+            for run_id in result.dead_cleaned + result.expired_killed:
+                try:
+                    run = engine.store.load_run(run_id)
+                    affected_job_ids.add(run.job_id)
+                except KeyError:
+                    pass
+
+            for job_id in affected_job_ids:
+                engine._dispatch_ready(job_id)
+                engine._check_job_terminal(job_id)
+                _notify_change(job_id)
+
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logger.error("Error in process health check", exc_info=True)
+            await asyncio.sleep(interval)
+
+
 async def _observe_external_jobs() -> None:
     """Poll for state changes in CLI-owned jobs and detect stale heartbeats.
 
@@ -857,6 +903,7 @@ async def lifespan(app: FastAPI):
     _stream_monitor = asyncio.create_task(_agent_stream_monitor())
     _observer = asyncio.create_task(_observe_external_jobs())
     _source_watcher = asyncio.create_task(_flow_source_watcher())
+    _health_checker = asyncio.create_task(_process_health_check())
     # Periodic queue owner cleanup disabled — see note above
     _queue_cleanup = None
 
@@ -873,6 +920,12 @@ async def lifespan(app: FastAPI):
             await _queue_cleanup
         except asyncio.CancelledError:
             pass
+
+    _health_checker.cancel()
+    try:
+        await _health_checker
+    except asyncio.CancelledError:
+        pass
 
     _source_watcher.cancel()
     try:
