@@ -16,6 +16,7 @@ import type {
   RegistryFlow,
   RegistrySearchResult,
   QuickLaunchItem,
+  StepDefinition,
 } from "./types";
 
 const BASE_URL = "/api";
@@ -98,6 +99,15 @@ export function resetJob(jobId: string): Promise<{ status: string }> {
 
 export function adoptJob(jobId: string): Promise<{ status: string; job_id: string }> {
   return request(`/jobs/${jobId}/adopt`, { method: "POST" });
+}
+
+export interface LiveSourceResponse {
+  steps: Record<string, StepDefinition>;
+  mtime: number;
+}
+
+export function fetchLiveSource(jobId: string): Promise<LiveSourceResponse> {
+  return request<LiveSourceResponse>(`/jobs/${jobId}/live-source`);
 }
 
 export function fetchRecentFlows(limit: number = 5): Promise<QuickLaunchItem[]> {

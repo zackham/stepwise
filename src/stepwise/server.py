@@ -152,6 +152,7 @@ _event_loop: asyncio.AbstractEventLoop | None = None
 _templates_dir: Path = Path("templates")
 _project_dir: Path = Path(".")
 _stream_tasks: dict[str, asyncio.Task] = {}
+_flow_mtimes: dict[str, float] = {}  # flow source_path → last known mtime
 
 
 # ── Event stream client registry ─────────────────────────────────────
@@ -378,6 +379,7 @@ def _serialize_job(job: Job, summary: bool = False) -> dict:
             "parent_job_id": job.parent_job_id,
             "created_by": job.created_by,
             "flow_file": getattr(job.workflow, "source_dir", None),
+            "flow_source_path": getattr(job.workflow, "source_path", None),
             "metadata": job.metadata,
             "has_suspended_steps": has_suspended,
             "current_step": current_step,
@@ -483,6 +485,50 @@ async def _observe_external_jobs() -> None:
             for jid in list(last_seen):
                 if jid not in active_ids:
                     del last_seen[jid]
+
+            await asyncio.sleep(2)
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            await asyncio.sleep(5)
+
+
+async def _flow_source_watcher() -> None:
+    """Poll flow source files for active jobs and broadcast changes via WebSocket."""
+    engine = _get_engine()
+    while True:
+        try:
+            changed_job_ids: list[str] = []
+            active = engine.store.active_jobs()
+            tracked_paths: set[str] = set()
+            for job in active:
+                sp = getattr(job.workflow, "source_path", None)
+                if not sp:
+                    continue
+                tracked_paths.add(sp)
+                try:
+                    mtime = os.path.getmtime(sp)
+                except OSError:
+                    continue
+                prev = _flow_mtimes.get(sp)
+                if prev is None:
+                    _flow_mtimes[sp] = mtime
+                    continue
+                if mtime != prev:
+                    _flow_mtimes[sp] = mtime
+                    changed_job_ids.append(job.id)
+
+            if changed_job_ids:
+                await _broadcast({
+                    "type": "flow_source_changed",
+                    "job_ids": changed_job_ids,
+                    "timestamp": _now().isoformat(),
+                })
+
+            # Clean up tracking for paths no longer active
+            for sp in list(_flow_mtimes):
+                if sp not in tracked_paths:
+                    del _flow_mtimes[sp]
 
             await asyncio.sleep(2)
         except asyncio.CancelledError:
@@ -810,6 +856,7 @@ async def lifespan(app: FastAPI):
     _engine_task = asyncio.create_task(_engine.run())
     _stream_monitor = asyncio.create_task(_agent_stream_monitor())
     _observer = asyncio.create_task(_observe_external_jobs())
+    _source_watcher = asyncio.create_task(_flow_source_watcher())
     # Periodic queue owner cleanup disabled — see note above
     _queue_cleanup = None
 
@@ -826,6 +873,12 @@ async def lifespan(app: FastAPI):
             await _queue_cleanup
         except asyncio.CancelledError:
             pass
+
+    _source_watcher.cancel()
+    try:
+        await _source_watcher
+    except asyncio.CancelledError:
+        pass
 
     _observer.cancel()
     try:
@@ -919,7 +972,7 @@ def create_job(req: CreateJobRequest):
             if not abs_path.is_file():
                 raise HTTPException(status_code=404, detail=f"Flow not found: {req.flow_path}")
             try:
-                wf = load_workflow_yaml(abs_path.read_text())
+                wf = load_workflow_yaml(abs_path)
             except YAMLLoadError as e:
                 raise HTTPException(status_code=400, detail=str(e))
         else:
@@ -964,6 +1017,31 @@ def create_job(req: CreateJobRequest):
         return _serialize_job(job)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/jobs/{job_id}/live-source")
+def get_live_source(job_id: str):
+    """Re-read the flow YAML from disk and return current step definitions."""
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+    engine = _get_engine()
+    job = engine.store.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    source_path = getattr(job.workflow, "source_path", None)
+    if not source_path:
+        raise HTTPException(status_code=404, detail="No source path for this job")
+    p = Path(source_path)
+    if not p.is_file():
+        raise HTTPException(status_code=404, detail="Flow file no longer exists on disk")
+    try:
+        wf = load_workflow_yaml(p)
+    except (YAMLLoadError, Exception) as e:
+        raise HTTPException(status_code=400, detail=f"Failed to parse flow file: {e}")
+    return {
+        "steps": {name: step.to_dict() for name, step in wf.steps.items()},
+        "mtime": os.path.getmtime(source_path),
+    }
 
 
 @app.get("/api/jobs/recent-flows")
