@@ -7,9 +7,6 @@ import {
 import { AppLayout } from "@/components/layout/AppLayout";
 import { JobDashboard } from "@/pages/JobDashboard";
 import { JobDetailPage } from "@/pages/JobDetailPage";
-import { JobEventsPage } from "@/pages/JobEventsPage";
-import { JobTreePage } from "@/pages/JobTreePage";
-import { JobTimelinePage } from "@/pages/JobTimelinePage";
 import { FlowsPage } from "@/pages/FlowsPage";
 import { EditorPage } from "@/pages/EditorPage";
 import { SettingsPage } from "@/pages/SettingsPage";
@@ -51,11 +48,13 @@ function validateJobsSearch(search: Record<string, unknown>): JobsRouteSearch {
 }
 
 const JOB_DETAIL_TAB_VALUES = new Set(["step", "data-flow", "job"]);
+const JOB_VIEW_VALUES = new Set(["dag", "events", "timeline", "tree"]);
 
 export type JobDetailSearch = JobsRouteSearch & {
   step?: string;
   tab?: "step" | "data-flow" | "job";
   panel?: "open";
+  view?: "dag" | "events" | "timeline" | "tree";
 };
 
 function validateJobDetailSearch(search: Record<string, unknown>): JobDetailSearch {
@@ -67,6 +66,9 @@ function validateJobDetailSearch(search: Record<string, unknown>): JobDetailSear
       ? search.tab as JobDetailSearch["tab"]
       : undefined,
     panel: search.panel === "open" ? "open" : undefined,
+    view: typeof search.view === "string" && JOB_VIEW_VALUES.has(search.view)
+      ? search.view as JobDetailSearch["view"]
+      : undefined,
   };
 }
 
@@ -101,25 +103,29 @@ const jobDetailRoute = createRoute({
   validateSearch: validateJobDetailSearch,
 });
 
-// Job events
+// Legacy route redirects: events/tree/timeline → job detail with view param
 const jobEventsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/jobs/$jobId/events",
-  component: JobEventsPage,
+  beforeLoad: ({ params }) => {
+    throw redirect({ to: "/jobs/$jobId", params: { jobId: params.jobId }, search: { view: "events" } });
+  },
 });
 
-// Job tree
 const jobTreeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/jobs/$jobId/tree",
-  component: JobTreePage,
+  beforeLoad: ({ params }) => {
+    throw redirect({ to: "/jobs/$jobId", params: { jobId: params.jobId }, search: { view: "tree" } });
+  },
 });
 
-// Job timeline
 const jobTimelineRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/jobs/$jobId/timeline",
-  component: JobTimelinePage,
+  beforeLoad: ({ params }) => {
+    throw redirect({ to: "/jobs/$jobId", params: { jobId: params.jobId }, search: { view: "timeline" } });
+  },
 });
 
 // Flows list
