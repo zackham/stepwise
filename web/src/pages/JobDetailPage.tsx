@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { useParams, useNavigate, Link } from "@tanstack/react-router";
+import { useParams, useNavigate, useSearch, Link } from "@tanstack/react-router";
+import type { JobDetailSearch } from "@/router";
 import { useJob, useRuns, useJobTree, useJobOutput, useJobCost, useStepwiseMutations } from "@/hooks/useStepwise";
 import { useConfig } from "@/hooks/useConfig";
 import { JobList } from "@/components/jobs/JobList";
@@ -213,11 +214,11 @@ export function JobDetailPage() {
   const { data: runs = [] } = useRuns(jobId);
   const { data: costData } = useJobCost(jobId);
   const { data: configData } = useConfig();
-  const [selection, setSelection] = useState<DagSelection>(null);
+  const searchParams = useSearch({ from: "/jobs/$jobId" }) as JobDetailSearch;
+  const [dataFlowSelection, setDataFlowSelection] = useState<DagSelection>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [rightPanelOpen, setRightPanelOpen] = useState<boolean | null>(null);
   const [expandedStep, setExpandedStep] = useState(false);
-  const [activeTab, setActiveTab] = useState<RightPanelTab>("job");
+  const [autoOpenedPanel, setAutoOpenedPanel] = useState(false);
   const mutations = useStepwiseMutations();
   const { expandedSteps, toggleExpand } = useAutoExpand(jobId, runs, job, jobTree ?? null);
 
@@ -230,8 +231,21 @@ export function JobDetailPage() {
     return runs.find((r) => r.status === "failed") ?? null;
   }, [job?.status, runs]);
 
-  // Derive selectedStep from selection for backward compatibility
-  const selectedStep = selection?.kind === "step" ? selection.stepName : null;
+  // Derive state from URL search params
+  const selectedStep = searchParams.step ?? null;
+  const selection: DagSelection = dataFlowSelection ?? (selectedStep ? { kind: "step", stepName: selectedStep } : null);
+
+  // Derive activeTab: URL tab param > auto-derive from selection kind > default "job"
+  const activeTab: RightPanelTab = dataFlowSelection
+    ? "data-flow"
+    : searchParams.tab ?? (selectedStep ? "step" : "job");
+
+  // Derive rightPanelOpen: URL panel param > auto-open for terminal jobs > default closed
+  const rightPanelOpen = searchParams.panel === "open"
+    ? true
+    : autoOpenedPanel
+      ? true
+      : false;
 
   // Build latestRuns map for DataFlowPanel
   const latestRuns = useMemo(() => {
@@ -250,42 +264,43 @@ export function JobDetailPage() {
   );
 
   const handleSelectStep = useCallback((stepName: string | null) => {
-    setSelection(stepName ? { kind: "step", stepName } : null);
-  }, []);
+    setDataFlowSelection(null);
+    if (stepName) {
+      navigate({
+        search: (prev: JobDetailSearch) => ({ ...prev, step: stepName, tab: "step" as const, panel: "open" as const }),
+        replace: false,
+      });
+    } else {
+      navigate({
+        search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined, panel: undefined }),
+        replace: true,
+      });
+    }
+  }, [navigate]);
 
   const handleSelectDataFlow = useCallback((sel: DagSelection) => {
-    setSelection(sel);
+    setDataFlowSelection(sel);
   }, []);
 
   // Auto-select newly suspended external steps
   useAutoSelectSuspended(runs, selection, handleSelectStep);
 
-  // Reset state when switching jobs
+  // Reset local state when switching jobs
   useEffect(() => {
-    setSelection(null);
-    setRightPanelOpen(null);
+    setDataFlowSelection(null);
     setExpandedStep(false);
-    setActiveTab("job");
+    setAutoOpenedPanel(false);
   }, [jobId]);
 
-  // Auto-open right panel for terminal jobs (only on initial load)
+  // Auto-open right panel for terminal jobs (only on initial load, when no URL panel param)
   useEffect(() => {
-    if (rightPanelOpen === null && job) {
+    if (searchParams.panel || autoOpenedPanel) return;
+    if (job) {
       const terminal =
         job.status === "completed" || job.status === "failed" || job.status === "cancelled";
-      setRightPanelOpen(terminal);
+      if (terminal) setAutoOpenedPanel(true);
     }
-  }, [job, rightPanelOpen]);
-
-  // Auto-switch tab on selection change
-  useEffect(() => {
-    if (!selection) return;
-    if (selection.kind === "step") {
-      setActiveTab("step");
-    } else {
-      setActiveTab("data-flow");
-    }
-  }, [selection]);
+  }, [job, searchParams.panel, autoOpenedPanel]);
 
   // Topological step order for keyboard navigation
   const topoStepNames = useMemo(() => {
@@ -371,15 +386,20 @@ export function JobDetailPage() {
         case "Enter": {
           if (selectedStep) {
             e.preventDefault();
-            setRightPanelOpen(true);
-            setActiveTab("step");
+            navigate({
+              search: (prev: JobDetailSearch) => ({ ...prev, panel: "open" as const, tab: "step" as const }),
+              replace: true,
+            });
           }
           break;
         }
         case "Escape": {
           if (selection) {
-            setSelection(null);
-            setActiveTab("job");
+            setDataFlowSelection(null);
+            navigate({
+              search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined, panel: undefined }),
+              replace: true,
+            });
           }
           break;
         }
@@ -572,7 +592,7 @@ export function JobDetailPage() {
                   </Link>
                   {!showRightPanel && (
                     <button
-                      onClick={() => setRightPanelOpen(true)}
+                      onClick={() => navigate({ search: (prev: JobDetailSearch) => ({ ...prev, panel: "open" as const }), replace: true })}
                       className="flex items-center justify-center min-w-[44px] min-h-[44px] text-xs text-zinc-500 hover:text-foreground rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
                       aria-label="Details"
                       title="Details"
@@ -659,7 +679,7 @@ export function JobDetailPage() {
                 </Link>
                 {!showRightPanel && (
                   <button
-                    onClick={() => setRightPanelOpen(true)}
+                    onClick={() => navigate({ search: (prev: JobDetailSearch) => ({ ...prev, panel: "open" as const }), replace: true })}
                     className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
                   >
                     <Info className="w-3.5 h-3.5" />
@@ -741,7 +761,10 @@ export function JobDetailPage() {
         const panelContent = showRightPanel ? (
           <Tabs
             value={activeTab}
-            onValueChange={(v) => setActiveTab(v as RightPanelTab)}
+            onValueChange={(v) => {
+              setDataFlowSelection(null);
+              navigate({ search: (prev: JobDetailSearch) => ({ ...prev, tab: v as RightPanelTab }), replace: true });
+            }}
             className="flex flex-col flex-1 min-h-0 gap-0"
           >
             <div className="flex items-center justify-between border-b border-border bg-zinc-50/50 dark:bg-zinc-950/50 shrink-0">
@@ -757,7 +780,11 @@ export function JobDetailPage() {
                 </TabsTrigger>
               </TabsList>
               <button
-                onClick={() => { setSelection(null); setRightPanelOpen(false); }}
+                onClick={() => {
+                  setDataFlowSelection(null);
+                  setAutoOpenedPanel(false);
+                  navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined, panel: undefined }), replace: true });
+                }}
                 className="text-zinc-600 hover:text-zinc-300 p-0.5 mr-2"
               >
                 <PanelRightOpen className="w-3.5 h-3.5" />
@@ -775,7 +802,7 @@ export function JobDetailPage() {
                 <StepDetailPanel
                   jobId={resolvedStep.jobId}
                   stepDef={resolvedStep.stepDef}
-                  onClose={() => { setSelection(null); setActiveTab("job"); }}
+                  onClose={() => { setDataFlowSelection(null); navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: "job" as const }), replace: true }); }}
                   onExpand={() => setExpandedStep(true)}
                 />
               )}
@@ -794,7 +821,7 @@ export function JobDetailPage() {
                   job={job}
                   latestRuns={latestRuns}
                   outputs={normalizedOutputs}
-                  onClose={() => { setSelection(null); setActiveTab("job"); }}
+                  onClose={() => { setDataFlowSelection(null); navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: "job" as const }), replace: true }); }}
                 />
               )}
             </TabsContent>
@@ -821,8 +848,9 @@ export function JobDetailPage() {
             <MobileFullScreen
               open={showRightPanel}
               onClose={() => {
-                setSelection(null);
-                setRightPanelOpen(false);
+                setDataFlowSelection(null);
+                setAutoOpenedPanel(false);
+                navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined, panel: undefined }), replace: true });
               }}
               title="Details"
             >
@@ -842,14 +870,14 @@ export function JobDetailPage() {
       {isMobile ? (
         <MobileFullScreen
           open={expandedStep && !!resolvedStep}
-          onClose={() => { setExpandedStep(false); setSelection(null); }}
+          onClose={() => { setExpandedStep(false); setDataFlowSelection(null); navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined }), replace: true }); }}
           title={resolvedStep?.stepDef.name ?? "Step Detail"}
         >
           {resolvedStep && (
             <StepDetailPanel
               jobId={resolvedStep.jobId}
               stepDef={resolvedStep.stepDef}
-              onClose={() => { setExpandedStep(false); setSelection(null); }}
+              onClose={() => { setExpandedStep(false); setDataFlowSelection(null); navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined }), replace: true }); }}
               onExpand={() => setExpandedStep(false)}
               expanded={true}
             />
@@ -862,7 +890,7 @@ export function JobDetailPage() {
               <StepDetailPanel
                 jobId={resolvedStep.jobId}
                 stepDef={resolvedStep.stepDef}
-                onClose={() => { setExpandedStep(false); setSelection(null); }}
+                onClose={() => { setExpandedStep(false); setDataFlowSelection(null); navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined }), replace: true }); }}
                 onExpand={() => setExpandedStep(false)}
                 expanded={true}
               />

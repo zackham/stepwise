@@ -50,6 +50,26 @@ function validateJobsSearch(search: Record<string, unknown>): JobsRouteSearch {
   };
 }
 
+const JOB_DETAIL_TAB_VALUES = new Set(["step", "data-flow", "job"]);
+
+export type JobDetailSearch = JobsRouteSearch & {
+  step?: string;
+  tab?: "step" | "data-flow" | "job";
+  panel?: "open";
+};
+
+function validateJobDetailSearch(search: Record<string, unknown>): JobDetailSearch {
+  const base = validateJobsSearch(search);
+  return {
+    ...base,
+    step: typeof search.step === "string" && search.step ? search.step : undefined,
+    tab: typeof search.tab === "string" && JOB_DETAIL_TAB_VALUES.has(search.tab)
+      ? search.tab as JobDetailSearch["tab"]
+      : undefined,
+    panel: search.panel === "open" ? "open" : undefined,
+  };
+}
+
 // Root route
 const rootRoute = createRootRoute({
   component: AppLayout,
@@ -78,7 +98,7 @@ const jobDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/jobs/$jobId",
   component: JobDetailPage,
-  validateSearch: validateJobsSearch,
+  validateSearch: validateJobDetailSearch,
 });
 
 // Job events
