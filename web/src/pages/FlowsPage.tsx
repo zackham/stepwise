@@ -14,6 +14,7 @@ import {
 } from "@/hooks/useEditor";
 import { useStepwiseMutations } from "@/hooks/useStepwise";
 import {
+  Eye,
   Hand,
   FileText,
   FolderOpen,
@@ -60,6 +61,7 @@ const EMPTY_RUNS: never[] = [];
 
 type Tab = "local" | "registry";
 type SortBy = "name" | "most-used" | "recent";
+type VisibilityFilter = "all" | "interactive" | "background" | "internal";
 
 function flowDirKey(flowPath: string): string {
   const lastSlash = flowPath.lastIndexOf("/");
@@ -83,6 +85,7 @@ export function FlowsPage() {
   const [tab, setTab] = useState<Tab>("local");
   const [filter, setFilter] = useState("");
   const [sortBy, setSortBy] = useState<SortBy>("name");
+  const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>("all");
   const [showCreateDialog, setShowCreateDialog] = useState(false);
 
   // Data
@@ -137,9 +140,16 @@ export function FlowsPage() {
   );
 
   const filtered = useMemo(() => {
-    const result = filter
+    let result = filter
       ? flows.filter((f) => f.name.toLowerCase().includes(filter.toLowerCase()))
       : [...flows];
+
+    // Apply visibility filter (hide internal by default)
+    if (visibilityFilter === "all") {
+      result = result.filter((f) => (f.visibility ?? "interactive") !== "internal");
+    } else {
+      result = result.filter((f) => (f.visibility ?? "interactive") === visibilityFilter);
+    }
 
     result.sort((a, b) => {
       if (sortBy === "name") {
@@ -161,7 +171,7 @@ export function FlowsPage() {
     });
 
     return result;
-  }, [flows, filter, sortBy, statsMap]);
+  }, [flows, filter, sortBy, visibilityFilter, statsMap]);
 
   const handleSelectLocalFlow = useCallback(
     (flow: LocalFlow) => {
@@ -318,6 +328,18 @@ export function FlowsPage() {
                       className="pl-8 h-8 text-sm bg-zinc-50 dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700"
                     />
                   </div>
+                  <Select value={visibilityFilter} onValueChange={(v) => setVisibilityFilter(v as VisibilityFilter)}>
+                    <SelectTrigger className="w-28 h-8 text-xs bg-zinc-50 dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700">
+                      <Eye className="w-3 h-3 mr-1 shrink-0" />
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="interactive">Interactive</SelectItem>
+                      <SelectItem value="background">Background</SelectItem>
+                      <SelectItem value="internal">Internal</SelectItem>
+                    </SelectContent>
+                  </Select>
                   <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortBy)}>
                     <SelectTrigger className="w-28 h-8 text-xs bg-zinc-50 dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700">
                       <SelectValue />
@@ -387,6 +409,11 @@ export function FlowsPage() {
                         <div className="flex flex-col min-w-0 flex-1">
                           <span className="truncate inline-flex items-center gap-1.5">
                             <span className="truncate">{flow.name}</span>
+                            {flow.visibility && flow.visibility !== "interactive" && (
+                              <span className="text-[9px] px-1 py-0.5 rounded bg-zinc-200 dark:bg-zinc-700 text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
+                                {flow.visibility}
+                              </span>
+                            )}
                             {flow.executor_types?.includes("external") && (
                               <Tooltip>
                                 <TooltipTrigger

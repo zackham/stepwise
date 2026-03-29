@@ -9,6 +9,7 @@ from stepwise.yaml_loader import (
     load_workflow_string,
     get_author,
     _parse_metadata,
+    YAMLLoadError,
 )
 
 
@@ -22,10 +23,13 @@ class TestFlowMetadata:
         assert m.author == ""
         assert m.version == ""
         assert m.tags == []
+        assert m.visibility == "interactive"
 
     def test_to_dict_omits_empty(self):
         m = FlowMetadata()
         assert m.to_dict() == {}
+        # visibility=interactive is the default, so omitted
+        assert "visibility" not in m.to_dict()
 
     def test_to_dict_includes_set_fields(self):
         m = FlowMetadata(name="test", author="zack", tags=["ai", "demo"])
@@ -35,6 +39,16 @@ class TestFlowMetadata:
         assert d["tags"] == ["ai", "demo"]
         assert "description" not in d
         assert "version" not in d
+
+    def test_to_dict_includes_non_default_visibility(self):
+        m = FlowMetadata(name="bg", visibility="background")
+        d = m.to_dict()
+        assert d["visibility"] == "background"
+
+    def test_to_dict_omits_interactive_visibility(self):
+        m = FlowMetadata(name="test", visibility="interactive")
+        d = m.to_dict()
+        assert "visibility" not in d
 
     def test_from_dict_full(self):
         d = {
@@ -50,11 +64,18 @@ class TestFlowMetadata:
         assert m.author == "zack"
         assert m.version == "1.0"
         assert m.tags == ["test", "demo"]
+        assert m.visibility == "interactive"
+
+    def test_from_dict_with_visibility(self):
+        d = {"name": "x", "visibility": "internal"}
+        m = FlowMetadata.from_dict(d)
+        assert m.visibility == "internal"
 
     def test_from_dict_empty(self):
         m = FlowMetadata.from_dict({})
         assert m.name == ""
         assert m.tags == []
+        assert m.visibility == "interactive"
 
     def test_round_trip(self):
         original = FlowMetadata(
@@ -70,6 +91,12 @@ class TestFlowMetadata:
         assert restored.author == original.author
         assert restored.version == original.version
         assert restored.tags == original.tags
+        assert restored.visibility == original.visibility
+
+    def test_round_trip_visibility(self):
+        original = FlowMetadata(name="bg", visibility="background")
+        restored = FlowMetadata.from_dict(original.to_dict())
+        assert restored.visibility == "background"
 
 
 class TestWorkflowDefinitionMetadata:
@@ -205,6 +232,60 @@ steps:
         wf = load_workflow_yaml(yaml_str)
         assert wf.metadata.tags == []
 
+    def test_visibility_defaults_to_interactive(self, tmp_path):
+        flow = tmp_path / "test.flow.yaml"
+        flow.write_text(self.FLOW_WITHOUT_METADATA)
+        wf = load_workflow_yaml(flow)
+        assert wf.metadata.visibility == "interactive"
+
+    def test_visibility_background(self):
+        yaml_str = """\
+name: bg-flow
+visibility: background
+steps:
+  hello:
+    run: 'echo "{\\"msg\\": \\"hi\\"}"'
+    outputs: [msg]
+"""
+        wf = load_workflow_yaml(yaml_str)
+        assert wf.metadata.visibility == "background"
+
+    def test_visibility_internal(self):
+        yaml_str = """\
+name: internal-flow
+visibility: internal
+steps:
+  hello:
+    run: 'echo "{\\"msg\\": \\"hi\\"}"'
+    outputs: [msg]
+"""
+        wf = load_workflow_yaml(yaml_str)
+        assert wf.metadata.visibility == "internal"
+
+    def test_visibility_interactive_explicit(self):
+        yaml_str = """\
+name: explicit-flow
+visibility: interactive
+steps:
+  hello:
+    run: 'echo "{\\"msg\\": \\"hi\\"}"'
+    outputs: [msg]
+"""
+        wf = load_workflow_yaml(yaml_str)
+        assert wf.metadata.visibility == "interactive"
+
+    def test_visibility_invalid_rejected(self):
+        yaml_str = """\
+name: bad-flow
+visibility: secret
+steps:
+  hello:
+    run: 'echo "{\\"msg\\": \\"hi\\"}"'
+    outputs: [msg]
+"""
+        with pytest.raises(YAMLLoadError, match="Invalid visibility 'secret'"):
+            load_workflow_yaml(yaml_str)
+
 
 class TestGetAuthor:
     """Author auto-population from git config."""
@@ -260,3 +341,13 @@ class TestParseMetadata:
         data = {}
         m = _parse_metadata(data, None)
         assert m.name == ""
+
+    def test_visibility_parsed(self):
+        data = {"visibility": "background"}
+        m = _parse_metadata(data, None)
+        assert m.visibility == "background"
+
+    def test_visibility_defaults_interactive(self):
+        data = {}
+        m = _parse_metadata(data, None)
+        assert m.visibility == "interactive"
