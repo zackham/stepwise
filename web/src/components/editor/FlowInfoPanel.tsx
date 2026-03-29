@@ -33,7 +33,7 @@ export function FlowInfoPanel({
       <ScrollArea className="flex-1 min-h-0">
         <div className="p-4 space-y-4">
           {flow.description && (
-            <p className="text-sm text-zinc-400">{flow.description}</p>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">{flow.description}</p>
           )}
 
           <div className="grid grid-cols-2 gap-2 text-xs">

@@ -110,7 +110,7 @@ export function FulfillWatchDialog({
 
         <div className="flex justify-end mb-2">
           <button
-            className="text-xs text-zinc-500 hover:text-zinc-300"
+            className="text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
             onClick={() => setJsonMode(!jsonMode)}
           >
             {jsonMode ? "Field mode" : "JSON mode"}

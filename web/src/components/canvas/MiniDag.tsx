@@ -1,6 +1,7 @@
 import { useMemo, memo } from "react";
 import dagre from "dagre";
 import type { FlowDefinition, StepRun, StepRunStatus } from "@/lib/types";
+import { useTheme } from "@/hooks/useTheme";
 
 interface MiniDagProps {
   workflow: FlowDefinition;
@@ -24,7 +25,7 @@ interface MiniEdge {
 
 const NODE_RADIUS = 5;
 
-function statusColor(status: StepRunStatus | "pending"): string {
+function statusColor(status: StepRunStatus | "pending", isDark: boolean): string {
   switch (status) {
     case "completed":
       return "#34d399"; // emerald-400
@@ -38,9 +39,9 @@ function statusColor(status: StepRunStatus | "pending"): string {
       return "#a78bfa"; // purple-400
     case "skipped":
     case "cancelled":
-      return "#71717a"; // zinc-500
+      return isDark ? "#71717a" : "#a1a1aa"; // zinc-500 / zinc-400
     default:
-      return "#52525b"; // zinc-600
+      return isDark ? "#52525b" : "#d4d4d8"; // zinc-600 / zinc-300
   }
 }
 
@@ -160,6 +161,11 @@ function computeMiniLayout(
 }
 
 export const MiniDag = memo(function MiniDag({ workflow, runs, width, height }: MiniDagProps) {
+  const theme = useTheme();
+  const isDark = theme === "dark";
+  const edgeStroke = isDark ? "#3f3f46" : "#d4d4d8";
+  const pendingStroke = isDark ? "#52525b" : "#a1a1aa";
+
   const { nodes, edges } = useMemo(
     () => computeMiniLayout(workflow, runs, width, height),
     [workflow, runs, width, height],
@@ -178,7 +184,7 @@ export const MiniDag = memo(function MiniDag({ workflow, runs, width, height }: 
               key={`e-${i}`}
               d={`M ${edge.from.x} ${edge.from.y} C ${midX} ${edge.from.y}, ${midX} ${edge.to.y}, ${edge.to.x} ${edge.to.y}`}
               fill="none"
-              stroke="#3f3f46"
+              stroke={edgeStroke}
               strokeWidth={1}
               opacity={0.6}
             />
@@ -191,7 +197,7 @@ export const MiniDag = memo(function MiniDag({ workflow, runs, width, height }: 
             y1={edge.from.y}
             x2={edge.to.x}
             y2={edge.to.y}
-            stroke="#3f3f46"
+            stroke={edgeStroke}
             strokeWidth={1}
             opacity={0.6}
           />
@@ -199,7 +205,7 @@ export const MiniDag = memo(function MiniDag({ workflow, runs, width, height }: 
       })}
       {/* Nodes */}
       {nodes.map((node) => {
-        const color = statusColor(node.status);
+        const color = statusColor(node.status, isDark);
         const isPending = node.status === "pending";
         const isRunning = node.status === "running";
         return (
@@ -214,7 +220,7 @@ export const MiniDag = memo(function MiniDag({ workflow, runs, width, height }: 
               cy={node.y}
               r={NODE_RADIUS}
               fill={isPending ? "none" : color}
-              stroke={isPending ? "#52525b" : color}
+              stroke={isPending ? pendingStroke : color}
               strokeWidth={isPending ? 1.5 : 0}
             />
           </g>

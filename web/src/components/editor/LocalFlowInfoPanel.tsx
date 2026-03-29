@@ -63,7 +63,7 @@ function InlineEdit({
         onClick={() => setEditing(true)}
         className="text-left w-full group/edit flex items-start gap-1"
       >
-        <span className={value ? "text-zinc-400" : "text-zinc-600 italic"}>
+        <span className={value ? "text-zinc-500 dark:text-zinc-400" : "text-zinc-400 dark:text-zinc-600 italic"}>
           {value || placeholder}
         </span>
         <Pencil className="w-3 h-3 text-zinc-600 opacity-0 group-hover/edit:opacity-100 shrink-0 mt-0.5" />
@@ -349,7 +349,7 @@ export function LocalFlowInfoPanel({
           onClick={onDelete}
           variant="ghost"
           size="sm"
-          className="text-red-400 hover:text-red-300"
+          className="text-red-500 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300"
         >
           <Trash2 className="w-3.5 h-3.5" />
         </Button>

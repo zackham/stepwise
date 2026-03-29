@@ -4,6 +4,7 @@ import { EditorState } from "@codemirror/state";
 import { basicSetup } from "codemirror";
 import { yaml } from "@codemirror/lang-yaml";
 import { oneDark } from "@codemirror/theme-one-dark";
+import { useTheme } from "@/hooks/useTheme";
 
 interface YamlEditorProps {
   value: string;
@@ -15,30 +16,36 @@ export function YamlEditor({ value, onChange }: YamlEditorProps) {
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  const theme = useTheme();
+  const isDark = theme === "dark";
 
   useEffect(() => {
     if (!containerRef.current) return;
 
+    const extensions = [
+      basicSetup,
+      yaml(),
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) {
+          onChangeRef.current(update.state.doc.toString());
+        }
+      }),
+      EditorView.theme({
+        "&": { height: "100%", fontSize: "13px" },
+        ".cm-scroller": { overflow: "auto" },
+        ".cm-content": {
+          fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+        },
+      }),
+    ];
+    if (isDark) {
+      extensions.push(oneDark);
+    }
+
     const view = new EditorView({
       state: EditorState.create({
         doc: value,
-        extensions: [
-          basicSetup,
-          yaml(),
-          oneDark,
-          EditorView.updateListener.of((update) => {
-            if (update.docChanged) {
-              onChangeRef.current(update.state.doc.toString());
-            }
-          }),
-          EditorView.theme({
-            "&": { height: "100%", fontSize: "13px" },
-            ".cm-scroller": { overflow: "auto" },
-            ".cm-content": {
-              fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-            },
-          }),
-        ],
+        extensions,
       }),
       parent: containerRef.current,
     });
@@ -48,7 +55,7 @@ export function YamlEditor({ value, onChange }: YamlEditorProps) {
       view.destroy();
       viewRef.current = null;
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isDark]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handle external value changes (load new flow)
   useEffect(() => {
@@ -62,5 +69,5 @@ export function YamlEditor({ value, onChange }: YamlEditorProps) {
     }
   }, [value]);
 
-  return <div ref={containerRef} className="h-full w-full overflow-hidden" />;
+  return <div ref={containerRef} className="h-full w-full overflow-hidden bg-white dark:bg-transparent" />;
 }

@@ -102,7 +102,7 @@ function LabelRow({
         </div>
       ) : (
         <>
-          <span className="flex-1 text-xs text-zinc-400 font-mono truncate">{label.model}</span>
+          <span className="flex-1 text-xs text-zinc-500 dark:text-zinc-400 font-mono truncate">{label.model}</span>
           <button
             onClick={() => {
               setModelValue(label.model);
@@ -198,7 +198,7 @@ function AddLabelForm({
         <button onClick={() => setOpen(false)} className="text-zinc-500 hover:text-zinc-700 dark:text-zinc-300 p-1">
           <X className="w-3.5 h-3.5" />
         </button>
-        {error && <span className="text-[10px] text-red-400">{error}</span>}
+        {error && <span className="text-[10px] text-red-500 dark:text-red-400">{error}</span>}
       </div>
     </div>
   );
@@ -239,7 +239,7 @@ function ApiKeyRow({
             <select
               value={scope}
               onChange={(e) => setScope(e.target.value)}
-              className="text-xs bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-400"
+              className="text-xs bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-500 dark:text-zinc-400"
             >
               <option value="user">User</option>
               <option value="project">Project</option>
@@ -302,7 +302,7 @@ function ModelRow({
         <div className="flex items-center gap-2">
           <span className="text-xs font-mono text-zinc-700 dark:text-zinc-300 truncate flex-1 min-w-0">{model.id}</span>
           {labelRefs.map((l) => (
-            <span key={l} className="text-[10px] px-1 py-0.5 bg-violet-950 text-violet-400 rounded shrink-0">
+            <span key={l} className="text-[10px] px-1 py-0.5 bg-violet-100 dark:bg-violet-950 text-violet-600 dark:text-violet-400 rounded shrink-0">
               {l}
             </span>
           ))}
@@ -329,7 +329,7 @@ function ModelRow({
         <div className="flex items-center gap-2">
           <span className="text-xs font-mono text-zinc-700 dark:text-zinc-300 truncate">{model.id}</span>
           {labelRefs.map((l) => (
-            <span key={l} className="text-[10px] px-1 py-0.5 bg-violet-950 text-violet-400 rounded shrink-0">
+            <span key={l} className="text-[10px] px-1 py-0.5 bg-violet-100 dark:bg-violet-950 text-violet-600 dark:text-violet-400 rounded shrink-0">
               {l}
             </span>
           ))}
@@ -387,16 +387,16 @@ function ModelSearch({
     <div className="px-3 py-2 space-y-2">
       <div className="flex items-center gap-2">
         <div className="flex-1 relative">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-600" />
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-500 dark:text-zinc-600" />
           <input
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search models (e.g. claude, gpt, gemini)..."
-            className="w-full text-xs bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded pl-7 pr-2 py-1.5 text-zinc-700 dark:text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-blue-500"
+            className="w-full text-xs bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded pl-7 pr-2 py-1.5 text-zinc-700 dark:text-zinc-300 placeholder:text-zinc-400 dark:placeholder:text-zinc-600 focus:outline-none focus:border-blue-500"
           />
           {isFetching && (
-            <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-600 animate-spin" />
+            <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-500 dark:text-zinc-600 animate-spin" />
           )}
         </div>
         <button
@@ -413,12 +413,12 @@ function ModelSearch({
       {query.length >= 2 && (
         <div className="max-h-64 overflow-y-auto border border-zinc-200 dark:border-zinc-800 rounded bg-zinc-50/80 dark:bg-zinc-950/80">
           {isLoading ? (
-            <div className="flex items-center justify-center py-4 text-xs text-zinc-600">
+            <div className="flex items-center justify-center py-4 text-xs text-zinc-500 dark:text-zinc-600">
               <Loader2 className="w-3 h-3 animate-spin mr-1.5" />
               Searching...
             </div>
           ) : filtered.length === 0 ? (
-            <div className="py-3 text-center text-xs text-zinc-600">
+            <div className="py-3 text-center text-xs text-zinc-500 dark:text-zinc-600">
               {results?.length === 0 ? "No models found" : "All matches already in registry"}
             </div>
           ) : (
@@ -430,14 +430,14 @@ function ModelSearch({
               >
                 <div className="flex-1 min-w-0">
                   <div className="text-xs text-zinc-700 dark:text-zinc-300 truncate">{m.name}</div>
-                  <div className="text-[10px] text-zinc-600 font-mono truncate">{m.id}</div>
+                  <div className="text-[10px] text-zinc-500 dark:text-zinc-600 font-mono truncate">{m.id}</div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0 text-[10px] text-zinc-500 font-mono">
                   <span>{formatTokenCount(m.context_length)}</span>
                   <span>{formatCostPerMToken(m.prompt_cost)}/Mi</span>
                   <span>{formatCostPerMToken(m.completion_cost)}/Mo</span>
                 </div>
-                <Plus className="w-3 h-3 text-zinc-600 shrink-0" />
+                <Plus className="w-3 h-3 text-zinc-500 dark:text-zinc-600 shrink-0" />
               </button>
             ))
           )}
@@ -470,7 +470,7 @@ function Section({
         <Icon className="w-4 h-4 text-zinc-500" />
         <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{title}</span>
         <div className="flex-1" />
-        <ChevronDown className={cn("w-4 h-4 text-zinc-600 transition-transform", !open && "-rotate-90")} />
+        <ChevronDown className={cn("w-4 h-4 text-zinc-500 dark:text-zinc-600 transition-transform", !open && "-rotate-90")} />
       </button>
       {open && <div className="p-2">{children}</div>}
     </div>
@@ -511,7 +511,7 @@ export function SettingsPage() {
         {/* Model Labels */}
         <Section title="Model Labels" icon={Tag}>
           <div className="space-y-1">
-            <div className="px-3 py-1 text-[10px] font-medium text-zinc-600 uppercase tracking-wide">
+            <div className="px-3 py-1 text-[10px] font-medium text-zinc-500 dark:text-zinc-600 uppercase tracking-wide">
               Default Labels
             </div>
             {defaultLabels.map((label) => (
@@ -524,11 +524,11 @@ export function SettingsPage() {
                 }
               />
             ))}
-            <div className="px-3 py-1 mt-3 text-[10px] font-medium text-zinc-600 uppercase tracking-wide">
+            <div className="px-3 py-1 mt-3 text-[10px] font-medium text-zinc-500 dark:text-zinc-600 uppercase tracking-wide">
               Custom Labels
             </div>
             {customLabels.length === 0 && (
-              <div className="px-3 py-1 text-xs text-zinc-600">No custom labels</div>
+              <div className="px-3 py-1 text-xs text-zinc-500 dark:text-zinc-600">No custom labels</div>
             )}
             {customLabels.map((label) => (
               <LabelRow
@@ -568,7 +568,7 @@ export function SettingsPage() {
               }
             />
           </div>
-          <p className="text-[10px] text-zinc-600 px-3 mt-2">
+          <p className="text-[10px] text-zinc-500 dark:text-zinc-600 px-3 mt-2">
             User = ~/.config/stepwise/ &nbsp;|&nbsp; Project = .stepwise/config.local.yaml (gitignored)
           </p>
         </Section>
@@ -578,7 +578,7 @@ export function SettingsPage() {
           <div className="space-y-0.5">
             {/* Column headers */}
             {config.model_registry.length > 0 && (
-              <div className="hidden md:flex items-center gap-2 py-1 px-3 text-[10px] font-medium text-zinc-600 uppercase tracking-wide">
+              <div className="hidden md:flex items-center gap-2 py-1 px-3 text-[10px] font-medium text-zinc-500 dark:text-zinc-600 uppercase tracking-wide">
                 <div className="flex-1">Model</div>
                 <div className="flex items-center gap-3 shrink-0 font-mono">
                   <span className="w-12 text-right">Context</span>
@@ -598,7 +598,7 @@ export function SettingsPage() {
               />
             ))}
             {config.model_registry.length === 0 && (
-              <div className="px-3 py-2 text-xs text-zinc-600">
+              <div className="px-3 py-2 text-xs text-zinc-500 dark:text-zinc-600">
                 No models in registry. Search OpenRouter to add models.
               </div>
             )}
@@ -625,7 +625,7 @@ export function SettingsPage() {
                   </option>
                 ))}
               </select>
-              <span className="text-[10px] text-zinc-600">Used when step omits model:</span>
+              <span className="text-[10px] text-zinc-500 dark:text-zinc-600">Used when step omits model:</span>
             </div>
             <div className="flex items-center gap-3">
               <span className="text-xs text-zinc-500 w-28">Default Agent</span>
@@ -637,7 +637,7 @@ export function SettingsPage() {
                 <option value="claude">claude</option>
                 <option value="codex">codex</option>
               </select>
-              <span className="text-[10px] text-zinc-600">Used when agent step omits backend:</span>
+              <span className="text-[10px] text-zinc-500 dark:text-zinc-600">Used when agent step omits backend:</span>
             </div>
           </div>
         </Section>

@@ -36,7 +36,7 @@ function ConfigField({
   if (fieldType === "bool") {
     return (
       <div className="space-y-1">
-        <Label className="text-xs text-zinc-400">{configVar.name}</Label>
+        <Label className="text-xs text-zinc-500 dark:text-zinc-400">{configVar.name}</Label>
         {configVar.description && (
           <p className="text-[10px] text-zinc-600">{configVar.description}</p>
         )}
@@ -44,7 +44,7 @@ function ConfigField({
           value={value != null ? String(value) : ""}
           onValueChange={(v) => onChange(v === "true")}
         >
-          <SelectTrigger className="h-8 text-sm bg-zinc-900 border-zinc-700">
+          <SelectTrigger className="h-8 text-sm bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700">
             <SelectValue placeholder={configVar.example || "Select..."} />
           </SelectTrigger>
           <SelectContent>
@@ -59,7 +59,7 @@ function ConfigField({
   if (fieldType === "choice" && configVar.options) {
     return (
       <div className="space-y-1">
-        <Label className="text-xs text-zinc-400">{configVar.name}</Label>
+        <Label className="text-xs text-zinc-500 dark:text-zinc-400">{configVar.name}</Label>
         {configVar.description && (
           <p className="text-[10px] text-zinc-600">{configVar.description}</p>
         )}
@@ -67,7 +67,7 @@ function ConfigField({
           value={strValue}
           onValueChange={(v) => onChange(v)}
         >
-          <SelectTrigger className="h-8 text-sm bg-zinc-900 border-zinc-700">
+          <SelectTrigger className="h-8 text-sm bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700">
             <SelectValue placeholder={configVar.example || "Select..."} />
           </SelectTrigger>
           <SelectContent>
@@ -85,7 +85,7 @@ function ConfigField({
   if (fieldType === "text") {
     return (
       <div className="space-y-1">
-        <Label className="text-xs text-zinc-400">{configVar.name}</Label>
+        <Label className="text-xs text-zinc-500 dark:text-zinc-400">{configVar.name}</Label>
         {configVar.description && (
           <p className="text-[10px] text-zinc-600">{configVar.description}</p>
         )}
@@ -93,7 +93,7 @@ function ConfigField({
           value={strValue}
           onChange={(e) => onChange(e.target.value)}
           placeholder={configVar.example || configVar.default != null ? String(configVar.default) : ""}
-          className="text-sm bg-zinc-900 border-zinc-700 min-h-[60px]"
+          className="text-sm bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700 min-h-[60px]"
           rows={3}
         />
       </div>
@@ -103,7 +103,7 @@ function ConfigField({
   if (fieldType === "number") {
     return (
       <div className="space-y-1">
-        <Label className="text-xs text-zinc-400">{configVar.name}</Label>
+        <Label className="text-xs text-zinc-500 dark:text-zinc-400">{configVar.name}</Label>
         {configVar.description && (
           <p className="text-[10px] text-zinc-600">{configVar.description}</p>
         )}
@@ -115,7 +115,7 @@ function ConfigField({
             onChange(v === "" ? null : Number(v));
           }}
           placeholder={configVar.example || (configVar.default != null ? String(configVar.default) : "")}
-          className="h-8 text-sm bg-zinc-900 border-zinc-700"
+          className="h-8 text-sm bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700"
         />
       </div>
     );
@@ -124,12 +124,12 @@ function ConfigField({
   // Default: str
   return (
     <div className="space-y-1">
-      <Label className="text-xs text-zinc-400">
+      <Label className="text-xs text-zinc-500 dark:text-zinc-400">
         {configVar.name}
         {configVar.sensitive && (
           <button
             onClick={() => setShowSensitive(!showSensitive)}
-            className="ml-1.5 text-zinc-600 hover:text-zinc-400"
+            className="ml-1.5 text-zinc-400 dark:text-zinc-600 hover:text-zinc-600 dark:hover:text-zinc-400"
           >
             {showSensitive ? <EyeOff className="w-3 h-3 inline" /> : <Eye className="w-3 h-3 inline" />}
           </button>
@@ -143,7 +143,7 @@ function ConfigField({
         value={strValue}
         onChange={(e) => onChange(e.target.value || null)}
         placeholder={configVar.example || (configVar.default != null ? String(configVar.default) : "")}
-        className="h-8 text-sm bg-zinc-900 border-zinc-700"
+        className="h-8 text-sm bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700"
       />
     </div>
   );
@@ -206,9 +206,9 @@ export function FlowConfigPanel({ flowPath }: FlowConfigPanelProps) {
   if (!hasConfigVars && !hasValues) return null;
 
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900/50">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800">
-        <div className="flex items-center gap-1.5 text-xs text-zinc-400">
+    <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-200 dark:border-zinc-800">
+        <div className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
           <Settings className="w-3.5 h-3.5" />
           <span className="font-medium">Config</span>
           <span className="text-zinc-600">({config.config_path})</span>
@@ -217,7 +217,7 @@ export function FlowConfigPanel({ flowPath }: FlowConfigPanelProps) {
           {hasConfigVars && (
             <button
               onClick={() => setMode(mode === "form" ? "raw" : "form")}
-              className="text-[10px] text-zinc-500 hover:text-zinc-300 px-1.5 py-0.5 rounded hover:bg-zinc-800"
+              className="text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 px-1.5 py-0.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800"
             >
               <Code className="w-3 h-3 inline mr-1" />
               {mode === "form" ? "YAML" : "Form"}
@@ -255,7 +255,7 @@ export function FlowConfigPanel({ flowPath }: FlowConfigPanelProps) {
             value={rawYaml}
             onChange={handleRawChange}
             placeholder="# key: value"
-            className="font-mono text-xs bg-zinc-950 border-zinc-700 min-h-[80px]"
+            className="font-mono text-xs bg-zinc-50 dark:bg-zinc-950 border-zinc-300 dark:border-zinc-700 min-h-[80px]"
             rows={Math.max(4, rawYaml.split("\n").length + 1)}
             onKeyDown={(e) => {
               if (e.key === "s" && (e.metaKey || e.ctrlKey)) {

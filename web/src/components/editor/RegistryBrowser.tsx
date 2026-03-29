@@ -21,7 +21,7 @@ export function RegistryBrowser({ selectedSlug, onSelect }: RegistryBrowserProps
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-6 text-zinc-500">
         <WifiOff className="w-8 h-8 mb-3 opacity-40" />
-        <p className="text-sm font-medium text-zinc-400">Flow Registry is not configured</p>
+        <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">Flow Registry is not configured</p>
         <p className="text-xs text-zinc-600 mt-1 text-center max-w-[200px]">
           The flow registry provides shared, reusable workflows you can install and run locally.
         </p>
@@ -29,7 +29,7 @@ export function RegistryBrowser({ selectedSlug, onSelect }: RegistryBrowserProps
           href="https://stepwise.run/docs/registry"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-xs text-blue-400 hover:text-blue-300 mt-3 underline underline-offset-2"
+          className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-500 dark:hover:text-blue-300 mt-3 underline underline-offset-2"
         >
           Learn more
         </a>
