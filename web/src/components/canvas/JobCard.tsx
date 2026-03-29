@@ -101,7 +101,7 @@ export const JobCard = memo(function JobCard({ job, runs, dependencyNames, isGro
           </div>
           <span className="text-[11px] text-zinc-600 shrink-0 ml-2">
             <LiveDuration
-              startTime={job.created_at}
+              startTime={isActive || isCompleted || isFailed || job.status === "cancelled" ? job.created_at : null}
               endTime={isCompleted || isFailed || job.status === "cancelled" ? job.updated_at : null}
             />
           </span>
