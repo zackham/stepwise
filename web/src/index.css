@@ -138,3 +138,39 @@
 @utility animate-fade-in {
   animation: fade-in 150ms ease-out both;
 }
+
+/* Custom scrollbar styling for dark mode */
+* {
+  scrollbar-color: oklch(0.552 0 0) transparent;
+  scrollbar-width: thin;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: oklch(0.552 0 0);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.65 0 0);
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: oklch(0.4 0 0);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.5 0 0);
+}
+
+.dark * {
+  scrollbar-color: oklch(0.4 0 0) transparent;
+}
