@@ -258,6 +258,16 @@ export interface StepwiseEvent {
   is_effector: boolean;
 }
 
+// ── Group Settings ────────────────────────────────────────────────────
+
+export interface GroupInfo {
+  group: string;
+  max_concurrent: number;
+  active_count: number;
+  pending_count: number;
+  total_count: number;
+}
+
 // ── Job Tree ───────────────────────────────────────────────────────────
 
 export interface JobTreeNode {

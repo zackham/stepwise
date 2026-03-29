@@ -117,6 +117,11 @@ class SQLiteStore:
             );
             CREATE INDEX IF NOT EXISTS idx_job_deps_depends_on
                 ON job_dependencies(depends_on_job_id);
+
+            CREATE TABLE IF NOT EXISTS group_settings (
+                group_name TEXT PRIMARY KEY,
+                max_concurrent INTEGER NOT NULL DEFAULT 0
+            );
         """)
         self._conn.commit()
         self._migrate()
@@ -972,6 +977,38 @@ class SQLiteStore:
             }
             for r in rows
         ]
+
+    # ── Group settings ─────────────────────────────────────────────────
+
+    def get_group_max_concurrent(self, group: str) -> int:
+        """Return max_concurrent for a group (0 = unlimited)."""
+        row = self._conn.execute(
+            "SELECT max_concurrent FROM group_settings WHERE group_name = ?",
+            (group,),
+        ).fetchone()
+        return row[0] if row else 0
+
+    def set_group_max_concurrent(self, group: str, max_concurrent: int) -> None:
+        """Upsert max_concurrent for a group."""
+        self._conn.execute(
+            "INSERT INTO group_settings (group_name, max_concurrent) VALUES (?, ?) "
+            "ON CONFLICT(group_name) DO UPDATE SET max_concurrent = excluded.max_concurrent",
+            (group, max_concurrent),
+        )
+        self._conn.commit()
+
+    def list_group_settings(self) -> dict[str, int]:
+        """Return {group_name: max_concurrent} for all groups with settings."""
+        rows = self._conn.execute("SELECT group_name, max_concurrent FROM group_settings").fetchall()
+        return {r[0]: r[1] for r in rows}
+
+    def active_jobs_in_group(self, group: str) -> list[Job]:
+        """Return RUNNING jobs in a specific group (excludes sub-jobs)."""
+        rows = self._conn.execute(
+            "SELECT * FROM jobs WHERE job_group = ? AND status = ? AND parent_job_id IS NULL",
+            (group, JobStatus.RUNNING.value),
+        ).fetchall()
+        return [self._row_to_job(r) for r in rows]
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
