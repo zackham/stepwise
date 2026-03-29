@@ -115,6 +115,7 @@ class StepwiseConfig:
     notify_context: dict = field(default_factory=dict)
     max_concurrent_jobs: int = 10
     max_concurrent_agents: int = 3
+    max_concurrent_by_executor: dict[str, int] = field(default_factory=dict)
     agent_permissions: str = "approve_all"  # "approve_all" | "prompt" | "deny"
 
     def resolve_model(self, model_ref: str) -> str:
@@ -126,6 +127,17 @@ class StepwiseConfig:
         if model_ref in all_labels:
             return label_model_id(all_labels[model_ref])
         return model_ref
+
+    def resolved_executor_limits(self) -> dict[str, int]:
+        """Effective per-executor-type concurrency limits.
+
+        max_concurrent_agents seeds the agent limit; max_concurrent_by_executor overlays.
+        """
+        limits: dict[str, int] = {}
+        if self.max_concurrent_agents > 0:
+            limits["agent"] = self.max_concurrent_agents
+        limits.update(self.max_concurrent_by_executor)
+        return {k: v for k, v in limits.items() if v > 0}
 
     def get_model_entry(self, model_id: str) -> ModelEntry | None:
         """Look up a model entry by ID."""
@@ -158,6 +170,8 @@ class StepwiseConfig:
             d["max_concurrent_jobs"] = self.max_concurrent_jobs
         if self.max_concurrent_agents != 3:
             d["max_concurrent_agents"] = self.max_concurrent_agents
+        if self.max_concurrent_by_executor:
+            d["max_concurrent_by_executor"] = self.max_concurrent_by_executor
         if self.agent_permissions != "approve_all":
             d["agent_permissions"] = self.agent_permissions
         return d
@@ -175,6 +189,14 @@ class StepwiseConfig:
             model_registry.append(ModelEntry(
                 id=m["id"], name=m["name"], provider=m["provider"]
             ))
+        raw_limits = d.get("max_concurrent_by_executor", {})
+        if not isinstance(raw_limits, dict):
+            raw_limits = {}
+        validated_limits = {}
+        for k, v in raw_limits.items():
+            if isinstance(v, int) and v >= 0:
+                validated_limits[str(k)] = v
+
         return StepwiseConfig(
             openrouter_api_key=d.get("openrouter_api_key"),
             anthropic_api_key=d.get("anthropic_api_key"),
@@ -187,6 +209,7 @@ class StepwiseConfig:
             notify_context=d.get("notify_context", {}),
             max_concurrent_jobs=d.get("max_concurrent_jobs", 10),
             max_concurrent_agents=d.get("max_concurrent_agents", 3),
+            max_concurrent_by_executor=validated_limits,
             agent_permissions=d.get("agent_permissions", "approve_all"),
         )
 
@@ -308,6 +331,12 @@ def load_config(project_dir: Path | None = None) -> StepwiseConfig:
     labels.update(project.labels)
     labels.update(local.labels)
 
+    # Merge executor limits: user < project < local
+    executor_limits: dict[str, int] = {}
+    executor_limits.update(user.max_concurrent_by_executor)
+    executor_limits.update(project.max_concurrent_by_executor)
+    executor_limits.update(local.max_concurrent_by_executor)
+
     registry = list(user.model_registry)
     registry = _ensure_label_models_in_registry(registry, labels)
     registry = _ensure_defaults_in_registry(registry)
@@ -343,6 +372,7 @@ def load_config(project_dir: Path | None = None) -> StepwiseConfig:
              if l.max_concurrent_agents != 3),
             3,
         ),
+        max_concurrent_by_executor=executor_limits,
         agent_permissions=next(
             (l.agent_permissions for l in (local, project, user)
              if l.agent_permissions != "approve_all"),

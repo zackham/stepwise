@@ -16,7 +16,14 @@ export type StepRunStatus =
   | "completed"
   | "failed"
   | "cancelled"
-  | "skipped";
+  | "skipped"
+  | "throttled";
+
+export interface ThrottleInfo {
+  executor_type: string;
+  running: number;
+  limit: number;
+}
 
 // ── Serializable References ────────────────────────────────────────────
 

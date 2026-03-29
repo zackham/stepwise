@@ -1505,6 +1505,39 @@ def cmd_config(args: argparse.Namespace) -> int:
             save_project_local_config(project_dir, notify_context=ctx)
             _io(args).log("success", f"Set {args.key} in project config")
             return EXIT_SUCCESS
+        elif args.key.startswith("max_concurrent_by_executor"):
+            from stepwise.config import save_project_local_config
+            project_dir = _project_dir(args) or Path.cwd()
+            if "." in args.key:
+                _, exec_type = args.key.split(".", 1)
+                try:
+                    limit = int(value)
+                except ValueError:
+                    print(f"Error: value must be an integer, got '{value}'", file=sys.stderr)
+                    return EXIT_USAGE_ERROR
+                if limit < 0:
+                    print("Error: limit must be non-negative (0 = unlimited)", file=sys.stderr)
+                    return EXIT_USAGE_ERROR
+                config = load_config(project_dir)
+                limits = dict(config.max_concurrent_by_executor)
+                if limit == 0:
+                    limits.pop(exec_type, None)
+                else:
+                    limits[exec_type] = limit
+                save_project_local_config(project_dir, max_concurrent_by_executor=limits)
+            else:
+                import json as _json
+                try:
+                    limits = _json.loads(value)
+                except _json.JSONDecodeError:
+                    print("Error: value must be JSON dict, e.g. '{\"agent\": 1}'", file=sys.stderr)
+                    return EXIT_USAGE_ERROR
+                if not isinstance(limits, dict) or not all(isinstance(v, int) and v >= 0 for v in limits.values()):
+                    print("Error: each value must be a non-negative integer", file=sys.stderr)
+                    return EXIT_USAGE_ERROR
+                save_project_local_config(project_dir, max_concurrent_by_executor=limits)
+            _io(args).log("success", f"Set {args.key} in project config")
+            return EXIT_SUCCESS
         else:
             print(f"Error: Unknown config key '{args.key}'", file=sys.stderr)
             return EXIT_USAGE_ERROR
@@ -1532,6 +1565,18 @@ def cmd_config(args: argparse.Namespace) -> int:
         elif args.key == "notify_context":
             import json as _json
             print(_json.dumps(config.notify_context) if config.notify_context else "{}")
+            return EXIT_SUCCESS
+        elif args.key.startswith("max_concurrent_by_executor"):
+            limits = config.resolved_executor_limits()
+            if "." in args.key:
+                _, exec_type = args.key.split(".", 1)
+                print(limits.get(exec_type, "unlimited"))
+            else:
+                if limits:
+                    for t, v in sorted(limits.items()):
+                        print(f"  {t}: {v}")
+                else:
+                    print("  (no limits set)")
             return EXIT_SUCCESS
         else:
             print(f"Error: Unknown config key '{args.key}'", file=sys.stderr)

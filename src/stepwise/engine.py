@@ -866,7 +866,21 @@ class Engine:
 
             else:
                 step_info["status"] = "pending"
-                # Show dependencies for pending steps
+                # Check if throttled: step would be ready but executor is at capacity
+                if (hasattr(self, '_executor_limits') and self._executor_limits
+                        and self._is_step_ready(job, step_name, step_def)):
+                    exec_type = step_def.executor.type
+                    limit = self._executor_limits.get(exec_type, 0)
+                    if limit > 0:
+                        running = self._running_count_for_type(exec_type)
+                        if running >= limit:
+                            step_info["status"] = "throttled"
+                            step_info["throttle_info"] = {
+                                "executor_type": exec_type,
+                                "running": running,
+                                "limit": limit,
+                            }
+                # Show dependencies for pending/throttled steps
                 deps = []
                 for binding in step_def.inputs:
                     if binding.source_step and binding.source_step != "$job":
@@ -3160,11 +3174,11 @@ class AsyncEngine(Engine):
         self._executor_pool = ThreadPoolExecutor(
             max_workers=pool_size, thread_name_prefix="stepwise-exec"
         )
-        # Agent concurrency: semaphore + stagger delay
-        _max_agents = 3
-        if config and hasattr(config, "max_concurrent_agents"):
-            _max_agents = config.max_concurrent_agents
-        self._agent_semaphore = asyncio.Semaphore(_max_agents)
+        # Per-executor-type dispatch gating
+        self._executor_limits: dict[str, int] = {}
+        self._task_exec_types: dict[str, str] = {}  # run_id → executor type name
+        if config and hasattr(config, "resolved_executor_limits"):
+            self._executor_limits = config.resolved_executor_limits()
         self._agent_last_launch: float = 0.0  # monotonic timestamp
         self._agent_stagger_lock = asyncio.Lock()
         self._agent_stagger_seconds = 2.0
@@ -3176,6 +3190,7 @@ class AsyncEngine(Engine):
             task.cancel()
         for task in self._poll_tasks.values():
             task.cancel()
+        self._task_exec_types.clear()
 
     # ── Main loop ────────────────────────────────────────────────────────
 
@@ -3625,7 +3640,7 @@ class AsyncEngine(Engine):
     # ── Step dispatch ────────────────────────────────────────────────────
 
     def _dispatch_ready(self, job_id: str) -> None:
-        """Find and launch all ready steps for a job."""
+        """Find and launch all ready steps for a job (respecting executor limits)."""
         job = self.store.load_job(job_id)
         if job.status != JobStatus.RUNNING:
             return
@@ -3633,6 +3648,16 @@ class AsyncEngine(Engine):
         if ready:
             _async_logger.info(f"Dispatching {len(ready)} ready step(s) for job {job_id}: {ready}")
         for step_name in ready:
+            step_def = job.workflow.steps[step_name]
+            exec_type = step_def.executor.type
+            if self._executor_at_capacity(exec_type):
+                _async_logger.debug(
+                    "Step %s throttled: %s at capacity (%d/%d)",
+                    step_name, exec_type,
+                    self._running_count_for_type(exec_type),
+                    self._executor_limits.get(exec_type, 0),
+                )
+                continue
             self._launch(job, step_name)
             # Reload — _launch may change job status (for_each, route, sub_flow)
             job = self.store.load_job(job_id)
@@ -3690,6 +3715,7 @@ class AsyncEngine(Engine):
                 raise RuntimeError("AsyncEngine.run() must be started before dispatching steps")
             task = asyncio.run_coroutine_threadsafe(coro, self._loop)
         self._tasks[run.id] = task
+        self._task_exec_types[run.id] = step_def.executor.type
         return run
 
     async def _apply_agent_stagger(self) -> None:
@@ -3700,6 +3726,15 @@ class AsyncEngine(Engine):
             if elapsed < self._agent_stagger_seconds:
                 await asyncio.sleep(self._agent_stagger_seconds - elapsed)
             self._agent_last_launch = asyncio.get_event_loop().time()
+
+    def _running_count_for_type(self, exec_type: str) -> int:
+        """Count in-flight executor tasks of a given type (across all jobs)."""
+        return sum(1 for t in self._task_exec_types.values() if t == exec_type)
+
+    def _executor_at_capacity(self, exec_type: str) -> bool:
+        """Check if an executor type has hit its concurrency limit."""
+        limit = self._executor_limits.get(exec_type, 0)
+        return limit > 0 and self._running_count_for_type(exec_type) >= limit
 
     async def _run_executor(
         self,
@@ -3714,11 +3749,8 @@ class AsyncEngine(Engine):
         _async_logger.info(
             f"Executor coroutine started for {step_name} (job {job_id}, type={exec_ref.type})"
         )
-        is_agent = exec_ref.type == "agent"
-        if is_agent:
-            await self._agent_semaphore.acquire()
         try:
-            if is_agent:
+            if exec_ref.type == "agent":
                 await self._apply_agent_stagger()
 
             executor = self.registry.create(exec_ref)
@@ -3772,9 +3804,6 @@ class AsyncEngine(Engine):
                 step_name, job_id, run_id, e, exc_info=True,
             )
             await self._queue.put(("step_error", job_id, step_name, run_id, e))
-        finally:
-            if is_agent:
-                self._agent_semaphore.release()
 
     # ── Poll watch scheduling ────────────────────────────────────────────
 
@@ -3814,6 +3843,7 @@ class AsyncEngine(Engine):
         if event_type == "step_result":
             _, job_id, step_name, run_id, result = event
             self._tasks.pop(run_id, None)
+            self._task_exec_types.pop(run_id, None)
 
             try:
                 job = self.store.load_job(job_id)
@@ -3839,6 +3869,7 @@ class AsyncEngine(Engine):
         elif event_type == "step_error":
             _, job_id, step_name, run_id, error = event
             self._tasks.pop(run_id, None)
+            self._task_exec_types.pop(run_id, None)
 
             try:
                 job = self.store.load_job(job_id)
@@ -3886,6 +3917,12 @@ class AsyncEngine(Engine):
         except KeyError:
             pass
         self._dispatch_ready(job_id)
+        # When executor limits are active, a slot opening in this job may
+        # unblock throttled steps in other jobs. Re-evaluate all running jobs.
+        if self._executor_limits:
+            for other_job in self.store.active_jobs():
+                if other_job.id != job_id:
+                    self._dispatch_ready(other_job.id)
         self._check_job_terminal(job_id)
 
     def _check_job_terminal(self, job_id: str) -> None:
