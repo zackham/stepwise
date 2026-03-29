@@ -443,6 +443,31 @@ export function deleteFlowFile(
   });
 }
 
+// ── Flow Config ─────────────────────────────────────────────────────
+
+export interface FlowConfigResponse {
+  config_vars: import("./types").ConfigVar[];
+  values: Record<string, unknown>;
+  raw_yaml: string;
+  config_path: string;
+}
+
+export function fetchFlowConfig(
+  flowPath: string
+): Promise<FlowConfigResponse> {
+  return request(`/flows/local/${flowPath}/config`);
+}
+
+export function saveFlowConfig(
+  flowPath: string,
+  data: { values?: Record<string, unknown>; raw_yaml?: string }
+): Promise<{ config_path: string; values: Record<string, unknown>; raw_yaml: string }> {
+  return request(`/flows/local/${flowPath}/config`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
 // ── Errors / Recovery ────────────────────────────────────────────────
 
 export interface SimilarFailure {

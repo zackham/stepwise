@@ -2480,7 +2480,110 @@ async def delete_local_flow(path: str):
     return {"status": "deleted", "path": path}
 
 
-# ── Load Local Flow (catch-all — must be AFTER /files and DELETE routes) ──
+# ── Flow Config (must be BEFORE the catch-all GET route) ─────────────
+
+
+def _config_file_path(flow_path: Path) -> Path:
+    """Determine the config.local.yaml path for a flow file."""
+    if flow_path.name == "FLOW.yaml":
+        return flow_path.parent / "config.local.yaml"
+    # Single-file: my-flow.flow.yaml → my-flow.config.local.yaml
+    stem = flow_path.stem
+    if stem.endswith(".flow"):
+        stem = stem[:-5]
+    return flow_path.parent / f"{stem}.config.local.yaml"
+
+
+@app.get("/api/flows/local/{path:path}/config")
+def get_flow_config(path: str):
+    """Read flow config: declared config_vars schema + current values from config.local.yaml."""
+    import yaml as _yaml
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+    abs_path = _resolve_flow_path(path)
+    if not abs_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Flow not found: {path}")
+
+    try:
+        workflow = load_workflow_yaml(abs_path)
+    except YAMLLoadError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid flow YAML: {'; '.join(e.errors)}")
+
+    config_vars = [v.to_dict() for v in workflow.config_vars]
+
+    # Read config.local.yaml if present
+    cfg_path = _config_file_path(abs_path)
+    values: dict = {}
+    raw_yaml = ""
+    if cfg_path.is_file():
+        raw_yaml = cfg_path.read_text()
+        loaded = _yaml.safe_load(raw_yaml)
+        if isinstance(loaded, dict):
+            values = loaded
+
+    return {
+        "config_vars": config_vars,
+        "values": values,
+        "raw_yaml": raw_yaml,
+        "config_path": cfg_path.name,
+    }
+
+
+class SaveFlowConfigRequest(BaseModel):
+    values: dict | None = None
+    raw_yaml: str | None = None
+
+
+@app.put("/api/flows/local/{path:path}/config")
+def save_flow_config(path: str, req: SaveFlowConfigRequest):
+    """Save flow config values to config.local.yaml.
+
+    Accepts either structured values (dict) or raw YAML string.
+    """
+    import yaml as _yaml
+
+    abs_path = _resolve_flow_path(path)
+    if not abs_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Flow not found: {path}")
+
+    cfg_path = _config_file_path(abs_path)
+
+    if req.raw_yaml is not None:
+        content = req.raw_yaml
+        # Validate it's parseable YAML
+        try:
+            parsed = _yaml.safe_load(content)
+        except _yaml.YAMLError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
+        if content.strip() and not isinstance(parsed, dict):
+            raise HTTPException(status_code=400, detail="Config YAML must be a mapping (key: value)")
+    elif req.values is not None:
+        # Filter out None values (treat as "unset")
+        clean = {k: v for k, v in req.values.items() if v is not None}
+        content = _yaml.dump(clean, default_flow_style=False, allow_unicode=True) if clean else ""
+    else:
+        raise HTTPException(status_code=400, detail="Provide either 'values' or 'raw_yaml'")
+
+    # Handle empty config: delete the file rather than write empty
+    if not content.strip():
+        if cfg_path.is_file():
+            cfg_path.unlink()
+        return {"config_path": cfg_path.name, "values": {}, "raw_yaml": ""}
+
+    # Atomic write
+    tmp = cfg_path.with_suffix(".tmp")
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text(content)
+    tmp.rename(cfg_path)
+
+    # Re-read to return canonical state
+    loaded = _yaml.safe_load(content)
+    values = loaded if isinstance(loaded, dict) else {}
+
+    return {"config_path": cfg_path.name, "values": values, "raw_yaml": content}
+
+
+# ── Load Local Flow (catch-all — must be AFTER /files, /config, and DELETE routes) ──
 
 @app.get("/api/flows/local/{path:path}")
 def load_local_flow(path: str):
