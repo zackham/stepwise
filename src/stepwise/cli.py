@@ -4691,8 +4691,9 @@ def _cmd_job_show(args) -> int:
                 name = (j.name or "")[:30]
                 group = (j.job_group or "")[:15]
                 created = _relative_time(j.created_at) if j.created_at else ""
-                rows.append([j.id, name, j.status.value, group, created])
-            io.table(["ID", "NAME", "STATUS", "GROUP", "CREATED"], rows)
+                deps = ", ".join(j.depends_on) if j.depends_on else ""
+                rows.append([j.id, name, j.status.value, group, deps, created])
+            io.table(["ID", "NAME", "STATUS", "GROUP", "DEPS", "CREATED"], rows)
             return EXIT_SUCCESS
     finally:
         store.close()
