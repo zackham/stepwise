@@ -28,6 +28,7 @@ const BAR_COLORS: Record<StepRunStatus, string> = {
   cancelled: "bg-zinc-500",
   skipped: "bg-zinc-600",
   throttled: "bg-orange-500",
+  waiting_reset: "bg-amber-600",
 };
 
 const BAR_GLOW: Record<StepRunStatus, string> = {
@@ -39,6 +40,7 @@ const BAR_GLOW: Record<StepRunStatus, string> = {
   cancelled: "",
   skipped: "",
   throttled: "shadow-[0_0_6px_rgba(249,115,22,0.3)]",
+  waiting_reset: "shadow-[0_0_6px_rgba(217,119,6,0.3)]",
 };
 
 function formatMs(ms: number): string {

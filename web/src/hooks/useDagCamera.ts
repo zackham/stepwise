@@ -181,7 +181,11 @@ export function useDagCamera({
     for (const [name, run] of Object.entries(latestRuns)) {
       if (run.status === "running" || run.status === "suspended" || run.status === "delegated") {
         activeNodeIds.push(name);
-        if (run.status === "suspended") suspendedIds.add(name);
+        if (run.status === "suspended" ||
+            (run.status === "running" &&
+             (run.executor_state as Record<string, unknown> | undefined)?.usage_limit_waiting)) {
+          suspendedIds.add(name);
+        }
       }
     }
     if (jobTree) {

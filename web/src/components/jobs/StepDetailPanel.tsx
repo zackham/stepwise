@@ -276,6 +276,10 @@ export function StepDetailPanel({
   const isSuspended =
     latestRun?.status === "suspended" && latestRun?.watch?.mode === "external";
 
+  const isWaitingReset =
+    latestRun?.status === "running" &&
+    !!(latestRun?.executor_state as Record<string, unknown> | undefined)?.usage_limit_waiting;
+
   // Compute effective source (prefer live over original) and detect changes
   const effectiveCommand = useMemo(() => {
     const original = String(stepDef.executor.config.command ?? "");
@@ -585,6 +589,25 @@ export function StepDetailPanel({
               </Button>
             )}
           </div>
+
+          {isWaitingReset && (() => {
+            const es = latestRun?.executor_state as Record<string, unknown> | undefined;
+            const resetAt = es?.reset_at ? String(es.reset_at) : null;
+            const limitMsg = es?.usage_limit_message ? String(es.usage_limit_message) : null;
+            return (
+              <div className="rounded-md bg-amber-100 dark:bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300 border border-amber-500/20">
+                <div className="font-medium">Usage limit reached</div>
+                {resetAt && (
+                  <div>{"Resuming at " + new Date(resetAt).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</div>
+                )}
+                {limitMsg && (
+                  <div className="mt-1 text-xs opacity-75">
+                    {limitMsg}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           <Separator />
 

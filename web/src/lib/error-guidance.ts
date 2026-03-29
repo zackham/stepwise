@@ -26,6 +26,16 @@ export const ERROR_GUIDANCE: Record<string, ErrorGuidance> = {
       "Wait for quota to reset if on a usage-based plan",
     ],
   },
+  usage_limit_reset: {
+    title: "Usage Limit — Waiting for Reset",
+    description: "API usage limit reached. The agent is paused and will resume automatically.",
+    retryable: false,
+    suggestions: [
+      "The agent will resume automatically when the usage limit resets",
+      "Check the reset time shown in the step detail",
+      "No action needed — the session and context are preserved",
+    ],
+  },
   timeout: {
     title: "Timeout",
     description: "The operation timed out. This is usually transient.",

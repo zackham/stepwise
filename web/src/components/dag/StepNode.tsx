@@ -309,8 +309,13 @@ export function StepNode({
     onClick();
   };
 
+  const isWaitingReset =
+    latestRun?.status === "running" &&
+    !!(latestRun?.executor_state as Record<string, unknown> | undefined)?.usage_limit_waiting;
   const status: StepRunStatus | "pending" =
-    latestRun?.status ?? (flowStatus === "throttled" ? "throttled" : "pending");
+    isWaitingReset
+      ? "waiting_reset"
+      : latestRun?.status ?? (flowStatus === "throttled" ? "throttled" : "pending");
   const subJobId = latestRun?.sub_job_id ?? null;
   const colors =
     status === "pending"
@@ -384,6 +389,7 @@ export function StepNode({
         status === "completed" ? "bg-emerald-500/60 border-emerald-400/60" :
         status === "failed" ? "bg-red-500/60 border-red-400/60" :
         status === "suspended" ? "bg-amber-500/60 border-amber-400/60" :
+        status === "waiting_reset" ? "bg-amber-600/60 border-amber-500/60" :
         status === "throttled" ? "bg-orange-500/60 border-orange-400/60" :
         "bg-zinc-300 border-zinc-400 dark:bg-zinc-700 dark:border-zinc-600"
       )} />
@@ -454,6 +460,13 @@ export function StepNode({
             <Clock className="w-2.5 h-2.5" />
             Waiting for executor slot
           </span>
+        ) : isWaitingReset ? (
+          <span className="flex items-center gap-1 text-amber-500">
+            <Clock className="w-2.5 h-2.5" />
+            Resumes {(latestRun?.executor_state as Record<string, unknown>)?.reset_at
+              ? new Date(String((latestRun?.executor_state as Record<string, unknown>).reset_at)).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
+              : "soon"}
+          </span>
         ) : isSuspended ? (
           <span className="flex items-center gap-1 text-amber-400">
             <CirclePause className="w-2.5 h-2.5" />
@@ -472,6 +485,7 @@ export function StepNode({
         status === "completed" ? "bg-emerald-500/60 border-emerald-400/60" :
         status === "failed" ? "bg-red-500/60 border-red-400/60" :
         status === "suspended" ? "bg-amber-500/60 border-amber-400/60" :
+        status === "waiting_reset" ? "bg-amber-600/60 border-amber-500/60" :
         status === "throttled" ? "bg-orange-500/60 border-orange-400/60" :
         "bg-zinc-300 border-zinc-400 dark:bg-zinc-700 dark:border-zinc-600"
       )} />
