@@ -330,31 +330,39 @@ export function FlowsPage() {
                 </div>
                 <div className="flex-1 overflow-y-auto py-1">
                   {filtered.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-full text-zinc-600 px-3">
-                      <FileText className="w-8 h-8 mb-2 opacity-40" />
-                      <p className="text-xs text-center">
-                        {flows.length === 0 ? "No flows yet" : "No matching flows"}
-                      </p>
-                      {flows.length === 0 && (
-                        <div className="flex flex-col gap-2 mt-3">
-                          <Button
-                            size="sm"
-                            className="text-xs"
-                            onClick={() => setShowCreateDialog(true)}
-                          >
-                            <Plus className="w-3 h-3 mr-1" />
-                            New Flow
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="text-xs"
-                            onClick={() => setTab("registry")}
-                          >
-                            <Globe className="w-3 h-3 mr-1" />
-                            Browse Registry
-                          </Button>
-                        </div>
+                    <div className="flex flex-col items-center justify-center h-full px-3 max-w-sm mx-auto text-center">
+                      {flows.length === 0 ? (
+                        <>
+                          <img src="/stepwise-icon-64.png" alt="Stepwise" className="w-12 h-12 opacity-40 mb-3" />
+                          <p className="text-sm font-medium text-zinc-400 mb-1">Create your first flow</p>
+                          <p className="text-xs text-zinc-600 mb-4">
+                            Flows define multi-step workflows for agents and humans.
+                          </p>
+                          <div className="flex flex-col gap-2">
+                            <Button
+                              size="sm"
+                              className="text-xs"
+                              onClick={() => setShowCreateDialog(true)}
+                            >
+                              <Plus className="w-3 h-3 mr-1" />
+                              Create Flow
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-xs"
+                              onClick={() => setTab("registry")}
+                            >
+                              <Globe className="w-3 h-3 mr-1" />
+                              Browse Registry
+                            </Button>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <FileText className="w-8 h-8 mb-2 opacity-40 text-zinc-600" />
+                          <p className="text-xs text-zinc-600">No matching flows</p>
+                        </>
                       )}
                     </div>
                   ) : (

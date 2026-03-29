@@ -74,6 +74,7 @@ export function ExternalInputPanel({
     }
     return initial;
   });
+  const [notes, setNotes] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const firstInputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -111,6 +112,8 @@ export function ExternalInputPanel({
         }
       }
     }
+    const trimmedNotes = notes.trim();
+    if (trimmedNotes) payload._fulfillment_notes = trimmedNotes;
     onSubmit(payload);
   };
 
@@ -203,6 +206,14 @@ export function ExternalInputPanel({
             className={textareaClass}
           />
         )}
+
+        {/* Notes */}
+        <AutoTextarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          placeholder="Notes (optional)"
+          className={textareaClass + " text-xs text-zinc-500"}
+        />
 
         {/* Server-side error */}
         {submitError && (

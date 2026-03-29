@@ -46,6 +46,7 @@ export function FulfillWatchDialog({
     return initial;
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [notes, setNotes] = useState("");
   const [jsonMode, setJsonMode] = useState(false);
   const [jsonInput, setJsonInput] = useState("{}");
   const [jsonError, setJsonError] = useState<string | null>(null);
@@ -54,6 +55,7 @@ export function FulfillWatchDialog({
     (run.watch?.config?.prompt as string) ?? "Provide the required outputs";
 
   const handleSubmit = () => {
+    const trimmedNotes = notes.trim();
     if (jsonMode) {
       try {
         const parsed = JSON.parse(jsonInput);
@@ -62,7 +64,9 @@ export function FulfillWatchDialog({
           return;
         }
         setJsonError(null);
-        onFulfill(parsed);
+        const final = { ...parsed };
+        if (trimmedNotes) final._fulfillment_notes = trimmedNotes;
+        onFulfill(final);
       } catch {
         setJsonError("Invalid JSON");
       }
@@ -91,6 +95,7 @@ export function FulfillWatchDialog({
           }
         }
       }
+      if (trimmedNotes) payload._fulfillment_notes = trimmedNotes;
       onFulfill(payload);
     }
   };
@@ -171,6 +176,16 @@ export function FulfillWatchDialog({
             )}
           </div>
         )}
+
+        <div className="space-y-1">
+          <Label className="text-sm text-zinc-500">Notes (optional)</Label>
+          <Textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            className="text-sm min-h-[60px]"
+            placeholder="Add context or rationale for this fulfillment..."
+          />
+        </div>
 
         <DialogFooter>
           <Button

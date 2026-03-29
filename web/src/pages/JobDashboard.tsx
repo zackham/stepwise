@@ -5,7 +5,6 @@ import { JobSummaryBar } from "@/components/jobs/JobSummaryBar";
 import { CreateJobDialog, type CreateJobPrefill } from "@/components/jobs/CreateJobDialog";
 // QuickLaunch removed — post-1.0
 import { useJobs } from "@/hooks/useStepwise";
-import { Workflow } from "lucide-react";
 
 export function JobDashboard() {
   const navigate = useNavigate();
@@ -39,11 +38,11 @@ export function JobDashboard() {
         </div>
       </div>
       <div className="hidden md:flex flex-1 items-center justify-center text-zinc-600">
-        <div className="text-center space-y-3">
-          <Workflow className="w-12 h-12 mx-auto text-zinc-700" />
-          <p className="text-lg">Select a job to view details</p>
-          <p className="text-sm text-zinc-700">
-            Or create a new one to get started
+        <div className="text-center max-w-sm space-y-3">
+          <img src="/stepwise-icon-64.png" alt="Stepwise" className="w-12 h-12 mx-auto opacity-40" />
+          <p className="text-sm font-medium text-zinc-400">Select a job to view its DAG</p>
+          <p className="text-xs text-zinc-600">
+            The detail view shows the workflow graph, step statuses, and live agent output for the selected job.
           </p>
         </div>
       </div>
