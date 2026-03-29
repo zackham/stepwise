@@ -426,6 +426,14 @@ Priority pattern: success first, then escalate as safety bound, then loop as fal
 
 ## Testing
 
+### CRITICAL: Never test against the production server
+
+A stepwise server runs in production at all times (vita-stepwise.service) with a real job database. **Never** use the stepwise CLI (`stepwise job create`, `stepwise job run`, `stepwise cancel`, etc.) or hit the server API (`localhost:8340`) during testing — this creates/modifies/deletes real jobs in the production database.
+
+**Always use pytest with test fixtures.** Tests use in-memory SQLite stores and mock executors — they never touch the production server or DB. Run: `uv run pytest tests/ -x -q`
+
+If you need to verify CLI behavior, **read the test fixtures and existing CLI tests** rather than running commands against the live server.
+
 ### Python (pytest, `tests/`)
 
 Fixtures in `tests/conftest.py`:
