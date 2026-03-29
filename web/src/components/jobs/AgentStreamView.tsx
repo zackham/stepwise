@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAgentStream, buildSegmentsFromEvents } from "@/hooks/useAgentStream";
 import { useAgentOutput } from "@/hooks/useStepwise";
 import type { ToolCallState, StreamSegment } from "@/hooks/useAgentStream";
@@ -112,6 +113,31 @@ function ToolCard({ tool }: { tool: ToolCallState }) {
   );
 }
 
+function SegmentRow({
+  segment,
+  searchRegex,
+  hasActiveSearch,
+}: {
+  segment: StreamSegment;
+  searchRegex?: RegExp | null;
+  hasActiveSearch?: boolean;
+}) {
+  if (segment.type === "text") {
+    const matches = searchRegex ? countMatches(segment.text, searchRegex) > 0 : true;
+    return (
+      <span
+        className={cn(
+          "whitespace-pre-wrap text-sm font-mono text-zinc-700 dark:text-zinc-300 leading-relaxed",
+          hasActiveSearch && !matches && "opacity-40",
+        )}
+      >
+        {searchRegex ? highlightMatches(segment.text, searchRegex) : segment.text}
+      </span>
+    );
+  }
+  return <ToolCard tool={segment.tool} />;
+}
+
 function SegmentRenderer({
   segments,
   showCursor,
@@ -124,32 +150,136 @@ function SegmentRenderer({
   hasActiveSearch?: boolean;
 }) {
   const hasRunningTool = segments.some(
-    (s) => s.type === "tool" && s.tool.status === "running"
+    (s) => s.type === "tool" && s.tool.status === "running",
   );
 
   return (
     <>
-      {segments.map((seg, i) => {
-        if (seg.type === "text") {
-          const matches = searchRegex ? countMatches(seg.text, searchRegex) > 0 : true;
-          return (
-            <span
-              key={i}
-              className={cn(
-                "whitespace-pre-wrap text-sm font-mono text-zinc-700 dark:text-zinc-300 leading-relaxed",
-                hasActiveSearch && !matches && "opacity-40"
-              )}
-            >
-              {searchRegex ? highlightMatches(seg.text, searchRegex) : seg.text}
-            </span>
-          );
-        }
-        return <ToolCard key={seg.tool.id} tool={seg.tool} />;
-      })}
+      {segments.map((seg, i) => (
+        <SegmentRow
+          key={seg.type === "tool" ? seg.tool.id : i}
+          segment={seg}
+          searchRegex={searchRegex}
+          hasActiveSearch={hasActiveSearch}
+        />
+      ))}
       {showCursor && !hasRunningTool && (
         <span className="inline-block w-0.5 h-4 bg-blue-400 animate-pulse align-middle ml-0.5" />
       )}
     </>
+  );
+}
+
+const VIRTUAL_THRESHOLD = 200;
+
+function VirtualizedSegments({
+  segments,
+  showCursor,
+  searchRegex,
+  hasActiveSearch,
+  version,
+}: {
+  segments: StreamSegment[];
+  showCursor: boolean;
+  searchRegex?: RegExp | null;
+  hasActiveSearch?: boolean;
+  version: number;
+}) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const userScrolledRef = useRef(false);
+
+  const hasRunningTool = segments.length > 0 &&
+    segments[segments.length - 1].type === "tool" &&
+    (segments[segments.length - 1] as { type: "tool"; tool: ToolCallState }).tool.status === "running";
+
+  const virtualizer = useVirtualizer({
+    count: segments.length + (showCursor && !hasRunningTool ? 1 : 0),
+    getScrollElement: () => parentRef.current,
+    estimateSize: (index) => {
+      if (index >= segments.length) return 20; // cursor row
+      const seg = segments[index];
+      if (seg.type === "tool") return 36;
+      const lines = Math.max(1, Math.ceil(seg.text.length / 80));
+      return lines * 20;
+    },
+    overscan: 10,
+  });
+
+  // Auto-scroll to bottom when new content arrives
+  useEffect(() => {
+    if (userScrolledRef.current) return;
+    const count = segments.length + (showCursor && !hasRunningTool ? 1 : 0);
+    if (count > 0) {
+      virtualizer.scrollToIndex(count - 1, { align: "end" });
+    }
+  }, [version, segments.length]);
+
+  const handleScroll = useCallback(() => {
+    const el = parentRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 50;
+    userScrolledRef.current = !nearBottom;
+  }, []);
+
+  return (
+    <div
+      ref={parentRef}
+      onScroll={handleScroll}
+      className="max-h-96 overflow-y-auto"
+    >
+      <div
+        style={{
+          height: virtualizer.getTotalSize(),
+          width: "100%",
+          position: "relative",
+        }}
+      >
+        {virtualizer.getVirtualItems().map((virtualRow) => {
+          if (virtualRow.index >= segments.length) {
+            // Cursor row
+            return (
+              <div
+                key="cursor"
+                ref={virtualizer.measureElement}
+                data-index={virtualRow.index}
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  transform: `translateY(${virtualRow.start}px)`,
+                }}
+                className="px-3"
+              >
+                <span className="inline-block w-0.5 h-4 bg-blue-400 animate-pulse align-middle ml-0.5" />
+              </div>
+            );
+          }
+          const seg = segments[virtualRow.index];
+          return (
+            <div
+              key={seg.type === "tool" ? seg.tool.id : virtualRow.index}
+              ref={virtualizer.measureElement}
+              data-index={virtualRow.index}
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                transform: `translateY(${virtualRow.start}px)`,
+              }}
+              className="px-3"
+            >
+              <SegmentRow
+                segment={seg}
+                searchRegex={searchRegex}
+                hasActiveSearch={hasActiveSearch}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -176,16 +306,22 @@ export function AgentStreamView({ runId, isLive, startedAt, costUsd, billingMode
   const userScrolledRef = useRef(false);
   const search = useLogSearch(containerRef);
 
-  // Live stream
-  const { streamState, version } = useAgentStream(isLive ? runId : undefined);
+  // Always fetch historical output — for live mode this provides backfill,
+  // for historical mode this is the only data source.
+  // Use staleTime: 0 for live mode so re-mounts get fresh backfill.
+  const { data: historyData } = useAgentOutput(runId, isLive ? { staleTime: 0 } : undefined);
 
-  // Historical replay
-  const { data: historyData } = useAgentOutput(isLive ? undefined : runId);
+  // Live stream with backfill from REST API
+  const { streamState, version } = useAgentStream(
+    isLive ? runId : undefined,
+    isLive ? (historyData?.events ?? null) : null,
+  );
 
+  // Historical replay (non-live)
   const replayState = useMemo(() => {
-    if (!historyData?.events?.length) return null;
+    if (isLive || !historyData?.events?.length) return null;
     return buildSegmentsFromEvents(historyData.events);
-  }, [historyData]);
+  }, [isLive, historyData]);
 
   const state = isLive ? streamState : replayState;
   const segments = state?.segments ?? [];
@@ -205,13 +341,15 @@ export function AgentStreamView({ runId, isLive, startedAt, costUsd, billingMode
   }, [totalMatches]);
 
   const hasActiveSearch = search.query.length > 0 && !search.regexError;
+  const useVirtual = segments.length > VIRTUAL_THRESHOLD;
 
-  // Auto-scroll
+  // Auto-scroll for flat (non-virtual) mode
   useEffect(() => {
+    if (useVirtual) return;
     const el = scrollRef.current;
     if (!el || userScrolledRef.current) return;
     el.scrollTop = el.scrollHeight;
-  }, [version, segments.length]);
+  }, [version, segments.length, useVirtual]);
 
   const handleScroll = () => {
     const el = scrollRef.current;
@@ -225,11 +363,14 @@ export function AgentStreamView({ runId, isLive, startedAt, costUsd, billingMode
   }
 
   if (segments.length === 0 && isLive) {
+    const backfillLoading = !historyData;
     return (
       <div className="bg-zinc-50/50 dark:bg-zinc-950/50 border border-zinc-300/50 dark:border-zinc-800/50 rounded-lg p-4">
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
-          <span className="text-sm text-blue-600 dark:text-blue-300">Agent starting...</span>
+          <span className="text-sm text-blue-600 dark:text-blue-300">
+            {backfillLoading ? "Loading output..." : "Agent starting..."}
+          </span>
           {startedAt && (
             <span className="text-xs text-zinc-600 ml-auto font-mono">
               {new Date(startedAt).toLocaleTimeString()}
@@ -254,18 +395,28 @@ export function AgentStreamView({ runId, isLive, startedAt, costUsd, billingMode
   return (
     <div ref={containerRef} tabIndex={-1} className="bg-zinc-50/50 dark:bg-zinc-950/50 border border-zinc-300/50 dark:border-zinc-800/50 rounded-lg overflow-hidden">
       <LogSearchBar search={search} />
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="max-h-96 overflow-y-auto p-3"
-      >
-        <SegmentRenderer
+      {useVirtual ? (
+        <VirtualizedSegments
           segments={segments}
           showCursor={isLive}
           searchRegex={search.compiledRegex}
           hasActiveSearch={hasActiveSearch}
+          version={version}
         />
-      </div>
+      ) : (
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className="max-h-96 overflow-y-auto p-3"
+        >
+          <SegmentRenderer
+            segments={segments}
+            showCursor={isLive}
+            searchRegex={search.compiledRegex}
+            hasActiveSearch={hasActiveSearch}
+          />
+        </div>
+      )}
       {usage && <UsageBar usage={usage} />}
     </div>
   );
