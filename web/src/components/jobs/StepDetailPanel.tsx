@@ -28,6 +28,7 @@ import {
   Copy,
   Check,
   Terminal,
+  StickyNote,
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { useAgentOutput } from "@/hooks/useStepwise";
@@ -557,6 +558,16 @@ export function StepDetailPanel({
                             {run.id}
                           </span>
                         </div>
+
+                        {/* Fulfillment Notes */}
+                        {run.result?.artifact?._fulfillment_notes && (
+                          <div className="flex items-start gap-1.5 text-xs bg-zinc-100/50 dark:bg-zinc-800/50 rounded p-2">
+                            <StickyNote className="w-3 h-3 mt-0.5 text-zinc-500 shrink-0" />
+                            <span className="text-zinc-400 whitespace-pre-wrap">
+                              {String(run.result.artifact._fulfillment_notes)}
+                            </span>
+                          </div>
+                        )}
 
                         {/* Error */}
                         {run.error && (

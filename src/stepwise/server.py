@@ -2206,6 +2206,42 @@ def _flow_template_yaml(name: str, template: str) -> str:
             f"        action: loop\n"
             f"        target: draft\n"
         )
+    elif template == "research-pipeline":
+        return (
+            f"name: {name}\n"
+            f"description: Multi-step research pipeline\n"
+            f"\n"
+            f"steps:\n"
+            f"  gather:\n"
+            f"    executor: agent\n"
+            f"    prompt: \"Research the following topic and gather key findings: $topic\"\n"
+            f"    inputs:\n"
+            f"      topic: $job.topic\n"
+            f"    outputs: [findings]\n"
+            f"\n"
+            f"  analyze:\n"
+            f"    executor: llm\n"
+            f"    config:\n"
+            f"      prompt: \"Analyze and synthesize these findings into a structured report:\\n$findings\"\n"
+            f"    inputs:\n"
+            f"      findings: gather.findings\n"
+            f"    outputs: [analysis]\n"
+            f"\n"
+            f"  review:\n"
+            f"    executor: external\n"
+            f"    prompt: \"Review the research analysis and approve or request deeper investigation\"\n"
+            f"    inputs:\n"
+            f"      analysis: analyze.analysis\n"
+            f"    outputs: [decision, notes]\n"
+            f"    exits:\n"
+            f"      - name: approved\n"
+            f"        when: \"outputs.decision == 'approve'\"\n"
+            f"        action: advance\n"
+            f"      - name: dig-deeper\n"
+            f"        when: \"attempt < 3\"\n"
+            f"        action: loop\n"
+            f"        target: gather\n"
+        )
     else:
         # blank / default
         return (

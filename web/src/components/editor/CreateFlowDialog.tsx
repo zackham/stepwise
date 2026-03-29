@@ -12,34 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
-import { Bot, Brain, Plus, UserCheck } from "lucide-react";
-
-const TEMPLATES = [
-  {
-    id: "blank",
-    label: "Blank",
-    description: "Empty flow with a single hello step",
-    icon: Plus,
-  },
-  {
-    id: "simple-llm",
-    label: "Simple LLM",
-    description: "Single LLM step with a prompt input",
-    icon: Brain,
-  },
-  {
-    id: "agent-task",
-    label: "Agent Task",
-    description: "Agent step with a validation loop",
-    icon: Bot,
-  },
-  {
-    id: "external-approval",
-    label: "External Approval",
-    description: "Agent draft with external approval loop",
-    icon: UserCheck,
-  },
-] as const;
+import { FLOW_TEMPLATES } from "@/lib/flow-templates";
 
 interface CreateFlowDialogProps {
   open: boolean;
@@ -100,7 +73,7 @@ export function CreateFlowDialog({
           <div className="space-y-2">
             <Label>Template</Label>
             <div className="grid grid-cols-2 gap-2">
-              {TEMPLATES.map((t) => {
+              {FLOW_TEMPLATES.map((t) => {
                 const Icon = t.icon;
                 return (
                   <button
@@ -119,6 +92,9 @@ export function CreateFlowDialog({
                     </div>
                     <span className="text-[11px] leading-tight text-zinc-500">
                       {t.description}
+                    </span>
+                    <span className="text-[10px] text-zinc-600">
+                      {t.stepCount} {t.stepCount === 1 ? "step" : "steps"}
                     </span>
                   </button>
                 );
