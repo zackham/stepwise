@@ -386,6 +386,7 @@ export function JobDetailPage() {
         case "Enter": {
           if (selectedStep) {
             e.preventDefault();
+            setDataFlowSelection(null);
             navigate({
               search: (prev: JobDetailSearch) => ({ ...prev, panel: "open" as const, tab: "step" as const }),
               replace: true,
