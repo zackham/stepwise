@@ -25,6 +25,7 @@ const STATUS_ICON: Record<JobStatus, typeof Circle> = {
   completed: CircleCheck,
   failed: CircleX,
   cancelled: CircleX,
+  archived: Circle,
 };
 
 interface CommandPaletteProps {
