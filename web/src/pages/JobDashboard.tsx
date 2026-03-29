@@ -40,7 +40,7 @@ export function JobDashboard() {
       <div className="hidden md:flex flex-1 items-center justify-center text-zinc-600">
         <div className="text-center max-w-sm space-y-3">
           <img src="/stepwise-icon-64.png" alt="Stepwise" className="w-12 h-12 mx-auto opacity-40" />
-          <p className="text-sm font-medium text-zinc-400">Select a job to view its DAG</p>
+          <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">Select a job to view its DAG</p>
           <p className="text-xs text-zinc-600">
             The detail view shows the workflow graph, step statuses, and live agent output for the selected job.
           </p>

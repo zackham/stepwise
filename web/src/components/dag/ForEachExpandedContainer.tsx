@@ -214,7 +214,7 @@ export function ForEachExpandedContainer({
             >
               {/* Instance header */}
               <div className="flex items-center gap-2 px-2 h-7 text-[11px]">
-                <span className="text-zinc-400 font-mono">{itemLabel}</span>
+                <span className="text-zinc-500 dark:text-zinc-400 font-mono">{itemLabel}</span>
                 <InstanceStatusBadge status={instance.status} />
               </div>
 
@@ -307,8 +307,8 @@ export function ForEachExpandedContainer({
       )}
 
       {/* Top/bottom handles for parent edges */}
-      <div className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-purple-700 border-2 border-purple-500/50" />
-      <div className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-purple-700 border-2 border-purple-500/50" />
+      <div className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-purple-400 dark:bg-purple-700 border-2 border-purple-500/50" />
+      <div className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-purple-400 dark:bg-purple-700 border-2 border-purple-500/50" />
     </div>
   );
 }

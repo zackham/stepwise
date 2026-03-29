@@ -27,11 +27,11 @@ const STEP_TYPES = [
 ] as const;
 
 const TYPE_COLORS: Record<string, string> = {
-  script: "border-emerald-800 hover:bg-emerald-900/30",
-  llm: "border-violet-800 hover:bg-violet-900/30",
-  agent: "border-blue-800 hover:bg-blue-900/30",
-  external: "border-amber-800 hover:bg-amber-900/30",
-  poll: "border-cyan-800 hover:bg-cyan-900/30",
+  script: "border-emerald-300 dark:border-emerald-800 hover:bg-emerald-100/30 dark:hover:bg-emerald-900/30",
+  llm: "border-violet-300 dark:border-violet-800 hover:bg-violet-100/30 dark:hover:bg-violet-900/30",
+  agent: "border-blue-300 dark:border-blue-800 hover:bg-blue-100/30 dark:hover:bg-blue-900/30",
+  external: "border-amber-300 dark:border-amber-800 hover:bg-amber-100/30 dark:hover:bg-amber-900/30",
+  poll: "border-cyan-300 dark:border-cyan-800 hover:bg-cyan-100/30 dark:hover:bg-cyan-900/30",
 };
 
 export function StepPalette({
@@ -70,7 +70,7 @@ export function StepPalette({
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => { setSelectedType(null); setName(""); }}
-                  className="p-1 rounded hover:bg-zinc-800 transition-colors"
+                  className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
                   title="Back"
                 >
                   <ArrowLeft className="w-4 h-4" />
@@ -93,7 +93,7 @@ export function StepPalette({
                 key={st.type}
                 onClick={() => setSelectedType(st.type)}
                 className={`flex items-center gap-3 p-3 rounded-lg border bg-transparent text-left transition-colors ${
-                  TYPE_COLORS[st.type] ?? "border-zinc-700 hover:bg-zinc-800/50"
+                  TYPE_COLORS[st.type] ?? "border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
                 } ${st.type === "poll" ? "col-span-2 max-w-[calc(50%-6px)]" : ""}`}
               >
                 <span className="shrink-0">{executorIcon(st.type, "w-5 h-5")}</span>
@@ -114,7 +114,7 @@ export function StepPalette({
                 autoFocus
               />
               {isDuplicate && (
-                <p className="text-xs text-red-400">
+                <p className="text-xs text-red-500 dark:text-red-400">
                   A step named &ldquo;{name.trim()}&rdquo; already exists
                 </p>
               )}

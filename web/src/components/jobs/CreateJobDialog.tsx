@@ -267,7 +267,7 @@ export function CreateJobDialog({ onCreated, prefill, open: controlledOpen, onOp
               {/* Dynamic input fields from $job references */}
               {jobInputFields.length > 0 && (
                 <div className="space-y-3">
-                  <Label className="text-zinc-400">Inputs</Label>
+                  <Label className="text-zinc-500 dark:text-zinc-400">Inputs</Label>
                   <JobInputForm
                     fields={jobInputFields}
                     values={inputValues}
@@ -309,7 +309,7 @@ export function CreateJobDialog({ onCreated, prefill, open: controlledOpen, onOp
           </div>
 
           {jsonError && (
-            <p className="text-red-400 text-xs">{jsonError}</p>
+            <p className="text-red-500 dark:text-red-400 text-xs">{jsonError}</p>
           )}
         </div>
 

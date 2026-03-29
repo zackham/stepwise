@@ -149,7 +149,7 @@ export function ExternalInputPanel({
 
       <form onSubmit={handleSubmit} className="p-3 pt-1 space-y-2.5">
         {/* Prompt */}
-        <pre className="text-xs font-sans text-amber-200/80 leading-relaxed whitespace-pre-wrap max-h-[40vh] overflow-y-auto">{prompt.trim()}</pre>
+        <pre className="text-xs font-sans text-amber-800 dark:text-amber-200/80 leading-relaxed whitespace-pre-wrap max-h-[40vh] overflow-y-auto">{prompt.trim()}</pre>
 
         {/* Fields */}
         {outputs.length > 0 ? (
@@ -217,7 +217,7 @@ export function ExternalInputPanel({
 
         {/* Server-side error */}
         {submitError && (
-          <p className="text-[10px] text-red-400">{submitError}</p>
+          <p className="text-[10px] text-red-500 dark:text-red-400">{submitError}</p>
         )}
 
         {/* Submit */}

@@ -25,7 +25,7 @@ function FieldLabel({
     <label className="block text-[10px] font-medium text-zinc-500 uppercase tracking-wide mb-1">
       {name}
       {schema.required === false && (
-        <span className="ml-1 normal-case text-zinc-600">(optional)</span>
+        <span className="ml-1 normal-case text-zinc-500 dark:text-zinc-600">(optional)</span>
       )}
     </label>
   );
@@ -34,13 +34,13 @@ function FieldLabel({
 function FieldDescription({ schema }: { schema: OutputFieldSchema }) {
   if (!schema.description) return null;
   return (
-    <p className="text-[10px] text-zinc-600 mt-0.5">{schema.description}</p>
+    <p className="text-[10px] text-zinc-500 dark:text-zinc-600 mt-0.5">{schema.description}</p>
   );
 }
 
 function FieldError({ error }: { error?: string }) {
   if (!error) return null;
-  return <p className="text-[10px] text-red-400 mt-0.5">{error}</p>;
+  return <p className="text-[10px] text-red-500 dark:text-red-400 mt-0.5">{error}</p>;
 }
 
 function StrField({
