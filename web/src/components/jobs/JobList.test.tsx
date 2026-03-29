@@ -94,6 +94,10 @@ vi.mock("@/hooks/useStepwise", () => ({
   useStepwiseMutations: () => mockMutations,
 }));
 
+vi.mock("@/components/jobs/CreateJobDialog", () => ({
+  CreateJobDialog: () => null,
+}));
+
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 let jobCounter = 0;
