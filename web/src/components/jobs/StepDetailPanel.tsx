@@ -331,6 +331,9 @@ export function StepDetailPanel({
             <h4 className="text-xs font-medium text-zinc-500 uppercase tracking-wide">
               Definition
             </h4>
+            {stepDef.description && (
+              <p className="text-sm text-zinc-400 dark:text-zinc-500 mb-2">{stepDef.description}</p>
+            )}
             <div className="grid grid-cols-2 gap-2 text-sm">
               <div className="text-zinc-500">Executor</div>
               <div className="text-foreground font-mono text-xs min-w-0 break-all">

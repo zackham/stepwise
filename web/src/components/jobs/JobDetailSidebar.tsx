@@ -2,7 +2,8 @@ import { useJobOutput } from "@/hooks/useStepwise";
 import { JsonView } from "@/components/JsonView";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { JobStatusBadge } from "@/components/StatusBadge";
-import { X, Package } from "lucide-react";
+import { X, Package, Copy, Check } from "lucide-react";
+import { useState } from "react";
 import type { Job } from "@/lib/types";
 import { formatDuration } from "@/lib/utils";
 
@@ -12,6 +13,7 @@ interface JobDetailSidebarProps {
 }
 
 export function JobDetailSidebar({ job, onClose }: JobDetailSidebarProps) {
+  const [copied, setCopied] = useState(false);
   const isTerminal =
     job.status === "completed" || job.status === "failed" || job.status === "cancelled";
   const { data: outputs, isLoading } = useJobOutput(job.id, isTerminal);
@@ -30,8 +32,19 @@ export function JobDetailSidebar({ job, onClose }: JobDetailSidebarProps) {
             </h3>
             <JobStatusBadge status={job.status} />
           </div>
-          <div className="text-[10px] font-mono text-zinc-600 mt-1">
-            {job.id}
+          <div className="flex items-center gap-1 mt-1">
+            <span className="text-[10px] font-mono text-zinc-600">{job.id}</span>
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(job.id);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+              }}
+              className="text-zinc-500 hover:text-foreground"
+              title="Copy job ID"
+            >
+              {copied ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
+            </button>
           </div>
         </div>
         <button
@@ -49,7 +62,11 @@ export function JobDetailSidebar({ job, onClose }: JobDetailSidebarProps) {
             <div className="text-zinc-500">Steps</div>
             <div className="text-foreground font-mono">{stepCount}</div>
             <div className="text-zinc-500">Duration</div>
-            <div className="text-foreground font-mono">{formatDuration(job.created_at, job.updated_at)}</div>
+            <div className="text-foreground font-mono">
+              {job.status === "staged" || job.status === "pending"
+                ? "-"
+                : formatDuration(job.created_at, job.updated_at)}
+            </div>
             <div className="text-zinc-500">Created</div>
             <div className="text-zinc-500 dark:text-zinc-400 font-mono text-[10px]">
               {new Date(job.created_at).toLocaleString()}
