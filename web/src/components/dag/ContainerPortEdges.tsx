@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { ContainerPort, HierarchicalDagNode } from "@/lib/dag-layout";
 import type { StepRun } from "@/lib/types";
 import { tryParseJsonValue } from "@/lib/utils";
+import { useTheme } from "@/hooks/useTheme";
 
 function formatPreview(rawValue: unknown, maxLen: number = 30): string {
   const value = tryParseJsonValue(rawValue);
@@ -59,6 +60,9 @@ export function ContainerPortEdges({
   contentTop,
 }: ContainerPortEdgesProps) {
   const [hover, setHover] = useState<HoverInfo | null>(null);
+  const theme = useTheme();
+  const isDark = theme === "dark";
+  const portStroke = isDark ? "rgb(168 85 247 / 0.25)" : "rgb(168 85 247 / 0.45)";
 
   if (containerPorts.length === 0) return null;
 
@@ -109,7 +113,7 @@ export function ContainerPortEdges({
                 key={`input-${port.stepName}`}
                 d={path}
                 fill="none"
-                stroke="rgb(168 85 247 / 0.25)"
+                stroke={portStroke}
                 strokeWidth={1.5}
                 strokeDasharray="4 3"
               />
@@ -125,7 +129,7 @@ export function ContainerPortEdges({
                 key={`output-${port.stepName}`}
                 d={path}
                 fill="none"
-                stroke="rgb(168 85 247 / 0.25)"
+                stroke={portStroke}
                 strokeWidth={1.5}
                 strokeDasharray="4 3"
               />

@@ -49,7 +49,7 @@ export function EditorToolbar({
           size="sm"
           onClick={onRun}
           disabled={isRunning || parseErrors.length > 0}
-          className="h-7 text-xs text-emerald-400 hover:text-emerald-300"
+          className="h-7 text-xs text-emerald-600 dark:text-emerald-400 hover:text-emerald-500 dark:hover:text-emerald-300"
         >
           <Play className="w-3 h-3 mr-1" />
           {isRunning ? "Starting..." : "Run"}
@@ -74,7 +74,7 @@ export function EditorToolbar({
           onClick={onToggleChat}
           className={cn(
             "h-7 text-xs relative",
-            chatOpen ? "text-violet-400 hover:text-violet-300" : "text-zinc-500 hover:text-zinc-300"
+            chatOpen ? "text-violet-600 dark:text-violet-400 hover:text-violet-500 dark:hover:text-violet-300" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
           )}
           title={chatOpen ? "Close chat" : "Open chat"}
         >

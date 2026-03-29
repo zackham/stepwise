@@ -152,7 +152,7 @@ function TreeNodeRow({
       className={cn(
         "flex items-center gap-1.5 w-full text-left text-sm py-2 rounded",
         isSelected
-          ? "bg-blue-500/20 text-blue-300"
+          ? "bg-blue-500/20 text-blue-700 dark:text-blue-300"
           : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
       )}
       style={{ paddingLeft: `${depth * 12 + 4 + 16}px` }}

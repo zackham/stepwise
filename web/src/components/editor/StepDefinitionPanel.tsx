@@ -28,19 +28,19 @@ interface StepDefinitionPanelProps {
 }
 
 const EXEC_TYPE_COLORS: Record<string, string> = {
-  script: "bg-emerald-900/50 text-emerald-400 border-emerald-800",
-  llm: "bg-violet-900/50 text-violet-400 border-violet-800",
-  mock_llm: "bg-violet-900/50 text-violet-400 border-violet-800",
-  agent: "bg-blue-900/50 text-blue-400 border-blue-800",
-  external: "bg-amber-900/50 text-amber-400 border-amber-800",
-  poll: "bg-cyan-900/50 text-cyan-400 border-cyan-800",
+  script: "bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-800",
+  llm: "bg-violet-100 dark:bg-violet-900/50 text-violet-700 dark:text-violet-400 border-violet-300 dark:border-violet-800",
+  mock_llm: "bg-violet-100 dark:bg-violet-900/50 text-violet-700 dark:text-violet-400 border-violet-300 dark:border-violet-800",
+  agent: "bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-400 border-blue-300 dark:border-blue-800",
+  external: "bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-800",
+  poll: "bg-cyan-100 dark:bg-cyan-900/50 text-cyan-700 dark:text-cyan-400 border-cyan-300 dark:border-cyan-800",
 };
 
 const EXIT_ACTION_COLORS: Record<string, string> = {
-  advance: "text-emerald-400",
-  loop: "text-amber-400",
-  escalate: "text-red-400",
-  abandon: "text-red-500 font-semibold",
+  advance: "text-emerald-600 dark:text-emerald-400",
+  loop: "text-amber-600 dark:text-amber-400",
+  escalate: "text-red-500 dark:text-red-400",
+  abandon: "text-red-600 dark:text-red-500 font-semibold",
 };
 
 /** Extract file paths referenced in a command string. */
@@ -90,9 +90,9 @@ function CodeBlock({
 }) {
   const tintClass =
     tint === "green"
-      ? "border-emerald-900/50 bg-emerald-950/20"
+      ? "border-emerald-200 dark:border-emerald-900/50 bg-emerald-50 dark:bg-emerald-950/20"
       : tint === "cyan"
-        ? "border-cyan-900/50 bg-cyan-950/20"
+        ? "border-cyan-200 dark:border-cyan-900/50 bg-cyan-50 dark:bg-cyan-950/20"
         : "border-zinc-300 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50";
   return (
     <pre
@@ -118,7 +118,7 @@ function EditSourceLink({
   return (
     <button
       onClick={() => onViewSource(field)}
-      className="inline-flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-300 transition-colors"
+      className="inline-flex items-center gap-1 text-[11px] text-blue-600 dark:text-blue-400 hover:text-blue-500 dark:hover:text-blue-300 transition-colors"
     >
       <ExternalLink className="w-2.5 h-2.5" />
       Edit in source
@@ -171,7 +171,7 @@ function OutputSchemaTable({
           key={name}
           className="flex items-baseline gap-2 text-xs font-mono bg-zinc-100/50 dark:bg-zinc-900/50 rounded px-2 py-1.5 min-w-0"
         >
-          <span className="text-blue-400">{name}</span>
+          <span className="text-blue-600 dark:text-blue-400">{name}</span>
           <Badge className="bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border-zinc-300 dark:border-zinc-700">
             {field.type}
           </Badge>
@@ -226,9 +226,9 @@ export function StepDefinitionPanel({
   // Idempotency badge
   const idempotencyBadge =
     stepDef.idempotency === "retriable_with_guard"
-      ? { label: "retriable", color: "bg-amber-900/50 text-amber-400 border-amber-800" }
+      ? { label: "retriable", color: "bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-800" }
       : stepDef.idempotency === "non_retriable"
-        ? { label: "non-retriable", color: "bg-red-900/50 text-red-400 border-red-800" }
+        ? { label: "non-retriable", color: "bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-400 border-red-300 dark:border-red-800" }
         : null;
 
   return (
@@ -237,7 +237,7 @@ export function StepDefinitionPanel({
       <div className="p-3 border-b border-border shrink-0">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 min-w-0">
-            <span className="text-zinc-400 shrink-0">
+            <span className="text-zinc-500 dark:text-zinc-400 shrink-0">
               {executorIcon(execType)}
             </span>
             <h3 className="font-semibold text-foreground text-sm truncate">
@@ -273,12 +273,12 @@ export function StepDefinitionPanel({
             {execType}
           </Badge>
           {!!config.emit_flow && (
-            <Badge className="bg-blue-900/50 text-blue-400 border-blue-800">
+            <Badge className="bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 border-blue-300 dark:border-blue-800">
               emit_flow
             </Badge>
           )}
           {stepDef.for_each && (
-            <Badge className="bg-purple-900/50 text-purple-400 border-purple-800">
+            <Badge className="bg-purple-100 dark:bg-purple-900/50 text-purple-600 dark:text-purple-400 border-purple-300 dark:border-purple-800">
               for_each
             </Badge>
           )}
@@ -290,7 +290,7 @@ export function StepDefinitionPanel({
         </div>
         {/* Description */}
         {stepDef.description && (
-          <p className="text-xs text-zinc-400 mt-2 leading-relaxed">
+          <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-2 leading-relaxed">
             {stepDef.description}
           </p>
         )}
@@ -313,7 +313,7 @@ export function StepDefinitionPanel({
                           <button
                             key={fp}
                             onClick={() => onViewFile(fp)}
-                            className="inline-flex items-center gap-1 text-[11px] font-mono text-blue-400 hover:text-blue-300 bg-blue-950/30 hover:bg-blue-950/50 rounded px-1.5 py-0.5 transition-colors"
+                            className="inline-flex items-center gap-1 text-[11px] font-mono text-blue-600 dark:text-blue-400 hover:text-blue-500 dark:hover:text-blue-300 bg-blue-100 dark:bg-blue-950/30 hover:bg-blue-200 dark:hover:bg-blue-950/50 rounded px-1.5 py-0.5 transition-colors"
                           >
                             <ExternalLink className="w-2.5 h-2.5" />
                             {fp}
@@ -516,16 +516,16 @@ export function StepDefinitionPanel({
                           key={b.local_name}
                           className="text-xs font-mono bg-zinc-100/50 dark:bg-zinc-900/50 rounded px-2 py-1.5 flex items-center gap-1.5 flex-wrap"
                         >
-                          <span className="text-blue-400">
+                          <span className="text-blue-600 dark:text-blue-400">
                             {b.local_name}
                           </span>
                           <span className="text-zinc-600">&larr;</span>
                           {b.any_of_sources ? (
-                            <span className="text-zinc-400">
+                            <span className="text-zinc-500 dark:text-zinc-400">
                               any_of({b.any_of_sources.map(s => `${s.step}.${s.field}`).join(", ")})
                             </span>
                           ) : (
-                            <span className="text-zinc-400">
+                            <span className="text-zinc-500 dark:text-zinc-400">
                               {b.source_step}.{b.source_field}
                             </span>
                           )}
@@ -547,7 +547,7 @@ export function StepDefinitionPanel({
                       {stepDef.exit_rules.map((r) => {
                         const action = safeRenderValue(r.config.action ?? "");
                         const actionColor =
-                          EXIT_ACTION_COLORS[action] ?? "text-zinc-400";
+                          EXIT_ACTION_COLORS[action] ?? "text-zinc-500 dark:text-zinc-400";
                         return (
                           <div
                             key={r.name}
@@ -595,16 +595,16 @@ export function StepDefinitionPanel({
                     <span className="text-xs text-zinc-500">For-Each</span>
                     <div className="grid grid-cols-2 gap-1 text-xs font-mono">
                       <span className="text-zinc-500">Source</span>
-                      <span className="text-zinc-400 break-all">
+                      <span className="text-zinc-500 dark:text-zinc-400 break-all">
                         {stepDef.for_each.source_step}.
                         {stepDef.for_each.source_field}
                       </span>
                       <span className="text-zinc-500">Item Var</span>
-                      <span className="text-zinc-400 break-all">
+                      <span className="text-zinc-500 dark:text-zinc-400 break-all">
                         {stepDef.for_each.item_var}
                       </span>
                       <span className="text-zinc-500">On Error</span>
-                      <span className="text-zinc-400 break-all">
+                      <span className="text-zinc-500 dark:text-zinc-400 break-all">
                         {stepDef.for_each.on_error}
                       </span>
                     </div>
@@ -653,7 +653,7 @@ export function StepDefinitionPanel({
                       )}
                       {!["timeout", "retry", "fallback"].includes(d.type) && (
                         <>
-                          <span className="text-zinc-400">{d.type}</span>
+                          <span className="text-zinc-500 dark:text-zinc-400">{d.type}</span>
                           {d.config && Object.keys(d.config).length > 0 && (
                             <span className="text-zinc-500 text-[10px]">
                               {Object.entries(d.config).map(([k, v]) => `${k}=${safeRenderValue(v)}`).join(", ")}
@@ -677,7 +677,7 @@ export function StepDefinitionPanel({
                       {stepDef.limits.max_cost_usd != null && (
                         <>
                           <span className="text-zinc-500">Max Cost</span>
-                          <span className="text-zinc-400">
+                          <span className="text-zinc-500 dark:text-zinc-400">
                             ${stepDef.limits.max_cost_usd}
                           </span>
                         </>
@@ -685,7 +685,7 @@ export function StepDefinitionPanel({
                       {stepDef.limits.max_duration_minutes != null && (
                         <>
                           <span className="text-zinc-500">Max Duration</span>
-                          <span className="text-zinc-400">
+                          <span className="text-zinc-500 dark:text-zinc-400">
                             {stepDef.limits.max_duration_minutes}m
                           </span>
                         </>
@@ -693,7 +693,7 @@ export function StepDefinitionPanel({
                       {stepDef.limits.max_iterations != null && (
                         <>
                           <span className="text-zinc-500">Max Iterations</span>
-                          <span className="text-zinc-400">
+                          <span className="text-zinc-500 dark:text-zinc-400">
                             {stepDef.limits.max_iterations}
                           </span>
                         </>

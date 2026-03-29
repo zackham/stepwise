@@ -49,8 +49,8 @@ function TreeNode({
     <div className={cn("relative", depth > 0 && "ml-4 pl-4")}>
       {depth > 0 && (
         <>
-          <div className="absolute left-0 top-0 bottom-0 border-l border-zinc-700/30" />
-          <div className="absolute left-0 top-4 w-4 border-t border-zinc-700/30" />
+          <div className="absolute left-0 top-0 bottom-0 border-l border-zinc-300/30 dark:border-zinc-700/30" />
+          <div className="absolute left-0 top-4 w-4 border-t border-zinc-300/30 dark:border-zinc-700/30" />
         </>
       )}
       <Collapsible open={expanded} onOpenChange={setExpanded}>
@@ -77,7 +77,7 @@ function TreeNode({
               Open job &rarr;
             </button>
 
-            <div className="relative ml-3 border-l border-zinc-700/30 pl-4 space-y-1">
+            <div className="relative ml-3 border-l border-zinc-300/30 dark:border-zinc-700/30 pl-4 space-y-1">
               {Object.entries(stepRuns).map(([stepName, runs]) => {
                 const latestRun = runs.reduce<StepRun | null>(
                   (currentLatest, run) =>
@@ -91,12 +91,12 @@ function TreeNode({
 
                 return (
                   <div key={stepName} className="relative space-y-1">
-                    <div className="absolute left-[-16px] top-3.5 w-4 border-t border-zinc-700/30" />
+                    <div className="absolute left-[-16px] top-3.5 w-4 border-t border-zinc-300/30 dark:border-zinc-700/30" />
                     <div className="flex items-center gap-2 py-0.5 text-sm min-w-0">
                       <span className="text-zinc-500 shrink-0">
                         {executorIcon(stepDef?.executor.type ?? "sub_flow", "w-3 h-3")}
                       </span>
-                      <span className="text-zinc-400 font-mono text-xs truncate flex-1">
+                      <span className="text-zinc-500 dark:text-zinc-400 font-mono text-xs truncate flex-1">
                         {stepName}
                       </span>
                       {latestRun && <StepStatusBadge status={latestRun.status} />}

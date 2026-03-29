@@ -85,7 +85,7 @@ export function QuickLaunch({ onLaunched, onEditLaunch }: QuickLaunchProps) {
     <div className="border-b border-border">
       <div className="flex items-center gap-1.5 px-3 pt-2 pb-1">
         <Zap className="w-3 h-3 text-yellow-500" />
-        <span className="text-xs font-medium text-zinc-400">Quick Launch</span>
+        <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Quick Launch</span>
       </div>
       <div className="px-2 pb-2 space-y-1">
         {visibleFlows.map((item) => {
@@ -102,7 +102,7 @@ export function QuickLaunch({ onLaunched, onEditLaunch }: QuickLaunchProps) {
               >
                 <div className="flex items-center gap-1.5">
                   {isLaunching ? (
-                    <Loader2 className="w-3 h-3 animate-spin text-zinc-400 shrink-0" />
+                    <Loader2 className="w-3 h-3 animate-spin text-zinc-500 dark:text-zinc-400 shrink-0" />
                   ) : null}
                   <span className="text-xs font-medium text-foreground truncate">
                     {item.flow_name}
@@ -120,7 +120,7 @@ export function QuickLaunch({ onLaunched, onEditLaunch }: QuickLaunchProps) {
                 className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-opacity cursor-pointer shrink-0 mt-0.5"
                 title="Edit & Run"
               >
-                <Pencil className="w-3 h-3 text-zinc-400" />
+                <Pencil className="w-3 h-3 text-zinc-500 dark:text-zinc-400" />
               </button>
             </div>
           );
@@ -129,7 +129,7 @@ export function QuickLaunch({ onLaunched, onEditLaunch }: QuickLaunchProps) {
       {recentFlows.length > 3 && (
         <button
           onClick={() => setExpanded(!expanded)}
-          className="w-full flex items-center justify-center gap-1 py-1 text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors border-t border-border cursor-pointer"
+          className="w-full flex items-center justify-center gap-1 py-1 text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors border-t border-border cursor-pointer"
         >
           {expanded ? (
             <>

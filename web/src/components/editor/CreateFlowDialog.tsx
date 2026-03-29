@@ -103,7 +103,7 @@ export function CreateFlowDialog({
           </div>
 
           {createFlowMutation.isError && (
-            <p className="text-xs text-red-400">
+            <p className="text-xs text-red-500 dark:text-red-400">
               {(createFlowMutation.error as Error).message?.includes("409")
                 ? "A flow with this name already exists"
                 : "Failed to create flow"}

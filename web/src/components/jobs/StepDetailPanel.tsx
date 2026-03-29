@@ -143,7 +143,7 @@ function ScriptLogView({ run }: { run: StepRun }) {
         </div>
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-300"
+          className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
         >
           {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
           {copied ? "Copied" : "Copy"}
@@ -187,7 +187,7 @@ function AgentRawView({ runId }: { runId: string }) {
       <div className="flex justify-end mb-1">
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-300"
+          className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
         >
           {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
           {copied ? "Copied" : "Copy All"}
@@ -300,7 +300,7 @@ export function StepDetailPanel({
       {/* Header */}
       <div className="flex items-start justify-between p-4 border-b border-border">
         <div className="flex items-center gap-2">
-          <span className="text-zinc-400">
+          <span className="text-zinc-500 dark:text-zinc-400">
             {executorIcon(stepDef.executor.type)}
           </span>
           <h3 className="font-semibold text-foreground">{stepDef.name}</h3>
@@ -432,17 +432,17 @@ export function StepDetailPanel({
                 <div className="flex gap-3 text-xs">
                   {Boolean(stepDef.executor.config.output_mode) && (
                     <span className="text-zinc-500">
-                      Mode: <span className="text-zinc-400 font-mono">{safeRenderValue(stepDef.executor.config.output_mode)}</span>
+                      Mode: <span className="text-zinc-500 dark:text-zinc-400 font-mono">{safeRenderValue(stepDef.executor.config.output_mode)}</span>
                     </span>
                   )}
                   {Boolean(stepDef.executor.config.model) && (
                     <span className="text-zinc-500">
-                      Model: <span className="text-zinc-400 font-mono">{safeRenderValue(stepDef.executor.config.model)}</span>
+                      Model: <span className="text-zinc-500 dark:text-zinc-400 font-mono">{safeRenderValue(stepDef.executor.config.model)}</span>
                     </span>
                   )}
                   {Boolean(stepDef.executor.config.permission_mode) && (
                     <span className="text-zinc-500">
-                      Perms: <span className="text-zinc-400 font-mono">{safeRenderValue(stepDef.executor.config.permission_mode)}</span>
+                      Perms: <span className="text-zinc-500 dark:text-zinc-400 font-mono">{safeRenderValue(stepDef.executor.config.permission_mode)}</span>
                     </span>
                   )}
                 </div>
@@ -467,7 +467,7 @@ export function StepDetailPanel({
                     >
                       <span className="text-blue-400">{b.local_name}</span>
                       <span className="text-zinc-600"> &larr; </span>
-                      <span className="text-zinc-400">
+                      <span className="text-zinc-500 dark:text-zinc-400">
                         {b.source_step}.{b.source_field}
                       </span>
                     </div>
@@ -488,7 +488,7 @@ export function StepDetailPanel({
                       <span className="text-amber-400">{safeRenderValue(r.name)}</span>
                       <span className="text-zinc-600"> ({safeRenderValue(r.type)})</span>
                       {r.config.action != null && (
-                        <span className="text-zinc-400">
+                        <span className="text-zinc-500 dark:text-zinc-400">
                           {" "}
                           &rarr; {safeRenderValue(r.config.action)}
                         </span>
@@ -524,19 +524,19 @@ export function StepDetailPanel({
                 {stepDef.limits.max_cost_usd != null && (
                   <>
                     <span className="text-zinc-500">Max Cost</span>
-                    <span className="text-zinc-400">${stepDef.limits.max_cost_usd}</span>
+                    <span className="text-zinc-500 dark:text-zinc-400">${stepDef.limits.max_cost_usd}</span>
                   </>
                 )}
                 {stepDef.limits.max_duration_minutes != null && (
                   <>
                     <span className="text-zinc-500">Max Duration</span>
-                    <span className="text-zinc-400">{stepDef.limits.max_duration_minutes}m</span>
+                    <span className="text-zinc-500 dark:text-zinc-400">{stepDef.limits.max_duration_minutes}m</span>
                   </>
                 )}
                 {stepDef.limits.max_iterations != null && (
                   <>
                     <span className="text-zinc-500">Max Iterations</span>
-                    <span className="text-zinc-400">{stepDef.limits.max_iterations}</span>
+                    <span className="text-zinc-500 dark:text-zinc-400">{stepDef.limits.max_iterations}</span>
                   </>
                 )}
               </div>
@@ -606,7 +606,7 @@ export function StepDetailPanel({
                     <AccordionTrigger className="text-sm py-2">
                       <div className="flex items-center gap-2">
                         <StepStatusBadge status={run.status} />
-                        <span className="text-zinc-400">
+                        <span className="text-zinc-500 dark:text-zinc-400">
                           Attempt #{run.attempt}
                         </span>
                         <span className="text-zinc-600 text-xs flex items-center gap-1">
@@ -631,11 +631,11 @@ export function StepDetailPanel({
                         {/* Timestamps */}
                         <div className="grid grid-cols-2 gap-1 text-xs">
                           <span className="text-zinc-500">Started</span>
-                          <span className="text-zinc-400 font-mono">
+                          <span className="text-zinc-500 dark:text-zinc-400 font-mono">
                             {formatTimestamp(run.started_at)}
                           </span>
                           <span className="text-zinc-500">Completed</span>
-                          <span className="text-zinc-400 font-mono">
+                          <span className="text-zinc-500 dark:text-zinc-400 font-mono">
                             {formatTimestamp(run.completed_at)}
                           </span>
                           <span className="text-zinc-500">Run ID</span>
@@ -648,7 +648,7 @@ export function StepDetailPanel({
                         {run.result?.artifact?._fulfillment_notes != null && (
                           <div className="flex items-start gap-1.5 text-xs bg-zinc-100/50 dark:bg-zinc-800/50 rounded p-2">
                             <StickyNote className="w-3 h-3 mt-0.5 text-zinc-500 shrink-0" />
-                            <span className="text-zinc-400 whitespace-pre-wrap">
+                            <span className="text-zinc-500 dark:text-zinc-400 whitespace-pre-wrap">
                               {String(run.result.artifact._fulfillment_notes)}
                             </span>
                           </div>

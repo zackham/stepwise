@@ -250,7 +250,7 @@ export function JobControls({ job, selectedStep, runs }: JobControlsProps) {
                   variant="outline"
                   size="sm"
                   onClick={() => setContextDialogOpen(true)}
-                  className="text-zinc-400"
+                  className="text-zinc-500 dark:text-zinc-400"
                 >
                   <MessageSquare className="w-3.5 h-3.5 mr-1.5" />
                   Inject Context

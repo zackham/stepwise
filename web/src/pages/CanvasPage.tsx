@@ -188,7 +188,7 @@ export function CanvasPage() {
                   <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
                     {group.label}
                   </span>
-                  <span className="text-[10px] text-zinc-400 dark:text-zinc-600">
+                  <span className="text-[10px] text-zinc-500 dark:text-zinc-600">
                     {group.completedCount}/{group.totalCount}
                   </span>
                   {group.maxConcurrent > 0 && (

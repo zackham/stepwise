@@ -59,15 +59,15 @@ export function ChatInput({
     <div className={floating ? "rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg" : "border-t border-border"}>
       {/* Permission disclosure */}
       {showDisclosure && isAgentMode && (
-        <div className="px-3 py-2 border-b border-amber-900/30 bg-amber-950/20 text-[11px] text-amber-200/80">
+        <div className="px-3 py-2 border-b border-amber-300/30 dark:border-amber-900/30 bg-amber-50 dark:bg-amber-950/20 text-[11px] text-amber-800/80 dark:text-amber-200/80">
           <div className="flex items-start gap-1.5">
-            <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0 text-amber-400" />
+            <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0 text-amber-500 dark:text-amber-400" />
             <div>
-              <p className="font-medium text-amber-300">Agent runs with full tool approval</p>
-              <p className="mt-1 text-amber-200/60">
+              <p className="font-medium text-amber-700 dark:text-amber-300">Agent runs with full tool approval</p>
+              <p className="mt-1 text-amber-700/60 dark:text-amber-200/60">
                 All tool calls (file reads, writes, shell commands) are auto-approved.
                 The system prompt constrains writes to the flow directory
-                {flowPath && <> (<code className="px-1 bg-amber-900/30 rounded">{flowPath}</code>)</>},
+                {flowPath && <> (<code className="px-1 bg-amber-200/30 dark:bg-amber-900/30 rounded">{flowPath}</code>)</>},
                 but this is not a sandbox.
               </p>
             </div>
@@ -94,7 +94,7 @@ export function ChatInput({
                   key={mode.value}
                   onClick={() => { onModeChange(mode.value); setShowModeSelect(false); }}
                   className={`block w-full text-left px-3 py-1.5 text-xs hover:bg-zinc-100 dark:hover:bg-zinc-800 ${
-                    mode.value === agentMode ? "text-violet-300" : "text-zinc-700 dark:text-zinc-300"
+                    mode.value === agentMode ? "text-violet-600 dark:text-violet-300" : "text-zinc-700 dark:text-zinc-300"
                   }`}
                 >
                   <div className="font-medium">{mode.label}</div>
@@ -135,7 +135,7 @@ export function ChatInput({
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
-          className="text-xs bg-zinc-900 border-zinc-700 min-h-[48px] max-h-[120px] resize-none w-full"
+          className="text-xs bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700 min-h-[48px] max-h-[120px] resize-none w-full"
           disabled={disabled}
         />
       </div>

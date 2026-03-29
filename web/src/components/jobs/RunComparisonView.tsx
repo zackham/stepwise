@@ -144,7 +144,7 @@ function DiffScalar({
       <span className="text-zinc-500">{label}</span>
       <span
         className={cn(
-          "text-zinc-400 font-mono",
+          "text-zinc-500 dark:text-zinc-400 font-mono",
           isDiff && `rounded px-1 ${tintColor}`
         )}
       >
@@ -199,7 +199,7 @@ function RunComparisonColumn({
       {/* Header */}
       <div className="flex items-center gap-2 flex-wrap">
         <StepStatusBadge status={run.status} />
-        <span className="text-zinc-400 text-sm">Attempt #{run.attempt}</span>
+        <span className="text-zinc-500 dark:text-zinc-400 text-sm">Attempt #{run.attempt}</span>
         <span className="text-zinc-600 text-xs flex items-center gap-1">
           <Clock className="w-3 h-3" />
           <span

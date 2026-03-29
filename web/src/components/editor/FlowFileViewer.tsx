@@ -76,8 +76,8 @@ export function FlowFileViewer({ flowPath, filePath, onClose }: FlowFileViewerPr
       {/* Header */}
       <div className="flex items-center justify-between h-10 px-3 border-b border-border shrink-0">
         <div className="flex items-center gap-2 min-w-0">
-          <FileText className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
-          <span className="text-xs font-mono text-zinc-300 truncate">{filePath}</span>
+          <FileText className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400 shrink-0" />
+          <span className="text-xs font-mono text-zinc-700 dark:text-zinc-300 truncate">{filePath}</span>
           <span className="text-[10px] text-zinc-600 shrink-0">{lang}</span>
           {isDirty && (
             <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" title="Unsaved" />
@@ -105,7 +105,7 @@ export function FlowFileViewer({ flowPath, filePath, onClose }: FlowFileViewerPr
       {/* Editor */}
       {isYaml ? (
         <div className="flex-1 overflow-auto">
-          <pre className="text-xs text-zinc-300 p-3 font-mono leading-relaxed whitespace-pre-wrap break-words overflow-x-auto">
+          <pre className="text-xs text-zinc-700 dark:text-zinc-300 p-3 font-mono leading-relaxed whitespace-pre-wrap break-words overflow-x-auto">
             <code>{content}</code>
           </pre>
           <div className="px-3 pb-3">
@@ -119,7 +119,7 @@ export function FlowFileViewer({ flowPath, filePath, onClose }: FlowFileViewerPr
           ref={textareaRef}
           value={content}
           onChange={(e) => setContent(e.target.value)}
-          className="flex-1 w-full bg-transparent text-xs text-zinc-300 font-mono p-3 leading-relaxed resize-none focus:outline-none"
+          className="flex-1 w-full bg-transparent text-xs text-zinc-700 dark:text-zinc-300 font-mono p-3 leading-relaxed resize-none focus:outline-none"
           spellCheck={false}
         />
       )}

@@ -136,12 +136,12 @@ export function ErrorRecoverySuggestions({
         </button>
         {fixesOpen && (
           <div className="px-2.5 pb-2.5 space-y-1.5">
-            <p className="text-[11px] text-zinc-400">{guidance.description}</p>
+            <p className="text-[11px] text-zinc-500 dark:text-zinc-400">{guidance.description}</p>
             <ul className="space-y-1">
               {guidance.suggestions.map((s, i) => (
                 <li
                   key={i}
-                  className="text-[11px] text-zinc-300 flex items-start gap-1.5"
+                  className="text-[11px] text-zinc-700 dark:text-zinc-300 flex items-start gap-1.5"
                 >
                   <span className="text-amber-500/60 mt-0.5 shrink-0">•</span>
                   {s}
@@ -157,7 +157,7 @@ export function ErrorRecoverySuggestions({
         <div className="bg-zinc-500/5 border border-zinc-500/15 rounded">
           <button
             onClick={() => setPastOpen(!pastOpen)}
-            className="flex items-center gap-1.5 w-full px-2.5 py-1.5 text-xs text-zinc-400 hover:text-zinc-300"
+            className="flex items-center gap-1.5 w-full px-2.5 py-1.5 text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-300"
           >
             {pastOpen ? (
               <ChevronDown className="w-3 h-3 shrink-0" />
@@ -187,11 +187,11 @@ export function ErrorRecoverySuggestions({
                       params={{ jobId: f.job_id }}
                       className="flex items-center gap-2 text-[11px] px-2 py-1 rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50 group"
                     >
-                      <span className="text-zinc-300 group-hover:text-blue-400 truncate max-w-[120px]">
+                      <span className="text-zinc-700 dark:text-zinc-300 group-hover:text-blue-400 truncate max-w-[120px]">
                         {f.job_name || f.job_id.slice(0, 8)}
                       </span>
                       <span className="text-zinc-600">/</span>
-                      <span className="text-zinc-400 font-mono truncate max-w-[100px]">
+                      <span className="text-zinc-500 dark:text-zinc-400 font-mono truncate max-w-[100px]">
                         {f.step_name}
                       </span>
                       <span className="text-zinc-600 ml-auto shrink-0">

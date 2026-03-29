@@ -171,7 +171,7 @@ function DiffBlock({ block }: { block: DiffBlock }) {
         <>
           {block.lines.map((line, i) => (
             <div key={i} className="flex text-zinc-500">
-              <span className="w-5 shrink-0 text-center select-none text-zinc-700">
+              <span className="w-5 shrink-0 text-center select-none text-zinc-500 dark:text-zinc-600">
                 {" "}
               </span>
               <span className="flex-1 px-2 whitespace-pre-wrap break-all">
@@ -207,7 +207,7 @@ function DiffBlock({ block }: { block: DiffBlock }) {
       ? "text-emerald-500"
       : block.type === "removed"
         ? "text-red-500"
-        : "text-zinc-700";
+        : "text-zinc-500 dark:text-zinc-600";
 
   return (
     <>
