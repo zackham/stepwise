@@ -5,8 +5,8 @@
 <h1 align="center">Stepwise</h1>
 
 <p align="center">
-  <strong>Deterministic scaffolding for nondeterministic work.</strong><br/>
-  Observable runs. Scoped delegation. Human gates. Replays. Auditability.
+  <strong>Air traffic control for AI work.</strong><br/>
+  Deterministic scaffolding around nondeterministic work.
 </p>
 
 <p align="center">
@@ -15,27 +15,63 @@
 
 ---
 
-AI agents are powerful. But power without structure is chaos. An agent that can't be observed, paused, or audited is an agent you can't trust with real work.
+You gave an agent a task. It ran for 40 minutes. Did it work?
 
-**The intelligence commoditizes. The harness does not.**
+Stepwise answers that question as a URL. Open the web UI, watch the DAG animate step by step — scripts running, agents thinking, humans approving — all in real time. Every decision logged, every output captured, every failure visible. The 3am question answered before you ask it.
 
-Stepwise is the harness. You define a workflow in YAML — steps, dependencies, branching logic, human checkpoints. Stepwise builds a DAG, runs independent steps in parallel, streams agent output in real time, and pauses at the gates you set. Every run is observable, replayable, and auditable.
+This isn't another agent framework. Stepwise doesn't replace your agents — it gives them structure. You define a workflow as a DAG of steps. Stepwise runs them in parallel where it can, pauses where you tell it to, and recovers from crashes without losing progress. The power meter for agent work.
 
-## 60-second start
+## Install
 
 ```bash
-# Install
 curl -fsSL https://raw.githubusercontent.com/zackham/stepwise/master/install.sh | sh
-
-# Run the interactive demo — opens a real-time web UI
-stepwise welcome
+stepwise welcome    # opens a live DAG demo in your browser
 ```
 
-That's it. You'll see a live DAG, agent steps executing, and human checkpoints where the workflow pauses for your input.
+## Three audiences, one system
 
-## What a flow looks like
+### For agents
 
-A `.flow.yaml` defines steps, their dependencies, and what happens at each decision point. This flow runs tests, branches on the result, and loops if fixes are needed:
+Agents are good at reasoning. They're bad at remembering what they were doing 45 minutes ago. Stepwise lets an agent offload multi-step work outside its context window: JSON in, results out.
+
+```bash
+stepwise run deploy-pipeline --wait --input repo="myapp" env="staging"
+# → {"status": "completed", "outputs": [{"url": "https://staging.myapp.dev", "healthy": true}]}
+```
+
+An agent calls this like any other tool. The flow runs tests, builds containers, deploys, health-checks — ten steps the agent doesn't need to hold in context. It gets back structured JSON. Agents can also *emit* sub-flows dynamically, delegating work they discover mid-task.
+
+### For humans
+
+You're the one who has to approve the production deploy at step 7. Stepwise pauses the job and waits — in the web UI, in the CLI, or via API. You see exactly what happened before your gate, review the agent's output, and decide.
+
+The live DAG viewer is where it clicks. Steps light up as they run. Agent output streams in real time — you watch the LLM think, see tool calls fire, catch problems as they happen instead of reading a log after the fact. Escalation rules surface stuck jobs before they burn tokens.
+
+### For infrastructure
+
+Fire a job and walk away. Stepwise persists everything to SQLite — if the process crashes, the server restarts and picks up where it left off. Orphaned jobs get detected and adopted. No Redis, no Postgres, no external queue. One binary, one database file.
+
+```bash
+stepwise run nightly-analysis --async --input date="2026-03-29"
+# Returns immediately. Job runs in the background.
+# Check later: stepwise jobs | stepwise status <job-id>
+```
+
+## What makes it different
+
+**The DAG viewer is the product.** Most orchestrators give you logs. Stepwise gives you a live, animated dependency graph — steps executing in parallel, edges showing data flow, sub-flows expanding inline. You *see* the work happening.
+
+**Mixed step types that actually compose.** A shell script fetches data. An agent analyzes it. A human approves the analysis. A poll step waits for CI to pass. Another agent acts on the result. Five executor types, one DAG, zero glue code.
+
+**Human-in-the-loop that works.** Not a checkbox feature — a first-class execution model. External steps pause the job with a schema-driven input form. Escalation rules promote stuck agents to human attention. The job tree shows exactly where you're needed.
+
+**Crash-proof by default.** SQLite WAL mode, heartbeat-based stale detection, automatic orphan recovery. Kill -9 the server, restart it, jobs resume. No message queue. No distributed state.
+
+**Observable and auditable.** Every step run is recorded with inputs, outputs, timing, and attempt count. Agent output (text + tool calls) streams live via WebSocket. Job reports generate shareable HTML. The audit trail is the database.
+
+**Registry and marketplace.** Browse, search, and install community flows from [stepwise.run](https://stepwise.run) — directly in the web UI or via `stepwise search`.
+
+## A flow in 30 seconds
 
 ```yaml
 name: test-and-fix
@@ -67,61 +103,21 @@ steps:
         max_iterations: 3
 ```
 
-`run-tests` executes a shell script. Based on the output, either `open-pr` or `fix-tests` activates — the `when` conditions are mutually exclusive. If `fix-tests` runs, it loops back to `run-tests` up to 3 times. No orchestration code. No framework. Just YAML.
-
-## Three actors, one DAG
-
-Every step in a Stepwise flow is one of three things:
-
-| | **Agent** | **Human** | **Script** |
-|---|---|---|---|
-| **What** | LLM or autonomous agent | Person reviewing, deciding, providing input | Shell command, API call, any executable |
-| **How** | `executor: agent` or `executor: llm` | `executor: external` — pauses the job | `run: \|` — parses JSON from stdout |
-| **When** | Complex reasoning, code generation, analysis | Approvals, creative judgment, escalation | Data fetching, testing, deterministic transforms |
-
-The DAG doesn't care which actor runs a step. An agent step that fails can escalate to a human. A human approval can trigger a script. A script's output feeds the next agent. They compose.
-
-## Agents call flows as tools
-
-Stepwise flows are callable by AI agents (Claude Code, Codex, etc.) via plain CLI. No MCP server, no protocol layer — just a bash command that returns JSON:
-
-```bash
-stepwise run my-flow --wait --input question="Should we use Postgres?"
-# → {"status": "completed", "outputs": [{"verdict": "yes", "reasoning": "..."}]}
-```
-
-`--wait` prints only JSON to stdout — zero logging, zero progress noise. Generate per-flow tool docs for your agent with:
-
-```bash
-stepwise agent-help --update CLAUDE.md
-```
-
-## Key capabilities
-
-- **DAG engine** — automatic parallelism, conditional branching (`when`), expression-based exit rules, loops with safety caps
-- **Five executor types** — script, llm, agent, external (human gate), poll (wait for external condition)
-- **Four run modes** — headless `run`, ephemeral `--watch` with web UI, blocking `--wait` for JSON output, fire-and-forget `--async`
-- **Real-time streaming** — agent output (text + tool calls) streamed live via WebSocket to the web UI
-- **Human gates** — `external` steps pause the job for approval, feedback, or structured input (web UI, CLI, or API)
-- **Escalation** — `action: escalate` pauses a job for human triage when an agent gets stuck
-- **For-each fan-out** — run a sub-pipeline for each item in a list, with independent error handling
-- **Agent flow emission** — agents can dynamically generate and delegate to sub-workflows
-- **Session continuity** — agents reuse conversation context across loop iterations
-- **Step caching** — content-addressable cache skips re-execution when inputs haven't changed
-- **Decorators** — timeout, retry, fallback — composable per step
+A script runs tests. Based on output, either an agent opens a PR or an agent fixes the failures and loops back. Branching, looping, mixed executors — declared, not coded.
 
 ## CLI
 
 ```
 stepwise run <flow> [--watch|--wait|--async]   Run a flow
 stepwise welcome                               Interactive demo
-stepwise server start [--detach]               Persistent server with web UI
-stepwise validate <flow>                       Check flow for errors + warnings
+stepwise server start [--detach]               Persistent server + web UI
+stepwise validate <flow>                       Check a flow for errors
 stepwise jobs                                  List all jobs
 stepwise status <job-id>                       Step-by-step detail
-stepwise fulfill <run-id> '{...}'              Satisfy an external step
+stepwise fulfill <run-id> '{...}'              Provide human input
 stepwise agent-help                            Generate agent tool docs
-stepwise update                                Upgrade to latest version
+stepwise search <query>                        Find flows in the registry
+stepwise update                                Upgrade to latest
 ```
 
 Full reference: [`docs/cli.md`](docs/cli.md)
