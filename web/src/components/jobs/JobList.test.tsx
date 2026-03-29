@@ -213,7 +213,7 @@ describe("JobList", () => {
     mockJobs = [];
     renderJobList();
 
-    expect(screen.getByText("No jobs yet")).toBeInTheDocument();
+    expect(screen.getByText("Start your first workflow")).toBeInTheDocument();
   });
 
   it("shows filtered empty state when filter matches nothing", () => {
