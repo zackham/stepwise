@@ -910,3 +910,122 @@ class TestH13ServerIdentity:
         with patch("urllib.request.urlopen", side_effect=ConnectionError("refused")):
             from stepwise.server_detect import verify_server_identity
             assert verify_server_identity("http://localhost:8340", Path("/test/project")) is False
+
+
+# ── recover_jobs dispatch tests ───────────────────────────────────────
+
+
+class TestRecoverJobsDispatch:
+    """recover_jobs dispatches ready steps for RUNNING jobs after restart."""
+
+    def _two_step_workflow(self, build_fn: str = "build") -> WorkflowDefinition:
+        return WorkflowDefinition(steps={
+            "ingest": StepDefinition(
+                name="ingest",
+                executor=ExecutorRef(type="callable", config={"fn_name": "echo"}),
+                outputs=["data"],
+            ),
+            "build": StepDefinition(
+                name="build",
+                executor=ExecutorRef(type="callable", config={"fn_name": build_fn}),
+                inputs=[InputBinding("data", "ingest", "data")],
+                outputs=["result"],
+            ),
+        })
+
+    def _make_running_job(self, store, wf) -> Job:
+        job = Job(
+            id=_gen_id("job"),
+            objective="test",
+            workflow=wf,
+            status=JobStatus.RUNNING,
+            inputs={},
+            workspace_path="/tmp/test",
+            config=JobConfig(),
+            created_by="server",
+        )
+        store.save_job(job)
+        return job
+
+    def _add_completed_ingest(self, store, job_id):
+        run = StepRun(
+            id=_gen_id("run"), job_id=job_id, step_name="ingest",
+            attempt=1, status=StepRunStatus.COMPLETED,
+            result=HandoffEnvelope(
+                artifact={"data": "ingested"},
+                sidecar=Sidecar(),
+                workspace="/tmp/test",
+                timestamp=_now(),
+            ),
+            started_at=_now(), completed_at=_now(),
+        )
+        store.save_run(run)
+        return run
+
+    def test_dispatch_ready_after_recovery(self):
+        """Job with completed script step + waiting agent step gets dispatched."""
+        store = SQLiteStore(":memory:")
+        registry = _make_registry()
+        register_step_fn("build", lambda inputs: {"result": "built"})
+        engine = AsyncEngine(store=store, registry=registry)
+
+        wf = self._two_step_workflow()
+        job = self._make_running_job(store, wf)
+        self._add_completed_ingest(store, job.id)
+
+        # recover_jobs needs an event loop for _launch to schedule tasks
+        async def _recover():
+            engine.recover_jobs()
+
+        asyncio.run(_recover())
+
+        runs = store.runs_for_job(job.id)
+        build_runs = [r for r in runs if r.step_name == "build"]
+        assert len(build_runs) == 1, "build step should have been dispatched"
+        assert build_runs[0].status in (StepRunStatus.RUNNING, StepRunStatus.COMPLETED)
+
+    def test_no_double_dispatch_for_running_step(self):
+        """A still-running step must not be launched again."""
+        store = SQLiteStore(":memory:")
+        registry = _make_registry()
+        engine = AsyncEngine(store=store, registry=registry)
+
+        wf = self._two_step_workflow(build_fn="echo")
+        job = self._make_running_job(store, wf)
+        self._add_completed_ingest(store, job.id)
+
+        # build is already RUNNING (survived restart)
+        build_run = StepRun(
+            id=_gen_id("run"), job_id=job.id, step_name="build",
+            attempt=1, status=StepRunStatus.RUNNING,
+            started_at=_now(),
+        )
+        store.save_run(build_run)
+
+        # No event loop needed — _is_step_ready returns False so _launch is never called
+        engine.recover_jobs()
+
+        runs = store.runs_for_job(job.id)
+        build_runs = [r for r in runs if r.step_name == "build"]
+        assert len(build_runs) == 1, "build step must not be double-dispatched"
+
+    def test_recover_jobs_idempotent(self):
+        """Calling recover_jobs twice produces the same result as once."""
+        store = SQLiteStore(":memory:")
+        registry = _make_registry()
+        register_step_fn("build", lambda inputs: {"result": "built"})
+        engine = AsyncEngine(store=store, registry=registry)
+
+        wf = self._two_step_workflow()
+        job = self._make_running_job(store, wf)
+        self._add_completed_ingest(store, job.id)
+
+        async def _recover_twice():
+            engine.recover_jobs()
+            engine.recover_jobs()
+
+        asyncio.run(_recover_twice())
+
+        runs = store.runs_for_job(job.id)
+        build_runs = [r for r in runs if r.step_name == "build"]
+        assert len(build_runs) == 1, "idempotent: second call must not create duplicate"
