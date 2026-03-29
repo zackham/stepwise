@@ -48,7 +48,6 @@ export function JobControls({ job, selectedStep, runs }: JobControlsProps) {
   const stale = isStale(job);
 
   // Rerun logic for selected step
-  const isTerminal = job.status === "completed" || job.status === "failed" || job.status === "cancelled";
   const selectedRun = selectedStep && runs
     ? runs.filter((r) => r.step_name === selectedStep).sort((a, b) => b.attempt - a.attempt)[0] ?? null
     : null;
