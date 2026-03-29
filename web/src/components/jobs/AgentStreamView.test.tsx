@@ -44,9 +44,10 @@ function toolSeg(
   id: string,
   title: string,
   kind: string,
-  status: "running" | "completed"
+  status: "running" | "completed" | "failed",
+  output?: string
 ): StreamSegment {
-  return { type: "tool", tool: { id, title, kind, status } };
+  return { type: "tool", tool: { id, title, kind, status, output } };
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────
@@ -139,5 +140,45 @@ describe("AgentStreamView", () => {
     );
     expect(screen.getByText("Agent starting...")).toBeInTheDocument();
     expect(screen.queryByText(/\$/)).toBeNull();
+  });
+
+  it("renders completed tool card as collapsible when output is present", async () => {
+    const { default: userEvent } = await import("@testing-library/user-event");
+    const user = userEvent.setup();
+    mockStreamState.segments = [
+      toolSeg("t1", "Read config.ts", "Read", "completed", "file contents here"),
+    ];
+    render(<AgentStreamView runId="r1" isLive={true} />);
+
+    // Tool title visible
+    expect(screen.getByText("Read config.ts")).toBeInTheDocument();
+    // Output hidden by default
+    expect(screen.queryByText("file contents here")).toBeNull();
+
+    // Click to expand
+    await user.click(screen.getByText("Read config.ts"));
+    expect(screen.getByText("file contents here")).toBeInTheDocument();
+
+    // Click again to collapse
+    await user.click(screen.getByText("Read config.ts"));
+    expect(screen.queryByText("file contents here")).toBeNull();
+  });
+
+  it("renders failed tool card with error styling", () => {
+    mockStreamState.segments = [
+      toolSeg("t1", "Command failed", "Bash", "failed", "exit code 1"),
+    ];
+    render(<AgentStreamView runId="r1" isLive={true} />);
+    expect(screen.getByText("Command failed")).toBeInTheDocument();
+  });
+
+  it("does not make running tool cards collapsible", () => {
+    mockStreamState.segments = [
+      toolSeg("t1", "Reading file", "Read", "running", "partial"),
+    ];
+    render(<AgentStreamView runId="r1" isLive={true} />);
+    expect(screen.getByText("Reading file")).toBeInTheDocument();
+    // Output should not be visible even though it exists — tool is still running
+    expect(screen.queryByText("partial")).toBeNull();
   });
 });

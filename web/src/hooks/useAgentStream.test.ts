@@ -161,4 +161,49 @@ describe("buildSegmentsFromEvents", () => {
       expect(seg.tool.status).toBe("running");
     }
   });
+
+  it("captures output from tool_end event", () => {
+    const events: AgentStreamEvent[] = [
+      { t: "tool_start", id: "t1", title: "Read config.ts", kind: "Read" },
+      { t: "tool_end", id: "t1", output: "file contents here" },
+    ];
+    const result = buildSegmentsFromEvents(events);
+
+    expect(result.segments).toHaveLength(1);
+    const seg = result.segments[0];
+    expect(seg.type).toBe("tool");
+    if (seg.type === "tool") {
+      expect(seg.tool.status).toBe("completed");
+      expect(seg.tool.output).toBe("file contents here");
+    }
+  });
+
+  it("marks tool as failed when tool_end has error flag", () => {
+    const events: AgentStreamEvent[] = [
+      { t: "tool_start", id: "t1", title: "Run script", kind: "Bash" },
+      { t: "tool_end", id: "t1", error: true, output: "exit code 1" },
+    ];
+    const result = buildSegmentsFromEvents(events);
+
+    expect(result.segments).toHaveLength(1);
+    const seg = result.segments[0];
+    expect(seg.type).toBe("tool");
+    if (seg.type === "tool") {
+      expect(seg.tool.status).toBe("failed");
+      expect(seg.tool.output).toBe("exit code 1");
+    }
+  });
+
+  it("tool without output on tool_end has no output field", () => {
+    const events: AgentStreamEvent[] = [
+      { t: "tool_start", id: "t1", title: "Read", kind: "Read" },
+      { t: "tool_end", id: "t1" },
+    ];
+    const result = buildSegmentsFromEvents(events);
+
+    const seg = result.segments[0];
+    if (seg.type === "tool") {
+      expect(seg.tool.output).toBeUndefined();
+    }
+  });
 });
