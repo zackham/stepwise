@@ -517,3 +517,217 @@ class TestGenerateReport:
         # Non-chain step (publish) should NOT have chain badge
         # (checked implicitly — only 2 chain badges in DAG, not 3)
         store.close()
+
+
+# ── Copy Button Tests ───────────────────────────────────────────────
+
+
+class TestCopyButtons:
+    def test_copy_button_in_output(self):
+        """Copy buttons appear in generated HTML."""
+        wf = _make_workflow({"step": {"outputs": ["x"]}})
+        job = _make_job(wf)
+        store = SQLiteStore()
+        store.save_job(job)
+        store.save_run(_make_run(job.id, "step"))
+
+        html = generate_report(job, store)
+        assert '<button class="copy-btn">Copy</button>' in html
+        assert 'class="copyable"' in html
+        store.close()
+
+    def test_copy_button_javascript(self):
+        """Report includes clipboard JS."""
+        wf = _make_workflow({"step": {"outputs": ["x"]}})
+        job = _make_job(wf)
+        store = SQLiteStore()
+        store.save_job(job)
+        store.save_run(_make_run(job.id, "step"))
+
+        html = generate_report(job, store)
+        assert "navigator.clipboard.writeText" in html
+        assert "document.execCommand" in html  # fallback
+        assert "<script>" in html
+        store.close()
+
+    def test_copy_button_in_yaml_appendix(self, tmp_path):
+        """Copy button appears in YAML source section."""
+        flow_file = tmp_path / "test.flow.yaml"
+        flow_file.write_text("name: test\nsteps:\n  s:\n    run: echo hi\n")
+
+        wf = _make_workflow({"s": {"outputs": ["x"]}})
+        job = _make_job(wf)
+        store = SQLiteStore()
+        store.save_job(job)
+        store.save_run(_make_run(job.id, "s"))
+
+        html = generate_report(job, store, flow_file)
+        # YAML appendix should have a copy button
+        assert html.count('<button class="copy-btn">Copy</button>') >= 2  # at least step output + yaml
+        store.close()
+
+    def test_copy_button_hidden_in_print(self):
+        """Print CSS hides copy buttons."""
+        wf = _make_workflow({"step": {"outputs": ["x"]}})
+        job = _make_job(wf)
+        store = SQLiteStore()
+        store.save_job(job)
+        store.save_run(_make_run(job.id, "step"))
+
+        html = generate_report(job, store)
+        assert ".copy-btn" in html
+        assert "@media print" in html
+        store.close()
+
+
+# ── Sub-Job Tests ───────────────────────────────────────────────────
+
+
+class TestSubJobVisualization:
+    def test_for_each_children_rendered(self):
+        """For-each sub-jobs appear in the report."""
+        wf = _make_workflow({
+            "fan-out": {"outputs": ["results"]},
+        })
+        parent_job = _make_job(wf)
+        store = SQLiteStore()
+        store.save_job(parent_job)
+
+        # Create parent run with sub_job_ids in executor_state
+        child_ids = []
+        for i in range(3):
+            child_wf = _make_workflow({"process": {"outputs": ["result"]}})
+            child_job = Job(
+                id=f"child-{i}",
+                objective=f"item-{i}",
+                workflow=child_wf,
+                status=JobStatus.COMPLETED,
+                created_at=parent_job.created_at,
+                updated_at=parent_job.updated_at,
+                parent_job_id=parent_job.id,
+            )
+            store.save_job(child_job)
+            store.save_run(_make_run(child_job.id, "process", artifact={"result": f"done-{i}"}))
+            child_ids.append(child_job.id)
+
+        parent_run = _make_run(parent_job.id, "fan-out")
+        parent_run.executor_state = {"sub_job_ids": child_ids}
+        store.save_run(parent_run)
+
+        html = generate_report(parent_job, store)
+
+        assert "Sub-Jobs (3)" in html
+        assert "sub-job-detail" in html
+        assert "sub-job-step-table" in html
+        assert "process" in html
+        for i in range(3):
+            assert f"item-{i}" in html
+        store.close()
+
+    def test_delegation_child_rendered(self):
+        """Delegation sub-job appears in the report."""
+        wf = _make_workflow({
+            "implement": {"outputs": ["result"], "executor": "agent"},
+        })
+        parent_job = _make_job(wf)
+        store = SQLiteStore()
+        store.save_job(parent_job)
+
+        # Create child job
+        child_wf = _make_workflow({
+            "build": {"outputs": ["artifact"]},
+            "test": {"outputs": ["passed"], "inputs": {"artifact": "build.artifact"}},
+        })
+        child_job = Job(
+            id="child-delegated",
+            objective="sub-flow",
+            workflow=child_wf,
+            status=JobStatus.COMPLETED,
+            created_at=parent_job.created_at,
+            updated_at=parent_job.updated_at,
+            parent_job_id=parent_job.id,
+        )
+        store.save_job(child_job)
+        store.save_run(_make_run(child_job.id, "build", artifact={"artifact": "built"}))
+        store.save_run(_make_run(child_job.id, "test", artifact={"passed": True}))
+
+        parent_run = _make_run(parent_job.id, "implement")
+        parent_run.sub_job_id = "child-delegated"
+        store.save_run(parent_run)
+
+        html = generate_report(parent_job, store)
+
+        assert "Sub-Jobs (1)" in html
+        assert "sub-flow" in html
+        assert "build" in html
+        assert "test" in html
+        store.close()
+
+    def test_nested_sub_jobs(self):
+        """Nested sub-jobs (parent → child → grandchild) rendered recursively."""
+        wf = _make_workflow({"outer": {"outputs": ["x"]}})
+        parent_job = _make_job(wf)
+        store = SQLiteStore()
+        store.save_job(parent_job)
+
+        # Child
+        child_wf = _make_workflow({"inner": {"outputs": ["y"]}})
+        child_job = Job(
+            id="child-nested",
+            objective="child-flow",
+            workflow=child_wf,
+            status=JobStatus.COMPLETED,
+            created_at=parent_job.created_at,
+            updated_at=parent_job.updated_at,
+            parent_job_id=parent_job.id,
+        )
+        store.save_job(child_job)
+
+        # Grandchild
+        gc_wf = _make_workflow({"deep": {"outputs": ["z"]}})
+        gc_job = Job(
+            id="grandchild",
+            objective="grandchild-flow",
+            workflow=gc_wf,
+            status=JobStatus.COMPLETED,
+            created_at=parent_job.created_at,
+            updated_at=parent_job.updated_at,
+            parent_job_id=child_job.id,
+        )
+        store.save_job(gc_job)
+        store.save_run(_make_run(gc_job.id, "deep", artifact={"z": "deepval"}))
+
+        child_run = _make_run(child_job.id, "inner")
+        child_run.sub_job_id = "grandchild"
+        store.save_run(child_run)
+
+        parent_run = _make_run(parent_job.id, "outer")
+        parent_run.sub_job_id = "child-nested"
+        store.save_run(parent_run)
+
+        html = generate_report(parent_job, store)
+
+        assert "child-flow" in html
+        assert "grandchild-flow" in html
+        assert "deep" in html
+        store.close()
+
+    def test_no_sub_jobs_no_regression(self):
+        """Simple job without sub-jobs renders identically (no sub-job section)."""
+        wf = _make_workflow({
+            "step-a": {"outputs": ["x"]},
+            "step-b": {"outputs": ["y"], "inputs": {"x": "step-a.x"}},
+        })
+        job = _make_job(wf)
+        store = SQLiteStore()
+        store.save_job(job)
+        store.save_run(_make_run(job.id, "step-a"))
+        store.save_run(_make_run(job.id, "step-b"))
+
+        html = generate_report(job, store)
+
+        assert "Sub-Jobs" not in html
+        assert '<details class="sub-job-detail">' not in html
+        assert "step-a" in html
+        assert "step-b" in html
+        store.close()

@@ -1623,6 +1623,16 @@ def get_runs(job_id: str, step_name: str | None = None):
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
 
 
+@app.get("/api/jobs/{job_id}/children")
+def get_children(job_id: str):
+    engine = _get_engine()
+    try:
+        children = engine.store.child_jobs(job_id)
+        return [j.to_dict() for j in children]
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+
+
 @app.post("/api/jobs/{job_id}/steps/{step_name}/rerun")
 def rerun_step(job_id: str, step_name: str):
     engine = _get_engine()
