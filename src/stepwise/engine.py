@@ -1973,6 +1973,7 @@ class Engine:
         parent_inputs: dict,
         source_list: list,
         item_var: str,
+        job_inputs: dict | None = None,
     ) -> dict[int, dict]:
         """Batch check cache for for-each items. Returns {index: artifact_dict} for hits."""
         from stepwise.cache import UNCACHEABLE_TYPES, compute_cache_key
@@ -2004,7 +2005,7 @@ class Engine:
         # Compute cache keys for each item
         keys_by_index: dict[str, int] = {}  # cache_key → item_index
         for i, item in enumerate(source_list):
-            sub_inputs = {**parent_inputs, item_var: item}
+            sub_inputs = {**(job_inputs or {}), **parent_inputs, item_var: item}
             exec_ref = target_step.executor
             interpolated = _interpolate_config(exec_ref.config, sub_inputs)
             if interpolated != exec_ref.config:
@@ -2122,6 +2123,7 @@ class Engine:
         if self.cache is not None:
             cached_results = self._for_each_batch_cache_check(
                 step_def, inputs, source_list, fe.item_var,
+                job_inputs=job.inputs,
             )
 
         # Create sub-jobs for uncached items only
@@ -2130,7 +2132,8 @@ class Engine:
             if i in cached_results:
                 continue  # cache hit — no sub-job needed
             sub_inputs = {
-                **inputs,  # parent inputs passed through
+                **job.inputs,  # propagate parent job inputs so inner $job.x refs resolve
+                **inputs,  # explicit for_each step inputs override parent values
                 fe.item_var: item,  # the iteration variable
             }
             sub_workspace = os.path.join(
