@@ -131,6 +131,14 @@ export function useSimilarErrors(
 
 // ── Mutation hooks ───────────────────────────────────────────────────
 
+export function useGroups() {
+  return useQuery({
+    queryKey: ["groups"],
+    queryFn: api.fetchGroups,
+    staleTime: 5_000,
+  });
+}
+
 export function useStepwiseMutations() {
   const queryClient = useQueryClient();
 
@@ -339,6 +347,15 @@ export function useStepwiseMutations() {
     },
   });
 
+  const updateGroupLimitMutation = useMutation({
+    mutationFn: ({ group, maxConcurrent }: { group: string; maxConcurrent: number }) =>
+      api.updateGroup(group, maxConcurrent),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["groups"] });
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+
   const deleteTemplateMutation = useMutation({
     mutationFn: api.deleteTemplate,
     onSuccess: () => {
@@ -370,5 +387,6 @@ export function useStepwiseMutations() {
     adoptJob: adoptJobMutation,
     saveTemplate: saveTemplateMutation,
     deleteTemplate: deleteTemplateMutation,
+    updateGroupLimit: updateGroupLimitMutation,
   };
 }
