@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import type { HierarchicalDagLayout, HierarchicalDagNode, FlowPortNode, LoopEdge } from "./dag-layout";
 import type { DagEdge } from "./dag-layout";
+import { computeLoopEdgePath } from "./dag-layout";
 
 // Duration of layout transition in ms
 const TRANSITION_MS = 300;
@@ -59,19 +60,29 @@ function lerpEdge(prev: DagEdge, next: DagEdge, t: number): DagEdge {
   return { ...next, points };
 }
 
-/** Interpolate a loop edge */
-function lerpLoopEdge(prev: LoopEdge, next: LoopEdge, t: number): LoopEdge {
-  return {
-    ...next,
-    labelPos: {
-      x: lerp(prev.labelPos.x, next.labelPos.x, t),
-      y: lerp(prev.labelPos.y, next.labelPos.y, t),
-    },
-    // Regenerate path from interpolated node positions is complex —
-    // for now just crossfade by using next's path (the spring camera
-    // handles the visual smoothness at the viewport level)
-    path: next.path,
-  };
+/** Interpolate a loop edge, recomputing path from interpolated node positions */
+function lerpLoopEdge(
+  prev: LoopEdge,
+  next: LoopEdge,
+  t: number,
+  nodeMap: Map<string, HierarchicalDagNode>,
+): LoopEdge {
+  const fromNode = nodeMap.get(next.from);
+  const toNode = nodeMap.get(next.to);
+
+  if (!fromNode || !toNode) {
+    // Fallback: interpolate label position, snap path
+    return {
+      ...next,
+      labelPos: {
+        x: lerp(prev.labelPos.x, next.labelPos.x, t),
+        y: lerp(prev.labelPos.y, next.labelPos.y, t),
+      },
+    };
+  }
+
+  const { path, labelPos } = computeLoopEdgePath(fromNode, toNode, next.loopIndex);
+  return { ...next, path, labelPos };
 }
 
 /** Interpolate a flow port node */
@@ -107,9 +118,12 @@ function lerpLayout(
     return pe ? lerpEdge(pe, e, t) : e;
   });
 
+  // Build map from interpolated nodes for loop edge path recomputation
+  const interpNodeMap = new Map(nodes.map(n => [n.id, n]));
+
   const loopEdges = next.loopEdges.map(e => {
     const pe = prevLoopMap.get(`${e.from}->${e.to}`);
-    return pe ? lerpLoopEdge(pe, e, t) : e;
+    return pe ? lerpLoopEdge(pe, e, t, interpNodeMap) : e;
   });
 
   const flowPorts = next.flowPorts.map(p => {

@@ -1,5 +1,6 @@
 import type { DagEdge, LoopEdge } from "@/lib/dag-layout";
 import type { StepRun } from "@/lib/types";
+import type { CriticalPathResult } from "@/lib/critical-path";
 import { tryParseJsonValue } from "@/lib/utils";
 
 interface SelectedLabel {
@@ -25,6 +26,7 @@ interface DagEdgesProps {
   latestRuns?: Record<string, StepRun>;
   onHoverLabel?: (info: HoveredLabelInfo) => void;
   onLeaveLabel?: () => void;
+  criticalPath?: CriticalPathResult | null;
 }
 
 function formatPreviewValue(rawValue: unknown, maxLen: number): string {
@@ -137,7 +139,7 @@ function measureLabelWidth(text: string): number {
   return width;
 }
 
-export function DagEdges({ edges, loopEdges, width, height, onClickLabel, selectedLabel, latestRuns, onHoverLabel, onLeaveLabel }: DagEdgesProps) {
+export function DagEdges({ edges, loopEdges, width, height, onClickLabel, selectedLabel, latestRuns, onHoverLabel, onLeaveLabel, criticalPath }: DagEdgesProps) {
   return (
     <svg
       className="absolute inset-0 pointer-events-none"
@@ -205,6 +207,21 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
           />
         </marker>
         <marker
+          id="arrowhead-critical"
+          markerWidth="8"
+          markerHeight="6"
+          refX="7"
+          refY="3"
+          orient="auto"
+          markerUnits="strokeWidth"
+        >
+          <polygon
+            points="0 0, 8 3, 0 6"
+            fill="oklch(0.8 0.15 85)"
+            opacity="0.8"
+          />
+        </marker>
+        <marker
           id="loop-arrow"
           markerWidth="8"
           markerHeight="6"
@@ -247,11 +264,24 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
         // Data edges are always blue when active (loop edges are orange)
         const activeColor = "oklch(0.6 0.15 250)";
         const completedColor = "oklch(0.5 0.1 160)"; // muted emerald
+        const isCritical = criticalPath?.edges.has(`${edge.from}->${edge.to}`) ?? false;
 
         const pathD = buildPath(edge.points);
 
         return (
           <g key={`${edge.from}-${edge.to}-${i}`}>
+            {/* Critical path highlight layer */}
+            {isCritical && (
+              <path
+                d={pathD}
+                fill="none"
+                stroke="oklch(0.8 0.15 85)"
+                strokeWidth={3}
+                opacity={0.7}
+                strokeLinecap="round"
+                markerEnd="url(#arrowhead-critical)"
+              />
+            )}
             {/* Glow layer for active edges */}
             {isActive && (
               <path
@@ -377,9 +407,20 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
         // Loop edges stay orange when active (data edges go blue)
         const activeColor = "oklch(0.7 0.15 55)";
         const inactiveColor = "oklch(0.55 0.12 55)";
+        const isLoopCritical = criticalPath?.edges.has(`${le.from}->${le.to}`) ?? false;
 
         return (
           <g key={`loop-${le.from}-${le.to}`}>
+            {isLoopCritical && (
+              <path
+                d={le.path}
+                fill="none"
+                stroke="oklch(0.8 0.15 85)"
+                strokeWidth={3}
+                opacity={0.7}
+                strokeLinecap="round"
+              />
+            )}
             {isActive && (
               <path
                 d={le.path}

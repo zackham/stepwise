@@ -36,6 +36,7 @@ export interface LoopEdge {
   label: string;
   path: string; // SVG path data
   labelPos: { x: number; y: number };
+  loopIndex: number; // horizontal offset index for staggering
 }
 
 export interface DagLayout {
@@ -110,6 +111,23 @@ const FOR_EACH_INSTANCE_GAP = 8;
 export function nodeHeight(workflow: FlowDefinition, stepName: string): number {
   const step = workflow.steps[stepName];
   return step?.description ? NODE_HEIGHT_WITH_DESC : NODE_HEIGHT;
+}
+
+/** Compute SVG path and label position for a loop-back edge given node geometries. */
+export function computeLoopEdgePath(
+  fromNode: { x: number; y: number; width: number; height: number },
+  toNode: { x: number; y: number; width: number; height: number },
+  loopIndex: number,
+): { path: string; labelPos: { x: number; y: number } } {
+  const offset = 60 + loopIndex * 30;
+  const startX = fromNode.x + fromNode.width;
+  const startY = fromNode.y + fromNode.height * 0.35;
+  const endX = toNode.x + toNode.width;
+  const endY = toNode.y + toNode.height * 0.65;
+  const midX = Math.max(startX, endX) + offset;
+  const midY = (startY + endY) / 2;
+  const path = `M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${endY}, ${endX} ${endY}`;
+  return { path, labelPos: { x: midX + 4, y: midY } };
 }
 
 export function computeDagLayout(workflow: FlowDefinition): DagLayout {
@@ -224,26 +242,15 @@ export function computeDagLayout(workflow: FlowDefinition): DagLayout {
       // loops where the target is above the source in the DAG.
       if (fromNode.y < toNode.y) continue;
 
-      // Stagger multiple loop edges so they don't overlap each other
-      const offset = 60 + loopIndex * 30;
-
-      // Connect from right side, offset vertically from center to avoid
-      // overlapping with data edges (which connect top/bottom center)
-      const startX = fromNode.x + fromNode.width;
-      const startY = fromNode.y + fromNode.height * 0.35;
-      const endX = toNode.x + toNode.width;
-      const endY = toNode.y + toNode.height * 0.65;
-      const midX = Math.max(startX, endX) + offset;
-      const midY = (startY + endY) / 2;
-
-      const path = `M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${endY}, ${endX} ${endY}`;
+      const { path, labelPos } = computeLoopEdgePath(fromNode, toNode, loopIndex);
 
       loopEdges.push({
         from: name,
         to: target,
         label: rule.name,
         path,
-        labelPos: { x: midX + 4, y: midY },
+        labelPos,
+        loopIndex,
       });
       loopIndex++;
     }
@@ -679,23 +686,15 @@ export function computeHierarchicalLayout(
       // Skip forward loops — only draw backward (upward) loop edges
       if (fromNode.y < toNode.y) continue;
 
-      const offset = 60 + loopIdx * 30;
-
-      const startX = fromNode.x + fromNode.width;
-      const startY = fromNode.y + fromNode.height * 0.35;
-      const endX = toNode.x + toNode.width;
-      const endY = toNode.y + toNode.height * 0.65;
-      const midX = Math.max(startX, endX) + offset;
-      const midY = (startY + endY) / 2;
-
-      const path = `M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${endY}, ${endX} ${endY}`;
+      const { path, labelPos } = computeLoopEdgePath(fromNode, toNode, loopIdx);
 
       loopEdges.push({
         from: name,
         to: target,
         label: rule.name,
         path,
-        labelPos: { x: midX + 4, y: midY },
+        labelPos,
+        loopIndex: loopIdx,
       });
       loopIdx++;
     }
