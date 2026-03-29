@@ -37,7 +37,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { MobileFullScreen } from "@/components/layout/MobileFullScreen";
 import {
   Select,
   SelectContent,
@@ -417,6 +417,7 @@ export function FlowsPage() {
                 </div>
               </div>
 
+              {/* Local flow preview — desktop: inline panel, mobile: full-screen takeover */}
               {!isMobile && (
                 selectedLocalFlow ? (
                   <div className="flex-1 min-w-0 overflow-y-auto p-4 sm:p-6">
@@ -494,6 +495,73 @@ export function FlowsPage() {
                   </div>
                 )
               )}
+              {isMobile && (
+                <MobileFullScreen
+                  open={!!selectedLocalFlow}
+                  onClose={() => {
+                    setSelectedLocalFlow(null);
+                    navigate({ to: "/flows", search: {}, replace: true });
+                  }}
+                  title={selectedLocalFlow?.name ?? "Flow Preview"}
+                >
+                  {selectedLocalFlow && (
+                    <div className="flex flex-col h-full">
+                      <div className="p-4 space-y-3">
+                        <p className="text-sm text-zinc-400">{localDescription}</p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {localMetadata?.author && (
+                            <span className="inline-flex items-center gap-1 rounded-md border border-zinc-700 bg-zinc-950/70 px-2 py-1 text-xs text-zinc-300">
+                              <User className="w-3 h-3" />
+                              {localMetadata.author}
+                            </span>
+                          )}
+                          {localMetadata?.version && (
+                            <span className="inline-flex items-center rounded-md border border-zinc-700 bg-zinc-950/70 px-2 py-1 text-xs text-zinc-300">
+                              v{localMetadata.version}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex gap-2">
+                          <Button onClick={() => handleRun(selectedLocalFlow)} size="sm" className="flex-1">
+                            <Play className="w-3.5 h-3.5 mr-1.5" />
+                            Run
+                          </Button>
+                          <Button onClick={() => handleEdit(selectedLocalFlow)} variant="outline" size="sm" className="flex-1">
+                            <Pencil className="w-3.5 h-3.5 mr-1.5" />
+                            Edit
+                          </Button>
+                          <Button
+                            onClick={() => handleDelete(selectedLocalFlow)}
+                            variant="ghost"
+                            size="icon-sm"
+                            className="shrink-0 text-red-400 hover:text-red-300"
+                            aria-label={`Delete ${selectedLocalFlow.name}`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="flex-1 min-h-0 border-t border-border">
+                        {localHasSteps ? (
+                          <FlowDagView
+                            workflow={localDagWorkflow}
+                            runs={EMPTY_RUNS}
+                            jobTree={null}
+                            expandedSteps={localExpandedSteps}
+                            onToggleExpand={toggleLocalExpand}
+                            selectedStep={null}
+                            onSelectStep={() => {}}
+                          />
+                        ) : (
+                          <div className="flex items-center justify-center h-full text-zinc-600 text-sm">
+                            {localFlowDetail ? "No steps defined" : "Loading preview..."}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </MobileFullScreen>
+              )}
             </div>
           ) : (
             <div className="flex-1 flex min-h-0">
@@ -540,25 +608,22 @@ export function FlowsPage() {
                   </div>
                 )
               )}
-              {/* Registry detail as Sheet on mobile */}
+              {/* Registry detail as full-screen on mobile */}
               {isMobile && (
-                <Sheet
+                <MobileFullScreen
                   open={!!selectedRegistryFlow}
-                  onOpenChange={(open) => {
-                    if (!open) setSelectedRegistryFlow(null);
-                  }}
+                  onClose={() => setSelectedRegistryFlow(null)}
+                  title={selectedRegistryFlow?.name ?? "Flow Details"}
                 >
-                  <SheetContent side="right" showCloseButton={false} className="w-[90vw] sm:max-w-sm p-0 overflow-y-auto">
-                    {selectedRegistryFlow && (
-                      <FlowInfoPanel
-                        flow={selectedRegistryFlow}
-                        onInstall={handleInstall}
-                        isInstalling={installMutation.isPending}
-                        isInstalled={installedSlugs.has(selectedRegistryFlow.slug)}
-                      />
-                    )}
-                  </SheetContent>
-                </Sheet>
+                  {selectedRegistryFlow && (
+                    <FlowInfoPanel
+                      flow={selectedRegistryFlow}
+                      onInstall={handleInstall}
+                      isInstalling={installMutation.isPending}
+                      isInstalled={installedSlugs.has(selectedRegistryFlow.slug)}
+                    />
+                  )}
+                </MobileFullScreen>
               )}
             </div>
           )}

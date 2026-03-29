@@ -14,6 +14,7 @@ import type { DagSelection } from "@/lib/dag-layout";
 import { useAutoSelectSuspended } from "@/hooks/useAutoSelectSuspended";
 import { useAutoExpand } from "@/hooks/useAutoExpand";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { MobileFullScreen } from "@/components/layout/MobileFullScreen";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import {
@@ -651,19 +652,22 @@ export function JobDetailPage() {
 
         if (isMobile) {
           return (
-            <Sheet
+            <MobileFullScreen
               open={showRightPanel}
-              onOpenChange={(open) => {
-                if (!open) {
-                  setSelection(null);
-                  setRightPanelOpen(false);
-                }
+              onClose={() => {
+                setSelection(null);
+                setRightPanelOpen(false);
               }}
+              title={
+                isDataFlowSelection
+                  ? "Data Flow"
+                  : resolvedStep
+                    ? resolvedStep.stepDef.name
+                    : "Job Details"
+              }
             >
-              <SheetContent side="right" showCloseButton={false} className="w-[90vw] sm:max-w-sm p-0 overflow-y-auto">
-                {panelContent}
-              </SheetContent>
-            </Sheet>
+              {panelContent}
+            </MobileFullScreen>
           );
         }
 
@@ -675,8 +679,12 @@ export function JobDetailPage() {
       })()}
 
       {/* Expanded step overlay */}
-      <Sheet open={expandedStep && !!resolvedStep} onOpenChange={(open) => !open && setExpandedStep(false)}>
-        <SheetContent side="right" showCloseButton={false} className="w-[70vw] max-w-4xl p-0 overflow-y-auto">
+      {isMobile ? (
+        <MobileFullScreen
+          open={expandedStep && !!resolvedStep}
+          onClose={() => { setExpandedStep(false); setSelection(null); }}
+          title={resolvedStep?.stepDef.name ?? "Step Detail"}
+        >
           {resolvedStep && (
             <StepDetailPanel
               jobId={resolvedStep.jobId}
@@ -686,8 +694,22 @@ export function JobDetailPage() {
               expanded={true}
             />
           )}
-        </SheetContent>
-      </Sheet>
+        </MobileFullScreen>
+      ) : (
+        <Sheet open={expandedStep && !!resolvedStep} onOpenChange={(open) => !open && setExpandedStep(false)}>
+          <SheetContent side="right" showCloseButton={false} className="w-[70vw] max-w-4xl p-0 overflow-y-auto">
+            {resolvedStep && (
+              <StepDetailPanel
+                jobId={resolvedStep.jobId}
+                stepDef={resolvedStep.stepDef}
+                onClose={() => { setExpandedStep(false); setSelection(null); }}
+                onExpand={() => setExpandedStep(false)}
+                expanded={true}
+              />
+            )}
+          </SheetContent>
+        </Sheet>
+      )}
     </div>
   );
 }
