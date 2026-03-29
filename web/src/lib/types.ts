@@ -7,7 +7,8 @@ export type JobStatus =
   | "paused"
   | "completed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "archived";
 
 export type StepRunStatus =
   | "running"

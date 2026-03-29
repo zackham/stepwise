@@ -46,6 +46,12 @@ export const JOB_STATUS_COLORS: Record<
     ring: "ring-zinc-500/30",
     dot: "bg-zinc-500",
   },
+  archived: {
+    bg: "bg-zinc-500/10",
+    text: "text-zinc-600",
+    ring: "ring-zinc-500/20",
+    dot: "bg-zinc-600",
+  },
 };
 
 export const STEP_STATUS_COLORS: Record<
