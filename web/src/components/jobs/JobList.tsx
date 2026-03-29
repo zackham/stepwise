@@ -29,6 +29,7 @@ import { AlertTriangle, CirclePause, Clock, Monitor, Terminal, Trash2, Search, X
 import { cn } from "@/lib/utils";
 import { LiveDuration } from "@/components/LiveDuration";
 import { Skeleton } from "@/components/ui/skeleton";
+import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
 import type { Job, JobStatus } from "@/lib/types";
 import { JOB_STATUS_COLORS } from "@/lib/status-colors";
 import { useWsStatus } from "@/hooks/useStepwiseWebSocket";
@@ -814,6 +815,7 @@ export function JobList({
                 Create a job from the UI or run one from the terminal.
               </p>
             </div>
+            <CreateJobDialog onCreated={(jobId) => onSelectJob(jobId)} />
             <code className="text-[11px] bg-zinc-100/80 dark:bg-zinc-800/80 text-zinc-600 dark:text-zinc-400 px-3 py-1.5 rounded-md border border-zinc-300/50 dark:border-zinc-700/50">
               stepwise run &lt;flow&gt; --watch
             </code>
