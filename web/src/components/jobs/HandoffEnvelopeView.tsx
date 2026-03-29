@@ -35,7 +35,7 @@ function Section({
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-foreground w-full py-1">
+      <CollapsibleTrigger className="flex items-center gap-1.5 text-sm text-zinc-500 dark:text-zinc-400 hover:text-foreground w-full py-1">
         <ChevronRight
           className={cn(
             "w-3.5 h-3.5 transition-transform",

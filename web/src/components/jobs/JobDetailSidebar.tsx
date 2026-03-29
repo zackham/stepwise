@@ -51,13 +51,13 @@ export function JobDetailSidebar({ job, onClose }: JobDetailSidebarProps) {
             <div className="text-zinc-500">Duration</div>
             <div className="text-foreground font-mono">{formatDuration(job.created_at, job.updated_at)}</div>
             <div className="text-zinc-500">Created</div>
-            <div className="text-zinc-400 font-mono text-[10px]">
+            <div className="text-zinc-500 dark:text-zinc-400 font-mono text-[10px]">
               {new Date(job.created_at).toLocaleString()}
             </div>
             {isTerminal && (
               <>
                 <div className="text-zinc-500">Finished</div>
-                <div className="text-zinc-400 font-mono text-[10px]">
+                <div className="text-zinc-500 dark:text-zinc-400 font-mono text-[10px]">
                   {new Date(job.updated_at).toLocaleString()}
                 </div>
               </>
