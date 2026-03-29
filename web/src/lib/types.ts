@@ -302,7 +302,7 @@ export interface EngineStatus {
 export type AgentStreamEvent =
   | { t: "text"; text: string }
   | { t: "tool_start"; id: string; title: string; kind: string }
-  | { t: "tool_end"; id: string }
+  | { t: "tool_end"; id: string; output?: string; error?: boolean }
   | { t: "usage"; used: number; size: number };
 
 export interface AgentOutputMessage {

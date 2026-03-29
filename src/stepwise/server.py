@@ -289,11 +289,17 @@ def _parse_ndjson_events(raw: str) -> list[dict]:
                     "title": update.get("title", ""),
                     "kind": update.get("kind", ""),
                 })
-            elif su == "tool_call_update" and update.get("status") == "completed":
-                events.append({
+            elif su == "tool_call_update" and update.get("status") in ("completed", "failed"):
+                ev: dict = {
                     "t": "tool_end",
                     "id": update.get("toolCallId", ""),
-                })
+                }
+                title = update.get("title", "")
+                if title:
+                    ev["output"] = title
+                if update.get("status") == "failed":
+                    ev["error"] = True
+                events.append(ev)
             elif su == "usage_update":
                 events.append({
                     "t": "usage",
