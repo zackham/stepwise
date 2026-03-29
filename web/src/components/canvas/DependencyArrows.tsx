@@ -23,7 +23,7 @@ export const DependencyArrows = memo(function DependencyArrows({
     >
       <defs>
         <marker
-          id="canvas-arrow"
+          id="canvas-arrow-satisfied"
           viewBox="0 0 10 6"
           refX="10"
           refY="3"
@@ -31,23 +31,35 @@ export const DependencyArrows = memo(function DependencyArrows({
           markerHeight="6"
           orient="auto"
         >
-          <path d="M 0 0 L 10 3 L 0 6 z" fill="#52525b" />
+          <path d="M 0 0 L 10 3 L 0 6 z" fill="#3f3f46" fillOpacity={0.5} />
+        </marker>
+        <marker
+          id="canvas-arrow-blocking"
+          viewBox="0 0 10 6"
+          refX="10"
+          refY="3"
+          markerWidth="8"
+          markerHeight="6"
+          orient="auto"
+        >
+          <path d="M 0 0 L 10 3 L 0 6 z" fill="#f59e0b" fillOpacity={0.7} />
         </marker>
       </defs>
       {edges.map((edge) => {
         const dx = edge.toPos.x - edge.fromPos.x;
         const cpOffset = Math.max(Math.abs(dx) * 0.4, 40);
         const path = `M ${edge.fromPos.x} ${edge.fromPos.y} C ${edge.fromPos.x + cpOffset} ${edge.fromPos.y}, ${edge.toPos.x - cpOffset} ${edge.toPos.y}, ${edge.toPos.x} ${edge.toPos.y}`;
+        const isSatisfied = edge.satisfied;
         return (
           <path
             key={`${edge.from}->${edge.to}`}
             d={path}
             fill="none"
-            stroke="#3f3f46"
-            strokeWidth={1.5}
-            strokeDasharray="6 4"
-            markerEnd="url(#canvas-arrow)"
-            opacity={0.6}
+            stroke={isSatisfied ? "#3f3f46" : "#f59e0b"}
+            strokeWidth={isSatisfied ? 1.5 : 2}
+            strokeDasharray={isSatisfied ? "6 4" : undefined}
+            markerEnd={`url(#canvas-arrow-${isSatisfied ? "satisfied" : "blocking"})`}
+            opacity={isSatisfied ? 0.4 : 0.6}
           />
         );
       })}
