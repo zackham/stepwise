@@ -56,11 +56,16 @@ export function buildSegmentsFromEvents(events: AgentStreamEvent[]): AgentStream
   return { segments, usage };
 }
 
-// ── Live stream hook ────────────────────────────────────────────────
+// ── Live stream hook (with backfill support) ────────────────────────
 
-export function useAgentStream(runId: string | undefined) {
+export function useAgentStream(
+  runId: string | undefined,
+  backfillEvents?: AgentStreamEvent[] | null,
+) {
   const stateRef = useRef<AgentStreamState>({ segments: [], usage: null });
   const [version, setVersion] = useState(0);
+  const backfilledRef = useRef(false);
+  const liveQueueRef = useRef<AgentStreamEvent[]>([]);
 
   const processEvents = useCallback(
     (events: AgentStreamEvent[]) => {
@@ -97,23 +102,52 @@ export function useAgentStream(runId: string | undefined) {
       }
       setVersion((v) => v + 1);
     },
-    []
+    [],
   );
 
+  // Subscribe to live WebSocket events; queue them until backfill arrives
   useEffect(() => {
     if (!runId) return;
     // Reset on runId change
     stateRef.current = { segments: [], usage: null };
     setVersion(0);
+    backfilledRef.current = false;
+    liveQueueRef.current = [];
 
     const unsub = subscribeAgentOutput((msg) => {
-      if (msg.run_id === runId) {
+      if (msg.run_id !== runId) return;
+      if (!backfilledRef.current) {
+        // Queue live events until backfill arrives
+        liveQueueRef.current.push(...msg.events);
+      } else {
         processEvents(msg.events);
       }
     });
 
     return unsub;
   }, [runId, processEvents]);
+
+  // When backfill arrives, process it then replay queued live events
+  useEffect(() => {
+    if (!runId || !backfillEvents || backfilledRef.current) return;
+
+    backfilledRef.current = true;
+
+    // Process all backfill events
+    if (backfillEvents.length > 0) {
+      processEvents(backfillEvents);
+    }
+
+    // Replay queued live events. The backfill covers everything in the file
+    // at REST-read time. Live events may partially overlap, but text
+    // concatenation is idempotent and tool updates are keyed by ID,
+    // so a small overlap at the boundary is harmless.
+    const queue = liveQueueRef.current;
+    if (queue.length > 0) {
+      processEvents(queue);
+    }
+    liveQueueRef.current = [];
+  }, [runId, backfillEvents, processEvents]);
 
   return {
     streamState: stateRef.current,

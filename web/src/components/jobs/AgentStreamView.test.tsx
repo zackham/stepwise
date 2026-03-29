@@ -53,12 +53,19 @@ function toolSeg(
 // ── Tests ──────────────────────────────────────────────────────────────
 
 describe("AgentStreamView", () => {
-  it('renders "Agent starting..." when live with no segments', () => {
+  it('renders "Loading output..." when live and backfill not yet loaded', () => {
+    render(<AgentStreamView runId="r1" isLive={true} />);
+    expect(screen.getByText("Loading output...")).toBeInTheDocument();
+  });
+
+  it('renders "Agent starting..." when live and backfill returned empty', () => {
+    mockHistoryData = { events: [] };
     render(<AgentStreamView runId="r1" isLive={true} />);
     expect(screen.getByText("Agent starting...")).toBeInTheDocument();
   });
 
   it("shows startedAt time when provided and live with no segments", () => {
+    mockHistoryData = { events: [] };
     render(
       <AgentStreamView
         runId="r1"
@@ -127,6 +134,7 @@ describe("AgentStreamView", () => {
   });
 
   it("shows cost when provided on the starting screen", () => {
+    mockHistoryData = { events: [] };
     render(
       <AgentStreamView runId="r1" isLive={true} costUsd={0.0042} />
     );
@@ -135,6 +143,7 @@ describe("AgentStreamView", () => {
   });
 
   it("does not show cost when zero", () => {
+    mockHistoryData = { events: [] };
     render(
       <AgentStreamView runId="r1" isLive={true} costUsd={0} />
     );
