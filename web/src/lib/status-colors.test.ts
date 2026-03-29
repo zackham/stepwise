@@ -11,6 +11,7 @@ describe("JOB_STATUS_COLORS", () => {
     "completed",
     "failed",
     "cancelled",
+    "archived",
   ];
 
   it("has a color definition for every JobStatus", () => {
@@ -39,6 +40,7 @@ describe("STEP_STATUS_COLORS", () => {
     "failed",
     "cancelled",
     "skipped",
+    "throttled",
   ];
 
   it("has a color definition for every StepRunStatus", () => {
