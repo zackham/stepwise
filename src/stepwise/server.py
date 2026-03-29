@@ -2775,6 +2775,14 @@ def add_step(req: AddStepRequest):
         new_step = {"executor": req.executor, "prompt": "TODO", "outputs": ["result"]}
     elif req.executor == "external":
         new_step = {"executor": "external", "prompt": "TODO", "outputs": ["result"]}
+    elif req.executor == "poll":
+        new_step = {
+            "executor": "poll",
+            "check_command": "exit 1  # replace with your check command",
+            "interval_seconds": 30,
+            "prompt": "Waiting for condition...",
+            "outputs": ["result"],
+        }
     else:
         new_step = {"executor": req.executor, "outputs": ["result"]}
 

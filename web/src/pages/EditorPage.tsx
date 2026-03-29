@@ -18,9 +18,11 @@ import {
   usePatchStep,
   useDeleteStep,
   useFlowFiles,
+  useAddStep,
 } from "@/hooks/useEditor";
 import { useStepwiseMutations } from "@/hooks/useStepwise";
-import { Code, Workflow, FolderTree } from "lucide-react";
+import { Code, Workflow, FolderTree, Plus } from "lucide-react";
+import { StepPalette } from "@/components/editor/StepPalette";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { MobileFullScreen } from "@/components/layout/MobileFullScreen";
 import { useIsMobile } from "@/hooks/useMediaQuery";
@@ -237,6 +239,8 @@ export function EditorPage() {
   // Visual editing mutations
   const patchStepMutation = usePatchStep();
   const deleteStepMutation = useDeleteStep();
+  const addStepMutation = useAddStep();
+  const [showStepPalette, setShowStepPalette] = useState(false);
 
   const applyVisualResult = useCallback(
     (result: ParseResult) => {
@@ -278,6 +282,24 @@ export function EditorPage() {
       }
     );
   }, [selectedFlow?.path, selectedStep, stepContext, deleteStepMutation, applyVisualResult]);
+
+  const handleAddStep = useCallback(
+    (name: string, executor: string) => {
+      if (!selectedFlow?.path) return;
+      clearTimeout(parseTimerRef.current);
+      addStepMutation.mutate(
+        { flowPath: selectedFlow.path, name, executor },
+        {
+          onSuccess: (result) => {
+            applyVisualResult(result);
+            handleSelectStep(name);
+            setShowStepPalette(false);
+          },
+        }
+      );
+    },
+    [selectedFlow?.path, addStepMutation, applyVisualResult, handleSelectStep]
+  );
 
   // Run flow directly from editor
   const mutations = useStepwiseMutations();
@@ -567,6 +589,16 @@ export function EditorPage() {
               onChange={handleYamlChange}
             />
           )}
+          {centerTab === "flow" && !editingPrompt && (
+            <button
+              onClick={() => setShowStepPalette(true)}
+              className="absolute bottom-14 right-3 z-20 flex items-center gap-1.5 bg-white/80 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-700/50 rounded-md px-2.5 py-1.5 text-zinc-400 hover:text-foreground text-xs shadow-sm hover:bg-white dark:hover:bg-zinc-800 transition-colors min-h-[44px] md:min-h-0"
+              title="Add step"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Add step
+            </button>
+          )}
           </div>
         </div>
 
@@ -781,6 +813,14 @@ export function EditorPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <StepPalette
+        open={showStepPalette}
+        onOpenChange={setShowStepPalette}
+        existingStepNames={Object.keys(parsedFlow?.steps ?? {})}
+        onAdd={handleAddStep}
+        isPending={addStepMutation.isPending}
+      />
     </div>
   );
 }
