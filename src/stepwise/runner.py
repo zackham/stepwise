@@ -25,6 +25,7 @@ from stepwise.io import IOAdapter, LiveFlowHandle, StepNode, ExternalInputAborte
 from stepwise.models import (
     Job,
     JobStatus,
+    StepRun,
     StepRunStatus,
     WorkflowDefinition,
 )
@@ -418,6 +419,11 @@ async def _delegated_ws_loop(
                                 "job_id": job_id,
                                 "duration_seconds": round(total_time, 1),
                             })
+                        if report:
+                            await _delegated_generate_report(
+                                client, job_id, job_data, runs,
+                                flow_path, report_output, output_stream,
+                            )
                         return EXIT_SUCCESS
                     elif job_status in ("failed", "cancelled"):
                         error_msg = None
@@ -436,10 +442,106 @@ async def _delegated_ws_loop(
                                 "failed_step": failed_step,
                                 "duration_seconds": round(time.time() - start_time, 1),
                             })
+                        if report:
+                            await _delegated_generate_report(
+                                client, job_id, job_data, runs,
+                                flow_path, report_output, output_stream,
+                            )
                         return EXIT_JOB_FAILED
         finally:
             if ws_conn:
                 await ws_conn.close()
+
+
+async def _delegated_generate_report(
+    client: httpx.AsyncClient,
+    job_id: str,
+    job_data: dict,
+    runs: list[dict],
+    flow_path: Path,
+    report_output: str | None,
+    output_stream: TextIO | None,
+) -> None:
+    """Generate report from server-delegated job by reconstructing data in a temp store."""
+    from stepwise.models import Job, StepRun
+    from stepwise.report import generate_report, save_report, default_report_path
+
+    try:
+        job = Job.from_dict(job_data)
+        step_runs = [StepRun.from_dict(r) for r in runs]
+
+        # Create temporary in-memory store with job + runs
+        temp_store = SQLiteStore()
+        temp_store.save_job(job)
+        for sr in step_runs:
+            temp_store.save_run(sr)
+
+        # Fetch step events for each run (needed for cost tracking, chain context)
+        for sr in step_runs:
+            try:
+                resp = await client.get(f"/api/runs/{sr.id}/step-events")
+                if resp.status_code == 200:
+                    events = resp.json()
+                    for evt in events:
+                        temp_store.save_step_event(
+                            sr.id, evt.get("type", ""), evt.get("data", {}),
+                        )
+            except Exception:
+                pass  # Best-effort: report still works without events
+
+        # Fetch child jobs recursively (for sub-job visualization)
+        await _fetch_children_into_store(client, job_id, temp_store, depth=0)
+
+        html = generate_report(job, temp_store, flow_path)
+        if report_output:
+            out_path = Path(report_output)
+        else:
+            out_path = default_report_path(flow_path)
+        save_report(html, out_path)
+        out = output_stream or sys.stderr
+        out.write(f"\n📄 Report: {out_path}\n")
+        out.flush()
+        temp_store.close()
+    except Exception as e:
+        out = output_stream or sys.stderr
+        out.write(f"\nWarning: Failed to generate report: {e}\n")
+        out.flush()
+
+
+async def _fetch_children_into_store(
+    client: httpx.AsyncClient,
+    parent_job_id: str,
+    store: SQLiteStore,
+    depth: int,
+    max_depth: int = 5,
+) -> None:
+    """Recursively fetch child jobs and their runs from the server into a temp store."""
+    if depth >= max_depth:
+        return
+
+    try:
+        resp = await client.get(f"/api/jobs/{parent_job_id}/children")
+        if resp.status_code != 200:
+            return
+        children = resp.json()
+    except Exception:
+        return
+
+    for child_data in children:
+        try:
+            child_job = Job.from_dict(child_data)
+            store.save_job(child_job)
+
+            # Fetch runs for this child
+            runs_resp = await client.get(f"/api/jobs/{child_job.id}/runs")
+            if runs_resp.status_code == 200:
+                for r in runs_resp.json():
+                    store.save_run(StepRun.from_dict(r))
+
+            # Recurse
+            await _fetch_children_into_store(client, child_job.id, store, depth + 1, max_depth)
+        except Exception:
+            pass
 
 
 def run_flow(
