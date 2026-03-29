@@ -32,7 +32,9 @@ import {
   Monitor,
   AlertTriangle,
   DollarSign,
+  ClipboardCopy,
 } from "lucide-react";
+import { toast } from "sonner";
 import type { Job, JobTreeNode, StepDefinition } from "@/lib/types";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn, formatDuration } from "@/lib/utils";
@@ -550,10 +552,12 @@ export function JobDetailPage() {
               {/* Mobile Row 2: duration + cost | route icons */}
               <div className="flex items-center justify-between mt-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
-                    <Clock className="w-2.5 h-2.5" />
-                    {formatDuration(job.created_at, job.updated_at)}
-                  </span>
+                  {job.status !== "pending" && job.status !== "staged" && (
+                    <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
+                      <Clock className="w-2.5 h-2.5" />
+                      {formatDuration(job.created_at, job.updated_at)}
+                    </span>
+                  )}
                   {costData && (costData.cost_usd > 0 || costData.billing_mode === "subscription") && (
                     <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
                       <DollarSign className="w-2.5 h-2.5" />
@@ -618,10 +622,12 @@ export function JobDetailPage() {
                       Stale
                     </span>
                   )}
-                  <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
-                    <Clock className="w-2.5 h-2.5" />
-                    {formatDuration(job.created_at, job.updated_at)}
-                  </span>
+                  {job.status !== "pending" && job.status !== "staged" && (
+                    <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
+                      <Clock className="w-2.5 h-2.5" />
+                      {formatDuration(job.created_at, job.updated_at)}
+                    </span>
+                  )}
                   {costData && (costData.cost_usd > 0 || costData.billing_mode === "subscription") && (
                     <span
                       className="text-[10px] text-zinc-600 flex items-center gap-0.5"
@@ -650,6 +656,16 @@ export function JobDetailPage() {
                     </Link>
                   )}
                   <span>{job.id}</span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(job.id);
+                      toast.success("Copied job ID");
+                    }}
+                    className="text-zinc-500 hover:text-foreground p-0.5 rounded hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 transition-colors"
+                    title="Copy job ID"
+                  >
+                    <ClipboardCopy className="w-3 h-3" />
+                  </button>
                 </div>
               </div>
 
@@ -861,7 +877,7 @@ export function JobDetailPage() {
         }
 
         return showRightPanel ? (
-          <div className="w-80 border-l border-border shrink-0 flex flex-col overflow-hidden" style={{ maxHeight: 'calc(100vh - 3rem)' }}>
+          <div className="w-80 border-l border-border shrink-0 flex flex-col overflow-y-auto" style={{ maxHeight: 'calc(100vh - 3rem)' }}>
             {panelContent}
           </div>
         ) : null;

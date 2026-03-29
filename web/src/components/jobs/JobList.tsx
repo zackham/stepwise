@@ -300,7 +300,7 @@ function VirtualJobList({
               className={cn(
                 "absolute left-2 right-2 text-left px-3 py-1.5 rounded-md transition-colors",
                 "border-b border-zinc-200/50 dark:border-zinc-800/50",
-                "hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
+                "hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50 cursor-pointer",
                 selectedJobId === job.id
                   ? "bg-zinc-100 dark:bg-zinc-800 ring-1 ring-zinc-300 dark:ring-zinc-700"
                   : "bg-transparent",
@@ -611,7 +611,7 @@ export function JobList({
       tabIndex={0}
     >
       {/* Search + delete */}
-      <div className="p-2 border-b border-border space-y-1.5">
+      <div className="px-2 py-1.5 border-b border-border space-y-1">
         <div className="flex items-center gap-1.5">
           <div className="relative flex-1">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-600" />
@@ -726,8 +726,8 @@ export function JobList({
         )}
 
         {/* Status pills + sort */}
-        <div className="flex items-center gap-1.5">
-          <div className="flex gap-1 flex-1 overflow-x-auto md:flex-wrap md:overflow-x-visible scrollbar-none">
+        <div className="flex items-center gap-1">
+          <div className="flex gap-0.5 flex-1 overflow-x-auto md:flex-wrap md:overflow-x-visible scrollbar-none">
             {STATUS_OPTIONS.map((opt) => (
               <button
                 key={opt.value}
@@ -768,7 +768,7 @@ export function JobList({
           </Select>
         </div>
 
-        <div className="flex gap-1 overflow-x-auto scrollbar-none">
+        <div className="flex gap-0.5 overflow-x-auto scrollbar-none">
           {DATE_RANGE_OPTIONS.map((opt) => (
             <button
               key={opt.value}
