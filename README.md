@@ -17,7 +17,7 @@
 
 You gave an agent a task. It ran for 40 minutes. Did it work?
 
-Stepwise answers that question as a URL. Open the web UI, watch the DAG animate step by step — scripts running, agents thinking, humans approving — all in real time. Every decision logged, every output captured, every failure visible. The 3am question answered before you ask it.
+Stepwise answers that question as a URL. Open the web UI, watch the DAG animate step by step — scripts running, agents thinking, humans approving — all in real time. Every decision logged, every output captured, every failure visible. The 3am question answered as a URL.
 
 This isn't another agent framework. Stepwise doesn't replace your agents — it gives them structure. You define a workflow as a DAG of steps. Stepwise runs them in parallel where it can, pauses where you tell it to, and recovers from crashes without losing progress. The power meter for agent work.
 
