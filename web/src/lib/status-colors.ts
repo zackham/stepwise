@@ -94,6 +94,12 @@ export const STEP_STATUS_COLORS: Record<
     border: "border-zinc-600/30",
     ring: "ring-zinc-600/40",
   },
+  throttled: {
+    bg: "bg-orange-500/15",
+    text: "text-orange-400",
+    border: "border-orange-500/40",
+    ring: "ring-orange-500/50",
+  },
 };
 
 // For steps with no run yet (pending)

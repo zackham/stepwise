@@ -24,7 +24,11 @@ async def _run(args) -> int:
     registry = create_default_registry(config)
     from pathlib import Path
     project_dir = Path(args.project_dir) if args.project_dir else None
-    engine = AsyncEngine(store, registry, jobs_dir=args.jobs_dir, project_dir=project_dir)
+    engine = AsyncEngine(
+        store, registry, jobs_dir=args.jobs_dir, project_dir=project_dir,
+        billing_mode=config.billing, config=config,
+        max_concurrent_jobs=config.max_concurrent_jobs,
+    )
 
     import os
     # Mark job as owned by this background process

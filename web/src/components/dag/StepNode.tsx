@@ -40,6 +40,7 @@ interface StepNodeProps {
   onToggleExpand?: () => void;
   childStepCount?: number;
   childJobStatus?: string | null;
+  flowStatus?: string;
   x: number;
   y: number;
   width: number;
@@ -270,6 +271,7 @@ export function StepNode({
   onToggleExpand,
   childStepCount,
   childJobStatus,
+  flowStatus,
   x,
   y,
   width,
@@ -285,7 +287,8 @@ export function StepNode({
     }
   };
 
-  const status: StepRunStatus | "pending" = latestRun?.status ?? "pending";
+  const status: StepRunStatus | "pending" =
+    latestRun?.status ?? (flowStatus === "throttled" ? "throttled" : "pending");
   const subJobId = latestRun?.sub_job_id ?? null;
   const colors =
     status === "pending"
@@ -346,6 +349,7 @@ export function StepNode({
         status === "completed" ? "bg-emerald-500/60 border-emerald-400/60" :
         status === "failed" ? "bg-red-500/60 border-red-400/60" :
         status === "suspended" ? "bg-amber-500/60 border-amber-400/60" :
+        status === "throttled" ? "bg-orange-500/60 border-orange-400/60" :
         "bg-zinc-700 border-zinc-600"
       )} />
 
@@ -410,6 +414,11 @@ export function StepNode({
             <Layers className="w-2.5 h-2.5" />
             Sub-job →
           </button>
+        ) : status === "throttled" ? (
+          <span className="flex items-center gap-1 text-orange-400">
+            <Clock className="w-2.5 h-2.5" />
+            Waiting for executor slot
+          </span>
         ) : isSuspended ? (
           <span className="flex items-center gap-1 text-amber-400">
             <CirclePause className="w-2.5 h-2.5" />
@@ -428,6 +437,7 @@ export function StepNode({
         status === "completed" ? "bg-emerald-500/60 border-emerald-400/60" :
         status === "failed" ? "bg-red-500/60 border-red-400/60" :
         status === "suspended" ? "bg-amber-500/60 border-amber-400/60" :
+        status === "throttled" ? "bg-orange-500/60 border-orange-400/60" :
         "bg-zinc-700 border-zinc-600"
       )} />
 

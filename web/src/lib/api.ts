@@ -485,6 +485,8 @@ export interface ConfigResponse {
   default_agent: string;
   labels: LabelInfo[];
   billing_mode: string;
+  concurrency_limits?: Record<string, number>;
+  concurrency_running?: Record<string, number>;
 }
 
 export function fetchConfig(): Promise<ConfigResponse> {

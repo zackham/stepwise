@@ -259,8 +259,8 @@ def _reload_engine_config() -> StepwiseConfig:
         _engine.registry = create_default_registry(cfg)
         _engine.billing_mode = cfg.billing
         _engine.max_concurrent_jobs = cfg.max_concurrent_jobs
-        if hasattr(_engine, "_agent_semaphore"):
-            _engine._agent_semaphore = asyncio.Semaphore(cfg.max_concurrent_agents)
+        if hasattr(_engine, "_executor_limits"):
+            _engine._executor_limits = cfg.resolved_executor_limits()
     return cfg
 
 
@@ -1675,6 +1675,11 @@ class SetApiKeyRequest(BaseModel):
     scope: str = "user"  # "user" or "project"
 
 
+class UpdateConcurrencyRequest(BaseModel):
+    executor_type: str
+    limit: int  # 0 = remove limit (unlimited)
+
+
 @app.get("/api/config")
 def get_config():
     cs = load_config_with_sources(_project_dir)
@@ -1689,6 +1694,11 @@ def get_config():
         "default_agent": cfg.default_agent,
         "labels": [li.to_dict() for li in cs.label_info],
         "billing_mode": cfg.billing,
+        "concurrency_limits": cfg.resolved_executor_limits(),
+        "concurrency_running": {
+            t: sum(1 for v in _engine._task_exec_types.values() if v == t)
+            for t in set(_engine._task_exec_types.values())
+        } if _engine and hasattr(_engine, "_task_exec_types") else {},
     }
 
 
@@ -1891,6 +1901,29 @@ def set_default_agent(req: UpdateDefaultAgentRequest):
     )
     cfg = _reload_engine_config()
     return {"status": "updated", "default_agent": cfg.default_agent}
+
+
+@app.put("/api/config/concurrency")
+def update_concurrency_limit(req: UpdateConcurrencyRequest):
+    """Set max concurrent steps for an executor type. 0 = unlimited."""
+    if req.limit < 0:
+        raise HTTPException(status_code=400, detail="Limit must be non-negative (0 = unlimited)")
+    cfg = load_config(_project_dir)
+    limits = dict(cfg.max_concurrent_by_executor)
+    if req.limit == 0:
+        limits.pop(req.executor_type, None)
+    else:
+        limits[req.executor_type] = req.limit
+    save_project_local_config(_project_dir, max_concurrent_by_executor=limits)
+    new_cfg = _reload_engine_config()
+    return {"status": "updated", "limits": new_cfg.resolved_executor_limits()}
+
+
+@app.post("/api/config/reload")
+def reload_config_endpoint():
+    """Reload config from disk. Use after manual YAML edits."""
+    cfg = _reload_engine_config()
+    return {"status": "reloaded", "limits": cfg.resolved_executor_limits()}
 
 
 # ── Editor (flow listing / loading / saving) ─────────────────────────
