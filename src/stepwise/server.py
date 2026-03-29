@@ -2073,6 +2073,32 @@ def get_flow_stats():
     return result
 
 
+@app.get("/api/flow-jobs")
+def get_flow_jobs(flow_dir: str = Query(...), limit: int = Query(10, ge=1, le=50)):
+    """Return recent jobs created from a specific flow directory."""
+    engine = _get_engine()
+    abs_dir = str((_project_dir / flow_dir).resolve())
+    rows = engine.store._conn.execute(
+        """SELECT id, name, objective, status, created_at, updated_at
+           FROM jobs
+           WHERE json_extract(workflow, '$.source_dir') = ?
+           ORDER BY created_at DESC
+           LIMIT ?""",
+        (abs_dir, limit),
+    ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "name": row["name"],
+            "objective": row["objective"],
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+        for row in rows
+    ]
+
+
 @app.get("/api/local-flows")
 def list_local_flows():
     """List all flows discoverable in the project directory."""

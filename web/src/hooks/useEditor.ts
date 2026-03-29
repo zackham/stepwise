@@ -18,6 +18,15 @@ export function useFlowStats() {
   });
 }
 
+export function useFlowJobs(flowDir: string | undefined, limit: number = 10) {
+  return useQuery({
+    queryKey: ["flowJobs", flowDir, limit],
+    queryFn: () => api.fetchFlowJobs(flowDir!, limit),
+    enabled: !!flowDir,
+    staleTime: 15000,
+  });
+}
+
 export function useCreateFlow() {
   const queryClient = useQueryClient();
   return useMutation({
