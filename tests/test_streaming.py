@@ -121,8 +121,32 @@ class TestParseNdjsonEvents:
         assert len(events) == 1
         assert events[0] == {"t": "tool_end", "id": "tc-123"}
 
+    def test_tool_call_update_completed_with_title_includes_output(self):
+        """tool_call_update with status=completed and title includes output."""
+        raw = _ndjson(_make_acp_event(
+            "tool_call_update",
+            toolCallId="tc-123",
+            status="completed",
+            title="Read src/main.py",
+        ))
+        events = _parse_ndjson_events(raw)
+        assert len(events) == 1
+        assert events[0] == {"t": "tool_end", "id": "tc-123", "output": "Read src/main.py"}
+
+    def test_tool_call_update_failed_produces_tool_end_with_error(self):
+        """tool_call_update with status=failed produces a tool_end event with error flag."""
+        raw = _ndjson(_make_acp_event(
+            "tool_call_update",
+            toolCallId="tc-456",
+            status="failed",
+            title="Command failed",
+        ))
+        events = _parse_ndjson_events(raw)
+        assert len(events) == 1
+        assert events[0] == {"t": "tool_end", "id": "tc-456", "output": "Command failed", "error": True}
+
     def test_tool_call_update_running_skipped(self):
-        """tool_call_update with status!=completed produces no event."""
+        """tool_call_update with status!=completed/failed produces no event."""
         raw = _ndjson(_make_acp_event(
             "tool_call_update",
             toolCallId="tc-123",

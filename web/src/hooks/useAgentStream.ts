@@ -8,7 +8,8 @@ export interface ToolCallState {
   id: string;
   title: string;
   kind: string;
-  status: "running" | "completed";
+  status: "running" | "completed" | "failed";
+  output?: string;
 }
 
 export type StreamSegment =
@@ -42,7 +43,8 @@ export function buildSegmentsFromEvents(events: AgentStreamEvent[]): AgentStream
     } else if (ev.t === "tool_end") {
       for (const seg of segments) {
         if (seg.type === "tool" && seg.tool.id === ev.id) {
-          seg.tool.status = "completed";
+          seg.tool.status = ev.error ? "failed" : "completed";
+          if (ev.output) seg.tool.output = ev.output;
           break;
         }
       }
@@ -84,7 +86,8 @@ export function useAgentStream(runId: string | undefined) {
         } else if (ev.t === "tool_end") {
           for (const seg of state.segments) {
             if (seg.type === "tool" && seg.tool.id === ev.id) {
-              seg.tool.status = "completed";
+              seg.tool.status = ev.error ? "failed" : "completed";
+              if (ev.output) seg.tool.output = ev.output;
               break;
             }
           }
