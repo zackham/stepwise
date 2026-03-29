@@ -533,6 +533,40 @@ export function FlowDagView({
     };
   }, [followFlow, activeRects, applyTransform]);
 
+  // Pan to selected step if it's off-screen (keyboard navigation)
+  useEffect(() => {
+    if (!selectedStep) return;
+    const node = layout.nodes.find((n) => n.id === selectedStep);
+    if (!node) return;
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+
+    const { x: tx, y: ty, scale } = transformRef.current;
+    const screenX = node.x * scale + tx;
+    const screenY = node.y * scale + ty;
+    const screenW = node.width * scale;
+    const screenH = node.height * scale;
+
+    const padding = 60;
+    const isVisible =
+      screenX >= padding &&
+      screenY >= padding &&
+      screenX + screenW <= rect.width - padding &&
+      screenY + screenH <= rect.height - padding;
+
+    if (!isVisible) {
+      const centerX = rect.width / 2 - (node.x + node.width / 2) * scale;
+      const centerY = rect.height / 2 - (node.y + node.height / 2) * scale;
+      transformRef.current.x = centerX;
+      transformRef.current.y = centerY;
+      cameraRef.current.syncFromManualInput(centerX, centerY, scale);
+      applyTransform();
+      setFollowFlow(false);
+    }
+  }, [selectedStep, layout, applyTransform]);
+
   // Keep reference for fitToView (used by Reset button)
   const fitToView = initView;
 

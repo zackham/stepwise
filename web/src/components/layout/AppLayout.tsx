@@ -67,6 +67,10 @@ const SHORTCUTS = [
   { keys: ["/"], description: "Focus search" },
   { keys: ["?"], description: "Show keyboard shortcuts" },
   { keys: ["Ctrl/Cmd", "K"], description: "Open command palette" },
+  { keys: ["j / \u2193"], description: "Next step (Job Detail)" },
+  { keys: ["k / \u2191"], description: "Previous step (Job Detail)" },
+  { keys: ["Enter"], description: "Open step detail" },
+  { keys: ["Escape"], description: "Clear selection" },
 ];
 
 function StepwiseMark({ className }: { className?: string }) {

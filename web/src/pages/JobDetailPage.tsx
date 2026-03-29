@@ -32,9 +32,10 @@ import {
   AlertTriangle,
   DollarSign,
 } from "lucide-react";
-import type { JobTreeNode, StepDefinition } from "@/lib/types";
+import type { Job, JobTreeNode, StepDefinition } from "@/lib/types";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatDuration } from "@/lib/utils";
+import { cn, formatDuration } from "@/lib/utils";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
 
 function resolveStep(
@@ -89,6 +90,119 @@ function normalizeOutputValue(value: unknown): unknown {
   return value;
 }
 
+type RightPanelTab = "step" | "data-flow" | "job";
+
+function JobDetailsPanel({
+  job,
+  costData,
+  normalizedOutputs,
+  isTerminal,
+}: {
+  job: Job;
+  costData: { cost_usd: number; billing_mode: string } | undefined;
+  normalizedOutputs: Record<string, unknown> | null;
+  isTerminal: boolean;
+}) {
+  const stepCount = Object.keys(job.workflow.steps).length;
+  const hasInputs = job.inputs && Object.keys(job.inputs).length > 0;
+  const hasOutputs = normalizedOutputs && Object.keys(normalizedOutputs).length > 0;
+
+  return (
+    <div className="flex-1 overflow-y-auto p-3 space-y-4">
+      {/* Stats */}
+      <div className="text-xs space-y-1.5">
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-500 w-16">Status</span>
+          <JobStatusBadge status={job.status} />
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-500 w-16">Steps</span>
+          <span className="font-mono text-zinc-700 dark:text-zinc-300">{stepCount}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-500 w-16">Duration</span>
+          <span className="font-mono text-zinc-400">
+            {formatDuration(job.created_at, job.updated_at)}
+          </span>
+        </div>
+        {costData && (costData.cost_usd > 0 || costData.billing_mode === "subscription") && (
+          <div className="flex items-center gap-2">
+            <span className="text-zinc-500 w-16">Cost</span>
+            <span className="font-mono text-zinc-400">
+              {costData.billing_mode === "subscription"
+                ? "$0 (Max)"
+                : `$${costData.cost_usd.toFixed(4)}`}
+            </span>
+          </div>
+        )}
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-500 w-16">Created</span>
+          <span className="font-mono text-zinc-500 text-[10px]">
+            {new Date(job.created_at).toLocaleString()}
+          </span>
+        </div>
+        {isTerminal && (
+          <div className="flex items-center gap-2">
+            <span className="text-zinc-500 w-16">Finished</span>
+            <span className="font-mono text-zinc-500 text-[10px]">
+              {new Date(job.updated_at).toLocaleString()}
+            </span>
+          </div>
+        )}
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-500 w-16">Source</span>
+          <span className="flex items-center gap-1 text-zinc-400 text-[10px] font-mono">
+            {job.created_by.startsWith("cli:") ? (
+              <>
+                <Terminal className="w-3 h-3" />
+                CLI (PID {job.runner_pid ?? job.created_by.slice(4)})
+              </>
+            ) : (
+              <>
+                <Monitor className="w-3 h-3" />
+                Server
+              </>
+            )}
+          </span>
+        </div>
+        {job.heartbeat_at && (
+          <div className="flex items-center gap-2">
+            <span className="text-zinc-500 w-16">Heartbeat</span>
+            <span className="font-mono text-zinc-500 text-[10px]">
+              {new Date(job.heartbeat_at).toLocaleString()}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Inputs */}
+      {hasInputs && (
+        <div>
+          <div className="text-[10px] font-medium text-zinc-500 uppercase tracking-wide mb-1.5">
+            Inputs
+          </div>
+          <div className="max-h-40 overflow-y-auto bg-zinc-50/50 dark:bg-zinc-900/50 rounded border border-zinc-200 dark:border-zinc-800 p-2">
+            <JsonView data={job.inputs} defaultExpanded={false} />
+          </div>
+        </div>
+      )}
+
+      {/* Outputs */}
+      {isTerminal && hasOutputs && (
+        <div>
+          <div className="text-[10px] font-medium text-zinc-500 uppercase tracking-wide mb-1.5 flex items-center gap-1">
+            <Package className="w-3 h-3" />
+            Outputs
+          </div>
+          <div className="max-h-40 overflow-y-auto bg-zinc-50/50 dark:bg-zinc-900/50 rounded border border-zinc-200 dark:border-zinc-800 p-2">
+            <JsonView data={normalizedOutputs} defaultExpanded={false} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function JobDetailPage() {
   const { jobId } = useParams({ from: "/jobs/$jobId" });
   const navigate = useNavigate();
@@ -103,6 +217,7 @@ export function JobDetailPage() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState<boolean | null>(null);
   const [expandedStep, setExpandedStep] = useState(false);
+  const [activeTab, setActiveTab] = useState<RightPanelTab>("job");
   const mutations = useStepwiseMutations();
   const { expandedSteps, toggleExpand } = useAutoExpand(jobId, runs, job, jobTree ?? null);
 
@@ -150,6 +265,7 @@ export function JobDetailPage() {
     setSelection(null);
     setRightPanelOpen(null);
     setExpandedStep(false);
+    setActiveTab("job");
   }, [jobId]);
 
   // Auto-open right panel for terminal jobs (only on initial load)
@@ -161,14 +277,118 @@ export function JobDetailPage() {
     }
   }, [job, rightPanelOpen]);
 
-  // Escape key clears any selection
+  // Auto-switch tab on selection change
+  useEffect(() => {
+    if (!selection) return;
+    if (selection.kind === "step") {
+      setActiveTab("step");
+    } else {
+      setActiveTab("data-flow");
+    }
+  }, [selection]);
+
+  // Topological step order for keyboard navigation
+  const topoStepNames = useMemo(() => {
+    if (!job?.workflow?.steps) return [];
+    const steps = job.workflow.steps;
+    const names = Object.keys(steps);
+
+    const inDegree: Record<string, number> = {};
+    const outEdges: Record<string, string[]> = {};
+    for (const name of names) {
+      inDegree[name] = 0;
+      outEdges[name] = [];
+    }
+    for (const name of names) {
+      const step = steps[name];
+      const deps = new Set<string>();
+      for (const input of step.inputs ?? []) {
+        if (input.source_step && input.source_step !== "$job") deps.add(input.source_step);
+      }
+      for (const after of step.after ?? []) deps.add(after);
+      for (const dep of deps) {
+        if (dep in inDegree) {
+          inDegree[name]++;
+          outEdges[dep].push(name);
+        }
+      }
+    }
+
+    const queue = names.filter((n) => inDegree[n] === 0);
+    const sorted: string[] = [];
+    while (queue.length > 0) {
+      queue.sort();
+      const node = queue.shift()!;
+      sorted.push(node);
+      for (const next of outEdges[node]) {
+        inDegree[next]--;
+        if (inDegree[next] === 0) queue.push(next);
+      }
+    }
+    for (const name of names) {
+      if (!sorted.includes(name)) sorted.push(name);
+    }
+    return sorted;
+  }, [job?.workflow?.steps]);
+
+  // Keyboard navigation for DAG steps
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && selection) setSelection(null);
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
+        return;
+      }
+
+      const stepCount = topoStepNames.length;
+      if (stepCount === 0) return;
+
+      const currentIndex = selectedStep ? topoStepNames.indexOf(selectedStep) : -1;
+
+      switch (e.key) {
+        case "j":
+        case "ArrowDown": {
+          e.preventDefault();
+          const next = currentIndex < 0 ? 0 : (currentIndex + 1) % stepCount;
+          handleSelectStep(topoStepNames[next]);
+          break;
+        }
+        case "k":
+        case "ArrowUp": {
+          e.preventDefault();
+          const prev = currentIndex < 0 ? stepCount - 1 : (currentIndex - 1 + stepCount) % stepCount;
+          handleSelectStep(topoStepNames[prev]);
+          break;
+        }
+        case "Tab": {
+          if (selectedStep) {
+            e.preventDefault();
+            const delta = e.shiftKey ? -1 : 1;
+            const next = (currentIndex + delta + stepCount) % stepCount;
+            handleSelectStep(topoStepNames[next]);
+          }
+          break;
+        }
+        case "Enter": {
+          if (selectedStep) {
+            e.preventDefault();
+            setRightPanelOpen(true);
+            setActiveTab("step");
+          }
+          break;
+        }
+        case "Escape": {
+          if (selection) {
+            setSelection(null);
+            setActiveTab("job");
+          }
+          break;
+        }
+      }
     };
+
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [selection]);
+  }, [selection, selectedStep, topoStepNames, handleSelectStep]);
 
   if (isLoading) {
     return (
@@ -228,9 +448,6 @@ export function JobDetailPage() {
     ? resolveStep(selectedStep, job.id, job.workflow, jobTree ?? null)
     : null;
 
-  const stepCount = Object.keys(job.workflow.steps).length;
-  const hasInputs = job.inputs && Object.keys(job.inputs).length > 0;
-  const hasOutputs = normalizedOutputs && Object.keys(normalizedOutputs).length > 0;
   const stale = job.status === "running" && job.created_by !== "server" &&
     (!job.heartbeat_at || Date.now() - new Date(job.heartbeat_at).getTime() > 60_000);
 
@@ -239,9 +456,6 @@ export function JobDetailPage() {
     selection?.kind === "edge-field" ||
     selection?.kind === "flow-input" ||
     selection?.kind === "flow-output";
-  const isRootWorkflowStepSelection =
-    selection?.kind === "step" &&
-    Boolean(job.workflow.steps[selection.stepName]);
   const showRightPanel = rightPanelOpen || !!resolvedStep || isDataFlowSelection;
 
   return (
@@ -522,132 +736,84 @@ export function JobDetailPage() {
         </div>
       </div>
 
-      {/* Right sidebar: step details, data flow, or job details */}
+      {/* Right sidebar: tabbed panel */}
       {(() => {
         const panelContent = showRightPanel ? (
-          (isDataFlowSelection || isRootWorkflowStepSelection) && selection ? (
-            <DataFlowPanel
-              selection={selection}
-              job={job}
-              latestRuns={latestRuns}
-              outputs={normalizedOutputs}
-              onClose={() => setSelection(null)}
-            />
-          ) : resolvedStep ? (
-            <StepDetailPanel
-              jobId={resolvedStep.jobId}
-              stepDef={resolvedStep.stepDef}
-              onClose={() => setSelection(null)}
-              onExpand={() => setExpandedStep(true)}
-            />
-          ) : (
-            <>
-              {/* Job details header */}
-              <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-zinc-50/50 dark:bg-zinc-950/50 shrink-0">
-                <span className="text-xs font-medium text-zinc-600 dark:text-zinc-400">Job Details</span>
-                <button
-                  onClick={() => setRightPanelOpen(false)}
-                  className="text-zinc-600 hover:text-zinc-300 p-0.5"
-                >
-                  <PanelRightOpen className="w-3.5 h-3.5" />
-                </button>
-              </div>
+          <Tabs
+            value={activeTab}
+            onValueChange={(v) => setActiveTab(v as RightPanelTab)}
+            className="flex flex-col flex-1 min-h-0 gap-0"
+          >
+            <div className="flex items-center justify-between border-b border-border bg-zinc-50/50 dark:bg-zinc-950/50 shrink-0">
+              <TabsList variant="line" className="px-1">
+                <TabsTrigger value="step" disabled={!resolvedStep} className="text-xs gap-1 px-2.5">
+                  Step
+                </TabsTrigger>
+                <TabsTrigger value="data-flow" disabled={!selection} className="text-xs gap-1 px-2.5">
+                  Data Flow
+                </TabsTrigger>
+                <TabsTrigger value="job" className="text-xs gap-1 px-2.5">
+                  Job
+                </TabsTrigger>
+              </TabsList>
+              <button
+                onClick={() => { setSelection(null); setRightPanelOpen(false); }}
+                className="text-zinc-600 hover:text-zinc-300 p-0.5 mr-2"
+              >
+                <PanelRightOpen className="w-3.5 h-3.5" />
+              </button>
+            </div>
 
-              {/* Job details content */}
-              <div className="flex-1 overflow-y-auto p-3 space-y-4">
-                {/* Stats */}
-                <div className="text-xs space-y-1.5">
-                  <div className="flex items-center gap-2">
-                    <span className="text-zinc-500 w-16">Status</span>
-                    <JobStatusBadge status={job.status} />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-zinc-500 w-16">Steps</span>
-                    <span className="font-mono text-zinc-700 dark:text-zinc-300">{stepCount}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-zinc-500 w-16">Duration</span>
-                    <span className="font-mono text-zinc-400">
-                      {formatDuration(job.created_at, job.updated_at)}
-                    </span>
-                  </div>
-                  {costData && (costData.cost_usd > 0 || costData.billing_mode === "subscription") && (
-                    <div className="flex items-center gap-2">
-                      <span className="text-zinc-500 w-16">Cost</span>
-                      <span className="font-mono text-zinc-400">
-                        {costData.billing_mode === "subscription"
-                          ? "$0 (Max)"
-                          : `$${costData.cost_usd.toFixed(4)}`}
-                      </span>
-                    </div>
-                  )}
-                  <div className="flex items-center gap-2">
-                    <span className="text-zinc-500 w-16">Created</span>
-                    <span className="font-mono text-zinc-500 text-[10px]">
-                      {new Date(job.created_at).toLocaleString()}
-                    </span>
-                  </div>
-                  {isTerminal && (
-                    <div className="flex items-center gap-2">
-                      <span className="text-zinc-500 w-16">Finished</span>
-                      <span className="font-mono text-zinc-500 text-[10px]">
-                        {new Date(job.updated_at).toLocaleString()}
-                      </span>
-                    </div>
-                  )}
-                  <div className="flex items-center gap-2">
-                    <span className="text-zinc-500 w-16">Source</span>
-                    <span className="flex items-center gap-1 text-zinc-400 text-[10px] font-mono">
-                      {job.created_by.startsWith("cli:") ? (
-                        <>
-                          <Terminal className="w-3 h-3" />
-                          CLI (PID {job.runner_pid ?? job.created_by.slice(4)})
-                        </>
-                      ) : (
-                        <>
-                          <Monitor className="w-3 h-3" />
-                          Server
-                        </>
-                      )}
-                    </span>
-                  </div>
-                  {job.heartbeat_at && (
-                    <div className="flex items-center gap-2">
-                      <span className="text-zinc-500 w-16">Heartbeat</span>
-                      <span className="font-mono text-zinc-500 text-[10px]">
-                        {new Date(job.heartbeat_at).toLocaleString()}
-                      </span>
-                    </div>
-                  )}
-                </div>
+            <TabsContent
+              value="step"
+              className={cn(
+                "flex-1 min-h-0 overflow-hidden",
+                activeTab !== "step" && "hidden"
+              )}
+            >
+              {resolvedStep && (
+                <StepDetailPanel
+                  jobId={resolvedStep.jobId}
+                  stepDef={resolvedStep.stepDef}
+                  onClose={() => { setSelection(null); setActiveTab("job"); }}
+                  onExpand={() => setExpandedStep(true)}
+                />
+              )}
+            </TabsContent>
 
-                {/* Inputs */}
-                {hasInputs && (
-                  <div>
-                    <div className="text-[10px] font-medium text-zinc-500 uppercase tracking-wide mb-1.5">
-                      Inputs
-                    </div>
-                    <div className="max-h-40 overflow-y-auto bg-zinc-50/50 dark:bg-zinc-900/50 rounded border border-zinc-200 dark:border-zinc-800 p-2">
-                      <JsonView data={job.inputs} defaultExpanded={false} />
-                    </div>
-                  </div>
-                )}
+            <TabsContent
+              value="data-flow"
+              className={cn(
+                "flex-1 min-h-0 overflow-hidden",
+                activeTab !== "data-flow" && "hidden"
+              )}
+            >
+              {selection && (
+                <DataFlowPanel
+                  selection={selection}
+                  job={job}
+                  latestRuns={latestRuns}
+                  outputs={normalizedOutputs}
+                  onClose={() => { setSelection(null); setActiveTab("job"); }}
+                />
+              )}
+            </TabsContent>
 
-                {/* Outputs */}
-                {isTerminal && hasOutputs && (
-                  <div>
-                    <div className="text-[10px] font-medium text-zinc-500 uppercase tracking-wide mb-1.5 flex items-center gap-1">
-                      <Package className="w-3 h-3" />
-                      Outputs
-                    </div>
-                    <div className="max-h-40 overflow-y-auto bg-zinc-50/50 dark:bg-zinc-900/50 rounded border border-zinc-200 dark:border-zinc-800 p-2">
-                      <JsonView data={normalizedOutputs} defaultExpanded={false} />
-                    </div>
-                  </div>
-                )}
-              </div>
-            </>
-          )
+            <TabsContent
+              value="job"
+              className={cn(
+                "flex-1 min-h-0 overflow-y-auto",
+                activeTab !== "job" && "hidden"
+              )}
+            >
+              <JobDetailsPanel
+                job={job}
+                costData={costData}
+                normalizedOutputs={normalizedOutputs}
+                isTerminal={isTerminal}
+              />
+            </TabsContent>
+          </Tabs>
         ) : null;
 
         if (isMobile) {
@@ -658,13 +824,7 @@ export function JobDetailPage() {
                 setSelection(null);
                 setRightPanelOpen(false);
               }}
-              title={
-                isDataFlowSelection
-                  ? "Data Flow"
-                  : resolvedStep
-                    ? resolvedStep.stepDef.name
-                    : "Job Details"
-              }
+              title="Details"
             >
               {panelContent}
             </MobileFullScreen>
