@@ -283,6 +283,12 @@ export function EditorPage() {
     );
   }, [selectedFlow?.path, selectedStep, stepContext, deleteStepMutation, applyVisualResult]);
 
+  // When selecting a step, also set it as chat context
+  const handleSelectStep = useCallback((stepName: string | null) => {
+    setSelectedStep(stepName);
+    if (stepName) setStepContext(stepName);
+  }, []);
+
   const handleAddStep = useCallback(
     (name: string, executor: string) => {
       if (!selectedFlow?.path) return;
@@ -412,12 +418,6 @@ export function EditorPage() {
     } else if (filePath) {
       setCenterTab("source");
     }
-  }, []);
-
-  // When selecting a step, also set it as chat context
-  const handleSelectStep = useCallback((stepName: string | null) => {
-    setSelectedStep(stepName);
-    if (stepName) setStepContext(stepName);
   }, []);
 
   // Cleanup parse timer

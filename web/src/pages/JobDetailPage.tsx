@@ -206,7 +206,7 @@ function JobDetailsPanel({
 
 export function JobDetailPage() {
   const { jobId } = useParams({ from: "/jobs/$jobId" });
-  const navigate = useNavigate();
+  const navigate = useNavigate({ from: "/jobs/$jobId" });
   const isMobile = useIsMobile();
   const { data: job, isLoading } = useJob(jobId);
   const { data: parentJob } = useJob(job?.parent_job_id ?? undefined);
@@ -871,14 +871,14 @@ export function JobDetailPage() {
       {isMobile ? (
         <MobileFullScreen
           open={expandedStep && !!resolvedStep}
-          onClose={() => { setExpandedStep(false); setDataFlowSelection(null); navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined }), replace: true }); }}
+          onClose={() => { setExpandedStep(false); setDataFlowSelection(null); navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined, panel: undefined }), replace: true }); }}
           title={resolvedStep?.stepDef.name ?? "Step Detail"}
         >
           {resolvedStep && (
             <StepDetailPanel
               jobId={resolvedStep.jobId}
               stepDef={resolvedStep.stepDef}
-              onClose={() => { setExpandedStep(false); setDataFlowSelection(null); navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined }), replace: true }); }}
+              onClose={() => { setExpandedStep(false); setDataFlowSelection(null); navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined, panel: undefined }), replace: true }); }}
               onExpand={() => setExpandedStep(false)}
               expanded={true}
             />
@@ -891,7 +891,7 @@ export function JobDetailPage() {
               <StepDetailPanel
                 jobId={resolvedStep.jobId}
                 stepDef={resolvedStep.stepDef}
-                onClose={() => { setExpandedStep(false); setDataFlowSelection(null); navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined }), replace: true }); }}
+                onClose={() => { setExpandedStep(false); setDataFlowSelection(null); navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined, panel: undefined }), replace: true }); }}
                 onExpand={() => setExpandedStep(false)}
                 expanded={true}
               />
