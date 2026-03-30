@@ -102,6 +102,7 @@ class StepLimits:
     max_cost_usd: float | None = None
     max_duration_minutes: float | None = None
     max_iterations: int | None = None  # loop bound (cheap steps can iterate fast)
+    max_infra_retries: int = 3  # consecutive failures before circuit breaker
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -111,6 +112,8 @@ class StepLimits:
             d["max_duration_minutes"] = self.max_duration_minutes
         if self.max_iterations is not None:
             d["max_iterations"] = self.max_iterations
+        if self.max_infra_retries != 3:
+            d["max_infra_retries"] = self.max_infra_retries
         return d
 
     @classmethod
@@ -119,6 +122,7 @@ class StepLimits:
             max_cost_usd=d.get("max_cost_usd"),
             max_duration_minutes=d.get("max_duration_minutes"),
             max_iterations=d.get("max_iterations"),
+            max_infra_retries=d.get("max_infra_retries", 3),
         )
 
 
