@@ -204,8 +204,8 @@ export function AppLayout() {
           : currentPath;
 
   // Dynamic tab title
-  const { data: suspendedJobs } = useJobs("suspended");
-  const pendingCount = suspendedJobs?.length ?? 0;
+  const { data: allJobs } = useJobs(undefined, true);
+  const pendingCount = allJobs?.filter((j) => j.has_suspended_steps).length ?? 0;
   const jobIdMatch = currentPath.match(/^\/jobs\/([^/]+)/);
   const detailJobId = jobIdMatch?.[1] ?? undefined;
   const { data: detailJob } = useJob(detailJobId);
