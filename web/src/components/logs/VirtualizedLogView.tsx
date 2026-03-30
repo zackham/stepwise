@@ -1,5 +1,6 @@
 import { useRef, useEffect, useCallback, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { usePretextMeasure } from "@/hooks/usePretextMeasure";
 import { cn } from "@/lib/utils";
 
 const VIRTUAL_THRESHOLD = 100;
@@ -66,10 +67,17 @@ function VirtualizedLogViewInner({
   parentRef: React.RefObject<HTMLDivElement | null>;
   userScrolledRef: React.RefObject<boolean>;
 }) {
+  const { containerRef: measureRef, estimateHeight } = usePretextMeasure();
+
+  const setContainerRef = useCallback((el: HTMLDivElement | null) => {
+    (parentRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+    (measureRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+  }, []);
+
   const virtualizer = useVirtualizer({
     count: lines.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 20,
+    estimateSize: (index) => estimateHeight(lines[index], 20),
     overscan: 15,
   });
 
@@ -91,7 +99,7 @@ function VirtualizedLogViewInner({
 
   return (
     <div
-      ref={parentRef}
+      ref={setContainerRef}
       onScroll={handleScroll}
       className={cn("max-h-96 overflow-y-auto", className)}
     >
