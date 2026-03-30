@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAgentStream, buildSegmentsFromEvents } from "@/hooks/useAgentStream";
 import { useAgentOutput } from "@/hooks/useStepwise";
+import { usePretextMeasure } from "@/hooks/usePretextMeasure";
 import type { ToolCallState, StreamSegment } from "@/hooks/useAgentStream";
 import {
   Search,
@@ -186,7 +187,13 @@ function VirtualizedSegments({
   version: number;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const { containerRef: measureRef, estimateHeight } = usePretextMeasure();
   const userScrolledRef = useRef(false);
+
+  const setContainerRef = useCallback((el: HTMLDivElement | null) => {
+    (parentRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+    (measureRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+  }, []);
 
   const hasRunningTool = segments.length > 0 &&
     segments[segments.length - 1].type === "tool" &&
@@ -199,8 +206,10 @@ function VirtualizedSegments({
       if (index >= segments.length) return 20; // cursor row
       const seg = segments[index];
       if (seg.type === "tool") return 36;
-      const lines = Math.max(1, Math.ceil(seg.text.length / 80));
-      return lines * 20;
+      return estimateHeight(
+        seg.text,
+        Math.max(1, Math.ceil(seg.text.length / 80)) * 20,
+      );
     },
     overscan: 10,
   });
@@ -223,7 +232,7 @@ function VirtualizedSegments({
 
   return (
     <div
-      ref={parentRef}
+      ref={setContainerRef}
       onScroll={handleScroll}
       className="max-h-96 overflow-y-auto"
     >
