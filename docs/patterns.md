@@ -286,9 +286,21 @@ Note: `after: [analyze]` on the `prepare` step creates ordering without data tra
 
 **When to use scripts:**
 - Parsing, filtering, or reformatting data between steps
-- Computing derived values (counts, aggregations, path calculations)
 - Conditionals that don't need judgment (file existence checks, threshold comparisons)
 - Extracting specific fields from large outputs for downstream consumption
+
+For simple computations (aggregations, thresholds, sorting), prefer `derived_outputs` over a script step — it's inline, no extra step, and the computed fields become real outputs:
+
+```yaml
+score:
+  executor: llm
+  outputs: [scores]
+  derived_outputs:
+    average: "sum(scores.values()) / len(scores)"
+    passed: "average >= 4.0"
+```
+
+See [YAML Format — Derived Outputs](yaml-format.md#derived-outputs-computed-fields) for full details.
 
 ---
 

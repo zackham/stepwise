@@ -133,6 +133,10 @@ step_name:
   # Activation condition (optional) — gate on resolved inputs
   when: "expression"               # Python expression against input names
 
+  # Derived Outputs (optional) — compute fields from executor output
+  derived_outputs:
+    field_name: "python expression"  # evaluated against artifact dict
+
   # Exit Rules (optional) — evaluated after step completion
   exits:
     - name: rule_name
@@ -519,6 +523,50 @@ Here `publish` runs as soon as `review` completes once — even if review loops 
 ```
 
 **General principle:** Any step downstream of a loop needs an explicit `when` condition to ensure it only runs after the loop terminates with the desired outcome. The engine has no concept of "loop finished" — it only knows "step completed." `stepwise validate` will warn about this pattern.
+
+### Derived Outputs (computed fields)
+
+Use `derived_outputs` to compute fields deterministically from a step's executor output. The engine evaluates Python expressions against the artifact dict after the executor returns, and merges results back into the artifact as new output fields.
+
+This is especially useful when an LLM returns raw data (scores, classifications) and you need derived values (averages, booleans, sorted lists) that downstream steps can reference — without trusting the LLM to do arithmetic.
+
+```yaml
+score:
+  executor: llm
+  prompt: |
+    Score this plan on 8 dimensions (1-5 each).
+    Respond with ONLY: {"scores": {"completeness": 4, "grounding": 3, ...}}
+  outputs: [scores]
+  derived_outputs:
+    average: "sum(scores.values()) / len(scores)"
+    passed: "sum(scores.values()) / len(scores) >= 4.0"
+    lowest_three: "sorted(scores, key=scores.get)[:3]"
+```
+
+The LLM returns only `scores`. The engine computes `average`, `passed`, and `lowest_three` deterministically. All three become real step outputs that downstream steps can reference:
+
+```yaml
+output:
+  inputs:
+    passed: score.passed
+  when: "passed == True"
+
+refine:
+  inputs:
+    passed: score.passed
+    lowest_three: score.lowest_three
+  when: "passed == False"
+```
+
+**Expression environment:** Expressions run in a restricted namespace with the artifact fields as local variables, plus Python builtins (`sum`, `len`, `sorted`, `min`, `max`, `float`, `int`, `str`, `list`, `dict`, `set`, `tuple`, `round`, `abs`, `any`, `all`, `enumerate`, `zip`, `map`, `filter`, `range`, `True`, `False`, `None`). No imports, no file access.
+
+**Evaluation order:** Derived outputs are evaluated after the executor returns but before exit rules. This means exit rules can reference derived fields.
+
+**When to use:**
+- Aggregating LLM scores (average, min, max)
+- Boolean gates (`passed`, `needs_review`) computed from thresholds
+- Extracting/sorting subsets of structured output
+- Any computation you don't want to trust to the LLM
 
 ## Config Variables
 

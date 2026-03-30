@@ -46,6 +46,12 @@ def resolve_flow(name_or_path: str, project_dir: Path | None = None) -> Path:
     if "/" in name_or_path or name_or_path.endswith((".yaml", ".yml")):
         raise FlowResolutionError(f"Flow not found: {name_or_path}")
 
+    # Registry flow syntax: @author:slug
+    if name_or_path.startswith("@") and ":" in name_or_path:
+        parts = name_or_path[1:].split(":", 1)
+        if len(parts) == 2:
+            return resolve_registry_flow(parts[0], parts[1], project_dir or Path.cwd())
+
     # Validate as a flow name
     if not FLOW_NAME_PATTERN.match(name_or_path):
         raise FlowResolutionError(
