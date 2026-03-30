@@ -232,6 +232,14 @@ export function fetchAgentOutput(
   return request<{ events: AgentStreamEvent[] }>(`/runs/${runId}/agent-output`);
 }
 
+export function fetchScriptOutput(
+  runId: string,
+  stdoutOffset = 0,
+  stderrOffset = 0,
+): Promise<{ stdout: string; stderr: string; stdout_offset: number; stderr_offset: number }> {
+  return request(`/runs/${runId}/script-output?stdout_offset=${stdoutOffset}&stderr_offset=${stderrOffset}`);
+}
+
 export function injectContext(
   jobId: string,
   context: string

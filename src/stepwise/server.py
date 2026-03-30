@@ -152,6 +152,8 @@ _event_loop: asyncio.AbstractEventLoop | None = None
 _templates_dir: Path = Path("templates")
 _project_dir: Path = Path(".")
 _stream_tasks: dict[str, asyncio.Task] = {}
+_script_stream_tasks: dict[str, asyncio.Task] = {}
+_script_monitor_task: asyncio.Task | None = None
 _flow_mtimes: dict[str, float] = {}  # flow source_path → last known mtime
 
 
@@ -337,6 +339,52 @@ async def _tail_agent_output(run_id: str, output_path: str) -> None:
         pass
 
 
+async def _tail_script_output(run_id: str, stdout_path: str, stderr_path: str | None) -> None:
+    """Tail script stdout/stderr files and broadcast via WebSocket with byte offsets."""
+    stdout_offset = 0
+    stderr_offset = 0
+    try:
+        while True:
+            stdout_new = ""
+            stderr_new = ""
+            prev_stdout_offset = stdout_offset
+            prev_stderr_offset = stderr_offset
+
+            try:
+                with open(stdout_path, "rb") as f:
+                    f.seek(stdout_offset)
+                    data = f.read()
+                    if data:
+                        stdout_offset = f.tell()
+                        stdout_new = data.decode("utf-8", errors="replace")
+            except FileNotFoundError:
+                pass
+
+            if stderr_path:
+                try:
+                    with open(stderr_path, "rb") as f:
+                        f.seek(stderr_offset)
+                        data = f.read()
+                        if data:
+                            stderr_offset = f.tell()
+                            stderr_new = data.decode("utf-8", errors="replace")
+                except FileNotFoundError:
+                    pass
+
+            if stdout_new or stderr_new:
+                await _broadcast({
+                    "type": "script_output",
+                    "run_id": run_id,
+                    "stdout": stdout_new,
+                    "stderr": stderr_new,
+                    "stdout_offset": prev_stdout_offset,
+                    "stderr_offset": prev_stderr_offset,
+                })
+            await asyncio.sleep(0.3)
+    except asyncio.CancelledError:
+        pass
+
+
 def _get_engine() -> AsyncEngine:
     if _engine is None:
         raise RuntimeError("Engine not initialized")
@@ -427,6 +475,41 @@ async def _agent_stream_monitor() -> None:
             for rid in stale:
                 _stream_tasks[rid].cancel()
                 del _stream_tasks[rid]
+
+            await asyncio.sleep(1.0)
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            await asyncio.sleep(5.0)
+
+
+async def _script_stream_monitor() -> None:
+    """Periodically check for running script steps to tail."""
+    engine = _get_engine()
+    while True:
+        try:
+            for job in engine.store.active_jobs():
+                for run in engine.store.running_runs(job.id):
+                    state = run.executor_state or {}
+                    stdout_path = state.get("stdout_path")
+                    if stdout_path and run.id not in _script_stream_tasks:
+                        task = asyncio.create_task(
+                            _tail_script_output(
+                                run.id,
+                                stdout_path,
+                                state.get("stderr_path"),
+                            )
+                        )
+                        _script_stream_tasks[run.id] = task
+
+            active_run_ids = set()
+            for job in engine.store.active_jobs():
+                for run in engine.store.running_runs(job.id):
+                    active_run_ids.add(run.id)
+            stale = [rid for rid in _script_stream_tasks if rid not in active_run_ids]
+            for rid in stale:
+                _script_stream_tasks[rid].cancel()
+                del _script_stream_tasks[rid]
 
             await asyncio.sleep(1.0)
         except asyncio.CancelledError:
@@ -907,6 +990,8 @@ async def lifespan(app: FastAPI):
     _engine.on_event = _schedule_event_stream
     _engine_task = asyncio.create_task(_engine.run())
     _stream_monitor = asyncio.create_task(_agent_stream_monitor())
+    global _script_monitor_task
+    _script_monitor_task = asyncio.create_task(_script_stream_monitor())
     _observer = asyncio.create_task(_observe_external_jobs())
     _source_watcher = asyncio.create_task(_flow_source_watcher())
     _health_checker = asyncio.create_task(_process_health_check())
@@ -919,6 +1004,19 @@ async def lifespan(app: FastAPI):
     for task in _stream_tasks.values():
         task.cancel()
     _stream_tasks.clear()
+
+    # Cancel script stream tailers
+    for task in _script_stream_tasks.values():
+        task.cancel()
+    _script_stream_tasks.clear()
+
+    # Cancel script stream monitor
+    if _script_monitor_task:
+        _script_monitor_task.cancel()
+        try:
+            await _script_monitor_task
+        except asyncio.CancelledError:
+            pass
 
     if _queue_cleanup:
         _queue_cleanup.cancel()
@@ -1737,6 +1835,42 @@ def get_agent_output(run_id: str):
         return {"events": _parse_ndjson_events(raw)}
     except FileNotFoundError:
         return {"events": []}
+
+
+@app.get("/api/runs/{run_id}/script-output")
+def get_script_output(run_id: str, stdout_offset: int = 0, stderr_offset: int = 0):
+    """Get script stdout/stderr content, supporting offset-based tailing."""
+    engine = _get_engine()
+    try:
+        run = engine.store.load_run(run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
+
+    state = run.executor_state or {}
+    stdout_path = state.get("stdout_path")
+    stderr_path = state.get("stderr_path")
+
+    def _read_from(path: str | None, offset: int) -> tuple[str, int]:
+        if not path:
+            return "", offset
+        try:
+            with open(path, "rb") as f:
+                f.seek(offset)
+                data = f.read()
+                new_offset = f.tell()
+            return data.decode("utf-8", errors="replace"), new_offset
+        except FileNotFoundError:
+            return "", offset
+
+    stdout, new_stdout_offset = _read_from(stdout_path, stdout_offset)
+    stderr, new_stderr_offset = _read_from(stderr_path, stderr_offset)
+
+    return {
+        "stdout": stdout,
+        "stderr": stderr,
+        "stdout_offset": new_stdout_offset,
+        "stderr_offset": new_stderr_offset,
+    }
 
 
 @app.post("/api/jobs/{job_id}/context")

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, createContext, useContext } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { AgentOutputMessage, TickMessage, FlowSourceChangedMessage } from "@/lib/types";
+import type { AgentOutputMessage, ScriptOutputMessage, TickMessage, FlowSourceChangedMessage } from "@/lib/types";
 
 export type WsStatus = "connected" | "disconnected" | "reconnecting";
 export interface StepwiseWebSocketState {
@@ -26,6 +26,17 @@ export function subscribeTickMessages(fn: (msg: TickMessage) => void) {
   tickListeners.add(fn);
   return () => {
     tickListeners.delete(fn);
+  };
+}
+
+// ── Script output pub/sub ─────────────────────────────────────────
+
+const scriptOutputListeners = new Set<(msg: ScriptOutputMessage) => void>();
+
+export function subscribeScriptOutput(fn: (msg: ScriptOutputMessage) => void) {
+  scriptOutputListeners.add(fn);
+  return () => {
+    scriptOutputListeners.delete(fn);
   };
 }
 
@@ -104,6 +115,8 @@ export function useStepwiseWebSocket(): StepwiseWebSocketState {
           for (const fn of flowSourceListeners) fn(msg as FlowSourceChangedMessage);
         } else if (msg.type === "agent_output") {
           for (const fn of agentOutputListeners) fn(msg);
+        } else if (msg.type === "script_output") {
+          for (const fn of scriptOutputListeners) fn(msg as ScriptOutputMessage);
         }
       } catch {
         // ignore parse errors

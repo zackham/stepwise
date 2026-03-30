@@ -104,6 +104,56 @@ class TestScriptExecutor:
         assert result.watch.config["interval_seconds"] == 5
 
 
+# ── Path persistence in executor_state ────────────────────────────────
+
+
+class TestScriptExecutorPathPersistence:
+    """Verify stdout_path/stderr_path in executor_state on all exit paths."""
+
+    def test_success_path_includes_paths(self):
+        """echo valid JSON -> result.executor_state has stdout_path and stderr_path."""
+        ctx = _ctx()
+        executor = ScriptExecutor(command='echo \'{"x": 1}\'')
+        result = executor.start({}, ctx)
+        assert result.type == "data"
+        assert "stdout_path" in result.executor_state
+        assert "stderr_path" in result.executor_state
+        assert result.executor_state["stdout_path"].endswith(".stdout")
+        from pathlib import Path
+        assert Path(result.executor_state["stdout_path"]).exists()
+
+    def test_failure_path_includes_paths(self):
+        """exit 1 -> result.executor_state has paths AND failed flag."""
+        ctx = _ctx()
+        executor = ScriptExecutor(command="exit 1")
+        result = executor.start({}, ctx)
+        assert result.executor_state["failed"] is True
+        assert "stdout_path" in result.executor_state
+        assert "stderr_path" in result.executor_state
+
+    def test_watch_path_includes_paths(self):
+        """stdout with _watch key -> result.executor_state has paths AND partial_output."""
+        ctx = _ctx()
+        executor = ScriptExecutor(command='echo \'{"_watch": {"mode": "external"}, "partial": 1}\'')
+        result = executor.start({}, ctx)
+        assert result.type == "watch"
+        assert "stdout_path" in result.executor_state
+        assert "stderr_path" in result.executor_state
+
+    def test_state_update_fn_receives_paths(self):
+        """state_update_fn callback receives stdout_path and stderr_path alongside pid."""
+        captured = {}
+        def capture(state):
+            captured.update(state)
+        ctx = _ctx()
+        ctx.state_update_fn = capture
+        executor = ScriptExecutor(command='echo hello')
+        executor.start({}, ctx)
+        assert "pid" in captured
+        assert "stdout_path" in captured
+        assert "stderr_path" in captured
+
+
 # ── N20: Auto-detect command vs shell script ──────────────────────────
 
 

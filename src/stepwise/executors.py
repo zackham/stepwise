@@ -361,6 +361,7 @@ class ScriptExecutor(Executor):
         stdout_path = step_io_dir / f"{context.step_name}-{context.attempt}.stdout"
         stderr_path = step_io_dir / f"{context.step_name}-{context.attempt}.stderr"
         exitcode_path = step_io_dir / f"{context.step_name}-{context.attempt}.exitcode"
+        _io_paths = {"stdout_path": str(stdout_path), "stderr_path": str(stderr_path)}
 
         project_dir = str(Path(workspace).resolve())
         env = {
@@ -463,9 +464,13 @@ class ScriptExecutor(Executor):
                 ),
             )
 
-        # Store PID in DB for crash recovery (issue #4)
+        # Store PID and output paths in DB for crash recovery (issue #4)
         if context.state_update_fn:
-            context.state_update_fn({"pid": proc.pid})
+            context.state_update_fn({
+                "pid": proc.pid,
+                "stdout_path": str(stdout_path),
+                "stderr_path": str(stderr_path),
+            })
 
         # Wait for process to complete (file handles stay open for the subprocess)
         proc.wait()
@@ -497,7 +502,7 @@ class ScriptExecutor(Executor):
                     timestamp=_now(),
                     executor_meta={**base_meta, "failed": True},
                 ),
-                executor_state={"failed": True, "error": stderr or f"Exit code {proc.returncode}"},
+                executor_state={**_io_paths, "failed": True, "error": stderr or f"Exit code {proc.returncode}"},
             )
 
         # Parse stdout
@@ -516,7 +521,7 @@ class ScriptExecutor(Executor):
                     return ExecutorResult(
                         type="watch",
                         watch=watch,
-                        executor_state={"partial_output": parsed} if parsed else None,
+                        executor_state={**_io_paths, "partial_output": parsed} if parsed else _io_paths,
                     )
                 artifact = parsed
             else:
@@ -533,6 +538,7 @@ class ScriptExecutor(Executor):
                 timestamp=_now(),
                 executor_meta=base_meta,
             ),
+            executor_state=_io_paths,
         )
 
     def check_status(self, state: dict) -> ExecutorStatus:
