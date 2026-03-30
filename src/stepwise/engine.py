@@ -2974,6 +2974,40 @@ class Engine:
             )
             return
 
+        # ── Circuit breaker: permanent errors halt immediately ──
+        _PERMANENT_ERROR_CATEGORIES = {"auth_error", "quota_error", "context_length"}
+        if error_category in _PERMANENT_ERROR_CATEGORIES:
+            _engine_logger.warning(
+                "Permanent error for step '%s' (category=%s) — halting job immediately",
+                run.step_name, error_category,
+            )
+            self._halt_job(job, run)
+            return
+
+        # ── Circuit breaker: consecutive infrastructure failures ──
+        max_infra_retries = step_def.limits.max_infra_retries if step_def.limits else 3
+        if max_infra_retries > 0:
+            recent_runs = self.store.runs_for_step(job.id, run.step_name)
+            consecutive_failures = 0
+            for r in reversed(recent_runs):
+                if r.status == StepRunStatus.FAILED:
+                    consecutive_failures += 1
+                else:
+                    break
+            if consecutive_failures >= max_infra_retries:
+                _engine_logger.error(
+                    "Step '%s' hit circuit breaker: %d consecutive failures "
+                    "(max_infra_retries=%d, last error: %s)",
+                    run.step_name, consecutive_failures, max_infra_retries, error,
+                )
+                run.error = (
+                    f"Step '{run.step_name}' failed after {consecutive_failures} "
+                    f"consecutive failures (last: {error})"
+                )
+                self.store.save_run(run)
+                self._halt_job(job, run)
+                return
+
         # Try exit rules for failure routing (M4: exit rules can handle errors)
         if step_def.exit_rules:
             artifact = run.result.artifact if run.result else {}
@@ -3238,18 +3272,26 @@ class AsyncEngine(Engine):
                     if age > 60:
                         _async_logger.warning(
                             "Stuck running step detected: %s/%s (run %s, age %.0fs) — "
-                            "no executor task found, failing run",
+                            "no executor task found, routing through _fail_run",
                             job.id, run.step_name, run.id, age,
                         )
                         self._task_exec_types.pop(run.id, None)
-                        run.status = StepRunStatus.FAILED
-                        run.error = "Executor task lost (possible thread pool crash)"
-                        run.completed_at = _now()
-                        self.store.save_run(run)
-                        self._emit(job.id, STEP_FAILED, {
-                            "step": run.step_name,
-                            "error": run.error,
-                        })
+                        step_def = job.workflow.steps.get(run.step_name)
+                        if step_def is None:
+                            run.status = StepRunStatus.FAILED
+                            run.error = "Executor task lost (orphan step — no definition found)"
+                            run.completed_at = _now()
+                            self.store.save_run(run)
+                            self._emit(job.id, STEP_FAILED, {
+                                "step": run.step_name,
+                                "error": run.error,
+                            })
+                        else:
+                            self._fail_run(
+                                job, run, step_def,
+                                error="Executor task lost (possible thread pool crash)",
+                                error_category="infra_failure",
+                            )
             self._dispatch_ready(job.id)
             self._check_job_terminal(job.id)
 
