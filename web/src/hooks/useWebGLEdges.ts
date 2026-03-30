@@ -23,6 +23,8 @@ export interface UseWebGLEdgesOptions {
   layout: HierarchicalDagLayout;
   latestRuns: Record<string, StepRun>;
   enabled: boolean;
+  onReady?: () => void;
+  onLost?: () => void;
 }
 
 interface EdgeMeshEntry {
@@ -41,10 +43,9 @@ export function useWebGLEdges({
   layout,
   latestRuns,
   enabled,
-}: UseWebGLEdgesOptions): {
-  canvasElement: HTMLCanvasElement | null;
-  ready: boolean;
-} {
+  onReady,
+  onLost,
+}: UseWebGLEdgesOptions): void {
   const rendererRef = useRef<WebGLRenderer | null>(null);
   const sceneRef = useRef<Scene | null>(null);
   const cameraRef = useRef<OrthographicCamera | null>(null);
@@ -53,13 +54,16 @@ export function useWebGLEdges({
   const stateManagerRef = useRef<EdgeStateManager>(new EdgeStateManager());
   const rafRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const readyRef = useRef(false);
+  const readyFiredRef = useRef(false);
   const layoutRef = useRef(layout);
   const latestRunsRef = useRef(latestRuns);
+  const onReadyRef = useRef(onReady);
+  const onLostRef = useRef(onLost);
 
   layoutRef.current = layout;
   latestRunsRef.current = latestRuns;
+  onReadyRef.current = onReady;
+  onLostRef.current = onLost;
 
   /** Build or update edge meshes to match the current layout. */
   const syncMeshes = useCallback((scene: Scene, edges: DagEdge[], loopEdges: LoopEdge[]) => {
@@ -71,20 +75,27 @@ export function useWebGLEdges({
       const key = `${edge.from}->${edge.to}`;
       activeKeys.add(key);
 
+      const isSequencingOnly = edge.labels.length === 0;
+      const radius = isSequencingOnly ? 1.0 : 1.5;
+      const hue = 0.0; // cyan for data edges
+      const dim = isSequencingOnly ? 0.5 : 1.0;
+
       const existing = meshMap.get(key);
       if (existing) {
         // Update geometry if points changed
         const curve = createEdgeCurve(edge.points);
         const curveLength = curve.getLength();
         existing.mesh.geometry.dispose();
-        existing.mesh.geometry = createEdgeGeometry(curve);
+        existing.mesh.geometry = createEdgeGeometry(curve, radius);
         existing.curveLength = curveLength;
         existing.material.uniforms.u_curve_length.value = curveLength;
+        existing.material.uniforms.u_hue.value = hue;
+        existing.material.uniforms.u_dim.value = dim;
       } else {
         // Create new mesh
         const curve = createEdgeCurve(edge.points);
         const curveLength = curve.getLength();
-        const geometry = createEdgeGeometry(curve);
+        const geometry = createEdgeGeometry(curve, radius);
         const material = new ShaderMaterial({
           vertexShader: VERTEX_SHADER,
           fragmentShader: FRAGMENT_SHADER,
@@ -98,6 +109,8 @@ export function useWebGLEdges({
             u_surge_progress: { value: 0.0 },
             u_curve_length: { value: curveLength },
             u_flash: { value: 0.0 },
+            u_hue: { value: hue },
+            u_dim: { value: dim },
           },
         });
         const mesh = new Mesh(geometry, material);
@@ -106,21 +119,24 @@ export function useWebGLEdges({
       }
     }
 
-    // Loop edges
+    // Loop edges (keyed with loopIndex for uniqueness)
     for (const le of loopEdges) {
-      const key = `loop:${le.from}->${le.to}`;
+      const key = `loop:${le.from}->${le.to}:${le.loopIndex}`;
       activeKeys.add(key);
+
+      const curve = createLoopEdgeCurve(le.path);
+      if (!curve) continue; // malformed path — SVG fallback renders this edge
 
       const existing = meshMap.get(key);
       if (existing) {
-        const curve = createLoopEdgeCurve(le.path);
         const curveLength = curve.getLength();
         existing.mesh.geometry.dispose();
         existing.mesh.geometry = createEdgeGeometry(curve);
         existing.curveLength = curveLength;
         existing.material.uniforms.u_curve_length.value = curveLength;
+        existing.material.uniforms.u_hue.value = 1.0; // orange for loop edges
+        existing.material.uniforms.u_dim.value = 1.0;
       } else {
-        const curve = createLoopEdgeCurve(le.path);
         const curveLength = curve.getLength();
         const geometry = createEdgeGeometry(curve);
         const material = new ShaderMaterial({
@@ -136,6 +152,8 @@ export function useWebGLEdges({
             u_surge_progress: { value: 0.0 },
             u_curve_length: { value: curveLength },
             u_flash: { value: 0.0 },
+            u_hue: { value: 1.0 }, // orange for loop edges
+            u_dim: { value: 1.0 },
           },
         });
         const mesh = new Mesh(geometry, material);
@@ -161,11 +179,19 @@ export function useWebGLEdges({
   useEffect(() => {
     if (!enabled) return;
 
-    const renderer = new WebGLRenderer({
-      alpha: true,
-      antialias: true,
-      premultipliedAlpha: false,
-    });
+    let renderer: WebGLRenderer;
+    try {
+      renderer = new WebGLRenderer({
+        alpha: true,
+        antialias: true,
+        premultipliedAlpha: false,
+        preserveDrawingBuffer: true, // needed for DAG export/share
+      });
+    } catch {
+      // WebGL context creation failed — SVG fallback stays
+      return;
+    }
+
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setClearColor(0x000000, 0);
 
@@ -184,23 +210,38 @@ export function useWebGLEdges({
     sceneRef.current = scene;
     cameraRef.current = camera;
     composerRef.current = bloom;
-    canvasRef.current = renderer.domElement;
-    readyRef.current = true;
+    readyFiredRef.current = false;
 
     // Initial mesh setup
     syncMeshes(scene, layoutRef.current.edges, layoutRef.current.loopEdges);
 
     // Mount canvas
     const container = containerRef.current;
+    const canvas = renderer.domElement;
+    canvas.style.position = "absolute";
+    canvas.style.top = "0";
+    canvas.style.left = "0";
+    canvas.style.pointerEvents = "none";
+    canvas.style.zIndex = "0";
     if (container) {
-      const canvas = renderer.domElement;
-      canvas.style.position = "absolute";
-      canvas.style.top = "0";
-      canvas.style.left = "0";
-      canvas.style.pointerEvents = "none";
-      canvas.style.zIndex = "0";
       container.insertBefore(canvas, container.firstChild);
     }
+
+    // Context loss handling
+    const handleContextLost = (e: Event) => {
+      e.preventDefault();
+      cancelAnimationFrame(rafRef.current);
+      onLostRef.current?.();
+    };
+    const handleContextRestored = () => {
+      // Re-init meshes and restart animation
+      syncMeshes(scene, layoutRef.current.edges, layoutRef.current.loopEdges);
+      lastTimeRef.current = performance.now();
+      rafRef.current = requestAnimationFrame(animate);
+      onReadyRef.current?.();
+    };
+    canvas.addEventListener("webglcontextlost", handleContextLost);
+    canvas.addEventListener("webglcontextrestored", handleContextRestored);
 
     // Animation loop
     lastTimeRef.current = performance.now();
@@ -233,6 +274,13 @@ export function useWebGLEdges({
       }
 
       bloom.composer.render();
+
+      // Fire onReady after first successful render
+      if (!readyFiredRef.current) {
+        readyFiredRef.current = true;
+        onReadyRef.current?.();
+      }
+
       rafRef.current = requestAnimationFrame(animate);
     };
 
@@ -240,45 +288,45 @@ export function useWebGLEdges({
 
     return () => {
       cancelAnimationFrame(rafRef.current);
-      if (container && renderer.domElement.parentElement === container) {
-        container.removeChild(renderer.domElement);
+      canvas.removeEventListener("webglcontextlost", handleContextLost);
+      canvas.removeEventListener("webglcontextrestored", handleContextRestored);
+      if (container && canvas.parentElement === container) {
+        container.removeChild(canvas);
       }
       disposeScene(scene);
       bloom.dispose();
       renderer.dispose();
       meshMapRef.current.clear();
+      stateManagerRef.current.reset();
       rendererRef.current = null;
       sceneRef.current = null;
       cameraRef.current = null;
       composerRef.current = null;
-      canvasRef.current = null;
-      readyRef.current = false;
+      readyFiredRef.current = false;
     };
   }, [enabled, containerRef, syncMeshes]);
 
-  // Update meshes and camera when layout changes
+  // Update meshes and camera when layout changes (debounced for transitions)
   useEffect(() => {
     if (!enabled || !sceneRef.current || !rendererRef.current || !cameraRef.current || !composerRef.current) return;
 
     const w = layout.width;
     const h = layout.height;
 
-    // Update camera
+    // Camera and renderer resize are cheap — do immediately
     const camera = cameraRef.current;
     camera.right = w;
     camera.bottom = h;
     camera.updateProjectionMatrix();
-
-    // Update renderer size
     rendererRef.current.setSize(w, h);
     composerRef.current.resize(w, h);
 
-    // Sync meshes
-    syncMeshes(sceneRef.current, layout.edges, layout.loopEdges);
+    // Debounce mesh sync to avoid geometry thrash during layout transitions
+    const timer = setTimeout(() => {
+      if (sceneRef.current) {
+        syncMeshes(sceneRef.current, layout.edges, layout.loopEdges);
+      }
+    }, 50);
+    return () => clearTimeout(timer);
   }, [enabled, layout, syncMeshes]);
-
-  return {
-    canvasElement: canvasRef.current,
-    ready: readyRef.current,
-  };
 }

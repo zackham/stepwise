@@ -39,19 +39,15 @@ export function createEdgeGeometry(
 /**
  * Convert loop edge geometry (SVG cubic Bezier) to a Three.js CatmullRom curve.
  * Parses the SVG path `M x y C cx1 cy1, cx2 cy2, ex ey` and samples it.
+ * Returns null on malformed input — caller should skip the mesh and let SVG render the edge.
  */
 export function createLoopEdgeCurve(
   svgPath: string,
-): CatmullRomCurve3 {
+): CatmullRomCurve3 | null {
   // Parse M x y C cx1 cy1, cx2 cy2, ex ey
   const nums = svgPath.match(/-?[\d.]+/g);
   if (!nums || nums.length < 8) {
-    // Fallback: straight line at origin
-    return new CatmullRomCurve3([
-      new Vector3(0, 0, 0),
-      new Vector3(10, 0, 0),
-      new Vector3(20, 0, 0),
-    ]);
+    return null;
   }
 
   const [mx, my, cx1, cy1, cx2, cy2, ex, ey] = nums.map(Number);
