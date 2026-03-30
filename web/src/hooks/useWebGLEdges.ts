@@ -10,6 +10,7 @@ import {
   Mesh,
   AdditiveBlending,
   DoubleSide,
+  NoToneMapping,
 } from "three";
 import { createEdgeCurve, createEdgeGeometry, createLoopEdgeCurve } from "@/lib/webgl/edge-geometry";
 import { VERTEX_SHADER, FRAGMENT_SHADER } from "@/lib/webgl/edge-shaders";
@@ -70,19 +71,21 @@ export function useWebGLEdges({
     const meshMap = meshMapRef.current;
     const activeKeys = new Set<string>();
 
+    // First pass: create/update meshes and collect curve lengths
+    const curveLengths: number[] = [];
+
     // Data edges
     for (const edge of edges) {
       const key = `${edge.from}->${edge.to}`;
       activeKeys.add(key);
 
       const isSequencingOnly = edge.labels.length === 0;
-      const radius = isSequencingOnly ? 1.0 : 1.5;
+      const radius = isSequencingOnly ? 2.0 : 3.0;
       const hue = 0.0; // cyan for data edges
       const dim = isSequencingOnly ? 0.5 : 1.0;
 
       const existing = meshMap.get(key);
       if (existing) {
-        // Update geometry if points changed
         const curve = createEdgeCurve(edge.points);
         const curveLength = curve.getLength();
         existing.mesh.geometry.dispose();
@@ -91,8 +94,8 @@ export function useWebGLEdges({
         existing.material.uniforms.u_curve_length.value = curveLength;
         existing.material.uniforms.u_hue.value = hue;
         existing.material.uniforms.u_dim.value = dim;
+        curveLengths.push(curveLength);
       } else {
-        // Create new mesh
         const curve = createEdgeCurve(edge.points);
         const curveLength = curve.getLength();
         const geometry = createEdgeGeometry(curve, radius);
@@ -111,11 +114,14 @@ export function useWebGLEdges({
             u_flash: { value: 0.0 },
             u_hue: { value: hue },
             u_dim: { value: dim },
+            u_pulse_count: { value: 1.0 },
+            u_flow_age: { value: 0.0 },
           },
         });
         const mesh = new Mesh(geometry, material);
         scene.add(mesh);
         meshMap.set(key, { key, mesh, material, curveLength });
+        curveLengths.push(curveLength);
       }
     }
 
@@ -125,7 +131,7 @@ export function useWebGLEdges({
       activeKeys.add(key);
 
       const curve = createLoopEdgeCurve(le.path);
-      if (!curve) continue; // malformed path — SVG fallback renders this edge
+      if (!curve) continue;
 
       const existing = meshMap.get(key);
       if (existing) {
@@ -134,8 +140,9 @@ export function useWebGLEdges({
         existing.mesh.geometry = createEdgeGeometry(curve);
         existing.curveLength = curveLength;
         existing.material.uniforms.u_curve_length.value = curveLength;
-        existing.material.uniforms.u_hue.value = 1.0; // orange for loop edges
+        existing.material.uniforms.u_hue.value = 1.0;
         existing.material.uniforms.u_dim.value = 1.0;
+        curveLengths.push(curveLength);
       } else {
         const curveLength = curve.getLength();
         const geometry = createEdgeGeometry(curve);
@@ -152,13 +159,27 @@ export function useWebGLEdges({
             u_surge_progress: { value: 0.0 },
             u_curve_length: { value: curveLength },
             u_flash: { value: 0.0 },
-            u_hue: { value: 1.0 }, // orange for loop edges
+            u_hue: { value: 1.0 },
             u_dim: { value: 1.0 },
+            u_pulse_count: { value: 1.0 },
+            u_flow_age: { value: 0.0 },
           },
         });
         const mesh = new Mesh(geometry, material);
         scene.add(mesh);
         meshMap.set(key, { key, mesh, material, curveLength });
+        curveLengths.push(curveLength);
+      }
+    }
+
+    // Second pass: compute pulse counts relative to shortest edge
+    // Use a generous unit length so pulses stay sparse — at most 1 pulse per ~300px
+    const minLength = curveLengths.length > 0 ? Math.min(...curveLengths) : 1;
+    const unitLength = Math.max(minLength, 300);
+    for (const entry of meshMap.values()) {
+      if (activeKeys.has(entry.key)) {
+        const pulseCount = Math.max(1, Math.round(entry.curveLength / unitLength));
+        entry.material.uniforms.u_pulse_count.value = pulseCount;
       }
     }
 
@@ -184,16 +205,17 @@ export function useWebGLEdges({
       renderer = new WebGLRenderer({
         alpha: true,
         antialias: true,
-        premultipliedAlpha: false,
-        preserveDrawingBuffer: true, // needed for DAG export/share
+        premultipliedAlpha: true,
+        preserveDrawingBuffer: true,
       });
     } catch {
       // WebGL context creation failed — SVG fallback stays
       return;
     }
 
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setClearColor(0x000000, 0);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.toneMapping = NoToneMapping;
+    renderer.setClearColor(0x000000, 0); // Transparent — luma-alpha pass handles visibility
 
     const w = layoutRef.current.width;
     const h = layoutRef.current.height;
@@ -203,6 +225,8 @@ export function useWebGLEdges({
     const camera = new OrthographicCamera(0, w, 0, h, -100, 100);
     camera.position.set(0, 0, 50);
     camera.lookAt(0, 0, 0);
+
+    renderer.setClearColor(0x000000, 1);
 
     const bloom = createBloomComposer(renderer, scene, camera, w, h);
 
@@ -269,6 +293,7 @@ export function useWebGLEdges({
           entry.material.uniforms.u_state.value = u.state;
           entry.material.uniforms.u_surge_progress.value = u.surgeProgress;
           entry.material.uniforms.u_flash.value = u.flash;
+          entry.material.uniforms.u_flow_age.value = u.flowAge;
         }
         entry.material.uniforms.u_time.value = globalTime;
       }
@@ -308,7 +333,7 @@ export function useWebGLEdges({
 
   // Update meshes and camera when layout changes (debounced for transitions)
   useEffect(() => {
-    if (!enabled || !sceneRef.current || !rendererRef.current || !cameraRef.current || !composerRef.current) return;
+    if (!enabled || !sceneRef.current || !rendererRef.current || !cameraRef.current) return;
 
     const w = layout.width;
     const h = layout.height;
@@ -319,7 +344,7 @@ export function useWebGLEdges({
     camera.bottom = h;
     camera.updateProjectionMatrix();
     rendererRef.current.setSize(w, h);
-    composerRef.current.resize(w, h);
+    if (composerRef.current) composerRef.current.resize(w, h);
 
     // Debounce mesh sync to avoid geometry thrash during layout transitions
     const timer = setTimeout(() => {

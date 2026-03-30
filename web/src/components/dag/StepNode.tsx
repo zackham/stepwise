@@ -370,7 +370,7 @@ export function StepNode({
         isSelected && `ring-2 ${colors.ring} shadow-lg`,
         isMultiSelected && "ring-2 ring-purple-400/70 shadow-lg shadow-purple-500/10",
         !isSelected && !isMultiSelected && "hover:shadow-md hover:brightness-110 focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:shadow-lg",
-        status === "running" && "shadow-blue-500/20 shadow-md",
+        status === "running" && "step-running-glow",
         isCritical && !isSelected && !isMultiSelected && "ring-1 ring-amber-400/60"
       )}
       role="button"

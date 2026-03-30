@@ -110,6 +110,20 @@ export function useDagCamera({
       return;
     }
 
+    // If follow flow is on, start at scale=1 centered on first node
+    // and let the spring animation smoothly zoom to fit active steps
+    if (followFlow) {
+      const firstNode = layout.nodes[0];
+      const x = rect.width / 2 - (firstNode.x + firstNode.width / 2);
+      const y = rect.height / 2 - (firstNode.y + firstNode.height / 2);
+      transformRef.current = { x, y, scale: 1 };
+      cameraRef.current.syncFromManualInput(x, y, 1);
+      applyTransform();
+      hasCenteredRef.current = true;
+      return;
+    }
+
+    // Fit all nodes when follow flow is off
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const node of layout.nodes) {
       minX = Math.min(minX, node.x);
@@ -133,7 +147,7 @@ export function useDagCamera({
     cameraRef.current.syncFromManualInput(x, y, scale);
     applyTransform();
     hasCenteredRef.current = true;
-  }, [layout, applyTransform, containerRef]);
+  }, [layout, applyTransform, containerRef, followFlow]);
 
   useLayoutEffect(() => {
     if (hasCenteredRef.current) return;
@@ -153,7 +167,8 @@ export function useDagCamera({
   }, [runs]);
 
   // Fallback screen-pixel height of the ExternalInputPanel popover
-  const EXTERNAL_PANEL_SCREEN_HEIGHT_FALLBACK = 280;
+  // 300px scroll body + ~90px submit/chrome + 12px gap
+  const EXTERNAL_PANEL_SCREEN_HEIGHT_FALLBACK = 400;
   const EXTERNAL_PANEL_GAP = 12;
 
   const [measuredPanelHeight, setMeasuredPanelHeight] = useState(0);
@@ -172,7 +187,7 @@ export function useDagCamera({
     ro.observe(el);
     return () => ro.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedStep]);
+  }, [selectedStep, runs]);
 
   // Collect active step IDs (stable identity, independent of layout positions)
   const activeStepInfo = useMemo(() => {
@@ -219,7 +234,9 @@ export function useDagCamera({
     const rects: Rect[] = [];
     for (const n of layout.nodes) {
       if (activeNodeIds.includes(n.id)) {
-        const hasPopover = selectedStep === n.id && suspendedIds.has(n.id);
+        // Include form height for suspended steps — the fulfillment form
+        // is always visible for suspended steps, not just when selected
+        const hasPopover = suspendedIds.has(n.id);
         const popoverExtra = hasPopover
           ? EXTERNAL_PANEL_GAP + panelScreenH / scale
           : 0;
@@ -283,9 +300,10 @@ export function useDagCamera({
     };
   }, [followFlow, activeRects, applyTransform]);
 
-  // Pan to selected step if it's off-screen (keyboard navigation)
+  // Pan to selected step if it's off-screen (keyboard navigation only).
+  // Skip when follow flow is active — the spring camera handles framing.
   useEffect(() => {
-    if (!selectedStep) return;
+    if (!selectedStep || followFlow) return;
     const node = layout.nodes.find((n) => n.id === selectedStep);
     if (!node) return;
     const container = containerRef.current;
@@ -313,9 +331,8 @@ export function useDagCamera({
       transformRef.current.y = centerY;
       cameraRef.current.syncFromManualInput(centerX, centerY, scale);
       applyTransform();
-      setFollowFlow(false);
     }
-  }, [selectedStep, layout, applyTransform, containerRef]);
+  }, [selectedStep, layout, applyTransform, containerRef, followFlow]);
 
   const fitToView = initView;
 

@@ -1,3 +1,4 @@
+import { Suspense, lazy } from "react";
 import { ChevronUp, Layers } from "lucide-react";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { StepNode } from "./StepNode";
@@ -7,6 +8,10 @@ import { ForEachExpandedContainer } from "./ForEachExpandedContainer";
 import type { HierarchicalDagLayout, HierarchicalDagNode } from "@/lib/dag-layout";
 import type { FlowDefinition, StepRun, JobTreeNode, JobStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useTheme } from "@/hooks/useTheme";
+import { canUseWebGL } from "@/lib/webgl/webgl-utils";
+
+const WebGLEdgeLayer = lazy(() => import("./WebGLEdgeLayer"));
 
 interface ExpandedStepContainerProps {
   node: HierarchicalDagNode;
@@ -53,6 +58,8 @@ export function ExpandedStepContainer({
   onNavigateSubJob,
   depth,
 }: ExpandedStepContainerProps) {
+  const theme = useTheme();
+  const isDark = theme === "dark";
   const borderColor = DEPTH_BORDER_COLORS[Math.min(depth, DEPTH_BORDER_COLORS.length - 1)];
   const bgColor = DEPTH_BG_COLORS[Math.min(depth, DEPTH_BG_COLORS.length - 1)];
 
@@ -176,6 +183,16 @@ export function ExpandedStepContainer({
           height: childLayout.height,
         }}
       >
+          {canUseWebGL() && isDark && (
+            <Suspense fallback={null}>
+              <WebGLEdgeLayer
+                layout={childLayout}
+                latestRuns={latestRuns}
+                onReady={() => {}}
+                onLost={() => {}}
+              />
+            </Suspense>
+          )}
           <DagEdges
             edges={childLayout.edges}
             loopEdges={childLayout.loopEdges}

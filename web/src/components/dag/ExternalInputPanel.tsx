@@ -138,18 +138,21 @@ export function ExternalInputPanel({
 
   return (
     <div
-      className="w-80 max-w-[calc(100vw-2rem)] max-h-[80vh] overflow-y-auto rounded-lg border border-amber-500/30 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-sm shadow-xl shadow-amber-500/5"
+      className="w-[26rem] max-w-[calc(100vw-2rem)] rounded-lg border border-amber-500/30 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-sm shadow-xl shadow-amber-500/5 flex flex-col"
       onClick={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}
+      onWheel={(e) => e.stopPropagation()}
     >
       {/* Connector arrow */}
       <div className="flex justify-center -mt-2">
         <div className="w-3 h-3 rotate-45 bg-white dark:bg-zinc-900 border-l border-t border-amber-500/30" />
       </div>
 
-      <form onSubmit={handleSubmit} className="p-3 pt-1 space-y-2.5">
+      <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0">
+        {/* Scrollable body — fixed max height, submit always visible below */}
+        <div className="p-3 pt-1 space-y-2.5 overflow-y-auto max-h-[300px]">
         {/* Prompt */}
-        <pre className="text-xs font-sans text-amber-800 dark:text-amber-200/80 leading-relaxed whitespace-pre-wrap max-h-[40vh] overflow-y-auto">{prompt.trim()}</pre>
+        <pre className="text-xs font-sans text-amber-800 dark:text-amber-200/80 leading-relaxed whitespace-pre-wrap">{prompt.trim()}</pre>
 
         {/* Fields */}
         {outputs.length > 0 ? (
@@ -219,25 +222,28 @@ export function ExternalInputPanel({
         {submitError && (
           <p className="text-[10px] text-red-500 dark:text-red-400">{submitError}</p>
         )}
+        </div>
 
-        {/* Submit */}
-        <button
-          type="submit"
-          disabled={isPending || !hasValues}
-          className="w-full min-h-[44px] h-8 rounded-md bg-amber-600/90 hover:bg-amber-500/90 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-medium text-white flex items-center justify-center gap-1.5 transition-colors"
-        >
-          {isPending ? (
-            <>
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              Submitting...
-            </>
-          ) : (
-            <>
-              <Send className="w-3 h-3" />
-              Submit
-            </>
-          )}
-        </button>
+        {/* Submit — fixed at bottom, never scrolls away */}
+        <div className="p-3 pt-0 shrink-0">
+          <button
+            type="submit"
+            disabled={isPending || !hasValues}
+            className="w-full min-h-[44px] h-8 rounded-md bg-amber-600/90 hover:bg-amber-500/90 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-medium text-white flex items-center justify-center gap-1.5 transition-colors"
+          >
+            {isPending ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                Submitting...
+              </>
+            ) : (
+              <>
+                <Send className="w-3 h-3" />
+                Submit
+              </>
+            )}
+          </button>
+        </div>
       </form>
     </div>
   );
