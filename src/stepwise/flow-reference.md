@@ -523,6 +523,30 @@ steps:
 - Sub-flow receives parent step's resolved inputs as job-level inputs
 - Cycle detection: A→B→A raises an error at parse time
 
+## Derived Outputs
+
+Compute fields deterministically from a step's executor output. Expressions run against the artifact dict after the executor returns, before exit rules evaluate.
+
+```yaml
+score:
+  executor: llm
+  prompt: |
+    Score on 8 dimensions (1-5 each).
+    Respond with ONLY: {"scores": {"completeness": 4, "grounding": 3, ...}}
+  outputs: [scores]
+  derived_outputs:
+    average: "sum(scores.values()) / len(scores)"
+    passed: "average >= 4.0"
+    lowest_three: "sorted(scores, key=scores.get)[:3]"
+```
+
+- LLM returns `scores`. Engine computes `average`, `passed`, `lowest_three`.
+- Derived fields become real outputs — downstream steps reference them like any other output: `score.passed`, `score.average`.
+- Exit rules can reference derived fields since they evaluate after derived outputs.
+- Expression environment: artifact fields as locals, plus builtins (`sum`, `len`, `sorted`, `min`, `max`, `float`, `int`, `str`, `round`, `abs`, `any`, `all`, `True`, `False`, `None`). No imports.
+
+**When to use:** Aggregations, boolean gates, sorting/filtering — anything computational that shouldn't be trusted to the LLM. Prefer over a separate script step when the computation is a one-liner.
+
 ## Conditional Branching
 
 Branch workflows using step-level `when` conditions (pure-pull) and merge with `any_of` inputs.
