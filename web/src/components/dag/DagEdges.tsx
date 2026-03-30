@@ -28,6 +28,7 @@ interface DagEdgesProps {
   onHoverLabel?: (info: HoveredLabelInfo) => void;
   onLeaveLabel?: () => void;
   criticalPath?: CriticalPathResult | null;
+  webglActive?: boolean;
 }
 
 function formatPreviewValue(rawValue: unknown, maxLen: number): string {
@@ -140,7 +141,7 @@ function measureLabelWidth(text: string): number {
   return width;
 }
 
-export function DagEdges({ edges, loopEdges, width, height, onClickLabel, selectedLabel, latestRuns, onHoverLabel, onLeaveLabel, criticalPath }: DagEdgesProps) {
+export function DagEdges({ edges, loopEdges, width, height, onClickLabel, selectedLabel, latestRuns, onHoverLabel, onLeaveLabel, criticalPath, webglActive }: DagEdgesProps) {
   const theme = useTheme();
   const isDark = theme === "dark";
 
@@ -281,60 +282,65 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
 
         return (
           <g key={`${edge.from}-${edge.to}-${i}`}>
-            {/* Critical path highlight layer */}
-            {isCritical && (
-              <path
-                d={pathD}
-                fill="none"
-                stroke="oklch(0.8 0.15 85)"
-                strokeWidth={3}
-                opacity={0.7}
-                strokeLinecap="round"
-                markerEnd="url(#arrowhead-critical)"
-              />
+            {/* SVG paths — skip when WebGL handles edge rendering */}
+            {!webglActive && (
+              <>
+                {/* Critical path highlight layer */}
+                {isCritical && (
+                  <path
+                    d={pathD}
+                    fill="none"
+                    stroke="oklch(0.8 0.15 85)"
+                    strokeWidth={3}
+                    opacity={0.7}
+                    strokeLinecap="round"
+                    markerEnd="url(#arrowhead-critical)"
+                  />
+                )}
+                {/* Glow layer for active edges */}
+                {isActive && (
+                  <path
+                    d={pathD}
+                    fill="none"
+                    stroke={activeColor}
+                    strokeWidth={6}
+                    opacity={0.15}
+                    strokeLinecap="round"
+                  />
+                )}
+                {/* Subtle glow for completed edges */}
+                {isCompleted && !isActive && (
+                  <path
+                    d={pathD}
+                    fill="none"
+                    stroke={completedColor}
+                    strokeWidth={4}
+                    opacity={0.08}
+                    strokeLinecap="round"
+                  />
+                )}
+                <path
+                  d={pathD}
+                  fill="none"
+                  stroke={
+                    isActive
+                      ? activeColor
+                      : isCompleted
+                        ? completedColor
+                        : isSequencingOnly ? inactiveEdge : inactiveEdgeData
+                  }
+                  strokeWidth={isActive ? 2 : isCompleted ? 1.5 : isSequencingOnly ? 1 : 1.5}
+                  strokeDasharray={isActive ? "8 12" : isSequencingOnly ? "4 3" : "none"}
+                  markerEnd={
+                    isActive ? "url(#arrowhead-active)"
+                      : isCompleted ? "url(#arrowhead-completed)"
+                        : "url(#arrowhead)"
+                  }
+                  opacity={isActive ? 0.8 : isCompleted ? 0.7 : isSequencingOnly ? 0.4 : 0.5}
+                  className={isActive ? "edge-active" : undefined}
+                />
+              </>
             )}
-            {/* Glow layer for active edges */}
-            {isActive && (
-              <path
-                d={pathD}
-                fill="none"
-                stroke={activeColor}
-                strokeWidth={6}
-                opacity={0.15}
-                strokeLinecap="round"
-              />
-            )}
-            {/* Subtle glow for completed edges */}
-            {isCompleted && !isActive && (
-              <path
-                d={pathD}
-                fill="none"
-                stroke={completedColor}
-                strokeWidth={4}
-                opacity={0.08}
-                strokeLinecap="round"
-              />
-            )}
-            <path
-              d={pathD}
-              fill="none"
-              stroke={
-                isActive
-                  ? activeColor
-                  : isCompleted
-                    ? completedColor
-                    : isSequencingOnly ? inactiveEdge : inactiveEdgeData
-              }
-              strokeWidth={isActive ? 2 : isCompleted ? 1.5 : isSequencingOnly ? 1 : 1.5}
-              strokeDasharray={isActive ? "8 12" : isSequencingOnly ? "4 3" : "none"}
-              markerEnd={
-                isActive ? "url(#arrowhead-active)"
-                  : isCompleted ? "url(#arrowhead-completed)"
-                    : "url(#arrowhead)"
-              }
-              opacity={isActive ? 0.8 : isCompleted ? 0.7 : isSequencingOnly ? 0.4 : 0.5}
-              className={isActive ? "edge-active" : undefined}
-            />
             {edge.labels.map((field, fi) => {
               const isSelected =
                 selectedLabel &&
@@ -422,36 +428,40 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
 
         return (
           <g key={`loop-${le.from}-${le.to}`}>
-            {isLoopCritical && (
-              <path
-                d={le.path}
-                fill="none"
-                stroke="oklch(0.8 0.15 85)"
-                strokeWidth={3}
-                opacity={0.7}
-                strokeLinecap="round"
-              />
+            {!webglActive && (
+              <>
+                {isLoopCritical && (
+                  <path
+                    d={le.path}
+                    fill="none"
+                    stroke="oklch(0.8 0.15 85)"
+                    strokeWidth={3}
+                    opacity={0.7}
+                    strokeLinecap="round"
+                  />
+                )}
+                {isActive && (
+                  <path
+                    d={le.path}
+                    fill="none"
+                    stroke={activeColor}
+                    strokeWidth={6}
+                    opacity={0.15}
+                    strokeLinecap="round"
+                  />
+                )}
+                <path
+                  d={le.path}
+                  fill="none"
+                  stroke={isActive ? activeColor : inactiveColor}
+                  strokeWidth={isActive ? 2 : 1.5}
+                  strokeDasharray={isActive ? "8 12" : "6 3"}
+                  markerEnd="url(#loop-arrow)"
+                  opacity={isActive ? 0.85 : 0.5}
+                  className={isActive ? "edge-active" : undefined}
+                />
+              </>
             )}
-            {isActive && (
-              <path
-                d={le.path}
-                fill="none"
-                stroke={activeColor}
-                strokeWidth={6}
-                opacity={0.15}
-                strokeLinecap="round"
-              />
-            )}
-            <path
-              d={le.path}
-              fill="none"
-              stroke={isActive ? activeColor : inactiveColor}
-              strokeWidth={isActive ? 2 : 1.5}
-              strokeDasharray={isActive ? "8 12" : "6 3"}
-              markerEnd="url(#loop-arrow)"
-              opacity={isActive ? 0.85 : 0.5}
-              className={isActive ? "edge-active" : undefined}
-            />
             <text
               x={le.labelPos.x}
               y={le.labelPos.y}

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useCallback, useEffect, useState } from "react";
+import { useMemo, useRef, useCallback, useEffect, useState, Suspense, lazy } from "react";
 import { computeHierarchicalLayout } from "@/lib/dag-layout";
 import type { DagSelection } from "@/lib/dag-layout";
 import { useLayoutTransition } from "@/lib/layout-transition";
@@ -17,6 +17,9 @@ import { computeCriticalPath } from "@/lib/critical-path";
 import type { CriticalPathResult } from "@/lib/critical-path";
 import { toBlob } from "html-to-image";
 import { useTheme } from "@/hooks/useTheme";
+import { canUseWebGL } from "@/lib/webgl/webgl-utils";
+
+const WebGLEdgeLayer = lazy(() => import("./WebGLEdgeLayer"));
 
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -118,6 +121,8 @@ export function FlowDagView({
   const [hoveredLabel, setHoveredLabel] = useState<HoveredLabelInfo | null>(null);
   const [showCriticalPath, setShowCriticalPath] = useState(false);
   const [multiSelected, setMultiSelected] = useState<Set<string>>(new Set());
+  const [webglSupported] = useState(() => canUseWebGL());
+  const [webglActive, setWebglActive] = useState(false);
 
   // Clear multi-select when clicking canvas background
   const handleCanvasClick = useCallback(() => {
@@ -570,6 +575,16 @@ export function FlowDagView({
           position: "relative",
         }}
       >
+        {/* WebGL energy pulse edge layer (dark mode only) */}
+        {webglSupported && isDark && (
+          <Suspense fallback={null}>
+            <WebGLEdgeLayer
+              layout={layout}
+              latestRuns={latestRuns}
+              onReady={() => setWebglActive(true)}
+            />
+          </Suspense>
+        )}
         <DagEdges
           edges={layout.edges}
           loopEdges={layout.loopEdges}
@@ -581,6 +596,7 @@ export function FlowDagView({
           onHoverLabel={handleHoverLabel}
           onLeaveLabel={handleLeaveLabel}
           criticalPath={criticalPath}
+          webglActive={webglActive && isDark}
         />
 
         {/* Flow port nodes (input/output) */}
