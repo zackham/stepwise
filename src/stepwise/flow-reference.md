@@ -260,12 +260,13 @@ implement:
 |---|---|---|---|---|
 | `continue_session` | bool | no | `false` | Reuse agent session across loop iterations |
 | `loop_prompt` | string | no | — | Alternate prompt template used on attempt > 1 (falls back to `prompt`) |
-| `max_continuous_attempts` | int | no | — | After N iterations, force a fresh session |
+| `max_continuous_attempts` | int | no | — | After N iterations, force fresh session with chain context backfill |
 
 **Behavior:**
 - First run (attempt 1): creates a new session, sends `prompt`
 - Loop-back (attempt 2+): continues existing session, sends `loop_prompt` (or `prompt` if not set)
-- If `max_continuous_attempts` is exceeded or the session crashes, falls back to a fresh session
+- When `continue_session` is true, M7a chain context injection is skipped (agent already has full history)
+- If `max_continuous_attempts` is exceeded or the session crashes, falls back to fresh session + chain context backfill
 
 **Cross-step session sharing via `_session_id`:**
 
@@ -338,7 +339,7 @@ inputs:
 **None handling:**
 - **In prompt templates** (`$var` interpolation): `None` renders as empty string `""`
 - **In expression evaluation** (exit rules, `when`): `None` is first-class. Test with `score is None` / `score is not None`. Comparing `None` with `>`, `<`, `float()` raises an eval error (flow authoring bug).
-- **In script executors** (`run:`): `STEPWISE_INPUT_<name>` env var is unset (not "None" or "null"). Use `if [ -z "$STEPWISE_INPUT_score" ]; then ...`
+- **In script executors** (`run:`): environment variable is unset (not "None" or "null"). Use `if [ -z "$score" ]; then ...`
 - **`any_of` + `optional`:** Allowed. Means "try to get one of these, but if none are available, resolve to `None` and proceed."
 
 **Cycle detection:** A cycle in the dependency graph is valid if every cycle contains at least one `optional: true` edge.
@@ -522,30 +523,6 @@ steps:
 - All refs resolved at parse time — no network/file access at runtime
 - Sub-flow receives parent step's resolved inputs as job-level inputs
 - Cycle detection: A→B→A raises an error at parse time
-
-## Derived Outputs
-
-Compute fields deterministically from a step's executor output. Expressions run against the artifact dict after the executor returns, before exit rules evaluate.
-
-```yaml
-score:
-  executor: llm
-  prompt: |
-    Score on 8 dimensions (1-5 each).
-    Respond with ONLY: {"scores": {"completeness": 4, "grounding": 3, ...}}
-  outputs: [scores]
-  derived_outputs:
-    average: "sum(scores.values()) / len(scores)"
-    passed: "average >= 4.0"
-    lowest_three: "sorted(scores, key=scores.get)[:3]"
-```
-
-- LLM returns `scores`. Engine computes `average`, `passed`, `lowest_three`.
-- Derived fields become real outputs — downstream steps reference them like any other output: `score.passed`, `score.average`.
-- Exit rules can reference derived fields since they evaluate after derived outputs.
-- Expression environment: artifact fields as locals, plus builtins (`sum`, `len`, `sorted`, `min`, `max`, `float`, `int`, `str`, `round`, `abs`, `any`, `all`, `True`, `False`, `None`). No imports.
-
-**When to use:** Aggregations, boolean gates, sorting/filtering — anything computational that shouldn't be trusted to the LLM. Prefer over a separate script step when the computation is a one-liner.
 
 ## Conditional Branching
 
