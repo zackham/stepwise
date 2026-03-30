@@ -4174,7 +4174,7 @@ def cmd_self_update(args: argparse.Namespace) -> int:
     if changelog:
         io.note(changelog, title="What's new")
     elif old_version != new_version:
-        io.log("info", "Run `stepwise changelog` or see CHANGELOG.md for details.")
+        io.log("info", "See CHANGELOG.md for details.")
 
     return EXIT_SUCCESS
 
