@@ -6,6 +6,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { EntityContextMenu } from "@/components/menus/EntityContextMenu";
 import { ChevronRight, Briefcase } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
@@ -53,6 +54,7 @@ function TreeNode({
           <div className="absolute left-0 top-4 w-4 border-t border-zinc-300/30 dark:border-zinc-700/30" />
         </>
       )}
+      <EntityContextMenu type="job" data={node.job}>
       <Collapsible open={expanded} onOpenChange={setExpanded}>
         <CollapsibleTrigger className="flex items-center gap-2 w-full py-1.5 hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50 rounded px-2 text-sm">
           <ChevronRight
@@ -115,6 +117,7 @@ function TreeNode({
           </div>
         </CollapsibleContent>
       </Collapsible>
+      </EntityContextMenu>
     </div>
   );
 }
