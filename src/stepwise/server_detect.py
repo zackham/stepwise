@@ -12,6 +12,46 @@ import os
 from pathlib import Path
 
 
+class ServerAlreadyRunning(Exception):
+    """Raised when a server is already running for this project."""
+
+    def __init__(self, pid: int, url: str):
+        self.pid = pid
+        self.url = url
+        super().__init__(f"Server already running (PID {pid}) at {url}")
+
+
+def acquire_pidfile_guard(
+    project_dir: Path,
+    port: int,
+    *,
+    pid: int | None = None,
+    log_file: str | None = None,
+) -> Path:
+    """Check for existing server, clean stale pidfile, write new one.
+
+    Raises ServerAlreadyRunning if a live server owned by a different process
+    is detected. Returns path to the newly written pidfile.
+    """
+    existing = read_pidfile(project_dir)
+    if existing:
+        existing_pid = existing.get("pid")
+        existing_url = existing.get("url", "unknown")
+        current_pid = pid or os.getpid()
+        if existing_pid and existing_pid != current_pid and _pid_alive(existing_pid):
+            raise ServerAlreadyRunning(existing_pid, existing_url)
+        elif existing_pid and not _pid_alive(existing_pid):
+            import logging
+
+            logging.getLogger("stepwise.server_detect").warning(
+                "Stale server.pid (PID %s dead) — cleaning up.",
+                existing_pid,
+            )
+            remove_pidfile(project_dir)
+
+    return write_pidfile(project_dir, port, pid=pid, log_file=log_file)
+
+
 def detect_server(project_dir: Path | None = None) -> str | None:
     """Check if a Stepwise server is running and reachable.
 
