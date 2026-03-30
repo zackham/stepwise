@@ -281,6 +281,7 @@ export function ExpandedStepContainer({
                   }
                   childStepCount={childNode.childStepCount}
                   childJobStatus={subTrees?.[0]?.job.status ?? null}
+                  isNested
                   x={childNode.x}
                   y={childNode.y}
                   width={childNode.width}

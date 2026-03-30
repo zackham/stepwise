@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { MiniDag } from "./MiniDag";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { LiveDuration } from "@/components/LiveDuration";
+import { EntityContextMenu } from "@/components/menus/EntityContextMenu";
 import type { Job, StepRun } from "@/lib/types";
 
 export interface JobCardProps {
@@ -30,6 +31,7 @@ export const JobCard = memo(function JobCard({ job, runs, dependencyNames, isGro
   const currentStep = job.current_step ?? null;
 
   return (
+    <EntityContextMenu type="job" data={job}>
     <Link
       to="/jobs/$jobId"
       params={{ jobId: job.id }}
@@ -113,5 +115,6 @@ export const JobCard = memo(function JobCard({ job, runs, dependencyNames, isGro
         )}
       </div>
     </Link>
+    </EntityContextMenu>
   );
 });

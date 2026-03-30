@@ -7,25 +7,26 @@ import { CANVAS_ACTIONS } from "./canvas-actions";
 export type { EntityType, ActionDefinition, ActionContext, SideEffects } from "./types";
 
 export function getActionsForEntity<T>(type: EntityType, data: T): ActionDefinition<T>[] {
-  let actions: ActionDefinition<unknown>[];
+  let raw: readonly ActionDefinition<never>[];
   switch (type) {
     case "job":
-      actions = JOB_ACTIONS;
+      raw = JOB_ACTIONS as unknown as ActionDefinition<never>[];
       break;
     case "step":
-      actions = STEP_ACTIONS;
+      raw = STEP_ACTIONS as unknown as ActionDefinition<never>[];
       break;
     case "flow":
-      actions = FLOW_ACTIONS;
+      raw = FLOW_ACTIONS as unknown as ActionDefinition<never>[];
       break;
     case "canvas":
-      actions = CANVAS_ACTIONS;
+      raw = CANVAS_ACTIONS as unknown as ActionDefinition<never>[];
       break;
     default:
-      actions = [];
+      raw = [];
   }
 
-  return (actions as ActionDefinition<T>[])
+  const actions = raw as unknown as ActionDefinition<T>[];
+  return actions
     .filter((a) => a.isAvailable(data))
     .sort((a, b) => a.groupOrder - b.groupOrder);
 }

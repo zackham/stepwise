@@ -1,12 +1,7 @@
 import { useState, useMemo } from "react";
-import { FolderOpen, FileText, Search, ChevronRight, ChevronDown, Trash2 } from "lucide-react";
+import { FolderOpen, FileText, Search, ChevronRight, ChevronDown } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import {
-  ContextMenu,
-  ContextMenuTrigger,
-  ContextMenuContent,
-  ContextMenuItem,
-} from "@/components/ui/context-menu";
+import { EntityContextMenu } from "@/components/menus/EntityContextMenu";
 import { FlowFileTree } from "./FlowFileTree";
 import { cn } from "@/lib/utils";
 import type { LocalFlow } from "@/lib/types";
@@ -16,7 +11,6 @@ interface FlowFileListProps {
   flows: LocalFlow[];
   selectedName: string | undefined;
   onSelect: (flow: LocalFlow) => void;
-  onDelete?: (flow: LocalFlow) => void;
   flowFiles?: FlowFile[];
   selectedFile?: string | null;
   onSelectFile?: (path: string) => void;
@@ -28,7 +22,6 @@ export function FlowFileList({
   flows,
   selectedName,
   onSelect,
-  onDelete,
   flowFiles,
   selectedFile,
   onSelectFile,
@@ -108,24 +101,9 @@ export function FlowFileList({
 
           return (
             <div key={flow.path}>
-              {onDelete ? (
-                <ContextMenu>
-                  <ContextMenuTrigger>
-                    {rowContent}
-                  </ContextMenuTrigger>
-                  <ContextMenuContent>
-                    <ContextMenuItem
-                      variant="destructive"
-                      onClick={() => onDelete(flow)}
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      Delete flow
-                    </ContextMenuItem>
-                  </ContextMenuContent>
-                </ContextMenu>
-              ) : (
-                rowContent
-              )}
+              <EntityContextMenu type="flow" data={flow}>
+                {rowContent}
+              </EntityContextMenu>
               {isExpandedDir && onSelectFile && (
                 <div className="ml-3 border-l border-zinc-200 dark:border-zinc-800 pl-1">
                   <FlowFileTree

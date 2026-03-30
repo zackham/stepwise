@@ -26,16 +26,8 @@ import {
   Trash2,
   User,
 } from "lucide-react";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ActionContextProvider } from "@/components/menus/ActionContextProvider";
+import { EntityContextMenu } from "@/components/menus/EntityContextMenu";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { MobileFullScreen } from "@/components/layout/MobileFullScreen";
@@ -97,7 +89,6 @@ export function FlowsPage() {
   // Local selection
   const { selected: selectedFlowName } = useSearch({ from: "/flows" });
   const [selectedLocalFlow, setSelectedLocalFlow] = useState<LocalFlow | null>(null);
-  const [pendingDeleteFlow, setPendingDeleteFlow] = useState<LocalFlow | null>(null);
   const { data: localFlowDetail } = useLocalFlow(selectedLocalFlow?.path);
 
   useEffect(() => {
@@ -202,36 +193,6 @@ export function FlowsPage() {
     [mutations, navigate]
   );
 
-  const handleDelete = useCallback(
-    (flow: LocalFlow) => {
-      setPendingDeleteFlow(flow);
-    },
-    []
-  );
-
-  const handleConfirmDelete = useCallback(() => {
-    if (!pendingDeleteFlow) return;
-
-    deleteFlowMutation.mutate(pendingDeleteFlow.path, {
-      onSuccess: () => {
-        if (selectedLocalFlow?.path === pendingDeleteFlow.path) {
-          setSelectedLocalFlow(null);
-          navigate({ to: "/flows", search: {}, replace: true });
-        }
-        setPendingDeleteFlow(null);
-      },
-    });
-  }, [deleteFlowMutation, navigate, pendingDeleteFlow, selectedLocalFlow]);
-
-  const handleDeleteDialogChange = useCallback(
-    (open: boolean) => {
-      if (!open && !deleteFlowMutation.isPending) {
-        setPendingDeleteFlow(null);
-      }
-    },
-    [deleteFlowMutation.isPending]
-  );
-
   const handleFlowCreated = useCallback(
     (result: { path: string; name: string }) => {
       navigate({ to: "/flows/$flowName", params: { flowName: result.name } });
@@ -315,6 +276,18 @@ export function FlowsPage() {
 
           {/* Content */}
           {tab === "local" ? (
+            <ActionContextProvider
+              sideEffects={{
+                onRunFlow: handleRun,
+                onAfterDeleteFlow: (flow) => {
+                  if (selectedLocalFlow?.path === flow.path) {
+                    setSelectedLocalFlow(null);
+                    navigate({ to: "/flows", search: {}, replace: true });
+                  }
+                },
+              }}
+              extraMutations={{ deleteFlow: deleteFlowMutation }}
+            >
             <div className="flex-1 flex min-h-0">
               {/* Flow list */}
               <div className="w-full md:w-72 md:border-r border-border md:shrink-0 flex flex-col">
@@ -390,8 +363,8 @@ export function FlowsPage() {
                     </div>
                   ) : (
                     filtered.map((flow) => (
+                      <EntityContextMenu key={flow.path} type="flow" data={flow}>
                       <button
-                        key={flow.path}
                         onClick={() => handleSelectLocalFlow(flow)}
                         onDoubleClick={() => handleEdit(flow)}
                         className={cn(
@@ -448,6 +421,7 @@ export function FlowsPage() {
                           </span>
                         </div>
                       </button>
+                      </EntityContextMenu>
                     ))
                   )}
                 </div>
@@ -469,7 +443,14 @@ export function FlowsPage() {
                             </p>
                           </div>
                           <Button
-                            onClick={() => handleDelete(selectedLocalFlow)}
+                            onClick={() => {
+                              deleteFlowMutation.mutate(selectedLocalFlow.path, {
+                                onSuccess: () => {
+                                  setSelectedLocalFlow(null);
+                                  navigate({ to: "/flows", search: {}, replace: true });
+                                },
+                              });
+                            }}
                             variant="ghost"
                             size="icon-sm"
                             className="shrink-0 text-red-400 hover:text-red-300"
@@ -571,7 +552,14 @@ export function FlowsPage() {
                             Edit
                           </Button>
                           <Button
-                            onClick={() => handleDelete(selectedLocalFlow)}
+                            onClick={() => {
+                              deleteFlowMutation.mutate(selectedLocalFlow.path, {
+                                onSuccess: () => {
+                                  setSelectedLocalFlow(null);
+                                  navigate({ to: "/flows", search: {}, replace: true });
+                                },
+                              });
+                            }}
                             variant="ghost"
                             size="icon-sm"
                             className="shrink-0 text-red-400 hover:text-red-300"
@@ -608,6 +596,7 @@ export function FlowsPage() {
                 </MobileFullScreen>
               )}
             </div>
+            </ActionContextProvider>
           ) : (
             <div className="flex-1 flex min-h-0">
               <div className="w-full md:w-72 md:border-r border-border md:shrink-0">
@@ -675,31 +664,6 @@ export function FlowsPage() {
         </div>
       </TooltipProvider>
 
-      <AlertDialog
-        open={!!pendingDeleteFlow}
-        onOpenChange={handleDeleteDialogChange}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete flow?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {pendingDeleteFlow
-                ? `Delete flow "${pendingDeleteFlow.name}"? This cannot be undone.`
-                : "This cannot be undone."}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleteFlowMutation.isPending}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleConfirmDelete}
-              variant="destructive"
-              disabled={deleteFlowMutation.isPending}
-            >
-              {deleteFlowMutation.isPending ? "Deleting..." : "Delete flow"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </>
   );
 }

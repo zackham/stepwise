@@ -13,19 +13,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-} from "@/components/ui/dropdown-menu";
-import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { AlertTriangle, Archive, ArchiveRestore, CirclePause, Clock, Monitor, Terminal, Trash2, Search, X, MoreVertical, XCircle, RefreshCw, ArrowUpDown, CheckSquare, Square } from "lucide-react";
+import { EntityContextMenu } from "@/components/menus/EntityContextMenu";
+import { EntityDropdownMenu } from "@/components/menus/EntityDropdownMenu";
+import { AlertTriangle, Archive, CirclePause, Clock, Monitor, Terminal, Trash2, Search, X, RefreshCw, ArrowUpDown, CheckSquare, Square } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LiveDuration } from "@/components/LiveDuration";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -182,98 +177,6 @@ function formatLastUpdated(timestamp: number): string {
   }).format(timestamp);
 }
 
-function canCancel(status: string): boolean {
-  return status === "running" || status === "paused";
-}
-
-function canRetry(status: string): boolean {
-  return status === "paused" || status === "failed";
-}
-
-function canArchive(status: string): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled";
-}
-
-function JobActions({
-  job,
-  mutations,
-}: {
-  job: Job;
-  mutations: ReturnType<typeof useStepwiseMutations>;
-}) {
-  const showCancel = canCancel(job.status);
-  const showRetry = canRetry(job.status);
-  const showArchive = canArchive(job.status);
-  const showUnarchive = job.status === "archived";
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        className="p-1 rounded hover:bg-zinc-200/50 dark:hover:bg-zinc-700/50 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 flex items-center justify-center"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <MoreVertical className="w-3.5 h-3.5" />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" side="bottom" sideOffset={4}>
-        {showRetry && (
-          <DropdownMenuItem
-            onClick={(e) => {
-              e.stopPropagation();
-              mutations.resumeJob.mutate(job.id);
-            }}
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            Retry
-          </DropdownMenuItem>
-        )}
-        {showCancel && (
-          <DropdownMenuItem
-            onClick={(e) => {
-              e.stopPropagation();
-              mutations.cancelJob.mutate(job.id);
-            }}
-          >
-            <XCircle className="w-3.5 h-3.5" />
-            Cancel
-          </DropdownMenuItem>
-        )}
-        {showArchive && (
-          <DropdownMenuItem
-            onClick={(e) => {
-              e.stopPropagation();
-              mutations.archiveJob.mutate(job.id);
-            }}
-          >
-            <Archive className="w-3.5 h-3.5" />
-            Archive
-          </DropdownMenuItem>
-        )}
-        {showUnarchive && (
-          <DropdownMenuItem
-            onClick={(e) => {
-              e.stopPropagation();
-              mutations.unarchiveJob.mutate(job.id);
-            }}
-          >
-            <ArchiveRestore className="w-3.5 h-3.5" />
-            Unarchive
-          </DropdownMenuItem>
-        )}
-        {(showRetry || showCancel || showArchive || showUnarchive) && <DropdownMenuSeparator />}
-        <DropdownMenuItem
-          variant="destructive"
-          onClick={(e) => {
-            e.stopPropagation();
-            mutations.deleteJob.mutate(job.id);
-          }}
-        >
-          <Trash2 className="w-3.5 h-3.5" />
-          Delete
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
 
 const JOB_ROW_HEIGHT = 68; // estimated row height in px
 
@@ -283,7 +186,6 @@ function VirtualJobList({
   focusedIndex,
   onSelectJob,
   setFocusedIndex,
-  mutations,
   scrollRef,
   selectedIds,
   onToggleSelect,
@@ -294,7 +196,6 @@ function VirtualJobList({
   focusedIndex: number;
   onSelectJob: (jobId: string) => void;
   setFocusedIndex: (index: number) => void;
-  mutations: ReturnType<typeof useStepwiseMutations>;
   scrollRef: React.RefObject<HTMLDivElement | null>;
   selectedIds: Set<string>;
   onToggleSelect: (jobId: string) => void;
@@ -324,110 +225,115 @@ function VirtualJobList({
           const job = filteredJobs[virtualRow.index];
           const index = virtualRow.index;
           return (
-            <div
-              key={job.id}
-              id={`job-${job.id}`}
-              ref={virtualizer.measureElement}
-              data-index={index}
-              role="option"
-              tabIndex={-1}
-              aria-selected={selectedJobId === job.id}
-              onClick={() => bulkMode ? onToggleSelect(job.id) : onSelectJob(job.id)}
-              onFocus={() => setFocusedIndex(index)}
-              className={cn(
-                "absolute left-2 right-2 text-left px-3 py-1.5 rounded-md transition-colors",
-                "border-b border-zinc-200/50 dark:border-zinc-800/50",
-                "hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50 cursor-pointer",
-                selectedJobId === job.id
-                  ? "bg-zinc-100 dark:bg-zinc-800 ring-1 ring-zinc-300 dark:ring-zinc-700"
-                  : "bg-transparent",
-                focusedIndex === index && selectedJobId !== job.id
-                  && "bg-zinc-100/30 dark:bg-zinc-800/30 ring-1 ring-zinc-300/50 dark:ring-zinc-700/50",
-                selectedIds.has(job.id) && "bg-blue-500/10 ring-1 ring-blue-500/30",
-              )}
-              style={{
-                top: virtualRow.start,
-              }}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex items-start gap-2 min-w-0 flex-1">
-                  {bulkMode && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); onToggleSelect(job.id); }}
-                      className="mt-0.5 shrink-0 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-                    >
-                      {selectedIds.has(job.id)
-                        ? <CheckSquare className="w-3.5 h-3.5 text-blue-400" />
-                        : <Square className="w-3.5 h-3.5" />}
-                    </button>
-                  )}
-                  <span
-                    className={cn(
-                      "w-2.5 h-2.5 rounded-full mt-1 shrink-0",
-                      JOB_STATUS_COLORS[job.status as JobStatus]?.dot ?? "bg-zinc-400",
-                      job.status === "running" && "animate-pulse",
+            <EntityContextMenu key={job.id} type="job" data={job}>
+              <div
+                id={`job-${job.id}`}
+                ref={virtualizer.measureElement}
+                data-index={index}
+                role="option"
+                tabIndex={-1}
+                aria-selected={selectedJobId === job.id}
+                onClick={() => bulkMode ? onToggleSelect(job.id) : onSelectJob(job.id)}
+                onFocus={() => setFocusedIndex(index)}
+                className={cn(
+                  "absolute left-2 right-2 text-left px-3 py-1.5 rounded-md transition-colors",
+                  "border-b border-zinc-200/50 dark:border-zinc-800/50",
+                  "hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50 cursor-pointer",
+                  selectedJobId === job.id
+                    ? "bg-zinc-100 dark:bg-zinc-800 ring-1 ring-zinc-300 dark:ring-zinc-700"
+                    : "bg-transparent",
+                  focusedIndex === index && selectedJobId !== job.id
+                    && "bg-zinc-100/30 dark:bg-zinc-800/30 ring-1 ring-zinc-300/50 dark:ring-zinc-700/50",
+                  selectedIds.has(job.id) && "bg-blue-500/10 ring-1 ring-blue-500/30",
+                )}
+                style={{
+                  top: virtualRow.start,
+                }}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-start gap-2 min-w-0 flex-1">
+                    {bulkMode && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onToggleSelect(job.id); }}
+                        className="mt-0.5 shrink-0 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                      >
+                        {selectedIds.has(job.id)
+                          ? <CheckSquare className="w-3.5 h-3.5 text-blue-400" />
+                          : <Square className="w-3.5 h-3.5" />}
+                      </button>
                     )}
-                  />
-                  <div className="min-w-0">
-                    <div className="text-sm text-foreground truncate">
-                      {job.name || job.objective || "Untitled Job"}
+                    <span
+                      className={cn(
+                        "w-2.5 h-2.5 rounded-full mt-1 shrink-0",
+                        JOB_STATUS_COLORS[job.status as JobStatus]?.dot ?? "bg-zinc-400",
+                        job.status === "running" && "animate-pulse",
+                      )}
+                    />
+                    <div className="min-w-0">
+                      <div className="text-sm text-foreground truncate">
+                        {job.name || job.objective || "Untitled Job"}
+                      </div>
+                      {job.current_step ? (
+                        <div className="text-[11px] text-zinc-500 truncate mt-0.5">
+                          {job.name && job.objective && (
+                            <span>{job.objective} · </span>
+                          )}
+                          <span className={cn(
+                            job.current_step.status === "running" && "text-blue-400",
+                            job.current_step.status === "failed" && "text-red-400",
+                          )}>
+                            {job.current_step.name}
+                          </span>
+                          {job.current_step.started_at && (
+                            <span className="text-zinc-600">
+                              {" · "}
+                              <LiveDuration
+                                startTime={job.current_step.started_at}
+                                endTime={job.current_step.completed_at ?? null}
+                              />
+                            </span>
+                          )}
+                        </div>
+                      ) : job.name && job.objective ? (
+                        <div className="text-[11px] text-zinc-500 truncate">
+                          {job.objective}
+                        </div>
+                      ) : null}
                     </div>
-                    {job.current_step ? (
-                      <div className="text-[11px] text-zinc-500 truncate mt-0.5">
-                        {job.name && job.objective && (
-                          <span>{job.objective} · </span>
+                  </div>
+                  <div className="flex items-start gap-1 shrink-0">
+                    <div className="flex flex-col items-end gap-1">
+                      <div className="flex items-center gap-1">
+                        {isStale(job) && (
+                          <AlertTriangle className="w-3 h-3 text-amber-500" />
                         )}
-                        <span className={cn(
-                          job.current_step.status === "running" && "text-blue-400",
-                          job.current_step.status === "failed" && "text-red-400",
-                        )}>
-                          {job.current_step.name}
-                        </span>
-                        {job.current_step.started_at && (
-                          <span className="text-zinc-600">
-                            {" · "}
-                            <LiveDuration
-                              startTime={job.current_step.started_at}
-                              endTime={job.current_step.completed_at ?? null}
-                            />
+                        <JobStatusBadge status={job.status} />
+                        {job.has_suspended_steps && (
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 ring-1 ring-amber-500/30">
+                            <CirclePause className="w-2.5 h-2.5" />
+                            Awaiting Fulfillment
                           </span>
                         )}
                       </div>
-                    ) : job.name && job.objective ? (
-                      <div className="text-[11px] text-zinc-500 truncate">
-                        {job.objective}
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-                <div className="flex items-start gap-1 shrink-0">
-                  <div className="flex flex-col items-end gap-1">
-                    <div className="flex items-center gap-1">
-                      {isStale(job) && (
-                        <AlertTriangle className="w-3 h-3 text-amber-500" />
-                      )}
-                      <JobStatusBadge status={job.status} />
-                      {job.has_suspended_steps && (
-                        <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 ring-1 ring-amber-500/30">
-                          <CirclePause className="w-2.5 h-2.5" />
-                          Awaiting Fulfillment
-                        </span>
-                      )}
+                      <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
+                        {isCliOwned(job.created_by) ? (
+                          <Terminal className="w-2.5 h-2.5" />
+                        ) : (
+                          <Monitor className="w-2.5 h-2.5" />
+                        )}
+                        <Clock className="w-2.5 h-2.5" />
+                        {timeAgo(job.updated_at)}
+                      </span>
                     </div>
-                    <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
-                      {isCliOwned(job.created_by) ? (
-                        <Terminal className="w-2.5 h-2.5" />
-                      ) : (
-                        <Monitor className="w-2.5 h-2.5" />
-                      )}
-                      <Clock className="w-2.5 h-2.5" />
-                      {timeAgo(job.updated_at)}
-                    </span>
+                    <EntityDropdownMenu
+                      type="job"
+                      data={job}
+                      triggerClassName="p-1 rounded hover:bg-zinc-200/50 dark:hover:bg-zinc-700/50 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0"
+                    />
                   </div>
-                  <JobActions job={job} mutations={mutations} />
                 </div>
               </div>
-            </div>
+            </EntityContextMenu>
           );
         })}
       </div>
@@ -949,7 +855,6 @@ export function JobList({
           focusedIndex={focusedIndex}
           onSelectJob={onSelectJob}
           setFocusedIndex={setFocusedIndex}
-          mutations={mutations}
           scrollRef={scrollRef}
           selectedIds={selectedIds}
           onToggleSelect={toggleSelect}

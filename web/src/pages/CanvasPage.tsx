@@ -4,6 +4,7 @@ import { useJobs, useGroups, useStepwiseMutations } from "@/hooks/useStepwise";
 import { JobCard } from "@/components/canvas/JobCard";
 import { DependencyArrows } from "@/components/canvas/DependencyArrows";
 import { computeCanvasLayout } from "@/components/canvas/CanvasLayout";
+import { ActionContextProvider } from "@/components/menus/ActionContextProvider";
 import { fetchRuns } from "@/lib/api";
 import { Eye, EyeOff, Minus, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -192,6 +193,7 @@ export function CanvasPage() {
   );
 
   return (
+    <ActionContextProvider>
     <div className="h-full overflow-y-auto">
       {/* Toolbar */}
       <div className="sticky top-0 z-10 flex items-center justify-end px-6 py-3 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-sm border-b border-zinc-200 dark:border-zinc-800/50">
@@ -360,5 +362,6 @@ export function CanvasPage() {
         )}
       </div>
     </div>
+    </ActionContextProvider>
   );
 }

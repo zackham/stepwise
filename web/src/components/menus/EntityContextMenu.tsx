@@ -34,7 +34,7 @@ export function EntityContextMenu<T>({
   return (
     <>
       <ContextMenu>
-        <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+        <ContextMenuTrigger>{children}</ContextMenuTrigger>
         <ContextMenuContent>
           <ActionMenuItems
             actions={actions}

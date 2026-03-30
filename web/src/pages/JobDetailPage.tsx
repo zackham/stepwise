@@ -4,6 +4,7 @@ import type { JobDetailSearch } from "@/router";
 import { useJob, useRuns, useJobTree, useJobOutput, useJobCost, useStepwiseMutations } from "@/hooks/useStepwise";
 import { useConfig } from "@/hooks/useConfig";
 import { JobList } from "@/components/jobs/JobList";
+import { ActionContextProvider } from "@/components/menus/ActionContextProvider";
 import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
 import { FlowDagView } from "@/components/dag/FlowDagView";
 import { StepDetailPanel } from "@/components/jobs/StepDetailPanel";
@@ -500,12 +501,14 @@ export function JobDetailPage() {
             </button>
           </div>
           <div className="flex-1 overflow-hidden">
-            <JobList
-              selectedJobId={jobId}
-              onSelectJob={(id) =>
-                navigate({ to: "/jobs/$jobId", params: { jobId: id }, search: true })
-              }
-            />
+            <ActionContextProvider>
+              <JobList
+                selectedJobId={jobId}
+                onSelectJob={(id) =>
+                  navigate({ to: "/jobs/$jobId", params: { jobId: id }, search: true })
+                }
+              />
+            </ActionContextProvider>
           </div>
         </div>
       )}
@@ -768,6 +771,7 @@ export function JobDetailPage() {
             selection={selection}
             onSelectDataFlow={handleSelectDataFlow}
             flowName={job.workflow.metadata?.name || job.name || job.objective || "Flow"}
+            jobId={job.id}
             jobStatus={job.status}
             jobActions={{
               onPauseJob: () => mutations.pauseJob.mutate(job.id),

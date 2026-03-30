@@ -307,6 +307,7 @@ export function ForEachExpandedContainer({
                         }
                         childStepCount={childNode.childStepCount}
                         childJobStatus={cSubTree?.job.status ?? null}
+                        isNested
                         x={childNode.x}
                         y={childNode.y}
                         width={childNode.width}

@@ -12,6 +12,8 @@ import {
 } from "lucide-react";
 import { StepStatusBadge } from "@/components/StatusBadge";
 import { STEP_STATUS_COLORS, STEP_PENDING_COLORS } from "@/lib/status-colors";
+import { EntityContextMenu } from "@/components/menus/EntityContextMenu";
+import type { StepEntity } from "@/lib/actions/step-actions";
 import type { ExitRule, StepDefinition, StepRun, StepRunStatus } from "@/lib/types";
 import { cn, safeRenderValue } from "@/lib/utils";
 import { LiveDuration } from "@/components/LiveDuration";
@@ -48,6 +50,8 @@ interface StepNodeProps {
   childJobStatus?: string | null;
   flowStatus?: string;
   isCritical?: boolean;
+  isNested?: boolean;
+  jobId?: string;
   x: number;
   y: number;
   width: number;
@@ -284,6 +288,8 @@ export function StepNode({
   childJobStatus,
   flowStatus,
   isCritical,
+  isNested,
+  jobId,
   x,
   y,
   width,
@@ -359,7 +365,7 @@ export function StepNode({
     setShowTooltip(false);
   };
 
-  return (
+  const nodeContent = (
     <div
       className={cn(
         "absolute cursor-pointer border border-l-[3px] rounded-lg p-3 pl-2.5",
@@ -534,5 +540,16 @@ export function StepNode({
         />
       )}
     </div>
+  );
+
+  if (isNested || !jobId) return nodeContent;
+
+  const stepEntity: StepEntity = { jobId, stepDef, latestRun };
+  return (
+    <EntityContextMenu type="step" data={stepEntity}>
+      <div onContextMenu={(e) => e.stopPropagation()}>
+        {nodeContent}
+      </div>
+    </EntityContextMenu>
   );
 }

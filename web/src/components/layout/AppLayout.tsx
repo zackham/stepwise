@@ -73,6 +73,12 @@ const SHORTCUTS = [
   { keys: ["Escape"], description: "Clear selection" },
 ];
 
+const ENTITY_SHORTCUTS = [
+  { keys: ["D"], description: "Delete selected entity" },
+  { keys: ["R"], description: "Retry/Rerun selected entity" },
+  { keys: ["Enter"], description: "Open selected entity" },
+];
+
 function StepwiseMark({ className }: { className?: string }) {
   return (
     <svg
@@ -116,25 +122,50 @@ function ShortcutsDialog({
             Global navigation and search shortcuts.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-2">
-          {SHORTCUTS.map((shortcut) => (
-            <div
-              key={`${shortcut.keys.join("-")}-${shortcut.description}`}
-              className="flex items-center justify-between gap-4 rounded-lg border border-border/70 bg-muted/30 px-3 py-2"
-            >
-              <div className="flex items-center gap-1.5">
-                {shortcut.keys.map((key) => (
-                  <kbd
-                    key={`${shortcut.description}-${key}`}
-                    className="inline-flex min-w-6 items-center justify-center rounded-md border border-border bg-background px-2 py-1 text-[11px] font-medium text-zinc-600 dark:text-zinc-300"
-                  >
-                    {key}
-                  </kbd>
-                ))}
+        <div className="space-y-4">
+          <div className="space-y-2">
+            {SHORTCUTS.map((shortcut) => (
+              <div
+                key={`${shortcut.keys.join("-")}-${shortcut.description}`}
+                className="flex items-center justify-between gap-4 rounded-lg border border-border/70 bg-muted/30 px-3 py-2"
+              >
+                <div className="flex items-center gap-1.5">
+                  {shortcut.keys.map((key) => (
+                    <kbd
+                      key={`${shortcut.description}-${key}`}
+                      className="inline-flex min-w-6 items-center justify-center rounded-md border border-border bg-background px-2 py-1 text-[11px] font-medium text-zinc-600 dark:text-zinc-300"
+                    >
+                      {key}
+                    </kbd>
+                  ))}
+                </div>
+                <span className="text-sm text-muted-foreground">{shortcut.description}</span>
               </div>
-              <span className="text-sm text-muted-foreground">{shortcut.description}</span>
+            ))}
+          </div>
+          <div>
+            <p className="mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">Entity Actions</p>
+            <div className="space-y-2">
+              {ENTITY_SHORTCUTS.map((shortcut) => (
+                <div
+                  key={`entity-${shortcut.keys.join("-")}-${shortcut.description}`}
+                  className="flex items-center justify-between gap-4 rounded-lg border border-border/70 bg-muted/30 px-3 py-2"
+                >
+                  <div className="flex items-center gap-1.5">
+                    {shortcut.keys.map((key) => (
+                      <kbd
+                        key={`${shortcut.description}-${key}`}
+                        className="inline-flex min-w-6 items-center justify-center rounded-md border border-border bg-background px-2 py-1 text-[11px] font-medium text-zinc-600 dark:text-zinc-300"
+                      >
+                        {key}
+                      </kbd>
+                    ))}
+                  </div>
+                  <span className="text-sm text-muted-foreground">{shortcut.description}</span>
+                </div>
+              ))}
             </div>
-          ))}
+          </div>
         </div>
       </DialogContent>
     </Dialog>
