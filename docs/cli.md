@@ -2,7 +2,7 @@
 
 Stepwise is a CLI-first tool. All commands are available via `stepwise <command>`.
 
-See [Quickstart](quickstart.md) for installation and first-run instructions. See [Troubleshooting](troubleshooting.md) for error messages and diagnostic commands.
+See [Quickstart](quickstart.md) for installation and first-run instructions. See [Concepts](concepts.md) for the mental model behind jobs and steps, [Writing Flows](writing-flows.md) for flow authorship, and [Troubleshooting](troubleshooting.md) for error messages and diagnostic commands.
 
 ## Overview
 
@@ -15,6 +15,72 @@ See [Quickstart](quickstart.md) for installation and first-run instructions. See
 | [Registry](#registry-commands) | `share`, `get`, `search`, `info`, `login`, `logout` |
 | [Configuration](#configuration-commands) | `config`, `init`, `templates`, `schema`, `diagram` |
 | [Utility](#utility-commands) | `agent-help`, `flows`, `extensions`, `docs`, `cache`, `version`, `update`, `welcome`, `uninstall` |
+
+## Common Workflows
+
+Quick recipes for the most frequent tasks. Each one combines several commands.
+
+### Run a flow and watch it live
+
+```bash
+stepwise run my-flow --watch --input task="build the API" --name "impl: API"
+```
+
+Opens the [web UI](web-ui.md) with real-time DAG visualization. External steps prompt in the browser.
+
+### Agent calls a flow as a tool
+
+```bash
+stepwise run deploy --wait --input repo="/path" --input branch="main"
+# Returns only JSON to stdout. Exit code 5 = suspended (needs human input).
+stepwise fulfill <run-id> '{"approved": true}' --wait
+# Continues blocking until next suspension or completion.
+```
+
+See [Agent Integration](agent-integration.md) for the full guide. Generate agent-facing docs with `stepwise agent-help`.
+
+### Stage, wire, and release a batch
+
+```bash
+stepwise job create plan-flow --input spec="new feature" --group sprint-1 --name "plan: feature"
+stepwise job create impl-flow --input plan=job-<plan-id>.plan --group sprint-1 --name "impl: feature"
+stepwise job show --group sprint-1     # review the batch
+stepwise job run --group sprint-1      # release — engine runs in dependency order
+```
+
+See [Concepts: Job Staging](concepts.md#job-staging) for the mental model.
+
+### Monitor and triage
+
+```bash
+stepwise jobs                          # list all jobs
+stepwise list --suspended              # show jobs waiting for human input
+stepwise status <job-id>               # step-by-step detail
+stepwise tail <job-id>                 # stream events in real time
+stepwise output <job-id>               # retrieve terminal outputs
+```
+
+### Validate before running
+
+```bash
+stepwise validate my-flow.flow.yaml    # structural check (fast, no execution)
+stepwise preflight my-flow.flow.yaml   # runtime check (API keys, models, scripts)
+```
+
+See [Writing Flows: Validation](writing-flows.md#validation-and-preflight) for what the validator catches.
+
+### Server lifecycle
+
+```bash
+stepwise server start --detach         # persistent background server
+stepwise server status                 # PID, port, uptime, log path
+stepwise server restart                # stop + start
+stepwise server stop                   # graceful shutdown
+```
+
+The server provides the [web UI](web-ui.md), WebSocket live updates, and job adoption for orphaned CLI jobs.
+
+---
 
 ## Global Flags
 

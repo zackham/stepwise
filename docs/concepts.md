@@ -1,22 +1,20 @@
 # Concepts
 
-Stepwise has three runtime concepts, a dependency system, and a control flow mechanism. Everything else is built on top of these.
+Stepwise is a power meter for agent work. It doesn't do the pedaling — your agents, scripts, and humans do the actual work. Stepwise shows you the watts: what's running, what's waiting, what failed, and what needs your attention.
+
+The system has three core runtime concepts (jobs, steps, executors), a dependency system (inputs, ordering), and control flow mechanisms (exit rules, branching). Everything else — for-each, caching, sub-jobs, human gates — is built on top of these.
 
 ### Quick reference
 
 | Concept | What it is | Key detail |
 |---------|-----------|------------|
-| **Job** | A unit of work with inputs and a workflow | Persists to SQLite, can spawn sub-jobs |
+| **Job** | A unit of work with inputs and a workflow | Persists to SQLite, survives crashes, can spawn sub-jobs |
 | **Step** | A typed node in the workflow graph | Declares outputs, executor, inputs, exit rules |
 | **Executor** | What does the work inside a step | script, llm, agent, external, poll |
 | **Input binding** | Pulls data from upstream outputs | `findings: research.findings` |
 | **Exit rule** | Decides what happens after step completion | advance, loop, escalate, abandon |
 | **For-each** | Iterates over a list with embedded sub-flows | Items execute in parallel |
-| **Branching** | Conditional activation via step-level `when` | `when` condition, `any_of` merge |
-| **Job staging** | Stage, review, and release jobs before execution | STAGED → PENDING lifecycle |
-| **Groups** | Batch label for organizing staged jobs | `--group wave-1` |
-| **Job dependencies** | Ordering between jobs (not steps) | `depends_on`, auto-start cascade |
-| **Data wiring** | Cross-job output references | `--input plan=job-abc.field` |
+| **Branching** | Conditional activation via step-level `when` | Pull-based: each step decides when it runs |
 
 ## Jobs
 
@@ -28,70 +26,24 @@ stepwise run code-review --input repo="/path/to/repo" --input branch="feature-x"
 
 Jobs track their own lifecycle: created → running → completed/failed. They persist to SQLite — if the process restarts, the job resumes where it left off.
 
-Jobs can also be **staged** — created in a holding state before execution. Staged jobs let you build a batch, add dependencies, wire data between jobs, review the plan, and then release everything at once. See [Job Staging](#job-staging) below.
-
 Jobs can spawn **sub-jobs**. A planning step might decompose a large objective into smaller pieces, each running its own workflow. The parent step waits for the sub-job to complete, then collects its output. This recurses to any depth — jobs all the way down.
 
-## Job Staging
+### Server vs CLI ownership
 
-Job staging lets you create jobs in a **STAGED** state, build up a batch with dependencies and data wiring, review the plan, and then release everything for execution.
+Jobs are owned by whoever created them. When you run `stepwise run`, the CLI owns the job. When you create a job through the web UI or API, the server owns it.
 
-### Lifecycle
+This matters for lifecycle management:
+- **Server-owned jobs** are managed by the persistent server process. The server monitors them, adopts orphaned jobs, and broadcasts status updates via WebSocket.
+- **CLI-owned jobs** run in the CLI process. If you Ctrl+C, the job is orphaned. The server detects orphaned jobs via heartbeat expiry and can adopt them — continuing execution without losing progress.
 
-```
-STAGED → (add deps, wire data, review) → job run → PENDING → RUNNING → COMPLETED/FAILED
-```
-
-Staged jobs don't execute until explicitly released. This gives you a review checkpoint between planning and execution.
-
-### Groups
-
-Groups are string labels for batch operations. Assign a job to a group at creation time:
-
-```bash
-stepwise job create my-flow --input task="Build API" --group wave-1
-stepwise job create my-flow --input task="Write tests" --group wave-1
-```
-
-Then operate on the entire group:
-
-```bash
-stepwise job show --group wave-1       # review staged jobs
-stepwise job run --group wave-1        # atomically transition all to PENDING
-```
-
-### Job Dependencies
-
-Job dependencies create ordering between jobs (not steps). A job won't start until all its dependencies have completed:
-
-```bash
-stepwise job dep job-impl-123 --after job-plan-456
-```
-
-The engine auto-starts dependents when a job completes. Cycle detection prevents deadlocks — `job dep` rejects edges that would create a cycle.
-
-### Data Wiring
-
-Data wiring references another job's output fields as inputs to a new job:
-
-```bash
-stepwise job create impl-flow --input plan=job-plan-456.plan --group batch
-```
-
-The `job-plan-456.plan` syntax means "the `plan` output field from job `job-plan-456`". This auto-creates a dependency edge — no separate `job dep` call needed. Nested paths work too: `job-abc123.hero.headline`.
-
-When the upstream job completes, the engine resolves the reference to the actual value before starting the downstream job.
-
-### Auto-Start Cascade
-
-When a job completes, the engine checks all its dependents. If a dependent is PENDING and all its dependencies are now COMPLETED, it auto-starts. This cascades through the full dependency graph — releasing a group of staged jobs with dependencies triggers a wave of execution in dependency order.
+The `stepwise server status` command shows which jobs the server is managing. `stepwise jobs` lists all jobs regardless of owner.
 
 ## Steps
 
 A **step** is a typed node in a job's workflow graph. Each step declares:
 
 - **Outputs** — the fields it produces (e.g., `[findings, sources]`)
-- **Executor** — what does the work (script, LLM, agent, or external)
+- **Executor** — what does the work (script, LLM, agent, external, or poll)
 - **Inputs** — data pulled from other steps' outputs
 - **Exit rules** — what happens after the step completes (advance, loop, escalate)
 
@@ -149,14 +101,21 @@ research:
   prompt: "Research $topic thoroughly"
   outputs: [findings, sources]
 
-# External — waits for external input
+# External — waits for human input
 approve:
   executor: external
   prompt: "Approve this deployment?"
   outputs: [approved, reason]
+
+# Poll — waits for an external condition
+wait-for-ci:
+  executor: poll
+  check_command: 'gh pr checks $pr --json conclusion --jq "select(.conclusion != \"\") | {done: true}"'
+  interval_seconds: 30
+  outputs: [done]
 ```
 
-See the [Executors guide](executors.md) for detailed configuration options.
+See the [Executors guide](executors.md) for detailed configuration options and the [Writing Flows guide](writing-flows.md) for step-by-step authorship.
 
 ## Dependencies
 
@@ -245,7 +204,7 @@ exits:
 | `escalate` | Pause the job. A human inspects and decides what to do. |
 | `abandon` | Fail the job. |
 
-If no exit rules match (or none are defined), the step advances by default.
+If no exit rules match (or none are defined), the step advances by default. When explicit `advance` rules exist but none match, the step **fails** — this prevents silent advancement past unhandled cases.
 
 Loops are **control flow, not graph cycles**. The workflow definition is always a DAG. When a loop fires, the engine creates a new step run (attempt N+1) for the target. The key mechanism is **supersession** — the new run invalidates the previous one, and that invalidation cascades downstream. Steps only run when all their dependencies are fresh.
 
@@ -325,6 +284,98 @@ When `classify` completes with `category == 'simple'`, `quick-path`'s `when` con
 - `inputs: { field: step-x.field }` = data dependency (also implies ordering)
 - `when: "expr"` = conditional gate on resolved inputs (evaluated after deps are satisfied)
 
+## Job Staging
+
+Job staging lets you create jobs in a **STAGED** state, build up a batch with dependencies and data wiring, review the plan, and then release everything for execution.
+
+### Lifecycle
+
+```
+STAGED → (add deps, wire data, review) → job run → PENDING → RUNNING → COMPLETED/FAILED
+```
+
+Staged jobs don't execute until explicitly released. This gives you a review checkpoint between planning and execution.
+
+### Groups and Data Wiring
+
+Groups are string labels for batch operations:
+
+```bash
+stepwise job create my-flow --input task="Build API" --group wave-1
+stepwise job create my-flow --input task="Write tests" --group wave-1
+stepwise job show --group wave-1       # review staged jobs
+stepwise job run --group wave-1        # release the batch
+```
+
+Wire data between jobs by referencing another job's outputs:
+
+```bash
+stepwise job create impl-flow --input plan=job-plan-456.plan --group batch
+```
+
+The `job-plan-456.plan` syntax means "the `plan` output field from job `job-plan-456`". This auto-creates a dependency edge. When the upstream job completes, the engine resolves the reference to the actual value before starting the downstream job. Dependencies cascade — releasing a group triggers execution in dependency order.
+
+## The Trust Model
+
+Stepwise is built around **packaged trust** — the idea that the real barrier to AI delegation isn't capability, it's confidence. You need to know what happened, why, and whether to let it continue.
+
+### Observable runs
+
+Every step run is recorded with:
+- **Inputs** — the exact values passed to the executor
+- **Outputs** — the artifact produced, validated against declared output fields
+- **Timing** — start time, duration, queue wait
+- **Executor metadata** — model used, token counts, cost, latency
+- **Attempt count** — which iteration this is (for looped steps)
+
+This isn't logging you opt into. It's the execution model. The engine can't run a step without recording these facts, because downstream steps depend on them.
+
+### Scoped delegation
+
+Each step has a bounded scope: declared inputs, declared outputs, a specific executor type. An agent step can't silently access data from an unrelated step. A script can't produce outputs it didn't declare. The engine validates artifact keys against the step's `outputs` list.
+
+This scoping is what makes mixed workflows safe. You can have an untrusted script fetch data, a trusted agent analyze it, and a human approve the result — each step's authority is explicit in the YAML.
+
+### Human gates
+
+External steps are the trust primitive. They pause the job and wait for a person — with full context of what happened before. The escalate exit rule is the safety valve: when an agent has tried three times and is still failing, the job pauses for human triage instead of burning more tokens.
+
+The combination of external steps and escalation rules means you can build workflows that delegate aggressively but fail safely. The human is always in the loop — not as a bottleneck, but as a circuit breaker.
+
+### Audit trail
+
+The event system records every state transition, every input resolution, every cost event. This powers the web UI's event timeline, HTML reports, and programmatic access via the SQLite store.
+
+When something goes wrong at step 4 of a 7-step pipeline, you see exactly what inputs it received, what it produced, and why the exit rule fired the way it did. The audit trail isn't a feature — it's the database.
+
+## How Agents Fit In
+
+Agents interact with Stepwise in three roles:
+
+### As callers
+
+An agent calls a flow like a tool via the CLI:
+
+```bash
+stepwise run deploy --wait --input repo="/path" --input branch="main"
+```
+
+The flow runs. The agent gets JSON back. `--wait` prints only the JSON payload to stdout — zero logging, zero progress noise. Missing inputs get actionable error messages. Exit codes are explicit (0=success, 1=failed, 5=suspended).
+
+This is the primary integration path. No MCP servers, no protocol layers. Just CLI commands that agents call via bash.
+
+### As workers
+
+Agent steps (`executor: agent`) use an LLM with tools to complete a task inside a step. The agent is scoped to its step's inputs and outputs. It can use tools, iterate, and produce structured output — but only within the boundaries the step defines.
+
+With `continue_session: true`, an agent can maintain conversation context across loop iterations. This saves tokens by continuing the conversation rather than re-injecting context each time.
+
+### As architects
+
+With `emit_flow: true`, an agent step can dynamically create sub-workflows. The agent analyzes a task, writes a flow definition, and the engine executes it as a sub-job. Results propagate back to the parent step.
+
+This is recursive delegation: an agent decides *how* to break down work, not just *what* to do. Exit rules with `outputs.get('_delegated', False)` can loop the agent with sub-flow results, enabling iterative planning-and-execution cycles.
+
 ## Handoff Envelopes
 
 When a step completes, it produces a **handoff envelope** — a structured package containing:
@@ -339,80 +390,22 @@ The envelope is the contract between steps. Downstream steps receive the artifac
 
 Every state transition, every input/output handoff, every cost event is persisted as a structured **step event**. This powers:
 
-- **Web UI** — real-time DAG visualization, step detail panels, event timeline
-- **HTML reports** — `stepwise run flow.yaml --report` generates a self-contained trace document with SVG DAG, step timeline, expandable details, and cost summary
+- **Web UI** — real-time DAG visualization, step detail panels, event timeline. See the [Web UI guide](web-ui.md).
+- **HTML reports** — `stepwise run flow.yaml --report` generates a self-contained trace document
 - **Programmatic access** — query the SQLite store directly for custom analysis
 
-The engine is designed to make the implicit explicit. When something goes wrong at step 4 of a 7-step pipeline, you can see exactly what inputs it received, what it produced, and why the exit rule fired the way it did.
+## Hooks and Notifications
 
-## Shell Hooks vs Server Notifications
+**Shell hooks** (`.stepwise/hooks/on-suspend`, `on-complete`, `on-fail`) run in the engine's process context. Use them for local automation: notifications, log writes, build triggers.
 
-Stepwise has two mechanisms for reacting to job events. They serve different use cases.
+**Server notifications** (`--notify URL`) are HTTP webhooks fired on job events. Use them for remote integrations: dashboards, CI pipelines, Slack.
 
-**Shell hooks** (`.stepwise/hooks/on-suspend`, `on-complete`, `on-fail`) are scripts that run in the engine's process context — the same machine, same filesystem, same environment. They fire synchronously (with a 30s timeout) and receive the event envelope on stdin and via `$STEPWISE_EVENT_FILE`. Use hooks for local automation: sending a notification, writing a log, triggering a local build.
+See [Extensions](extensions.md) for full details.
 
-```bash
-# .stepwise/hooks/on-complete
-#!/bin/sh
-echo "Job $STEPWISE_JOB_ID completed" >> /var/log/stepwise.log
-```
+## What's next
 
-**Server notifications** (`--notify URL`) are HTTP POST webhooks fired by the server on job events. They are fire-and-forget, remote, and stateless. The POST body is the same event envelope as hooks, with `--notify-context` merged in. Use notifications for remote integrations: updating a dashboard, triggering a CI pipeline, posting to Slack.
-
-```bash
-stepwise run deploy --async \
-  --notify https://my-server.com/api/events \
-  --notify-context '{"channel": "#deploys"}'
-```
-
-| | Shell hooks | Server notifications |
-|---|---|---|
-| **Where they run** | Same machine as the engine | Remote HTTP endpoint |
-| **Configuration** | `.stepwise/hooks/` scripts | `--notify URL` per job |
-| **Scope** | All jobs in the project | Single job |
-| **Use case** | Local automation, file ops | Remote integrations, dashboards |
-
-See [Extensions](extensions.md) for full details on both mechanisms plus the WebSocket event stream.
-
-## Flows as Tools
-
-A Stepwise flow is a prompted workflow run with a working directory. The input is a string (the objective) plus optional string variables. The output is an array of terminal step artifacts. This makes flows callable by agents via CLI — turning flows from "things humans run" into "tools agents delegate to."
-
-**No MCP servers, no protocol layers, no required background services.** Just CLI commands that agents call via bash:
-
-```bash
-# Agent calls a flow and gets JSON back
-stepwise run council --wait --input question="Should we use Postgres?"
-
-# Self-documenting: generate the instructions block for CLAUDE.md
-stepwise agent-help --update CLAUDE.md
-```
-
-### Five Interaction Modes
-
-Agents interact with flows in five modes, all using the same flow definition:
-
-1. **Automated** — Run end-to-end, get structured output. `stepwise run <flow> --wait`
-2. **Mediated** — Run with external steps; agent fulfills them interactively. `--wait` returns exit 5 on suspension; `fulfill --wait` resumes.
-3. **Monitoring** — Check job progress and suspension inbox. `status --output json`, `list --suspended`.
-4. **Data Grab** — Retrieve specific outputs from completed steps. `output --step a,b`, `output --step a --inputs`.
-5. **Takeover** — Cancel and inspect a running job. `cancel --output json`, `wait <job-id>`.
-
-### Key Mechanics
-
-- **`--wait`** blocks until the flow completes or all progress is blocked by external steps (exit 5). Returns JSON with `suspended_steps` including `run_id`, `prompt`, and `fields`.
-- **`--async`** spawns a detached background process — no server required. Poll with `stepwise status`, retrieve with `stepwise output`.
-- **`stepwise fulfill <run-id> '{...}' --wait`** satisfies an external step and continues blocking until the next suspension or completion.
-- **`stepwise list --suspended --output json`** shows all pending external steps across all active jobs — the agent's "inbox."
-- **`stepwise schema`** generates a JSON tool contract: inputs, outputs, external steps.
-- **`stepwise agent-help`** generates markdown instructions with the 5-mode interaction model. Self-documenting, zero infrastructure.
-
-### Design for Agents
-
-- **Stdout purity**: `--wait` prints ONLY the JSON payload to stdout. Zero logging, zero progress noise.
-- **Actionable errors**: Every error includes the fix. `Missing required input 'question'. Usage: --input question="..."`.
-- **Explicit exit codes**: 0=success, 1=failed, 2=input error, 4=cancelled, 5=suspended.
-- **Partial outputs on failure**: Steps that completed before the failure are included in the response.
-- **`--input key=@path`**: Agents write long inputs to a temp file and pass the path — no shell escaping needed.
-- **Idempotent fulfill**: Double-fulfilling a step returns an error but doesn't corrupt state.
-- **Project hooks**: `.stepwise/hooks/on-suspend` fires when steps suspend — agents and hooks can race safely.
+- [Writing Flows](writing-flows.md) — author workflows using all step types, wiring, and control flow
+- [Executors](executors.md) — deep dive into executor configuration and decorators
+- [Flow Reference](flow-reference.md) — complete field-by-field YAML schema
+- [Agent Integration](agent-integration.md) — making flows callable by AI agents
+- [Web UI](web-ui.md) — the dashboard, DAG viewer, and step detail

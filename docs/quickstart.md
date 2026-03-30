@@ -26,9 +26,39 @@ No API keys? Try the welcome tour instead:
 stepwise welcome
 ```
 
-## Create your own flow
+## Your first flow in 60 seconds
 
-Create `code-review.flow.yaml`:
+No `.stepwise/` directory needed. No API keys. Just a YAML file anywhere on your machine.
+
+Create `hello.flow.yaml`:
+
+```yaml
+name: hello
+steps:
+  greet:
+    run: echo '{"message": "Hello from Stepwise!"}'
+    outputs: [message]
+
+  shout:
+    run: echo "{\"loud\": \"$(echo $message | tr '[:lower:]' '[:upper:]')\"}"
+    inputs:
+      message: greet.message
+    outputs: [loud]
+```
+
+Run it:
+
+```bash
+stepwise run hello.flow.yaml
+```
+
+Two steps, one dependency. `greet` runs first (outputs JSON to stdout), then `shout` runs with `greet`'s output as input. Variables from `inputs:` are available as `$variable_name` in `run:` commands and as `STEPWISE_INPUT_*` environment variables.
+
+That's the core model: steps produce outputs, downstream steps consume them, the engine figures out the order.
+
+## A real workflow
+
+Now something closer to real life. Create `code-review.flow.yaml`:
 
 ```yaml
 name: code-review
@@ -197,7 +227,9 @@ Jobs auto-start when their dependencies complete. See [Concepts: Job Staging](co
 
 ## What's next
 
-- [Concepts](concepts.md) — understand the full mental model (jobs, steps, runs, currency)
-- [Executors](executors.md) — deep dive into all executor types
-- [YAML Format](yaml-format.md) — complete reference for flow files
-- [Why Stepwise](why-stepwise.md) — the motivation and design philosophy
+- [Concepts](concepts.md) — the full mental model: jobs, steps, executors, trust, agents
+- [Writing Flows](writing-flows.md) — flow authorship guide covering all step types and control flow
+- [Executors](executors.md) — deep dive into all five executor types
+- [Web UI](web-ui.md) — the dashboard, DAG viewer, and step detail
+- [Flow Reference](flow-reference.md) — complete `.flow.yaml` schema
+- [Why Stepwise](why-stepwise.md) — design philosophy: the harness, not the intelligence
