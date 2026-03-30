@@ -9,6 +9,7 @@ vi.mock("@tanstack/react-router", () => ({
   Link: ({ children, ...props }: { children: React.ReactNode; to: string; params: Record<string, string> }) => (
     <a href={props.to} data-testid={`link-${props.params?.jobId}`}>{children}</a>
   ),
+  useNavigate: () => vi.fn(),
 }));
 
 // Mock hooks

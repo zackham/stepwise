@@ -2,6 +2,7 @@ import { useJobOutput } from "@/hooks/useStepwise";
 import { JsonView } from "@/components/JsonView";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { JobStatusBadge } from "@/components/StatusBadge";
+import { EntityDropdownMenu } from "@/components/menus/EntityDropdownMenu";
 import { X, Package, Copy, Check } from "lucide-react";
 import { useState } from "react";
 import type { Job } from "@/lib/types";
@@ -31,6 +32,7 @@ export function JobDetailSidebar({ job, onClose }: JobDetailSidebarProps) {
               {job.objective || "Untitled Job"}
             </h3>
             <JobStatusBadge status={job.status} />
+            <EntityDropdownMenu type="job" data={job} />
           </div>
           <div className="flex items-center gap-1 mt-1">
             <span className="text-[10px] font-mono text-zinc-600">{job.id}</span>

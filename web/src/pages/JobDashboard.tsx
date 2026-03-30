@@ -3,6 +3,7 @@ import { useState } from "react";
 import { JobList } from "@/components/jobs/JobList";
 import { JobSummaryBar } from "@/components/jobs/JobSummaryBar";
 import { CreateJobDialog, type CreateJobPrefill } from "@/components/jobs/CreateJobDialog";
+import { ActionContextProvider } from "@/components/menus/ActionContextProvider";
 // QuickLaunch removed — post-1.0
 import { useJobs } from "@/hooks/useStepwise";
 
@@ -29,12 +30,14 @@ export function JobDashboard() {
         </div>
         <JobSummaryBar jobs={jobs} />
         <div className="flex-1 overflow-hidden">
-          <JobList
-            selectedJobId={null}
-            onSelectJob={(jobId) =>
-              navigate({ to: "/jobs/$jobId", params: { jobId }, search: true })
-            }
-          />
+          <ActionContextProvider>
+            <JobList
+              selectedJobId={null}
+              onSelectJob={(jobId) =>
+                navigate({ to: "/jobs/$jobId", params: { jobId }, search: true })
+              }
+            />
+          </ActionContextProvider>
         </div>
       </div>
       <div className="hidden md:flex flex-1 items-center justify-center text-zinc-600">

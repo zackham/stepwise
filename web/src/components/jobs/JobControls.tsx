@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useStepwiseMutations } from "@/hooks/useStepwise";
+import { getActionsForEntity } from "@/lib/actions";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,16 +18,22 @@ import {
 } from "@/components/ui/tooltip";
 import { Textarea } from "@/components/ui/textarea";
 import type { Job, StepRun } from "@/lib/types";
-import {
-  Play,
-  Pause,
-  RotateCcw,
-  RefreshCw,
-  XCircle,
-  MessageSquare,
-  AlertTriangle,
-  ShieldCheck,
-} from "lucide-react";
+import type { ActionContext } from "@/lib/actions/types";
+import { RefreshCw, MessageSquare, AlertTriangle } from "lucide-react";
+import { isStale } from "@/lib/actions/job-actions";
+
+const TOOLTIP_MAP: Record<string, string> = {
+  "job.pause": "Stop after the current step completes",
+  "job.resume": "Continue from where the job was paused",
+};
+
+const STYLE_MAP: Record<string, string> = {
+  "job.cancel": "border-red-500/30 text-red-400 hover:bg-red-500/10",
+  "job.start": "border-blue-500/30 text-blue-400 hover:bg-blue-500/10",
+  "job.resume": "border-blue-500/30 text-blue-400 hover:bg-blue-500/10",
+  "job.retry": "border-blue-500/30 text-blue-400 hover:bg-blue-500/10",
+  "job.take-over": "border-amber-500/30 text-amber-400 hover:bg-amber-500/10",
+};
 
 interface JobControlsProps {
   job: Job;
@@ -34,18 +41,15 @@ interface JobControlsProps {
   runs?: StepRun[];
 }
 
-function isStale(job: { status: string; created_by: string; heartbeat_at: string | null }): boolean {
-  if (job.status !== "running" || job.created_by === "server") return false;
-  if (!job.heartbeat_at) return true;
-  const age = Date.now() - new Date(job.heartbeat_at).getTime();
-  return age > 60_000;
-}
-
 export function JobControls({ job, selectedStep, runs }: JobControlsProps) {
   const mutations = useStepwiseMutations();
   const [contextDialogOpen, setContextDialogOpen] = useState(false);
   const [contextText, setContextText] = useState("");
   const stale = isStale(job);
+
+  // Get lifecycle actions from registry (exclude inject-context — handled separately)
+  const lifecycleActions = getActionsForEntity("job", job)
+    .filter((a) => a.group === "lifecycle" && a.id !== "job.inject-context");
 
   // Rerun logic for selected step
   const selectedRun = selectedStep && runs
@@ -71,155 +75,55 @@ export function JobControls({ job, selectedStep, runs }: JobControlsProps) {
     );
   };
 
+  // Minimal ActionContext for executing registry actions directly
+  const ctx: ActionContext = {
+    mutations,
+    navigate: () => {},
+    clipboard: () => {},
+    sideEffects: {},
+    extraMutations: undefined,
+  };
+
   return (
     <>
       <div className="flex items-center gap-2 p-3 border-b border-border bg-zinc-50/50 dark:bg-zinc-900/50 overflow-x-auto flex-nowrap">
         <TooltipProvider>
-          {/* Pending: Start, Cancel */}
-          {job.status === "pending" && (
-            <>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => mutations.startJob.mutate(job.id)}
-                disabled={mutations.startJob.isPending}
-                className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
-              >
-                <Play className="w-3.5 h-3.5 mr-1.5" />
-                Start
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => mutations.cancelJob.mutate(job.id)}
-                disabled={mutations.cancelJob.isPending}
-                className="border-red-500/30 text-red-400 hover:bg-red-500/10"
-              >
-                <XCircle className="w-3.5 h-3.5 mr-1.5" />
-                Cancel
-              </Button>
-            </>
-          )}
+          {/* Registry-driven lifecycle buttons */}
+          {lifecycleActions.map((action) => {
+            const Icon = action.icon;
+            const tooltip = TOOLTIP_MAP[action.id];
+            const style = STYLE_MAP[action.id] ?? "";
 
-          {/* Running: Pause, Cancel, Inject Context */}
-          {job.status === "running" && (
-            <>
-              <Tooltip>
-                <TooltipTrigger render={
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => mutations.pauseJob.mutate(job.id)}
-                    disabled={mutations.pauseJob.isPending}
-                  >
-                    <Pause className="w-3.5 h-3.5 mr-1.5" />
-                    Pause
-                  </Button>
-                } />
-                <TooltipContent>Stop after the current step completes</TooltipContent>
-              </Tooltip>
+            const btn = (
               <Button
+                key={action.id}
                 variant="outline"
                 size="sm"
-                onClick={() => mutations.cancelJob.mutate(job.id)}
-                disabled={mutations.cancelJob.isPending}
-                className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                onClick={() => action.execute(job, ctx)}
+                className={style}
               >
-                <XCircle className="w-3.5 h-3.5 mr-1.5" />
-                Cancel
+                {Icon && <Icon className="w-3.5 h-3.5 mr-1.5" />}
+                {action.label}
               </Button>
-            </>
-          )}
+            );
 
-          {/* Paused: Resume, Cancel */}
-          {job.status === "paused" && (
-            <>
-              <Tooltip>
-                <TooltipTrigger render={
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => mutations.resumeJob.mutate(job.id)}
-                    disabled={mutations.resumeJob.isPending}
-                    className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
-                    Resume
-                  </Button>
-                } />
-                <TooltipContent>Continue from where the job was paused</TooltipContent>
-              </Tooltip>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => mutations.cancelJob.mutate(job.id)}
-                disabled={mutations.cancelJob.isPending}
-                className="border-red-500/30 text-red-400 hover:bg-red-500/10"
-              >
-                <XCircle className="w-3.5 h-3.5 mr-1.5" />
-                Cancel
-              </Button>
-            </>
-          )}
+            if (tooltip) {
+              return (
+                <Tooltip key={action.id}>
+                  <TooltipTrigger render={btn} />
+                  <TooltipContent>{tooltip}</TooltipContent>
+                </Tooltip>
+              );
+            }
+            return btn;
+          })}
 
-          {/* Completed: Retry only */}
-          {job.status === "completed" && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => mutations.resumeJob.mutate(job.id)}
-              disabled={mutations.resumeJob.isPending}
-              className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
-            >
-              <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
-              Retry
-            </Button>
-          )}
-
-          {/* Failed: Retry, Cancel */}
-          {job.status === "failed" && (
-            <>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => mutations.resumeJob.mutate(job.id)}
-                disabled={mutations.resumeJob.isPending}
-                className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
-              >
-                <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
-                Retry
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => mutations.cancelJob.mutate(job.id)}
-                disabled={mutations.cancelJob.isPending}
-                className="border-red-500/30 text-red-400 hover:bg-red-500/10"
-              >
-                <XCircle className="w-3.5 h-3.5 mr-1.5" />
-                Cancel
-              </Button>
-            </>
-          )}
-
-          {/* Stale job warning + adopt */}
+          {/* Stale warning indicator */}
           {stale && (
-            <>
-              <div className="flex items-center gap-1.5 text-amber-500 text-xs">
-                <AlertTriangle className="w-3.5 h-3.5" />
-                Owner not responding
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => mutations.adoptJob.mutate(job.id)}
-                disabled={mutations.adoptJob.isPending}
-                className="border-amber-500/30 text-amber-400 hover:bg-amber-500/10"
-              >
-                <ShieldCheck className="w-3.5 h-3.5 mr-1.5" />
-                Take Over
-              </Button>
-            </>
+            <div className="flex items-center gap-1.5 text-amber-500 text-xs">
+              <AlertTriangle className="w-3.5 h-3.5" />
+              Owner not responding
+            </div>
           )}
 
           {/* Rerun selected step */}

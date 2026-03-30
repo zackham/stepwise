@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ActionContextProvider } from "@/components/menus/ActionContextProvider";
 import { JobList } from "./JobList";
 import type { Job } from "@/lib/types";
 
@@ -132,7 +133,9 @@ function createWrapper() {
     defaultOptions: { queries: { retry: false } },
   });
   return ({ children }: { children: React.ReactNode }) => (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <QueryClientProvider client={queryClient}>
+      <ActionContextProvider>{children}</ActionContextProvider>
+    </QueryClientProvider>
   );
 }
 

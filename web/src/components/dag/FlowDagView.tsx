@@ -12,6 +12,8 @@ import { FlowPortNode } from "./FlowPortNode";
 import { ExternalInputPanel, getWatchProps } from "./ExternalInputPanel";
 import { CanvasJobControls } from "./CanvasJobControls";
 import type { FlowDefinition, StepRun, JobTreeNode, JobStatus } from "@/lib/types";
+import { EntityContextMenu } from "@/components/menus/EntityContextMenu";
+import { ActionContextProvider } from "@/components/menus/ActionContextProvider";
 import { Share2, Download, Check, RefreshCw, XCircle } from "lucide-react";
 import { computeCriticalPath } from "@/lib/critical-path";
 import type { CriticalPathResult } from "@/lib/critical-path";
@@ -91,6 +93,7 @@ interface FlowDagViewProps {
   selection?: DagSelection;
   onSelectDataFlow?: (selection: DagSelection) => void;
   flowName?: string;
+  jobId?: string;
   jobStatus?: JobStatus;
   jobActions?: JobActionCallbacks;
 }
@@ -109,6 +112,7 @@ export function FlowDagView({
   selection,
   onSelectDataFlow,
   flowName,
+  jobId,
   jobStatus,
   jobActions,
 }: FlowDagViewProps) {
@@ -366,6 +370,7 @@ export function FlowDagView({
     handleTouchStart,
     handleTouchMove,
     handleTouchEnd,
+    fitToView,
     initView,
   } = useDagCamera({
     containerRef,
@@ -525,6 +530,14 @@ export function FlowDagView({
   }
 
   return (
+    <ActionContextProvider
+      sideEffects={{
+        onFitToView: fitToView,
+        onResetZoom: initView,
+        onToggleFollowFlow: () => setFollowFlow(!followFlow),
+      }}
+    >
+    <EntityContextMenu type="canvas" data={{}}>
     <div
       ref={containerRef}
       className="relative w-full h-full overflow-hidden bg-zinc-100/50 dark:bg-zinc-950 rounded-lg touch-none"
@@ -682,6 +695,7 @@ export function FlowDagView({
                 childStepCount={node.childStepCount}
                 childJobStatus={subTrees?.[0]?.job.status ?? null}
                 isCritical={criticalPath?.steps.has(node.id) ?? false}
+                jobId={jobId}
                 x={node.x}
                 y={node.y}
                 width={node.width}
@@ -882,5 +896,7 @@ export function FlowDagView({
         </div>
       </div>
     </div>
+    </EntityContextMenu>
+    </ActionContextProvider>
   );
 }

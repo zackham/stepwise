@@ -1,7 +1,21 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ActionContextProvider } from "@/components/menus/ActionContextProvider";
 import { FlowFileList } from "../FlowFileList";
 import type { LocalFlow } from "@/lib/types";
+
+vi.mock("@tanstack/react-router", () => ({
+  useNavigate: () => vi.fn(),
+}));
+
+vi.mock("sonner", () => ({
+  toast: { success: vi.fn(), error: vi.fn() },
+}));
+
+vi.mock("@/hooks/useStepwise", () => ({
+  useStepwiseMutations: () => ({}),
+}));
 
 const mockFlows: LocalFlow[] = [
   {
@@ -36,6 +50,15 @@ const mockFlows: LocalFlow[] = [
   },
 ];
 
+function createWrapper() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return ({ children }: { children: React.ReactNode }) => (
+    <QueryClientProvider client={queryClient}>
+      <ActionContextProvider>{children}</ActionContextProvider>
+    </QueryClientProvider>
+  );
+}
+
 describe("FlowFileList", () => {
   it("renders all flows", () => {
     render(
@@ -43,7 +66,8 @@ describe("FlowFileList", () => {
         flows={mockFlows}
         selectedName={undefined}
         onSelect={() => {}}
-      />
+      />,
+      { wrapper: createWrapper() },
     );
     expect(screen.getByText("research")).toBeDefined();
     expect(screen.getByText("deploy")).toBeDefined();
@@ -56,7 +80,8 @@ describe("FlowFileList", () => {
         flows={mockFlows}
         selectedName={undefined}
         onSelect={() => {}}
-      />
+      />,
+      { wrapper: createWrapper() },
     );
     expect(screen.getByText("3")).toBeDefined();
     expect(screen.getByText("2")).toBeDefined();
@@ -69,7 +94,8 @@ describe("FlowFileList", () => {
         flows={mockFlows}
         selectedName="research"
         onSelect={() => {}}
-      />
+      />,
+      { wrapper: createWrapper() },
     );
     const button = screen.getByText("research").closest("button")!;
     expect(button.className).toContain("dark:bg-zinc-800");
@@ -82,7 +108,8 @@ describe("FlowFileList", () => {
         flows={mockFlows}
         selectedName={undefined}
         onSelect={onSelect}
-      />
+      />,
+      { wrapper: createWrapper() },
     );
     fireEvent.click(screen.getByText("deploy"));
     expect(onSelect).toHaveBeenCalledWith(mockFlows[1]);
@@ -94,7 +121,8 @@ describe("FlowFileList", () => {
         flows={mockFlows}
         selectedName={undefined}
         onSelect={() => {}}
-      />
+      />,
+      { wrapper: createWrapper() },
     );
     const input = screen.getByPlaceholderText("Filter flows...");
     fireEvent.change(input, { target: { value: "res" } });
@@ -109,7 +137,8 @@ describe("FlowFileList", () => {
         flows={[]}
         selectedName={undefined}
         onSelect={() => {}}
-      />
+      />,
+      { wrapper: createWrapper() },
     );
     expect(screen.getByText("No flows found")).toBeDefined();
   });
@@ -120,11 +149,11 @@ describe("FlowFileList", () => {
         flows={mockFlows}
         selectedName={undefined}
         onSelect={() => {}}
-      />
+      />,
+      { wrapper: createWrapper() },
     );
     const input = screen.getByPlaceholderText("Filter flows...");
     fireEvent.change(input, { target: { value: "zzzzz" } });
     expect(screen.getByText("No matching flows")).toBeDefined();
   });
-
 });
