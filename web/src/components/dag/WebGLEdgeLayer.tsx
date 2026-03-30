@@ -1,4 +1,4 @@
-import { useRef, useEffect } from "react";
+import { useRef } from "react";
 import type { HierarchicalDagLayout } from "@/lib/dag-layout";
 import type { StepRun } from "@/lib/types";
 import { useWebGLEdges } from "@/hooks/useWebGLEdges";
@@ -7,29 +7,25 @@ interface WebGLEdgeLayerProps {
   layout: HierarchicalDagLayout;
   latestRuns: Record<string, StepRun>;
   onReady: () => void;
+  onLost?: () => void;
 }
 
 export default function WebGLEdgeLayer({
   layout,
   latestRuns,
   onReady,
+  onLost,
 }: WebGLEdgeLayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const notifiedRef = useRef(false);
 
-  const { ready } = useWebGLEdges({
+  useWebGLEdges({
     containerRef,
     layout,
     latestRuns,
     enabled: true,
+    onReady,
+    onLost,
   });
-
-  useEffect(() => {
-    if (ready && !notifiedRef.current) {
-      notifiedRef.current = true;
-      onReady();
-    }
-  }, [ready, onReady]);
 
   return (
     <div

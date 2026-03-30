@@ -282,21 +282,34 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
 
         return (
           <g key={`${edge.from}-${edge.to}-${i}`}>
-            {/* SVG paths — skip when WebGL handles edge rendering */}
-            {!webglActive && (
+            {/* Critical path highlight — always rendered at full opacity */}
+            {isCritical && (
+              <path
+                d={pathD}
+                fill="none"
+                stroke="oklch(0.8 0.15 85)"
+                strokeWidth={3}
+                opacity={0.7}
+                strokeLinecap="round"
+                markerEnd="url(#arrowhead-critical)"
+              />
+            )}
+            {/* SVG edge paths — full when no WebGL, hairline-opacity when WebGL active (preserves markerEnd arrowheads) */}
+            {webglActive ? (
+              <path
+                d={pathD}
+                fill="none"
+                stroke={inactiveEdge}
+                strokeWidth={1}
+                opacity={0.01}
+                markerEnd={
+                  isActive ? "url(#arrowhead-active)"
+                    : isCompleted ? "url(#arrowhead-completed)"
+                      : "url(#arrowhead)"
+                }
+              />
+            ) : (
               <>
-                {/* Critical path highlight layer */}
-                {isCritical && (
-                  <path
-                    d={pathD}
-                    fill="none"
-                    stroke="oklch(0.8 0.15 85)"
-                    strokeWidth={3}
-                    opacity={0.7}
-                    strokeLinecap="round"
-                    markerEnd="url(#arrowhead-critical)"
-                  />
-                )}
                 {/* Glow layer for active edges */}
                 {isActive && (
                   <path
@@ -428,18 +441,29 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
 
         return (
           <g key={`loop-${le.from}-${le.to}`}>
-            {!webglActive && (
+            {/* Critical path highlight — always rendered */}
+            {isLoopCritical && (
+              <path
+                d={le.path}
+                fill="none"
+                stroke="oklch(0.8 0.15 85)"
+                strokeWidth={3}
+                opacity={0.7}
+                strokeLinecap="round"
+              />
+            )}
+            {/* Loop edge paths — hairline when WebGL active, full otherwise */}
+            {webglActive ? (
+              <path
+                d={le.path}
+                fill="none"
+                stroke={inactiveColor}
+                strokeWidth={1}
+                opacity={0.01}
+                markerEnd="url(#loop-arrow)"
+              />
+            ) : (
               <>
-                {isLoopCritical && (
-                  <path
-                    d={le.path}
-                    fill="none"
-                    stroke="oklch(0.8 0.15 85)"
-                    strokeWidth={3}
-                    opacity={0.7}
-                    strokeLinecap="round"
-                  />
-                )}
                 {isActive && (
                   <path
                     d={le.path}

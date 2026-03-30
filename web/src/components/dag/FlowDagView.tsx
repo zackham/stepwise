@@ -582,6 +582,7 @@ export function FlowDagView({
               layout={layout}
               latestRuns={latestRuns}
               onReady={() => setWebglActive(true)}
+              onLost={() => setWebglActive(false)}
             />
           </Suspense>
         )}

@@ -55,23 +55,25 @@ export class EdgeStateManager {
 
   /**
    * Determine target state for an edge based on source/target step run status.
+   * Precedence: active (SURGE) > completed > failed > idle
    */
-  private deriveTargetState(
+  deriveTargetState(
     sourceStatus: string | undefined,
     targetStatus: string | undefined,
   ): EdgeStateValue {
-    if (targetStatus === "failed" || sourceStatus === "failed") {
-      return EdgeState.FAILED;
-    }
-    if (
-      sourceStatus === "completed" &&
-      (targetStatus === "completed" || targetStatus === "running" || targetStatus === "delegated")
-    ) {
-      return EdgeState.COMPLETED;
-    }
+    // Priority 1 (highest): target is active → SURGE/FLOW
     if (targetStatus === "running" || targetStatus === "delegated" || targetStatus === "suspended") {
       return EdgeState.SURGE; // will transition to FLOW after surge
     }
+    // Priority 2: both source and target completed
+    if (sourceStatus === "completed" && targetStatus === "completed") {
+      return EdgeState.COMPLETED;
+    }
+    // Priority 3: either side failed
+    if (targetStatus === "failed" || sourceStatus === "failed") {
+      return EdgeState.FAILED;
+    }
+    // Priority 4: everything else
     return EdgeState.IDLE;
   }
 
@@ -101,9 +103,9 @@ export class EdgeStateManager {
       });
     }
 
-    // Process loop edges
+    // Process loop edges (keyed with loopIndex for uniqueness)
     for (const le of loopEdges) {
-      const key = `loop:${le.from}->${le.to}`;
+      const key = `loop:${le.from}->${le.to}:${le.loopIndex}`;
       const sourceStatus = latestRuns[le.from]?.status;
       const targetStatus = latestRuns[le.to]?.status;
       this.updateEdge(key, sourceStatus, targetStatus, le.to, deltaTime);
@@ -199,5 +201,11 @@ export class EdgeStateManager {
         this.states.delete(key);
       }
     }
+  }
+
+  /** Reset all state — call on unmount/navigation to prevent stale animation on remount. */
+  reset(): void {
+    this.states.clear();
+    this.prevRunStatuses.clear();
   }
 }
