@@ -369,6 +369,110 @@ class TestGetAgentOutputEndpoint:
 
 
 # ══════════════════════════════════════════════════════════════════════
+# 2b. Script output REST endpoint
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestScriptOutputEndpoint:
+    """Tests for GET /api/runs/{run_id}/script-output."""
+
+    @pytest.fixture
+    def client(self):
+        """Create a TestClient with a minimal engine setup."""
+        with TestClient(app, raise_server_exceptions=False) as c:
+            yield c
+
+    @pytest.fixture(autouse=True)
+    def _setup_engine(self):
+        """Set up a minimal engine for the server module's global state."""
+        import stepwise.server as srv
+        from stepwise.engine import Engine
+        from stepwise.executors import ExecutorRegistry, ScriptExecutor
+
+        store = SQLiteStore(":memory:")
+        reg = ExecutorRegistry()
+        reg.register("script", lambda config: ScriptExecutor(
+            command=config.get("command", "echo '{}'"),
+        ))
+        engine = Engine(store=store, registry=reg)
+        srv._engine = engine
+        yield
+        store.close()
+        srv._engine = None
+
+    def _create_run(self, executor_state=None):
+        """Create a completed StepRun in the engine store. Returns run_id."""
+        import stepwise.server as srv
+        engine = srv._engine
+
+        wf = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a", outputs=["result"],
+                executor=ExecutorRef("script", {"command": "echo '{}'"}),
+            ),
+        })
+        job = engine.create_job("Test job", wf)
+        run = StepRun(
+            id=_gen_id("run"),
+            job_id=job.id,
+            step_name="a",
+            attempt=1,
+            status=StepRunStatus.COMPLETED,
+            executor_state=executor_state,
+            started_at=_now(),
+            completed_at=_now(),
+        )
+        engine.store.save_run(run)
+        return run.id
+
+    def test_returns_file_content(self, client, tmp_path):
+        """Write content to stdout/stderr files, verify endpoint returns it."""
+        stdout_file = tmp_path / "test-1.stdout"
+        stderr_file = tmp_path / "test-1.stderr"
+        stdout_file.write_text("line 1\nline 2\n")
+        stderr_file.write_text("warning\n")
+        run_id = self._create_run(executor_state={
+            "stdout_path": str(stdout_file),
+            "stderr_path": str(stderr_file),
+        })
+        resp = client.get(f"/api/runs/{run_id}/script-output")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["stdout"] == "line 1\nline 2\n"
+        assert data["stderr"] == "warning\n"
+        assert data["stdout_offset"] > 0
+
+    def test_offset_returns_only_new_content(self, client, tmp_path):
+        """Request with offset -> only content after that byte position."""
+        stdout_file = tmp_path / "test-1.stdout"
+        stdout_file.write_bytes(b"AAABBB")
+        run_id = self._create_run(executor_state={
+            "stdout_path": str(stdout_file),
+        })
+        resp = client.get(f"/api/runs/{run_id}/script-output?stdout_offset=3")
+        data = resp.json()
+        assert data["stdout"] == "BBB"
+        assert data["stdout_offset"] == 6
+
+    def test_missing_files_returns_empty(self, client, tmp_path):
+        run_id = self._create_run(executor_state={
+            "stdout_path": str(tmp_path / "nonexistent.stdout"),
+        })
+        resp = client.get(f"/api/runs/{run_id}/script-output")
+        assert resp.json()["stdout"] == ""
+
+    def test_no_paths_returns_empty(self, client):
+        run_id = self._create_run(executor_state={})
+        resp = client.get(f"/api/runs/{run_id}/script-output")
+        assert resp.json()["stdout"] == ""
+        assert resp.json()["stderr"] == ""
+
+    def test_404_for_unknown_run(self, client):
+        resp = client.get("/api/runs/nonexistent/script-output")
+        assert resp.status_code == 404
+
+
+# ══════════════════════════════════════════════════════════════════════
 # 3. ExecutionContext.objective
 # ══════════════════════════════════════════════════════════════════════
 

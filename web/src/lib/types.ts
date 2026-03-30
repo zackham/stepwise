@@ -323,6 +323,17 @@ export interface AgentOutputMessage {
   events: AgentStreamEvent[];
 }
 
+// ── Script Output Streaming ─────────────────────────────────────────
+
+export interface ScriptOutputMessage {
+  type: "script_output";
+  run_id: string;
+  stdout: string;
+  stderr: string;
+  stdout_offset: number;
+  stderr_offset: number;
+}
+
 // ── WebSocket Message ──────────────────────────────────────────────────
 
 export interface TickMessage {
@@ -337,7 +348,7 @@ export interface FlowSourceChangedMessage {
   timestamp: string;
 }
 
-export type WebSocketMessage = TickMessage | AgentOutputMessage | FlowSourceChangedMessage;
+export type WebSocketMessage = TickMessage | AgentOutputMessage | ScriptOutputMessage | FlowSourceChangedMessage;
 
 // ── Editor / Local Flow ──────────────────────────────────────────────
 

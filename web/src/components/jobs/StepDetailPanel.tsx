@@ -30,9 +30,10 @@ import {
   Terminal,
   StickyNote,
 } from "lucide-react";
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useLiveSource } from "@/hooks/useLiveSource";
 import { useAgentOutput } from "@/hooks/useStepwise";
+import { useScriptStream } from "@/hooks/useScriptStream";
 import { FulfillWatchDialog } from "./FulfillWatchDialog";
 import { toast } from "sonner";
 import { cn, safeRenderValue } from "@/lib/utils";
@@ -164,6 +165,80 @@ function ScriptLogView({ run }: { run: StepRun }) {
           ))}
         </pre>
       </div>
+    </div>
+  );
+}
+
+function LiveScriptLogView({ runId }: { runId: string }) {
+  const { stdout, stderr, truncated, version } = useScriptStream(runId);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const userScrolledRef = useRef(false);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || userScrolledRef.current) return;
+    el.scrollTop = el.scrollHeight;
+  }, [version]);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+    userScrolledRef.current = !isAtBottom;
+  }, []);
+
+  if (!stdout && !stderr) {
+    return (
+      <div className="text-xs text-zinc-500 italic py-4 text-center">
+        <div className="flex items-center justify-center gap-2">
+          <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse" />
+          Script running...
+        </div>
+      </div>
+    );
+  }
+
+  const rawLines = stdout.split("\n");
+  if (rawLines.length > 0 && rawLines[rawLines.length - 1] === "") {
+    rawLines.pop();
+  }
+
+  return (
+    <div>
+      <div className="text-xs text-zinc-500 dark:text-zinc-500 mb-1 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse" />
+          Live Output
+        </div>
+        <button
+          onClick={() => { navigator.clipboard.writeText(stdout); toast.success("Copied to clipboard"); }}
+          className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors"
+        >
+          <Copy className="w-3 h-3" /> Copy
+        </button>
+      </div>
+      {truncated && (
+        <div className="text-[10px] text-amber-400/70 mb-1 font-mono">[earlier output truncated]</div>
+      )}
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="bg-zinc-50 dark:bg-zinc-950 rounded border border-zinc-200 dark:border-zinc-800 p-2 font-mono text-xs max-h-96 overflow-auto"
+      >
+        {rawLines.map((line, i) => (
+          <div key={i} className="whitespace-pre-wrap break-words leading-relaxed">
+            {line === "" ? "\u00A0" : highlightLogLine(line)}
+          </div>
+        ))}
+      </div>
+      {stderr && (
+        <div className="mt-2">
+          <div className="text-xs text-red-400/70 dark:text-red-400/70 mb-1">stderr</div>
+          <pre className="bg-zinc-50 dark:bg-zinc-950 rounded border border-red-300/20 dark:border-red-500/20 p-2 font-mono text-xs text-red-600 dark:text-red-300/80 max-h-48 overflow-auto whitespace-pre-wrap break-words">
+            {stderr}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }
@@ -518,6 +593,11 @@ export function StepDetailPanel({
               costUsd={costData?.cost_usd}
               billingMode={costData?.billing_mode}
             />
+          )}
+
+          {/* Live Script Output */}
+          {activeRun && stepDef.executor.type === "script" && (
+            <LiveScriptLogView runId={activeRun.id} />
           )}
 
           {/* Step Limits */}
