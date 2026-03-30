@@ -19,6 +19,7 @@ import {
   useDeleteStep,
   useFlowFiles,
   useAddStep,
+  useDeleteFlow,
 } from "@/hooks/useEditor";
 import { useStepwiseMutations } from "@/hooks/useStepwise";
 import { Code, Workflow, FolderTree, Plus } from "lucide-react";
@@ -39,6 +40,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { cn } from "@/lib/utils";
+import { ActionContextProvider } from "@/components/menus/ActionContextProvider";
 import type { FlowDefinition, ParseResult } from "@/lib/types";
 
 const EMPTY_RUNS: never[] = [];
@@ -309,6 +311,7 @@ export function EditorPage() {
 
   // Run flow directly from editor
   const mutations = useStepwiseMutations();
+  const deleteFlowMutation = useDeleteFlow();
   const [showRunConfig, setShowRunConfig] = useState(false);
   const [runJobName, setRunJobName] = useState("");
   const [runInputValues, setRunInputValues] = useState<Record<string, string>>({});
@@ -451,6 +454,10 @@ export function EditorPage() {
   }
 
   return (
+    <ActionContextProvider
+      sideEffects={{ onRunFlow: handleRun }}
+      extraMutations={{ deleteFlow: deleteFlowMutation }}
+    >
     <div className="h-full flex flex-col">
       <EditorToolbar
         flowName={flowName}
@@ -824,5 +831,6 @@ export function EditorPage() {
         isPending={addStepMutation.isPending}
       />
     </div>
+    </ActionContextProvider>
   );
 }
