@@ -650,10 +650,14 @@ def _server_start(args: argparse.Namespace) -> int:
     if not args.no_open:
         _open_browser_when_ready(host, port)
 
-    # Write pidfile for CLI server detection
-    from stepwise.server_detect import write_pidfile, remove_pidfile
+    # PID-file guard: prevent duplicate server processes
+    from stepwise.server_detect import acquire_pidfile_guard, ServerAlreadyRunning, remove_pidfile
     log_file = str(project.logs_dir / "server.log")
-    write_pidfile(project.dot_dir, port, log_file=log_file)
+    try:
+        acquire_pidfile_guard(project.dot_dir, port, log_file=log_file)
+    except ServerAlreadyRunning as e:
+        io.log("error", f"Cannot start: {e}")
+        return EXIT_JOB_FAILED
     try:
         uvicorn.run(
             "stepwise.server:app",
@@ -2167,7 +2171,7 @@ def _run_watch(
     import os
     import uvicorn
     from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
-    from stepwise.server_detect import detect_server, write_pidfile, remove_pidfile
+    from stepwise.server_detect import detect_server, acquire_pidfile_guard, ServerAlreadyRunning, remove_pidfile
 
     # Load and validate the flow
     try:
@@ -2213,7 +2217,11 @@ def _run_watch(
     # Background thread: wait for server ready → submit job → open browser
     _submit_job_when_ready(host, port, server_url, workflow, objective, inputs, args, name=job_name)
 
-    write_pidfile(project.dot_dir, port)
+    try:
+        acquire_pidfile_guard(project.dot_dir, port)
+    except ServerAlreadyRunning as e:
+        _io(args).log("error", f"Cannot start: {e}")
+        return EXIT_JOB_FAILED
     try:
         uvicorn.run(
             "stepwise.server:app",

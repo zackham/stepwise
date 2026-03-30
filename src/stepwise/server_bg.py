@@ -53,11 +53,18 @@ def main() -> int:
     if args.web_dir:
         os.environ["STEPWISE_WEB_DIR"] = args.web_dir
 
-    # Write pidfile with this process's PID
-    from stepwise.server_detect import write_pidfile, remove_pidfile
+    # PID-file guard: prevent duplicate server processes
+    from stepwise.server_detect import acquire_pidfile_guard, ServerAlreadyRunning, remove_pidfile
 
     dot_dir = Path(args.dot_dir)
-    write_pidfile(dot_dir, args.port, log_file=str(log_path))
+    try:
+        acquire_pidfile_guard(dot_dir, args.port, log_file=str(log_path))
+    except ServerAlreadyRunning as e:
+        logging.getLogger("stepwise").error("Cannot start: %s", e)
+        return 1
+
+    import atexit
+    atexit.register(remove_pidfile, dot_dir)
 
     try:
         import uvicorn

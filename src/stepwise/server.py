@@ -933,13 +933,22 @@ async def lifespan(app: FastAPI):
     _templates_dir.mkdir(parents=True, exist_ok=True)
     _project_dir = Path(os.environ.get("STEPWISE_PROJECT_DIR", ".")).resolve()
 
+    # ── PID-file guard: prevent duplicate server processes ──
+    dot_dir = _project_dir / ".stepwise"
+    dot_dir.mkdir(parents=True, exist_ok=True)
+    _port = int(os.environ.get("STEPWISE_PORT", "8340"))
+    from stepwise.server_detect import acquire_pidfile_guard, ServerAlreadyRunning
+    try:
+        acquire_pidfile_guard(dot_dir, _port)
+    except ServerAlreadyRunning as e:
+        logger.error("Cannot start: %s", e)
+        raise SystemExit(1) from e
+
     store = ThreadSafeStore(db_path)
 
     from stepwise.registry_factory import create_default_registry
     config = load_config(_project_dir)
     registry = create_default_registry(config)
-
-    dot_dir = _project_dir / ".stepwise"
 
     # Ensure server.log exists regardless of how the server was started
     # (foreground, systemd, etc.).  server_bg.py already sets up a handler
@@ -978,7 +987,6 @@ async def lifespan(app: FastAPI):
 
     # Register in global server registry
     from stepwise.server_detect import register_server, unregister_server
-    _port = int(os.environ.get("STEPWISE_PORT", "8340"))
     register_server(
         project_path=str(_project_dir),
         pid=os.getpid(),
@@ -1059,6 +1067,8 @@ async def lifespan(app: FastAPI):
         await _engine.shutdown()
     store.close()
     unregister_server(str(_project_dir))
+    from stepwise.server_detect import remove_pidfile
+    remove_pidfile(dot_dir)
 
 
 app = FastAPI(title="Stepwise", lifespan=lifespan)
