@@ -4346,7 +4346,7 @@ _COMMAND_GROUPS: list[tuple[str, list[str]]] = [
     ("Project", ["init", "new", "flows", "config", "templates"]),
     ("Registry", ["search", "get", "share", "info", "login", "logout"]),
     ("Advanced", ["job", "cache", "schema", "agent-help", "extensions", "docs"]),
-    ("System", ["update", "demo", "help", "version", "uninstall"]),
+    ("System", ["update", "help", "version", "uninstall"]),
 ]
 
 
@@ -4763,9 +4763,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     # version
     sub.add_parser("version", help="Print version and exit")
-
-    # demo
-    sub.add_parser("demo", help="Interactive demo")
 
     # uninstall
     p_uninstall = sub.add_parser("uninstall", help="Remove stepwise from this project")
@@ -5575,35 +5572,6 @@ def cmd_cache(args: argparse.Namespace) -> int:
         return EXIT_USAGE_ERROR
 
 
-def cmd_demo(args: argparse.Namespace) -> int:
-    """Interactive demo prompt."""
-    io = _io(args)
-    io.log("info", "Welcome to Stepwise!")
-    io.log("info", "The demo flow walks you through a simulated dev workflow:")
-    io.log("info", "  plan → implement (parallel) → test → review → deploy")
-    print()
-
-    choice = io.prompt_select(
-        "How would you like to try it?",
-        choices=[
-            "Browser (stepwise run @stepwise:demo --watch)",
-            "Terminal (stepwise run @stepwise:demo)",
-            "Skip for now",
-        ],
-    )
-
-    if choice.startswith("Skip"):
-        io.log("info", "No problem! Run 'stepwise new my-flow' to create your own flow.")
-        return EXIT_SUCCESS
-
-    import os
-    watch = "--watch" if choice.startswith("Browser") else ""
-    cmd = f"stepwise run @stepwise:demo {watch}".strip()
-    io.log("info", f"Running: {cmd}")
-    print()
-    os.execvp("stepwise", cmd.split())
-    return EXIT_SUCCESS  # unreachable after exec
-
 
 def _io(args: argparse.Namespace) -> IOAdapter:
     """Get the IOAdapter from args (created in main())."""
@@ -5731,7 +5699,6 @@ def main(argv: list[str] | None = None) -> int:
         "job": cmd_job,
         "update": cmd_self_update,
         "version": lambda args: (print(f"stepwise {_get_version()}"), EXIT_SUCCESS)[1],
-        "demo": cmd_demo,
         "uninstall": cmd_uninstall,
         "extensions": cmd_extensions,
         "extension": cmd_extensions,

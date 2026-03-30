@@ -23,7 +23,7 @@ This downloads and runs a multi-step code review workflow, opening a browser wit
 No API keys? Try the demo instead:
 
 ```bash
-stepwise demo
+stepwise run @stepwise:demo --watch
 ```
 
 ## Your first flow in 60 seconds

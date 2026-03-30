@@ -25,7 +25,7 @@ This isn't another agent framework. Stepwise doesn't replace your agents — it 
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zackham/stepwise/master/install.sh | sh
-stepwise demo       # interactive demo — opens a live DAG in your browser
+stepwise run @stepwise:demo --watch   # interactive demo — live DAG in your browser
 ```
 
 ## Three audiences, one system
@@ -108,7 +108,6 @@ A script runs tests. Based on output, an agent opens a PR or fixes the failures 
 
 ```
 stepwise run <flow> [--watch|--wait|--async]   Run a flow
-stepwise demo                                  Interactive demo
 stepwise server start [--detach]               Persistent server + web UI
 stepwise validate <flow>                       Check a flow for errors
 stepwise jobs                                  List all jobs
