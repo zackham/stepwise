@@ -228,9 +228,10 @@ export function useDagCamera({
   const activeRects = useMemo(() => {
     const { activeNodeIds, suspendedIds } = activeStepInfo;
     const scale = transformRef.current.scale;
-    const panelScreenH = measuredPanelHeight > 0
-      ? measuredPanelHeight
-      : EXTERNAL_PANEL_SCREEN_HEIGHT_FALLBACK;
+    // Only account for the inline panel height when it's actually measured
+    // (i.e., rendered in the DAG). Don't use a fallback — it causes the camera
+    // to pan offscreen when the fulfillment UI is in the side panel instead.
+    const panelScreenH = measuredPanelHeight;
     const rects: Rect[] = [];
     for (const n of layout.nodes) {
       if (activeNodeIds.includes(n.id)) {
