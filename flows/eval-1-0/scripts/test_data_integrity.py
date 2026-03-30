@@ -128,13 +128,13 @@ def main():
     # Create a job via API, wait for it to reach a state, verify data
     try:
         status, body = api_post(server_port, "/api/jobs", {
-            "flow": "welcome",
+            "flow": "demo",
             "inputs": {"team_name": "di-test"},
         })
         data = json.loads(body)
         job_id = data.get("id")
         if job_id:
-            # Wait for job to reach suspended state (welcome flow has human step)
+            # Wait for job to reach suspended state (demo flow has human step)
             time.sleep(3)
             status, body = api_get(server_port, f"/api/jobs/{job_id}")
             job_data = json.loads(body)

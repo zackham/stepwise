@@ -14,7 +14,7 @@ See [Quickstart](quickstart.md) for installation and first-run instructions. See
 | [Server](#server-commands) | `server start`, `server stop`, `server restart`, `server status` |
 | [Registry](#registry-commands) | `share`, `get`, `search`, `info`, `login`, `logout` |
 | [Configuration](#configuration-commands) | `config`, `init`, `templates`, `schema`, `diagram` |
-| [Utility](#utility-commands) | `agent-help`, `flows`, `extensions`, `docs`, `cache`, `version`, `update`, `welcome`, `uninstall` |
+| [Utility](#utility-commands) | `agent-help`, `flows`, `extensions`, `docs`, `cache`, `version`, `update`, `demo`, `uninstall` |
 
 ## Common Workflows
 
@@ -1132,12 +1132,12 @@ Equivalent to `stepwise --version`.
 
 ---
 
-### `stepwise welcome`
+### `stepwise demo`
 
-Run the interactive welcome demo. Walks through a sample flow to demonstrate stepwise concepts.
+Run the interactive demo. Walks through a sample flow to demonstrate stepwise concepts.
 
 ```bash
-stepwise welcome
+stepwise demo
 ```
 
 ---

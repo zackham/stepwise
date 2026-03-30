@@ -3,6 +3,30 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.22.0] — 2026-03-30
+
+### Added
+- **Right-click context menus** — entity-driven action registry powering context menus, kebab menus, and keyboard shortcuts from a single source of truth. 4 entity types (Job: 17 actions, Step: 5, Flow: 9, Canvas: 4) across 10 UI surfaces
+- **Canvas zone layout** — independent jobs partition to responsive CSS grid, dependent jobs stay in Dagre DAG with status-priority sorting
+- **WebGL energy pulse edges** — Three.js + custom GLSL shaders with bloom post-processing, 4-state machine (idle/surge/flow/completed/failed), luma-alpha transparency, loop-aware pulsing
+- **Live script output streaming** — real-time stdout/stderr tailing for script steps in the web UI with WebSocket delivery
+- **Virtualized log viewers** — @tanstack/react-virtual replaces raw .map() rendering, eliminates 50-line truncation
+- **Pretext integration** — canvas-based text measurement for accurate virtualized scroll heights
+- **Follow-flow camera** — zoom stability, initial view centering, suspended step height awareness
+- **Fulfillment panel** — wider panel, scrollable body, pinned submit, wheel event isolation
+- **Running step breathing glow** — CSS keyframe pulsing blue glow ring on active steps
+- **PID-file guard** — prevents duplicate server processes with stale PID detection and atexit cleanup
+- **Agent executor circuit breaker** — consecutive failure tracking, permanent error halt, stuck task routing
+
+### Changed
+- **`stepwise welcome` renamed to `stepwise demo`** — clearer command name, flow directory and registry references updated
+- CLI polish audit — error output, help text, formatting improvements across 7 files
+- Docs and README overhaul — "packaged trust" positioning, new web-ui.md and writing-flows.md guides
+
+### Fixed
+- Registry flow resolution for derived outputs
+- Usage limit resilience — error classification, reset time parsing, agent backend wait with file tailing
+
 ## [0.21.0] — 2026-03-27
 
 **Full-Stack Orchestration Platform** — from engine primitives to production-grade job management, a comprehensive web UI, and hardened agent reliability. 297 commits spanning 15 internal versions since 0.6.0.

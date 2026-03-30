@@ -79,7 +79,7 @@ def test_cli(project_path):
         f"Exit {rc}, has usage: {'usage' in out.lower()}"))
 
     # C3: validate good flow
-    welcome = os.path.join(project_path, "flows", "welcome", "FLOW.yaml")
+    welcome = os.path.join(project_path, "flows", "demo", "FLOW.yaml")
     rc, out, err = run_cmd(["uv", "run", "stepwise", "validate", welcome], cwd=project_path)
     results.append(rubric_item("C3", "stepwise validate accepts valid flow",
         "pass" if rc == 0 else "fail",
@@ -97,7 +97,7 @@ def test_cli(project_path):
             "insufficient_evidence", "known-bad.flow.yaml not found"))
 
     # C5: info command (requires a flow name argument)
-    rc, out, err = run_cmd(["uv", "run", "stepwise", "info", "welcome"], cwd=project_path)
+    rc, out, err = run_cmd(["uv", "run", "stepwise", "info", "demo"], cwd=project_path)
     results.append(rubric_item("C5", "stepwise info exits 0",
         "pass" if rc == 0 else "fail",
         f"Exit {rc}: {out[:200] if out else err[:200]}"))
@@ -107,16 +107,16 @@ def test_cli(project_path):
         ["uv", "run", "stepwise", "run", "--wait", "--local", welcome],
         cwd=project_path, timeout=60,
     )
-    # Welcome flow requires human input, so --wait will likely fail or timeout
+    # Demo flow requires human input, so --wait will likely fail or timeout
     # Mark as pass if the command starts and produces JSON or recognizable output
     if rc == 0:
         results.append(rubric_item("C6", "stepwise run --wait produces output",
             "pass", f"Exit {rc}: output length {len(out)}"))
     else:
-        # Expected: welcome flow suspends for human input
+        # Expected: demo flow suspends for human input
         results.append(rubric_item("C6", "stepwise run --wait produces output",
             "insufficient_evidence",
-            "Welcome flow requires human input; cannot test --wait end-to-end non-interactively"))
+            "Demo flow requires human input; cannot test --wait end-to-end non-interactively"))
 
     # C7: jobs list
     rc, out, err = run_cmd(["uv", "run", "stepwise", "jobs"], cwd=project_path)
@@ -171,13 +171,13 @@ def test_server(server_port):
         results.append(rubric_item("SV2", "GET /api/jobs returns job list",
             "fail", f"Request failed: {e}"))
 
-    # SV3: Create job (using welcome flow)
+    # SV3: Create job (using demo flow)
     # API requires 'objective' (str) and either 'workflow' (dict) or 'flow_path' (str)
     test_job_id = None
     try:
         status, body = api_post(server_port, "/api/jobs", {
             "objective": "eval test run",
-            "flow_path": "flows/welcome/FLOW.yaml",
+            "flow_path": "flows/demo/FLOW.yaml",
             "inputs": {"team_name": "eval-test"},
         })
         data = json.loads(body)
@@ -280,13 +280,13 @@ def test_lifecycle(project_path, server_port):
         # Check if there's a purely scripted flow available
         status, body = api_post(server_port, "/api/jobs", {
             "objective": "lifecycle test run",
-            "flow_path": "flows/welcome/FLOW.yaml",
+            "flow_path": "flows/demo/FLOW.yaml",
             "inputs": {"team_name": "lifecycle-test"},
         })
         data = json.loads(body)
         job_id = data.get("id")
         if job_id:
-            # Wait briefly then check status — welcome flow suspends for human
+            # Wait briefly then check status — demo flow suspends for human
             time.sleep(2)
             status, body = api_get(server_port, f"/api/jobs/{job_id}")
             job_data = json.loads(body)

@@ -381,7 +381,7 @@ def test_performance(project_path, server_port):
         f"Completed in {elapsed_s:.1f}s (exit {rc})"))
 
     # P3: Validation < 5s
-    welcome = os.path.join(project_path, "flows", "welcome", "FLOW.yaml")
+    welcome = os.path.join(project_path, "flows", "demo", "FLOW.yaml")
     start = time.monotonic()
     rc, _, _ = run_cmd(["uv", "run", "stepwise", "validate", welcome], cwd=project_path, timeout=10)
     elapsed_s = time.monotonic() - start

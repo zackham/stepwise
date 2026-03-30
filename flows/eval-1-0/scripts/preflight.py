@@ -59,7 +59,7 @@ def check_server_health(server_port):
 
 def check_known_good_validates(stepwise_path):
     """PF3: Known-good flow validates successfully."""
-    flow_path = os.path.join(stepwise_path, "flows", "welcome", "FLOW.yaml")
+    flow_path = os.path.join(stepwise_path, "flows", "demo", "FLOW.yaml")
     if not os.path.exists(flow_path):
         return False, f"Known-good flow not found at {flow_path}"
     result = subprocess.run(
