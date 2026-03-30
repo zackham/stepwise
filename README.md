@@ -17,9 +17,9 @@
 
 You gave an agent a task. It ran for 40 minutes. Did it work?
 
-Most of what we call AI delegation right now isn't really delegation — it's assisted anxiety. You hand something off, then check four times instead of zero. Stepwise fixes this. Define a workflow as a DAG of steps, and Stepwise runs them — scripts, agents, humans, polls — all observable in real time. The 3am question answered as a URL.
+Most of what we call AI delegation right now isn't really delegation — it's assisted anxiety. You hand something off, then check four times instead of zero. Stepwise fixes this. Define a workflow as a DAG of steps, and Stepwise runs them — scripts, agents, external gates, polls — all observable in real time. The 3am question answered as a URL.
 
-This isn't another agent framework. Stepwise doesn't replace your agents — it gives them a harness. The intelligence commoditizes. The harness does not.
+This isn't another agent framework. Stepwise doesn't replace your agents — it gives them a harness. Agent steps run via [ACP](https://agentclientprotocol.com) (Agent Client Protocol) through [acpx](https://github.com/openclaw/acpx) — one protocol surface for Claude, Codex, Gemini, and 15+ coding agents. The intelligence commoditizes. The harness does not.
 
 ## Install
 
@@ -62,9 +62,11 @@ stepwise run nightly-analysis --async --input date="2026-03-29"
 
 **The DAG viewer is the product.** Most orchestrators give you logs. Stepwise gives you a live, animated dependency graph — steps executing in parallel, data flowing between them, sub-flows expanding inline. You *see* the work happening.
 
-**Mixed executors that compose.** A shell script fetches data. An agent analyzes it. A human approves. A poll waits for CI. Another agent acts on the result. Five types, one DAG, zero glue code.
+**Mixed executors that compose.** A shell script fetches data. An agent analyzes it. An external gate pauses for approval. A poll waits for CI. Another agent acts on the result. Five types, one DAG, zero glue code.
 
-**Human-in-the-loop as a first-class primitive.** External steps pause with schema-driven input forms. Escalation rules promote stuck agents to human attention. Not a checkbox feature — it's how you build trust in automated work.
+**External steps — not just human gates.** The `external` executor suspends a step and waits for fulfillment from *anyone* — a human in the web UI, a webhook from another service, or another agent via the API. It's a universal suspension primitive with schema-driven typed inputs. Escalation rules promote stuck jobs to human attention.
+
+**Session continuity across steps.** Agent steps can share a persistent session (`continue_session: true`) — the model accumulates context across steps, just like sequential prompts in a conversation. Or start fresh per step. Your choice, per step, in the same flow. Session IDs flow as typed data through the DAG, so the engine knows the dependencies.
 
 **Crash-proof by default.** SQLite WAL mode, heartbeat-based stale detection, automatic orphan recovery. Kill the server, restart it, jobs resume. No message queue, no distributed state.
 
@@ -111,7 +113,7 @@ stepwise server start [--detach]               Persistent server + web UI
 stepwise validate <flow>                       Check a flow for errors
 stepwise jobs                                  List all jobs
 stepwise status <job-id>                       Step-by-step detail
-stepwise fulfill <run-id> '{...}'              Provide human input
+stepwise fulfill <run-id> '{...}'              Fulfill a suspended external step
 stepwise agent-help                            Generate agent tool docs
 stepwise search <query>                        Find flows in the registry
 stepwise update                                Upgrade to latest
