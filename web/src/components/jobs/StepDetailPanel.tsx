@@ -30,7 +30,7 @@ import {
   Terminal,
   StickyNote,
 } from "lucide-react";
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useLiveSource } from "@/hooks/useLiveSource";
 import { useAgentOutput } from "@/hooks/useStepwise";
 import { useScriptStream } from "@/hooks/useScriptStream";
@@ -38,6 +38,7 @@ import { FulfillWatchDialog } from "./FulfillWatchDialog";
 import { toast } from "sonner";
 import { cn, safeRenderValue } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
+import { VirtualizedLogView } from "@/components/logs/VirtualizedLogView";
 import { LiveDuration } from "@/components/LiveDuration";
 import { executorIcon } from "@/lib/executor-utils";
 
@@ -71,8 +72,6 @@ function formatTimestamp(ts: string | null): string {
   return new Date(ts).toLocaleTimeString();
 }
 
-const LOG_INITIAL_LINES = 50;
-
 function highlightLogLine(line: string): React.ReactNode {
   // Timestamp patterns: ISO, syslog-style, bracketed
   const timestampRe = /^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[.\d]*Z?|\[\d{2}:\d{2}:\d{2}\]|\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})/;
@@ -102,7 +101,6 @@ function highlightLogLine(line: string): React.ReactNode {
 }
 
 function ScriptLogView({ run }: { run: StepRun }) {
-  const [showAll, setShowAll] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const stdout = (run.result?.executor_meta?.stdout as string) ?? "";
@@ -117,8 +115,6 @@ function ScriptLogView({ run }: { run: StepRun }) {
   ].filter(Boolean).join("\n");
 
   const lines = fullText.split("\n");
-  const truncated = !showAll && lines.length > LOG_INITIAL_LINES;
-  const displayLines = truncated ? lines.slice(-LOG_INITIAL_LINES) : lines;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(fullText);
@@ -151,19 +147,11 @@ function ScriptLogView({ run }: { run: StepRun }) {
         </button>
       </div>
       <div className="bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded overflow-hidden">
-        {truncated && (
-          <button
-            onClick={() => setShowAll(true)}
-            className="w-full text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 bg-zinc-100 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 py-1 px-2 text-center"
-          >
-            ↑ {lines.length - LOG_INITIAL_LINES} more lines — Show all
-          </button>
-        )}
-        <pre className="text-[11px] font-mono p-2 text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap break-all max-h-96 overflow-auto leading-relaxed">
-          {displayLines.map((line, i) => (
-            <div key={i}>{highlightLogLine(line)}</div>
-          ))}
-        </pre>
+        <VirtualizedLogView
+          lines={lines}
+          className="text-[11px] font-mono p-2 text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap break-all leading-relaxed"
+          renderLine={(line) => highlightLogLine(line)}
+        />
       </div>
     </div>
   );
@@ -171,21 +159,6 @@ function ScriptLogView({ run }: { run: StepRun }) {
 
 function LiveScriptLogView({ runId }: { runId: string }) {
   const { stdout, stderr, truncated, version } = useScriptStream(runId);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const userScrolledRef = useRef(false);
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el || userScrolledRef.current) return;
-    el.scrollTop = el.scrollHeight;
-  }, [version]);
-
-  const handleScroll = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
-    userScrolledRef.current = !isAtBottom;
-  }, []);
 
   if (!stdout && !stderr) {
     return (
@@ -220,16 +193,18 @@ function LiveScriptLogView({ runId }: { runId: string }) {
       {truncated && (
         <div className="text-[10px] text-amber-400/70 mb-1 font-mono">[earlier output truncated]</div>
       )}
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="bg-zinc-50 dark:bg-zinc-950 rounded border border-zinc-200 dark:border-zinc-800 p-2 font-mono text-xs max-h-96 overflow-auto"
-      >
-        {rawLines.map((line, i) => (
-          <div key={i} className="whitespace-pre-wrap break-words leading-relaxed">
-            {line === "" ? "\u00A0" : highlightLogLine(line)}
-          </div>
-        ))}
+      <div className="bg-zinc-50 dark:bg-zinc-950 rounded border border-zinc-200 dark:border-zinc-800">
+        <VirtualizedLogView
+          lines={rawLines}
+          isLive={true}
+          version={version}
+          className="p-2 font-mono text-xs"
+          renderLine={(line) => (
+            <span className="whitespace-pre-wrap break-words leading-relaxed">
+              {line === "" ? "\u00A0" : highlightLogLine(line)}
+            </span>
+          )}
+        />
       </div>
       {stderr && (
         <div className="mt-2">
