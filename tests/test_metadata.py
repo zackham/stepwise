@@ -245,7 +245,7 @@ class TestParseMetaFlags:
     def test_invalid_top_level_key_rejected(self):
         from stepwise.cli import parse_meta_flags
 
-        with pytest.raises(SystemExit):
+        with pytest.raises(ValueError, match="sys.*app"):
             parse_meta_flags(["invalid.key=val"])
 
 

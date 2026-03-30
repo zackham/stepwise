@@ -190,7 +190,7 @@ class TestResolveFlowByName:
         with pytest.raises(FlowResolutionError, match="not found"):
             resolve_flow("nonexistent", project_dir=tmp_path)
 
-    def test_shadow_warning(self, tmp_path, capsys):
+    def test_shadow_warning(self, tmp_path, caplog):
         """Multiple matches across search dirs produces stderr warning."""
         # Project root
         root_dir = tmp_path / "dupe"
@@ -202,12 +202,12 @@ class TestResolveFlowByName:
         flows_dir.mkdir(parents=True)
         (flows_dir / "FLOW.yaml").write_text(SIMPLE_FLOW)
 
-        result = resolve_flow("dupe", project_dir=tmp_path)
+        import logging
+        with caplog.at_level(logging.WARNING, logger="stepwise.flow_resolution"):
+            result = resolve_flow("dupe", project_dir=tmp_path)
         # Should pick the first one (project root)
         assert result == root_dir / "FLOW.yaml"
-        err = capsys.readouterr().err
-        assert "Warning" in err
-        assert "multiple" in err.lower()
+        assert "multiple" in caplog.text.lower()
 
 
 # ── discover_flows ───────────────────────────────────────────────────
