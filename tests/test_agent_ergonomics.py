@@ -1109,24 +1109,20 @@ class TestCLIServerRouting:
         assert data is None
         assert code is None
 
-    def test_try_server_connection_failure_fallback(self):
+    def test_try_server_connection_failure_fallback(self, caplog):
         """_try_server falls back with warning on connection failure."""
         import argparse
+        import logging
         from stepwise.cli import _try_server
 
         args = argparse.Namespace(standalone=False, server="http://localhost:1")
-        captured_stderr = io.StringIO()
-        old_stderr = sys.stderr
-        sys.stderr = captured_stderr
-        try:
+        with caplog.at_level(logging.WARNING, logger="stepwise.cli"):
             data, code = _try_server(args, lambda c: c.health())
-        finally:
-            sys.stderr = old_stderr
 
         assert data is None
         assert code is None
-        assert "unreachable" in captured_stderr.getvalue()
-        assert "falling back" in captured_stderr.getvalue()
+        assert "unreachable" in caplog.text
+        assert "falling back" in caplog.text
 
     def test_try_server_api_error(self):
         """_try_server returns error dict on API error (non-connection)."""

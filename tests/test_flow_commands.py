@@ -33,8 +33,9 @@ class TestFlowGet:
             rc = main(["get", "https://example.com/test.flow.yaml"])
 
         assert rc == EXIT_SUCCESS
-        out = capsys.readouterr().out
-        assert "Downloaded" in out
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "Downloaded" in combined
         assert (tmp_path / "test.flow.yaml").exists()
 
     def test_get_non_yaml_url_errors(self, tmp_path, capsys, monkeypatch):

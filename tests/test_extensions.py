@@ -33,6 +33,19 @@ def _capture_stdout(argv: list[str]) -> tuple[int, str]:
     return code, output
 
 
+def _capture_output(argv: list[str]) -> tuple[int, str]:
+    """Run CLI and capture both stdout and stderr."""
+    old_stdout, old_stderr = sys.stdout, sys.stderr
+    sys.stdout = io.StringIO()
+    sys.stderr = io.StringIO()
+    try:
+        code = main(argv)
+        output = sys.stdout.getvalue() + sys.stderr.getvalue()
+    finally:
+        sys.stdout, sys.stderr = old_stdout, old_stderr
+    return code, output
+
+
 def _make_executable(path: Path, content: str) -> Path:
     """Write a script file and make it executable."""
     path.write_text(content)
@@ -293,7 +306,7 @@ class TestExtensionsCLI:
     def test_no_extensions_helpful_message(self, tmp_project):
         """When no extensions found, print helpful message."""
         with patch.dict(os.environ, {"PATH": ""}):
-            code, output = _capture_stdout([
+            code, output = _capture_output([
                 "--project-dir", str(tmp_project),
                 "extensions",
             ])
@@ -312,7 +325,7 @@ class TestExtensionsCLI:
 
         path = f"{ext_dir}{os.pathsep}{os.environ.get('PATH', '')}"
         with patch.dict(os.environ, {"PATH": path}):
-            code, output = _capture_stdout([
+            code, output = _capture_output([
                 "--project-dir", str(tmp_project),
                 "extensions",
                 "--refresh",
@@ -330,7 +343,7 @@ class TestExtensionsCLI:
 
         path = f"{ext_dir}{os.pathsep}{os.environ.get('PATH', '')}"
         with patch.dict(os.environ, {"PATH": path}):
-            code, output = _capture_stdout([
+            code, output = _capture_output([
                 "--project-dir", str(tmp_project),
                 "extensions",
                 "--refresh",
@@ -350,7 +363,7 @@ class TestExtensionsCLI:
 
         path = f"{ext_dir}{os.pathsep}{os.environ.get('PATH', '')}"
         with patch.dict(os.environ, {"PATH": path}):
-            code, output = _capture_stdout([
+            code, output = _capture_output([
                 "--project-dir", str(tmp_project),
                 "extensions", "list",
                 "--refresh",
@@ -366,7 +379,7 @@ class TestExtensionsCLI:
 
         path = f"{ext_dir}{os.pathsep}{os.environ.get('PATH', '')}"
         with patch.dict(os.environ, {"PATH": path}):
-            code, output = _capture_stdout([
+            code, output = _capture_output([
                 "--project-dir", str(tmp_project),
                 "extensions",
                 "--refresh",
@@ -400,7 +413,7 @@ class TestExtensionsCLI:
 
         path = f"{ext_dir}{os.pathsep}{os.environ.get('PATH', '')}"
         with patch.dict(os.environ, {"PATH": path}):
-            code, output = _capture_stdout([
+            code, output = _capture_output([
                 "--project-dir", str(tmp_project),
                 "extensions",
                 "--refresh",
@@ -418,7 +431,7 @@ class TestExtensionsCLI:
 
         path = f"{ext_dir}{os.pathsep}{os.environ.get('PATH', '')}"
         with patch.dict(os.environ, {"PATH": path}):
-            code, output = _capture_stdout([
+            code, output = _capture_output([
                 "--project-dir", str(tmp_project),
                 "extensions",
                 "--refresh",

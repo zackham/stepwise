@@ -237,9 +237,9 @@ def _try_server(args: argparse.Namespace, fn):
         return fn(client), EXIT_SUCCESS
     except StepwiseAPIError as e:
         if e.status == 0:  # connection failed
-            print(
-                f"Warning: Server at {server_url} unreachable, falling back to direct mode",
-                file=sys.stderr,
+            import logging
+            logging.getLogger(__name__).warning(
+                "Server at %s unreachable, falling back to direct mode", server_url
             )
             return None, None
         return {"status": "error", "error": e.detail}, EXIT_JOB_FAILED
@@ -353,8 +353,9 @@ async def _tail_ws(ws_url: str) -> int:
                     return EXIT_JOB_FAILED if event_type == "job.failed" else EXIT_SUCCESS
     except websockets.exceptions.ConnectionClosed:
         return EXIT_JOB_FAILED
-    except (ConnectionRefusedError, OSError) as e:
-        print(f"Error: Could not connect to server: {e}", file=sys.stderr)
+    except (ConnectionRefusedError, OSError):
+        import logging
+        logging.getLogger(__name__).error("Could not connect to server. Is it running? Start with: stepwise server start")
         return EXIT_JOB_FAILED
 
     return EXIT_SUCCESS
@@ -366,10 +367,7 @@ def cmd_tail(args: argparse.Namespace) -> int:
 
     server_url = _detect_server_url(args)
     if not server_url:
-        print(
-            "stepwise tail requires a running server. Start one with: stepwise server start",
-            file=sys.stderr,
-        )
+        _io(args).log("error", "stepwise tail requires a running server. Start with: stepwise server start")
         return EXIT_CONFIG_ERROR
 
     # Build WebSocket URL for event stream
@@ -410,7 +408,7 @@ def cmd_logs(args: argparse.Namespace) -> int:
         try:
             job = store.load_job(args.job_id)
         except KeyError:
-            print(f"Error: Job not found: {args.job_id}", file=sys.stderr)
+            _io(args).log("error", f"Job not found: {args.job_id}. Run 'stepwise jobs' to list jobs")
             return EXIT_JOB_FAILED
 
         events = store.load_events(args.job_id)
@@ -1477,11 +1475,12 @@ def cmd_flows(args: argparse.Namespace) -> int:
 def cmd_config(args: argparse.Namespace) -> int:
     from stepwise.config import load_config, save_config
 
+    io = _io(args)
     action = args.config_action
 
     if action == "set":
         if not args.key:
-            print("Error: config set requires a key", file=sys.stderr)
+            io.log("error", "config set requires a key. Usage: stepwise config set <key> <value>")
             return EXIT_USAGE_ERROR
 
         if args.stdin:
@@ -1490,7 +1489,7 @@ def cmd_config(args: argparse.Namespace) -> int:
         elif args.value is not None:
             value = args.value
         else:
-            print("Error: config set requires a value or --stdin", file=sys.stderr)
+            io.log("error", "config set requires a value or --stdin")
             return EXIT_USAGE_ERROR
 
         config = load_config()
@@ -1505,19 +1504,19 @@ def cmd_config(args: argparse.Namespace) -> int:
             from stepwise.config import save_project_local_config
             project_dir = _project_dir(args) or Path.cwd()
             save_project_local_config(project_dir, notify_url=value)
-            _io(args).log("success", f"Set {args.key} in project config")
+            io.log("success", f"Set {args.key} in project config")
             return EXIT_SUCCESS
         elif args.key == "notify_context":
             import json as _json
             try:
                 ctx = _json.loads(value)
             except _json.JSONDecodeError:
-                print(f"Error: notify_context must be valid JSON", file=sys.stderr)
+                io.log("error", "notify_context must be valid JSON")
                 return EXIT_USAGE_ERROR
             from stepwise.config import save_project_local_config
             project_dir = _project_dir(args) or Path.cwd()
             save_project_local_config(project_dir, notify_context=ctx)
-            _io(args).log("success", f"Set {args.key} in project config")
+            io.log("success", f"Set {args.key} in project config")
             return EXIT_SUCCESS
         elif args.key.startswith("max_concurrent_by_executor"):
             from stepwise.config import save_project_local_config
@@ -1527,10 +1526,10 @@ def cmd_config(args: argparse.Namespace) -> int:
                 try:
                     limit = int(value)
                 except ValueError:
-                    print(f"Error: value must be an integer, got '{value}'", file=sys.stderr)
+                    io.log("error", f"Value must be an integer, got '{value}'")
                     return EXIT_USAGE_ERROR
                 if limit < 0:
-                    print("Error: limit must be non-negative (0 = unlimited)", file=sys.stderr)
+                    io.log("error", "Limit must be non-negative (0 = unlimited)")
                     return EXIT_USAGE_ERROR
                 config = load_config(project_dir)
                 limits = dict(config.max_concurrent_by_executor)
@@ -1544,25 +1543,25 @@ def cmd_config(args: argparse.Namespace) -> int:
                 try:
                     limits = _json.loads(value)
                 except _json.JSONDecodeError:
-                    print("Error: value must be JSON dict, e.g. '{\"agent\": 1}'", file=sys.stderr)
+                    io.log("error", "Value must be JSON dict, e.g. '{\"agent\": 1}'")
                     return EXIT_USAGE_ERROR
                 if not isinstance(limits, dict) or not all(isinstance(v, int) and v >= 0 for v in limits.values()):
-                    print("Error: each value must be a non-negative integer", file=sys.stderr)
+                    io.log("error", "Each value must be a non-negative integer")
                     return EXIT_USAGE_ERROR
                 save_project_local_config(project_dir, max_concurrent_by_executor=limits)
-            _io(args).log("success", f"Set {args.key} in project config")
+            io.log("success", f"Set {args.key} in project config")
             return EXIT_SUCCESS
         else:
-            print(f"Error: Unknown config key '{args.key}'", file=sys.stderr)
+            io.log("error", f"Unknown config key '{args.key}'. Run 'stepwise config get' to see available keys")
             return EXIT_USAGE_ERROR
 
         save_config(config)
-        _io(args).log("success", f"Set {args.key}")
+        io.log("success", f"Set {args.key}")
         return EXIT_SUCCESS
 
     elif action == "get":
         if not args.key:
-            print("Error: config get requires a key", file=sys.stderr)
+            io.log("error", "config get requires a key. Usage: stepwise config get <key>")
             return EXIT_USAGE_ERROR
 
         project_dir = _project_dir(args) or Path.cwd()
@@ -1593,7 +1592,7 @@ def cmd_config(args: argparse.Namespace) -> int:
                     print("  (no limits set)")
             return EXIT_SUCCESS
         else:
-            print(f"Error: Unknown config key '{args.key}'", file=sys.stderr)
+            io.log("error", f"Unknown config key '{args.key}'. Run 'stepwise config get' to see available keys")
             return EXIT_USAGE_ERROR
 
         if val and not args.unmask and args.key in ("openrouter_api_key", "anthropic_api_key"):
@@ -1611,24 +1610,23 @@ def cmd_config(args: argparse.Namespace) -> int:
 
         flow_ref = args.key
         if not flow_ref:
-            print("Error: config init requires a flow name or path", file=sys.stderr)
+            io.log("error", "config init requires a flow name or path. Usage: stepwise config init <flow>")
             return EXIT_USAGE_ERROR
 
         project_dir = _project_dir(args) or Path.cwd()
         try:
             flow_path = resolve_flow(flow_ref, project_dir)
         except FlowResolutionError as e:
-            print(f"Error: {e}", file=sys.stderr)
+            io.log("error", str(e))
             return EXIT_USAGE_ERROR
 
         try:
             wf = load_workflow_yaml(str(flow_path))
         except (YAMLLoadError, Exception) as e:
-            print(f"Error loading flow: {e}", file=sys.stderr)
+            io.log("error", f"Error loading flow: {e}")
             return EXIT_USAGE_ERROR
 
         if not wf.config_vars:
-            io = _io(args)
             io.log("info", f"Flow '{flow_ref}' has no config: block — nothing to scaffold.")
             return EXIT_SUCCESS
 
@@ -1642,7 +1640,7 @@ def cmd_config(args: argparse.Namespace) -> int:
             config_path = flow_path.parent / f"{stem}.config.local.yaml"
 
         if config_path.exists():
-            print(f"Config file already exists: {config_path}", file=sys.stderr)
+            io.log("error", f"Config file already exists: {config_path}")
             return EXIT_USAGE_ERROR
 
         # Scaffold YAML with comments
@@ -1670,12 +1668,11 @@ def cmd_config(args: argparse.Namespace) -> int:
             lines.append("")
 
         config_path.write_text("\n".join(lines))
-        io = _io(args)
         io.log("success", f"Created {config_path}")
         return EXIT_SUCCESS
 
     else:
-        print("Error: config requires 'get', 'set', or 'init' action", file=sys.stderr)
+        io.log("error", "config requires 'get', 'set', or 'init' action")
         return EXIT_USAGE_ERROR
 
 
@@ -1685,15 +1682,14 @@ def cmd_check(args: argparse.Namespace) -> int:
     from stepwise.flow_resolution import FlowResolutionError, resolve_flow
     from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
 
+    io = _io(args)
     project_dir = Path(args.project_dir).resolve() if args.project_dir else Path.cwd().resolve()
 
     try:
         flow_path = resolve_flow(args.flow, project_dir)
     except (FlowResolutionError, Exception) as e:
-        print(f"Error: {e}", file=sys.stderr)
+        io.log("error", str(e))
         return EXIT_USAGE_ERROR
-
-    io = _io(args)
 
     # Phase 1: Structural validation
     try:
@@ -2006,13 +2002,11 @@ def parse_meta_flags(meta_args: list[str]) -> dict:
     result: dict = {"sys": {}, "app": {}}
     for arg in meta_args:
         if "=" not in arg:
-            print(f"Error: Invalid --meta format: '{arg}' (expected KEY=VALUE)", file=sys.stderr)
-            raise SystemExit(EXIT_USAGE_ERROR)
+            raise ValueError(f"Invalid --meta format: '{arg}' (expected KEY=VALUE)")
         key, value = arg.split("=", 1)
         parts = key.split(".")
         if len(parts) < 2 or parts[0] not in ("sys", "app"):
-            print(f"Error: --meta key must start with 'sys.' or 'app.': '{key}'", file=sys.stderr)
-            raise SystemExit(EXIT_USAGE_ERROR)
+            raise ValueError(f"--meta key must start with 'sys.' or 'app.': '{key}'")
         namespace = parts[0]
         leaf_key = ".".join(parts[1:])
         result[namespace][leaf_key] = value
@@ -2066,7 +2060,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 from stepwise.runner import _json_error
                 _json_error(2, str(e))
                 return EXIT_USAGE_ERROR
-            print(f"Error: {e}", file=sys.stderr)
+            io.log("error", str(e))
             return EXIT_USAGE_ERROR
 
     try:
@@ -2076,11 +2070,15 @@ def cmd_run(args: argparse.Namespace) -> int:
             from stepwise.runner import _json_error
             _json_error(2, str(e))
             return EXIT_USAGE_ERROR
-        print(f"Error: {e}", file=sys.stderr)
+        io.log("error", str(e))
         return EXIT_USAGE_ERROR
 
     # Parse metadata flags
-    metadata = parse_meta_flags(args.meta) if args.meta else None
+    try:
+        metadata = parse_meta_flags(args.meta) if args.meta else None
+    except ValueError as e:
+        io.log("error", str(e))
+        return EXIT_USAGE_ERROR
 
     # --async mode: fire-and-forget (handles own errors as JSON)
     if getattr(args, "async_mode", False):
@@ -2132,9 +2130,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             metadata=metadata,
         )
 
-    # Everything below uses stderr for errors
     if not flow_path.exists():
-        print(f"Error: File not found: {flow_path}", file=sys.stderr)
+        io.log("error", f"Flow file not found: {flow_path}. Run 'stepwise flows' to list flows")
         return EXIT_USAGE_ERROR
 
     if args.watch:
@@ -2176,12 +2173,12 @@ def _run_watch(
     try:
         workflow = load_workflow_yaml(str(flow_path))
     except YAMLLoadError as e:
-        print(f"Error: {'; '.join(e.errors)}", file=sys.stderr)
+        _io(args).log("error", f"Invalid flow: {'; '.join(e.errors)}")
         return EXIT_USAGE_ERROR
 
     errors = workflow.validate()
     if errors:
-        print(f"Error: {'; '.join(errors)}", file=sys.stderr)
+        _io(args).log("error", f"Validation failed: {'; '.join(errors)}")
         return EXIT_USAGE_ERROR
 
     from stepwise.flow_resolution import flow_display_name
@@ -2262,7 +2259,8 @@ def _submit_watch_job(
             job_data = json.loads(resp.read())
             job_id = job_data["id"]
     except (urllib.error.URLError, Exception) as e:
-        print(f"Error: Failed to create job: {e}", file=sys.stderr)
+        import logging
+        logging.getLogger(__name__).error("Failed to create job: %s", e)
         return EXIT_JOB_FAILED
 
     try:
@@ -2273,7 +2271,8 @@ def _submit_watch_job(
         )
         urllib.request.urlopen(start_req, timeout=10)
     except (urllib.error.URLError, Exception) as e:
-        print(f"Error: Failed to start job: {e}", file=sys.stderr)
+        import logging
+        logging.getLogger(__name__).error("Failed to start job: %s", e)
         return EXIT_JOB_FAILED
 
     project_label = ""
@@ -2406,7 +2405,7 @@ def cmd_jobs(args: argparse.Namespace) -> int:
                 status_filter = JobStatus(args.status)
             except ValueError:
                 valid = ", ".join(s.value for s in JobStatus)
-                print(f"Error: Invalid status '{args.status}'. Valid: {valid}", file=sys.stderr)
+                _io(args).log("error", f"Invalid status '{args.status}'. Valid: {valid}")
                 return EXIT_USAGE_ERROR
 
         meta_filters = None
@@ -2414,7 +2413,7 @@ def cmd_jobs(args: argparse.Namespace) -> int:
             meta_filters = {}
             for item in args.meta:
                 if "=" not in item:
-                    print(f"Error: Invalid --meta filter: '{item}' (expected KEY=VALUE)", file=sys.stderr)
+                    _io(args).log("error", f"Invalid --meta filter: '{item}' (expected KEY=VALUE)")
                     return EXIT_USAGE_ERROR
                 key, value = item.split("=", 1)
                 meta_filters[key] = value
@@ -2472,7 +2471,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         try:
             job = store.load_job(args.job_id)
         except KeyError:
-            print(f"Error: Job not found: {args.job_id}", file=sys.stderr)
+            _io(args).log("error", f"Job not found: {args.job_id}. Run 'stepwise jobs' to list jobs")
             return EXIT_JOB_FAILED
 
         runs = store.runs_for_job(job.id)
@@ -2546,7 +2545,7 @@ def cmd_cancel(args: argparse.Namespace) -> int:
             if getattr(args, "output", None) == "json":
                 print(json.dumps({"status": "error", "error": f"Job not found: {args.job_id}"}))
             else:
-                print(f"Error: Job not found: {args.job_id}", file=sys.stderr)
+                _io(args).log("error", f"Job not found: {args.job_id}. Run 'stepwise jobs' to list jobs")
             return EXIT_JOB_FAILED
 
         from stepwise.models import JobStatus, StepRunStatus
@@ -2554,7 +2553,7 @@ def cmd_cancel(args: argparse.Namespace) -> int:
             if getattr(args, "output", None) == "json":
                 print(json.dumps({"status": "error", "error": f"Job already {job.status.value}"}))
             else:
-                print(f"Error: Job already {job.status.value}", file=sys.stderr)
+                _io(args).log("error", f"Job already {job.status.value}")
             return EXIT_USAGE_ERROR
 
         registry = create_default_registry()
@@ -2825,7 +2824,7 @@ def cmd_rm(args: argparse.Namespace) -> int:
             return EXIT_USAGE_ERROR
 
         if len(to_delete) > 1 and not getattr(args, "force", False):
-            io.log("warning", f"About to permanently delete {len(to_delete)} job(s). Use --force to skip confirmation.")
+            io.log("warn", f"About to permanently delete {len(to_delete)} job(s). Use --force to skip confirmation.")
             return EXIT_USAGE_ERROR
 
         for job in to_delete:
@@ -3114,15 +3113,16 @@ def cmd_share(args: argparse.Namespace) -> int:
     from stepwise.registry_client import load_auth, publish_flow, update_flow, RegistryError
     from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
 
+    io = _io(args)
     flow_arg = args.flow
     if not flow_arg:
-        print("Error: share requires a flow name or file path", file=sys.stderr)
+        io.log("error", "share requires a flow name or file path")
         return EXIT_USAGE_ERROR
 
     try:
         flow_path = resolve_flow(flow_arg, _project_dir(args))
     except FlowResolutionError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        io.log("error", str(e))
         return EXIT_USAGE_ERROR
 
     # Validate first
@@ -3130,15 +3130,13 @@ def cmd_share(args: argparse.Namespace) -> int:
         wf = load_workflow_yaml(str(flow_path))
         errors = wf.validate()
         if errors:
-            print(f"Error: Validation failed:", file=sys.stderr)
+            io.log("error", "Validation failed:")
             for err in errors:
-                print(f"  - {err}", file=sys.stderr)
+                io.log("error", f"  - {err}")
             return EXIT_USAGE_ERROR
     except (YAMLLoadError, ValueError) as e:
-        print(f"Error: Validation failed: {e}", file=sys.stderr)
+        io.log("error", f"Validation failed: {e}")
         return EXIT_USAGE_ERROR
-
-    io = _io(args)
     yaml_content = flow_path.read_text()
     author = getattr(args, "author", None)
     do_update = getattr(args, "update", False)
@@ -3243,14 +3241,14 @@ def cmd_search(args: argparse.Namespace) -> int:
     sort = getattr(args, "sort", "downloads")
     output = getattr(args, "output", "table")
 
+    io = _io(args)
     try:
         result = search_flows(query=query, tag=tag, sort=sort)
     except RegistryError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        io.log("error", str(e))
         return EXIT_USAGE_ERROR
 
     flows = result.get("flows", [])
-    io = _io(args)
     if not flows:
         io.log("info", "No flows found.")
         return EXIT_SUCCESS
@@ -3286,7 +3284,7 @@ def cmd_info(args: argparse.Namespace) -> int:
     io = _io(args)
     flow_ref = args.name
     if not flow_ref:
-        print("Error: flow info requires a flow name", file=sys.stderr)
+        io.log("error", "flow info requires a flow name")
         return EXIT_USAGE_ERROR
 
     # Try local resolution first
@@ -3301,7 +3299,7 @@ def cmd_info(args: argparse.Namespace) -> int:
         try:
             wf = load_workflow_yaml(str(local_flow))
         except (YAMLLoadError, Exception) as e:
-            print(f"Error loading flow: {e}", file=sys.stderr)
+            io.log("error", f"Error loading flow: {e}")
             return EXIT_USAGE_ERROR
 
         meta = wf.metadata
@@ -3408,7 +3406,7 @@ def cmd_info(args: argparse.Namespace) -> int:
     try:
         data = fetch_flow(flow_ref)
     except RegistryError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        io.log("error", str(e))
         return EXIT_USAGE_ERROR
 
     tags = ", ".join(data.get("tags", []))
@@ -3443,22 +3441,23 @@ def _flow_get_url(url: str) -> int:
 
     # Derive filename from URL
     filename = url.rsplit("/", 1)[-1]
+    io = create_adapter()
     if not filename.endswith((".yaml", ".yml")):
-        print(f"Error: URL does not point to a YAML file: {url}", file=sys.stderr)
+        io.log("error", f"URL does not point to a YAML file: {url}")
         return EXIT_USAGE_ERROR
 
     target = Path(filename)
     if target.exists():
-        print(f"Error: {target} already exists", file=sys.stderr)
+        io.log("error", f"{target} already exists. Use --force to overwrite")
         return EXIT_USAGE_ERROR
 
     try:
         urllib.request.urlretrieve(url, str(target))
-        print(f"✓ Downloaded {target}")
-        print(f"  Run 'stepwise run {target}' to execute.")
+        io.log("success", f"Downloaded {target}")
+        io.log("info", f"Run 'stepwise run {target}' to execute.")
         return EXIT_SUCCESS
     except urllib.error.URLError as e:
-        print(f"Error: Failed to download: {e}", file=sys.stderr)
+        io.log("error", f"Failed to download: {e}")
         return EXIT_USAGE_ERROR
 
 
@@ -3468,16 +3467,17 @@ def cmd_schema(args: argparse.Namespace) -> int:
     from stepwise.schema import generate_input_schema, generate_schema
     from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
 
+    io = _io(args)
     try:
         flow_path = resolve_flow(args.flow, _project_dir(args))
     except FlowResolutionError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        io.log("error", str(e))
         return EXIT_USAGE_ERROR
 
     try:
         wf = load_workflow_yaml(str(flow_path))
     except YAMLLoadError as e:
-        print(f"Error: {'; '.join(e.errors)}", file=sys.stderr)
+        io.log("error", f"Invalid flow: {'; '.join(e.errors)}")
         return EXIT_USAGE_ERROR
 
     if getattr(args, "input_schema", False):
@@ -3616,6 +3616,7 @@ def cmd_output(args: argparse.Namespace) -> int:
 
 def cmd_fulfill(args: argparse.Namespace) -> int:
     """Satisfy a suspended external step from the command line."""
+    io = _io(args)
     # Server routing (always JSON)
     server_url = _detect_server_url(args)
     if server_url:
@@ -3626,15 +3627,15 @@ def cmd_fulfill(args: argparse.Namespace) -> int:
         if raw_payload == "-" or (raw_payload is None and getattr(args, "stdin", False)):
             raw_payload = sys.stdin.read().strip()
         elif raw_payload is None:
-            print(json.dumps({"status": "error", "error": "No payload provided."}))
+            io.log("error", "No payload provided. Usage: stepwise fulfill <run-id> '{\"field\": \"value\"}'")
             return EXIT_USAGE_ERROR
         try:
             payload = json.loads(raw_payload)
         except json.JSONDecodeError as e:
-            print(json.dumps({"status": "error", "error": f"Invalid JSON: {e}"}))
+            io.log("error", f"Invalid JSON payload: {e}")
             return EXIT_USAGE_ERROR
         if not isinstance(payload, dict):
-            print(json.dumps({"status": "error", "error": "Payload must be a JSON object"}))
+            io.log("error", "Payload must be a JSON object")
             return EXIT_USAGE_ERROR
 
         client = StepwiseClient(server_url)
@@ -3653,9 +3654,9 @@ def cmd_fulfill(args: argparse.Namespace) -> int:
             return EXIT_SUCCESS
         except StepwiseAPIError as e:
             if e.status == 0:
-                print(
-                    f"Warning: Server at {server_url} unreachable, falling back to direct mode",
-                    file=sys.stderr,
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Server at %s unreachable, falling back to direct mode", server_url
                 )
                 # Fall through to direct path
             else:
@@ -3711,7 +3712,7 @@ def cmd_fulfill(args: argparse.Namespace) -> int:
         if result is not None:
             if getattr(args, "wait", False):
                 # Still enter wait loop on the job even if already fulfilled
-                print(json.dumps(result), file=sys.stderr)
+                io.log("info", f"Already fulfilled: {args.run_id}")
                 from stepwise.runner import wait_for_job
                 return wait_for_job(engine, store, result["job_id"])
             print(json.dumps(result))
@@ -3872,9 +3873,10 @@ def cmd_docs(args: argparse.Namespace) -> int:
     """Print reference documentation."""
     from stepwise.project import get_docs_dir
 
+    io = _io(args)
     docs_dir = get_docs_dir()
     if docs_dir is None:
-        print("Documentation not found.", file=sys.stderr)
+        io.log("error", "Documentation not found")
         return EXIT_USAGE_ERROR
 
     topic = getattr(args, "topic", None)
@@ -3910,8 +3912,7 @@ def cmd_docs(args: argparse.Namespace) -> int:
                 print(section_text.strip())
                 print()
             return EXIT_SUCCESS
-        print(f"No documentation found for '{topic}'.", file=sys.stderr)
-        print("Run 'stepwise docs' to see available topics.", file=sys.stderr)
+        io.log("error", f"No documentation found for '{topic}'. Run 'stepwise docs' to see available topics")
         return EXIT_USAGE_ERROR
 
     print(match.read_text())
@@ -3935,10 +3936,11 @@ def cmd_agent_help(args: argparse.Namespace) -> int:
     if args.update:
         target = Path(args.update)
         replaced = update_file(target, content)
+        io = _io(args)
         if replaced:
-            print(f"✓ Updated {target} (replaced existing section)", file=sys.stderr)
+            io.log("success", f"Updated {target} (replaced existing section)")
         else:
-            print(f"✓ Updated {target} (appended new section)", file=sys.stderr)
+            io.log("success", f"Updated {target} (appended new section)")
     else:
         print(content)
 
@@ -3966,8 +3968,8 @@ def cmd_help(args: argparse.Namespace) -> int:
         api_key = cfg.openrouter_api_key or ""
 
     if not api_key:
-        print("Error: No OpenRouter API key found.", file=sys.stderr)
-        print("Set OPENROUTER_API_KEY or run: stepwise config set openrouter_api_key <key>", file=sys.stderr)
+        io = _io(args)
+        io.log("error", "No OpenRouter API key. Set with: stepwise config set openrouter_api_key <key>")
         return EXIT_CONFIG_ERROR
 
     # Gather context
@@ -4044,10 +4046,10 @@ def cmd_help(args: argparse.Namespace) -> int:
         print(answer)
         return EXIT_SUCCESS
     except httpx.HTTPStatusError as exc:
-        print(f"Error: OpenRouter API returned {exc.response.status_code}", file=sys.stderr)
+        _io(args).log("error", f"OpenRouter API returned {exc.response.status_code}")
         return EXIT_JOB_FAILED
     except Exception as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        _io(args).log("error", str(exc))
         return EXIT_JOB_FAILED
 
 
@@ -4113,16 +4115,14 @@ def cmd_self_update(args: argparse.Namespace) -> int:
 
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        print(f"Upgrade failed (exit {result.returncode}):", file=sys.stderr)
+        io.log("error", f"Upgrade failed (exit {result.returncode})")
         stderr = result.stderr.strip()
         if stderr:
-            print(stderr, file=sys.stderr)
+            io.log("error", stderr)
         if method == "pip":
-            print(
-                "\nTip: if pip is blocked by your OS, install with:\n"
-                "  curl -fsSL https://raw.githubusercontent.com/zackham/stepwise/master/install.sh | sh",
-                file=sys.stderr,
-            )
+            io.log("info",
+                "Tip: if pip is blocked by your OS, install with:\n"
+                "  curl -fsSL https://raw.githubusercontent.com/zackham/stepwise/master/install.sh | sh")
         return EXIT_JOB_FAILED
 
     # Get the new version from a fresh subprocess (avoids stale importlib cache)
@@ -4330,11 +4330,66 @@ def _open_browser_when_ready(host: str, port: int) -> None:
 
 # ── Parser ───────────────────────────────────────────────────────────
 
+# Command groups for --help display
+_COMMAND_GROUPS: list[tuple[str, list[str]]] = [
+    ("Execution", ["run", "validate", "check", "preflight", "diagram"]),
+    ("Jobs", ["jobs", "status", "cancel", "tail", "logs", "output", "wait", "fulfill", "list"]),
+    ("Server", ["server"]),
+    ("Project", ["init", "new", "flows", "config", "templates"]),
+    ("Registry", ["search", "get", "share", "info", "login", "logout"]),
+    ("Advanced", ["job", "cache", "schema", "agent-help", "extensions", "docs"]),
+    ("System", ["update", "welcome", "help", "version", "uninstall"]),
+]
+
+
+class _GroupedHelpFormatter(argparse.RawDescriptionHelpFormatter):
+    """Custom formatter that groups subcommands by category."""
+
+    def _format_action(self, action):
+        # Only customize the subparsers action
+        if isinstance(action, argparse._SubParsersAction):
+            parts = []
+            # Build a map from command name -> help text
+            cmd_help: dict[str, str] = {}
+            for choice_name, choice_parser in action.choices.items():
+                # Skip aliases like 'extension'
+                if choice_parser.description:
+                    h = choice_parser.description
+                else:
+                    # Fall back to the help kwarg from add_parser
+                    h = ""
+                    for a in action._choices_actions:
+                        if a.dest == choice_name:
+                            h = a.help or ""
+                            break
+                cmd_help[choice_name] = h
+
+            for group_name, commands in _COMMAND_GROUPS:
+                group_lines = []
+                for cmd in commands:
+                    if cmd in cmd_help:
+                        group_lines.append(f"  {cmd:<18s}{cmd_help[cmd]}")
+                if group_lines:
+                    parts.append(f"\n{group_name}:")
+                    parts.extend(group_lines)
+
+            # Any commands not in a group (safety net)
+            grouped = {c for _, cmds in _COMMAND_GROUPS for c in cmds}
+            ungrouped = [c for c in cmd_help if c not in grouped and c != "extension"]
+            if ungrouped:
+                parts.append("\nOther:")
+                for cmd in ungrouped:
+                    parts.append(f"  {cmd:<18s}{cmd_help[cmd]}")
+
+            return "\n".join(parts) + "\n"
+        return super()._format_action(action)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="stepwise",
-        description="Enter the flow state. Portable orchestration for agents and humans.",
+        description="Portable workflow orchestration for agents and humans.",
+        formatter_class=_GroupedHelpFormatter,
     )
     parser.add_argument("--version", action="store_true", help="Print version and exit")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
@@ -4369,7 +4424,13 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Stream new log lines as they are written (log action only)")
 
     # run
-    p_run = sub.add_parser("run", help="Run a flow")
+    p_run = sub.add_parser("run", help="Run a flow",
+                           epilog="Examples:\n"
+                                  "  stepwise run my-flow --input url=https://example.com\n"
+                                  "  stepwise run my-flow --watch              # server + browser UI\n"
+                                  "  stepwise run my-flow --wait               # block, JSON output\n"
+                                  "  stepwise run my-flow --async --name 'impl: feature-x'",
+                           formatter_class=argparse.RawDescriptionHelpFormatter)
     p_run.add_argument("flow", help="Flow name or path to .flow.yaml file")
     p_run.add_argument("--watch", action="store_true", help="Ephemeral server + browser UI")
     p_run.add_argument("--wait", action="store_true", help="Block until completion, JSON output on stdout")
@@ -4378,7 +4439,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--output", choices=["json"], dest="output_format",
                        help="Output format (currently only json)")
     p_run.add_argument("--input", action="append", dest="inputs", metavar="KEY=VALUE",
-                       help="Pass input variable (repeatable). Use KEY=@path to read from file.")
+                       help="Pass input variable (repeatable; KEY=@path reads from file)")
     p_run.add_argument("--var", action="append", dest="inputs", metavar="KEY=VALUE",
                        help=argparse.SUPPRESS)  # deprecated alias for --input
     p_run.add_argument("--vars-file", help="Load variables from YAML/JSON file")
@@ -4437,7 +4498,13 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Filter by visibility category (default: hide internal)")
 
     # config
-    p_config = sub.add_parser("config", help="Manage configuration")
+    p_config = sub.add_parser("config", help="Get/set configuration values",
+                              epilog="Examples:\n"
+                                     "  stepwise config get openrouter_api_key\n"
+                                     "  stepwise config set openrouter_api_key sk-...\n"
+                                     "  stepwise config set default_model anthropic/claude-sonnet-4-20250514\n"
+                                     "  stepwise config init my-flow",
+                              formatter_class=argparse.RawDescriptionHelpFormatter)
     p_config.add_argument("config_action", choices=["get", "set", "init"], help="Action")
     p_config.add_argument("key", nargs="?", help="Config key or flow name (for init)")
     p_config.add_argument("value", nargs="?", help="Config value (for set)")
@@ -4471,7 +4538,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_info.add_argument("name", help="Flow name")
 
     # jobs
-    p_jobs = sub.add_parser("jobs", help="List jobs")
+    p_jobs = sub.add_parser("jobs", help="List jobs (most recent 20; --all for full list)")
     p_jobs.add_argument("--output", choices=["table", "json"], default="table")
     p_jobs.add_argument("--limit", type=int, default=20)
     p_jobs.add_argument("--all", action="store_true")
@@ -4483,7 +4550,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Filter by metadata (e.g. sys.origin=cli)")
 
     # status
-    p_status = sub.add_parser("status", help="Show job detail")
+    p_status = sub.add_parser("status", help="Show job status with step breakdown")
     p_status.add_argument("job_id", help="Job ID")
     p_status.add_argument("--output", choices=["table", "json"], default="table")
 
@@ -4506,7 +4573,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_unarchive.add_argument("--output", choices=["table", "json"], default="table")
 
     # rm
-    p_rm = sub.add_parser("rm", help="Permanently delete jobs")
+    p_rm = sub.add_parser("rm", help="Permanently delete jobs (irreversible)",
+                          epilog="Examples:\n"
+                                 "  stepwise rm <job-id>              # delete one job\n"
+                                 "  stepwise rm --status failed -f    # delete all failed jobs\n"
+                                 "  stepwise rm --archived -f         # delete all archived jobs",
+                          formatter_class=argparse.RawDescriptionHelpFormatter)
     p_rm.add_argument("job_ids", nargs="*", metavar="JOB_ID", help="Job ID(s) to delete")
     p_rm.add_argument("--status", help="Delete all jobs with this status")
     p_rm.add_argument("--group", "-g", help="Delete all jobs in this group")
@@ -4529,7 +4601,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_logs.add_argument("job_id", help="Job ID")
 
     # output
-    p_output = sub.add_parser("output", help="Retrieve job outputs")
+    p_output = sub.add_parser("output", help="Retrieve job outputs",
+                              epilog="Examples:\n"
+                                     "  stepwise output <job-id>           # all terminal outputs\n"
+                                     "  stepwise output <job-id> <step>    # single step (raw)\n"
+                                     "  stepwise output <job-id> --scope full  # all steps",
+                              formatter_class=argparse.RawDescriptionHelpFormatter)
     p_output.add_argument("job_id", nargs="?", default=None, help="Job ID")
     p_output.add_argument("step_name", nargs="?", default=None,
                           help="Step name (positional shorthand for --step)")
@@ -4541,7 +4618,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_output.add_argument("--run", dest="run_id", help="Retrieve output by run ID directly")
 
     # list
-    p_list = sub.add_parser("list", help="List suspended steps or other items")
+    p_list = sub.add_parser("list", help="List suspended steps awaiting input")
     p_list.add_argument("--suspended", action="store_true",
                         help="Show suspended steps across all active jobs")
     p_list.add_argument("--output", choices=["table", "json"], default="table")
@@ -4558,7 +4635,12 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Wait for first job to reach terminal state")
 
     # fulfill
-    p_fulfill = sub.add_parser("fulfill", help="Satisfy a suspended external step")
+    p_fulfill = sub.add_parser("fulfill", help="Satisfy a suspended external step",
+                               epilog="Examples:\n"
+                                      "  stepwise fulfill <run-id> '{\"field\": \"value\"}'\n"
+                                      "  echo '{\"field\": \"value\"}' | stepwise fulfill <run-id> --stdin\n"
+                                      "  stepwise fulfill <run-id> '{\"field\": \"value\"}' --wait",
+                               formatter_class=argparse.RawDescriptionHelpFormatter)
     p_fulfill.add_argument("run_id", help="Run ID of the suspended step")
     p_fulfill.add_argument("payload", nargs="?", default=None,
                            help="JSON payload with field values (use --stdin or '-' to read from stdin)")
@@ -4592,11 +4674,11 @@ def build_parser() -> argparse.ArgumentParser:
                               help="Bypass cache and force a fresh scan")
 
     # docs
-    p_docs = sub.add_parser("docs", help="Print reference documentation")
+    p_docs = sub.add_parser("docs", help="Browse reference docs (patterns, CLI, executors)")
     p_docs.add_argument("topic", nargs="?", help="Documentation topic (e.g., patterns, cli, executors)")
 
     # cache
-    p_cache = sub.add_parser("cache", help="Manage step result cache")
+    p_cache = sub.add_parser("cache", help="Inspect and clear step result cache")
     cache_sub = p_cache.add_subparsers(dest="cache_action")
     p_cache_clear = cache_sub.add_parser("clear", help="Clear cached results")
     p_cache_clear.add_argument("--flow", help="Filter by flow name")
@@ -4611,7 +4693,7 @@ def build_parser() -> argparse.ArgumentParser:
                                help=argparse.SUPPRESS)  # deprecated alias for --input
 
     # job (staging & orchestration)
-    p_job = sub.add_parser("job", help="Job staging and orchestration")
+    p_job = sub.add_parser("job", help="Stage, order, and batch-run jobs")
     job_sub = p_job.add_subparsers(dest="job_command")
 
     # job create
@@ -4675,7 +4757,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("version", help="Print version and exit")
 
     # welcome
-    sub.add_parser("welcome", help="Try the interactive welcome demo")
+    sub.add_parser("welcome", help="Interactive welcome demo")
 
     # uninstall
     p_uninstall = sub.add_parser("uninstall", help="Remove stepwise from this project")
@@ -4695,6 +4777,8 @@ def cmd_extensions(args: argparse.Namespace) -> int:
     """List discovered stepwise extensions."""
     from stepwise.extensions import scan_extensions
 
+    io = _io(args)
+
     # Determine dot_dir for caching (optional — non-fatal if no project found)
     dot_dir = None
     try:
@@ -4709,27 +4793,15 @@ def cmd_extensions(args: argparse.Namespace) -> int:
     extensions = scan_extensions(dot_dir=dot_dir, refresh=refresh)
 
     if not extensions:
-        print("No extensions found.")
-        print()
-        print("Extensions are executables named 'stepwise-<name>' on your PATH.")
-        print("Example: create a script called 'stepwise-telegram' to add 'stepwise telegram'.")
+        io.log("info", "No extensions found.")
+        io.log("info", "Extensions are executables named 'stepwise-<name>' on your PATH.")
+        io.log("info", "Example: create a script called 'stepwise-telegram' to add 'stepwise telegram'.")
         return EXIT_SUCCESS
 
-    # Column widths
-    name_w = max(len("NAME"), max(len(e.name) for e in extensions))
-    ver_w = max(len("VERSION"), max(len(e.version or "-") for e in extensions))
-    desc_w = max(len("DESCRIPTION"), max(len(e.description or "-") for e in extensions))
-
-    header = (
-        f"{'NAME':<{name_w}}  {'VERSION':<{ver_w}}  {'DESCRIPTION':<{desc_w}}  PATH"
-    )
-    separator = "-" * len(header)
-    print(header)
-    print(separator)
+    rows = []
     for ext in extensions:
-        ver = ext.version or "-"
-        desc = ext.description or "-"
-        print(f"{ext.name:<{name_w}}  {ver:<{ver_w}}  {desc:<{desc_w}}  {ext.path}")
+        rows.append([ext.name, ext.version or "-", ext.description or "-", str(ext.path)])
+    io.table(["NAME", "VERSION", "DESCRIPTION", "PATH"], rows)
 
     return EXIT_SUCCESS
 
@@ -5350,8 +5422,8 @@ def cmd_job(args: argparse.Namespace) -> int:
     handler = handlers.get(action)
     if handler:
         return handler(args)
-    # No subcommand — print help
-    print("Usage: stepwise job {create|show|run|approve|dep|cancel|rm} ...", file=sys.stderr)
+    # No subcommand — show help
+    _io(args).log("error", "Usage: stepwise job {create|show|run|approve|dep|cancel|rm}")
     return EXIT_USAGE_ERROR
 
 
@@ -5359,6 +5431,7 @@ def cmd_cache(args: argparse.Namespace) -> int:
     """Manage step result cache."""
     from stepwise.cache import StepResultCache
 
+    io = _io(args)
     project = _find_project_or_exit(args)
     cache_path = str(project.dot_dir / "cache" / "results.db")
     action = getattr(args, "cache_action", None)
@@ -5370,7 +5443,7 @@ def cmd_cache(args: argparse.Namespace) -> int:
                 flow_name=getattr(args, "flow", None),
                 step_name=getattr(args, "step", None),
             )
-            print(f"Cleared {count} cache entries.")
+            io.log("success", f"Cleared {count} cache entries")
         finally:
             cache.close()
         return EXIT_SUCCESS
@@ -5378,24 +5451,27 @@ def cmd_cache(args: argparse.Namespace) -> int:
     elif action == "stats":
         import os
         if not os.path.exists(cache_path):
-            print("No cache database found.")
+            io.log("info", "No cache database found")
             return EXIT_SUCCESS
         cache = StepResultCache(cache_path)
         try:
             s = cache.stats()
-            print(f"Total entries: {s['total_entries']}")
-            print(f"Total hits:    {s['total_hits']}")
+            summary_rows = [
+                ["Total entries", str(s['total_entries'])],
+                ["Total hits", str(s['total_hits'])],
+            ]
             if s['size_bytes'] > 0:
                 size_kb = s['size_bytes'] / 1024
-                print(f"Size on disk:  {size_kb:.1f} KB")
+                summary_rows.append(["Size on disk", f"{size_kb:.1f} KB"])
+            io.table(["METRIC", "VALUE"], summary_rows)
             if s['by_flow']:
-                print("\nBy flow:")
-                for flow, info in s['by_flow'].items():
-                    print(f"  {flow}: {info['entries']} entries, {info['hits']} hits")
+                flow_rows = [[flow, str(info['entries']), str(info['hits'])]
+                             for flow, info in s['by_flow'].items()]
+                io.table(["FLOW", "ENTRIES", "HITS"], flow_rows)
             if s['by_step']:
-                print("\nBy step:")
-                for step, info in s['by_step'].items():
-                    print(f"  {step}: {info['entries']} entries, {info['hits']} hits")
+                step_rows = [[step, str(info['entries']), str(info['hits'])]
+                             for step, info in s['by_step'].items()]
+                io.table(["STEP", "ENTRIES", "HITS"], step_rows)
         finally:
             cache.close()
         return EXIT_SUCCESS
@@ -5407,30 +5483,30 @@ def cmd_cache(args: argparse.Namespace) -> int:
 
         flow_path = Path(args.flow)
         if not flow_path.exists():
-            print(f"Error: File not found: {flow_path}", file=sys.stderr)
+            io.log("error", f"File not found: {flow_path}")
             return EXIT_USAGE_ERROR
 
         try:
             workflow = load_workflow_yaml(str(flow_path))
         except YAMLLoadError as e:
-            print(f"Error: {'; '.join(e.errors)}", file=sys.stderr)
+            io.log("error", f"Invalid flow: {'; '.join(e.errors)}")
             return EXIT_USAGE_ERROR
 
         step_name = args.step
         if step_name not in workflow.steps:
-            print(f"Error: Step '{step_name}' not found in flow", file=sys.stderr)
+            io.log("error", f"Step '{step_name}' not found in flow")
             return EXIT_USAGE_ERROR
 
         step_def = workflow.steps[step_name]
         if step_def.cache is None:
-            print(f"Step '{step_name}' has no cache config.", file=sys.stderr)
+            io.log("error", f"Step '{step_name}' has no cache config")
             return EXIT_USAGE_ERROR
 
         # Parse inputs
         try:
             inputs = parse_inputs(getattr(args, "inputs", None))
         except ValueError as e:
-            print(f"Error: {e}", file=sys.stderr)
+            io.log("error", str(e))
             return EXIT_USAGE_ERROR
 
         # Resolve job inputs for the step
@@ -5487,7 +5563,7 @@ def cmd_cache(args: argparse.Namespace) -> int:
         return EXIT_SUCCESS
 
     else:
-        print("Usage: stepwise cache {clear|stats|debug}", file=sys.stderr)
+        io.log("error", "Usage: stepwise cache {clear|stats|debug}")
         return EXIT_USAGE_ERROR
 
 
@@ -5663,7 +5739,18 @@ def main(argv: list[str] | None = None) -> int:
 
 def cli_main() -> None:
     """Entry point for console_scripts."""
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except Exception as exc:
+        # Catch unexpected errors and show a clean message instead of traceback
+        if "--verbose" in sys.argv or "-v" in sys.argv:
+            raise  # full traceback in verbose mode
+        import logging
+        logging.getLogger(__name__).error("Unexpected error: %s", exc)
+        print("Run with --verbose for full traceback.", file=sys.stderr)
+        sys.exit(EXIT_JOB_FAILED)
 
 
 if __name__ == "__main__":

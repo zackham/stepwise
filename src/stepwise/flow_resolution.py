@@ -82,11 +82,10 @@ def resolve_flow(name_or_path: str, project_dir: Path | None = None) -> Path:
         )
 
     if len(matches) > 1:
-        import sys
-        print(
-            f"Warning: multiple flows found for '{name_or_path}', "
-            f"using {matches[0]} (also found at {', '.join(str(m) for m in matches[1:])})",
-            file=sys.stderr,
+        import logging
+        logging.getLogger(__name__).warning(
+            "Multiple flows found for '%s', using %s (also found at %s)",
+            name_or_path, matches[0], ", ".join(str(m) for m in matches[1:]),
         )
 
     return matches[0]
