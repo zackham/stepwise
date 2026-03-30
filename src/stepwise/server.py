@@ -878,6 +878,12 @@ async def lifespan(app: FastAPI):
     if reattached:
         logger.info("Reattached %d surviving step run(s) from previous server", reattached)
 
+    # Kick PENDING jobs that are ready to start. recover_jobs() already calls
+    # _start_queued_jobs(), but by that point reattach_surviving_runs() hasn't
+    # registered surviving executor tasks yet. Re-evaluating here ensures PENDING
+    # jobs are dispatched with full knowledge of the engine's actual state.
+    _engine._start_queued_jobs()
+
     # NOTE: Queue owner cleanup disabled. Queue owners manage their own lifecycle
     # via TTL (--ttl 0 = stay alive forever). Stepwise's cleanup routines were
     # killing queue owners that belonged to running steps, causing
