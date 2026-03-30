@@ -20,10 +20,10 @@ stepwise run @stepwise:code-review --watch
 
 This downloads and runs a multi-step code review workflow, opening a browser with real-time DAG visualization. An agent reviews your code, an external step pauses for your decision, and the flow continues based on your input.
 
-No API keys? Try the welcome tour instead:
+No API keys? Try the demo instead:
 
 ```bash
-stepwise welcome
+stepwise demo
 ```
 
 ## Your first flow in 60 seconds
