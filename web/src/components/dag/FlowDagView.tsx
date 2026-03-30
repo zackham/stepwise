@@ -122,7 +122,6 @@ export function FlowDagView({
   const [showCriticalPath, setShowCriticalPath] = useState(false);
   const [multiSelected, setMultiSelected] = useState<Set<string>>(new Set());
   const [webglSupported] = useState(() => canUseWebGL());
-  const [webglActive, setWebglActive] = useState(false);
 
   // Clear multi-select when clicking canvas background
   const handleCanvasClick = useCallback(() => {
@@ -528,7 +527,7 @@ export function FlowDagView({
   return (
     <div
       ref={containerRef}
-      className="relative w-full h-full overflow-hidden bg-zinc-100/50 dark:bg-zinc-950/50 rounded-lg touch-none"
+      className="relative w-full h-full overflow-hidden bg-zinc-100/50 dark:bg-zinc-950 rounded-lg touch-none"
       onWheel={handleWheel}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
@@ -575,14 +574,14 @@ export function FlowDagView({
           position: "relative",
         }}
       >
-        {/* WebGL energy pulse edge layer (dark mode only) */}
+        {/* WebGL energy pulse overlay (dark mode only — animation layer over SVG edges) */}
         {webglSupported && isDark && (
           <Suspense fallback={null}>
             <WebGLEdgeLayer
               layout={layout}
               latestRuns={latestRuns}
-              onReady={() => setWebglActive(true)}
-              onLost={() => setWebglActive(false)}
+              onReady={() => {}}
+              onLost={() => {}}
             />
           </Suspense>
         )}
@@ -597,7 +596,6 @@ export function FlowDagView({
           onHoverLabel={handleHoverLabel}
           onLeaveLabel={handleLeaveLabel}
           criticalPath={criticalPath}
-          webglActive={webglActive && isDark}
         />
 
         {/* Flow port nodes (input/output) */}
@@ -702,7 +700,7 @@ export function FlowDagView({
           if (!watchProps) return null;
           const node = layout.nodes.find((n) => n.id === selectedStep);
           if (!node) return null;
-          const panelWidth = 320;
+          const panelWidth = 416;
           return (
             <div
               ref={inputPanelRef}

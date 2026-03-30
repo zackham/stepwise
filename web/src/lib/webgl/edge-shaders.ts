@@ -30,6 +30,8 @@ uniform float u_curve_length;
 uniform float u_flash;
 uniform float u_hue;
 uniform float u_dim;
+uniform float u_pulse_count;
+uniform float u_flow_age;
 
 varying vec2 vUv;
 
@@ -53,77 +55,72 @@ void main() {
   vec3 brightOrange = vec3(1.0, 0.7, 0.3);
   vec3 brightColor = mix(brightCyan, brightOrange, u_hue);
 
-  vec3 color;
-  float alpha;
+  // Absolute black base — critical for screen blend mode.
+  // Any non-black pixel will be visible via CSS screen compositing.
+  vec3 color = vec3(0.0);
+  float alpha = 1.0; // alpha irrelevant for screen blend over black
 
-  // State 0: Idle — faint wire
+  // State 0: Idle — absolute black (invisible via screen blend)
   if (u_state == 0) {
-    color = idleColor;
-    alpha = 0.15 * edgeFade;
+    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+    return;
   }
 
-  // State 1: Surge — single bright bolt traveling along the edge
+  // State 1: Surge + flow combined — the surge bolt is the leading wavefront,
+  // flow pulses spawn from source behind it
   else if (u_state == 1) {
+    float period = 1.5;
+    float speed = 1.0 / period;
+    float pc = max(u_pulse_count, 1.0);
+
+    // Surge bolt (bright leading edge)
     float dist = along - u_surge_progress;
-    // Bright head
     float head = exp(-80.0 * dist * dist);
-    // Exponential decay tail (behind the surge front)
     float tail = dist < 0.0 ? exp(8.0 * dist) * 0.4 : 0.0;
-    float intensity = head + tail;
-    // Color with white-hot core
+    float surgeIntensity = head + tail;
     vec3 white = vec3(1.0, 1.0, 1.0);
-    color = mix(energyColor, white, head * 0.7);
-    alpha = intensity * edgeFade;
-    // Keep dim base visible
-    vec3 dimBase = mix(vec3(0.05, 0.12, 0.2), vec3(0.15, 0.1, 0.03), u_hue);
-    color = mix(dimBase, color, clamp(intensity, 0.0, 1.0));
-    alpha = max(alpha, 0.1 * edgeFade);
+    vec3 surgeColor = mix(vec3(0.0), mix(energyColor, white, head * 0.7), surgeIntensity);
+
+    // Flow pulses behind the surge front
+    float phase = fract(along * pc - u_time * speed);
+    float pulse = exp(-5.0 * (1.0 - phase));
+    vec3 flowColor = mix(vec3(0.0), mix(energyColor, brightColor, pulse * pulse), pulse);
+
+    // Only show flow pulses behind the surge wavefront
+    float behindSurge = 1.0 - smoothstep(u_surge_progress - 0.05, u_surge_progress, along);
+    flowColor *= behindSurge;
+
+    // Combine: surge on top, flow behind
+    color = max(surgeColor, flowColor) * edgeFade;
   }
 
-  // State 2: Flow — repeating pulses at constant visual speed
+  // State 2: Flow — continuous synchronized pulses (surge is done)
   else if (u_state == 2) {
-    float speed = 150.0 / max(u_curve_length, 1.0); // constant visual speed
-    float phase = fract(along - u_time * speed);
-    float pulse = exp(-12.0 * phase);
-    float baseLine = 0.15;
-    float intensity = baseLine + pulse * 0.85;
-    color = mix(energyColor, brightColor, pulse);
-    alpha = intensity * edgeFade;
+    float period = 1.5;
+    float speed = 1.0 / period;
+    float pc = max(u_pulse_count, 1.0);
+    float phase = fract(along * pc - u_time * speed);
+    float pulse = exp(-5.0 * (1.0 - phase));
+
+    color = mix(vec3(0.0), mix(energyColor, brightColor, pulse * pulse), pulse) * edgeFade;
   }
 
-  // State 3: Completed — flash then settle to dim cyan/amber glow
+  // State 3: Completed — flash from black
   else if (u_state == 3) {
     vec3 flashCyan = vec3(0.5, 1.0, 1.0);
     vec3 flashAmber = vec3(1.0, 0.8, 0.4);
     vec3 flashColor = mix(flashCyan, flashAmber, u_hue);
-    vec3 settledCyan = vec3(0.0, 0.5, 0.6);
-    vec3 settledAmber = vec3(0.5, 0.3, 0.1);
-    vec3 settledColor = mix(settledCyan, settledAmber, u_hue);
-    color = mix(settledColor, flashColor, u_flash);
-    float settledAlpha = 0.35;
-    float flashAlpha = 0.9;
-    alpha = mix(settledAlpha, flashAlpha, u_flash) * edgeFade;
+    color = flashColor * u_flash * 0.9 * edgeFade;
   }
 
-  // State 4: Failed — red pulse then dim red (always red regardless of hue)
+  // State 4: Failed — red flash from black
   else if (u_state == 4) {
-    vec3 flashColor = vec3(1.0, 0.3, 0.2);
-    vec3 settledColor = vec3(0.5, 0.1, 0.08);
-    color = mix(settledColor, flashColor, u_flash);
-    float settledAlpha = 0.3;
-    float flashAlpha = 0.9;
-    alpha = mix(settledAlpha, flashAlpha, u_flash) * edgeFade;
-  }
-
-  // Fallback
-  else {
-    color = idleColor;
-    alpha = 0.15 * edgeFade;
+    color = vec3(1.0, 0.3, 0.2) * u_flash * 0.9 * edgeFade;
   }
 
   // Apply dim factor for sequencing-only edges
-  alpha *= u_dim;
+  color *= u_dim;
 
-  gl_FragColor = vec4(color, alpha);
+  gl_FragColor = vec4(color, 1.0);
 }
 `;

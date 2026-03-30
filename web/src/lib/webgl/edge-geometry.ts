@@ -1,50 +1,161 @@
 import {
-  CatmullRomCurve3,
+  CurvePath,
+  LineCurve3,
   Vector3,
-  TubeGeometry,
+  QuadraticBezierCurve3,
+  CubicBezierCurve3,
+  BufferGeometry,
+  Float32BufferAttribute,
 } from "three";
+import type { Curve } from "three";
 
 /**
- * Convert dagre edge points to a smooth CatmullRom spline in the z=0 plane.
- * For 2-point edges, inserts a midpoint to give the spline enough control points.
+ * Convert dagre edge points to a curve path matching SVG buildPath() exactly.
  */
 export function createEdgeCurve(
   points: Array<{ x: number; y: number }>,
-): CatmullRomCurve3 {
-  let pts = points.map((p) => new Vector3(p.x, p.y, 0));
+): CurvePath<Vector3> {
+  const path = new CurvePath<Vector3>();
+  if (points.length < 2) return path;
 
-  // CatmullRom needs at least 3 points for a smooth curve
-  if (pts.length === 2) {
-    const mid = new Vector3().lerpVectors(pts[0], pts[1], 0.5);
-    pts = [pts[0], mid, pts[1]];
+  if (points.length === 2) {
+    path.add(new LineCurve3(
+      new Vector3(points[0].x, points[0].y, 0),
+      new Vector3(points[1].x, points[1].y, 0),
+    ));
+    return path;
   }
 
-  return new CatmullRomCurve3(pts, false, "centripetal", 0.5);
+  if (points.length === 3) {
+    path.add(new QuadraticBezierCurve3(
+      new Vector3(points[0].x, points[0].y, 0),
+      new Vector3(points[1].x, points[1].y, 0),
+      new Vector3(points[2].x, points[2].y, 0),
+    ));
+    return path;
+  }
+
+  const start = points[0];
+  const rest = points.slice(1);
+
+  for (let i = 0; i < rest.length; i++) {
+    const ctrl = i === 0 ? start : rest[i - 1];
+    const p = rest[i];
+
+    if (i === rest.length - 1) {
+      if (i === 0) {
+        path.add(new LineCurve3(
+          new Vector3(start.x, start.y, 0),
+          new Vector3(p.x, p.y, 0),
+        ));
+      } else {
+        const prevCtrl = rest[i - 1];
+        const segStart = new Vector3(
+          (rest[Math.max(0, i - 2)].x + prevCtrl.x) / 2,
+          (rest[Math.max(0, i - 2)].y + prevCtrl.y) / 2,
+          0,
+        );
+        const mid = new Vector3((prevCtrl.x + p.x) / 2, (prevCtrl.y + p.y) / 2, 0);
+        path.add(new QuadraticBezierCurve3(
+          segStart,
+          new Vector3(prevCtrl.x, prevCtrl.y, 0),
+          mid,
+        ));
+        path.add(new LineCurve3(mid, new Vector3(p.x, p.y, 0)));
+      }
+    } else if (i === 0) {
+      const mid = new Vector3((start.x + p.x) / 2, (start.y + p.y) / 2, 0);
+      path.add(new QuadraticBezierCurve3(
+        new Vector3(start.x, start.y, 0),
+        new Vector3(start.x, start.y, 0),
+        mid,
+      ));
+    } else {
+      const prev = rest[i - 1];
+      const mid = new Vector3((prev.x + p.x) / 2, (prev.y + p.y) / 2, 0);
+      const prevPrev = i >= 2 ? rest[i - 2] : start;
+      const segStart = new Vector3((prevPrev.x + prev.x) / 2, (prevPrev.y + prev.y) / 2, 0);
+      path.add(new QuadraticBezierCurve3(
+        segStart,
+        new Vector3(prev.x, prev.y, 0),
+        mid,
+      ));
+    }
+  }
+
+  return path;
 }
 
 /**
- * Generate tube geometry from a curve.
- * Segment count is proportional to curve length for consistent detail.
- * Default radius: 1.5 (thin lines).
+ * Generate a flat ribbon (2D strip) along a curve.
+ * Unlike TubeGeometry (3D cylinder), this produces a perfectly smooth
+ * flat surface with no polygon edge aliasing when viewed top-down.
+ *
+ * UV mapping: u = 0..1 along curve, v = 0..1 across width.
  */
 export function createEdgeGeometry(
-  curve: CatmullRomCurve3,
+  curve: Curve<Vector3>,
   radius: number = 1.5,
-): TubeGeometry {
+): BufferGeometry {
   const length = curve.getLength();
-  const segments = Math.max(16, Math.min(128, Math.round(length / 3)));
-  return new TubeGeometry(curve, segments, radius, 4, false);
+  const segments = Math.max(64, Math.min(512, Math.round(length)));
+
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+
+  const halfWidth = radius;
+
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const point = curve.getPointAt(t);
+    // Get tangent to compute perpendicular
+    const tangent = curve.getTangentAt(t);
+    // Perpendicular in 2D: rotate tangent 90 degrees (swap x/y, negate one)
+    const nx = -tangent.y;
+    const ny = tangent.x;
+    const len = Math.sqrt(nx * nx + ny * ny) || 1;
+
+    // Two vertices per segment point: left and right of center
+    positions.push(
+      point.x + (nx / len) * halfWidth,
+      point.y + (ny / len) * halfWidth,
+      0,
+    );
+    positions.push(
+      point.x - (nx / len) * halfWidth,
+      point.y - (ny / len) * halfWidth,
+      0,
+    );
+
+    uvs.push(t, 0);
+    uvs.push(t, 1);
+  }
+
+  // Build triangle strip as indexed triangles
+  for (let i = 0; i < segments; i++) {
+    const a = i * 2;
+    const b = i * 2 + 1;
+    const c = (i + 1) * 2;
+    const d = (i + 1) * 2 + 1;
+    indices.push(a, b, c);
+    indices.push(b, d, c);
+  }
+
+  const geometry = new BufferGeometry();
+  geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("uv", new Float32BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
+
+  return geometry;
 }
 
 /**
- * Convert loop edge geometry (SVG cubic Bezier) to a Three.js CatmullRom curve.
- * Parses the SVG path `M x y C cx1 cy1, cx2 cy2, ex ey` and samples it.
- * Returns null on malformed input — caller should skip the mesh and let SVG render the edge.
+ * Convert loop edge SVG cubic Bezier to a Three.js CubicBezierCurve3.
  */
 export function createLoopEdgeCurve(
   svgPath: string,
-): CatmullRomCurve3 | null {
-  // Parse M x y C cx1 cy1, cx2 cy2, ex ey
+): CubicBezierCurve3 | null {
   const nums = svgPath.match(/-?[\d.]+/g);
   if (!nums || nums.length < 8) {
     return null;
@@ -52,21 +163,10 @@ export function createLoopEdgeCurve(
 
   const [mx, my, cx1, cy1, cx2, cy2, ex, ey] = nums.map(Number);
 
-  // Sample the cubic bezier at N points
-  const sampleCount = 16;
-  const pts: Vector3[] = [];
-  for (let i = 0; i <= sampleCount; i++) {
-    const t = i / sampleCount;
-    const t2 = t * t;
-    const t3 = t2 * t;
-    const mt = 1 - t;
-    const mt2 = mt * mt;
-    const mt3 = mt2 * mt;
-
-    const x = mt3 * mx + 3 * mt2 * t * cx1 + 3 * mt * t2 * cx2 + t3 * ex;
-    const y = mt3 * my + 3 * mt2 * t * cy1 + 3 * mt * t2 * cy2 + t3 * ey;
-    pts.push(new Vector3(x, y, 0));
-  }
-
-  return new CatmullRomCurve3(pts, false, "centripetal", 0.5);
+  return new CubicBezierCurve3(
+    new Vector3(mx, my, 0),
+    new Vector3(cx1, cy1, 0),
+    new Vector3(cx2, cy2, 0),
+    new Vector3(ex, ey, 0),
+  );
 }

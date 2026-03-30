@@ -18,6 +18,7 @@ export interface EdgeAnimState {
   surgeProgress: number;
   flashIntensity: number;
   transitionTime: number;
+  flowAge: number;
 }
 
 /** Uniform values for a single edge mesh */
@@ -25,6 +26,7 @@ export interface EdgeUniforms {
   state: EdgeStateValue;
   surgeProgress: number;
   flash: number;
+  flowAge: number;
 }
 
 const SURGE_DURATION = 0.8; // seconds
@@ -47,6 +49,7 @@ export class EdgeStateManager {
         surgeProgress: 0,
         flashIntensity: 0,
         transitionTime: 0,
+        flowAge: 0,
       };
       this.states.set(key, s);
     }
@@ -55,25 +58,35 @@ export class EdgeStateManager {
 
   /**
    * Determine target state for an edge based on source/target step run status.
-   * Precedence: active (SURGE) > completed > failed > idle
+   * Loop edges require source to have completed/failed before activating
+   * (matching SVG ant-march behavior).
    */
   deriveTargetState(
     sourceStatus: string | undefined,
     targetStatus: string | undefined,
+    isLoop: boolean = false,
   ): EdgeStateValue {
-    // Priority 1 (highest): target is active → SURGE/FLOW
-    if (targetStatus === "running" || targetStatus === "delegated" || targetStatus === "suspended") {
-      return EdgeState.SURGE; // will transition to FLOW after surge
+    const targetActive = targetStatus === "running" || targetStatus === "delegated" || targetStatus === "suspended";
+
+    if (isLoop) {
+      // Loop edges only pulse when source has run AND target is active
+      const sourceHasRun = sourceStatus === "completed" || sourceStatus === "failed";
+      if (sourceHasRun && targetActive) {
+        return EdgeState.SURGE;
+      }
+      return EdgeState.IDLE;
     }
-    // Priority 2: both source and target completed
+
+    // Data edges
+    if (targetActive) {
+      return EdgeState.SURGE;
+    }
     if (sourceStatus === "completed" && targetStatus === "completed") {
       return EdgeState.COMPLETED;
     }
-    // Priority 3: either side failed
     if (targetStatus === "failed" || sourceStatus === "failed") {
       return EdgeState.FAILED;
     }
-    // Priority 4: everything else
     return EdgeState.IDLE;
   }
 
@@ -94,12 +107,13 @@ export class EdgeStateManager {
       const key = `${edge.from}->${edge.to}`;
       const sourceStatus = latestRuns[edge.from]?.status;
       const targetStatus = latestRuns[edge.to]?.status;
-      this.updateEdge(key, sourceStatus, targetStatus, edge.to, deltaTime);
+      this.updateEdge(key, sourceStatus, targetStatus, edge.to, deltaTime, false);
       const s = this.states.get(key)!;
       result.set(key, {
         state: s.currentState,
         surgeProgress: s.surgeProgress,
         flash: s.flashIntensity,
+        flowAge: s.flowAge,
       });
     }
 
@@ -108,12 +122,13 @@ export class EdgeStateManager {
       const key = `loop:${le.from}->${le.to}:${le.loopIndex}`;
       const sourceStatus = latestRuns[le.from]?.status;
       const targetStatus = latestRuns[le.to]?.status;
-      this.updateEdge(key, sourceStatus, targetStatus, le.to, deltaTime);
+      this.updateEdge(key, sourceStatus, targetStatus, le.to, deltaTime, true);
       const s = this.states.get(key)!;
       result.set(key, {
         state: s.currentState,
         surgeProgress: s.surgeProgress,
         flash: s.flashIntensity,
+        flowAge: s.flowAge,
       });
     }
 
@@ -132,9 +147,10 @@ export class EdgeStateManager {
     targetStatus: string | undefined,
     targetStep: string,
     deltaTime: number,
+    isLoop: boolean,
   ) {
     const s = this.getOrCreate(key);
-    const targetState = this.deriveTargetState(sourceStatus, targetStatus);
+    const targetState = this.deriveTargetState(sourceStatus, targetStatus, isLoop);
     const prevTargetStatus = this.prevRunStatuses.get(targetStep);
 
     // Detect state transitions
@@ -154,9 +170,16 @@ export class EdgeStateManager {
           s.currentState = EdgeState.FLOW;
         }
       } else if (targetState === EdgeState.COMPLETED || targetState === EdgeState.FAILED) {
-        s.currentState = targetState;
-        s.flashIntensity = 1.0;
-        s.transitionTime = 0;
+        // Only flash if this is a real transition (not initial page load)
+        const isRealTransition = prevTargetStatus !== undefined && prevTargetStatus !== targetStatus;
+        if (isRealTransition) {
+          s.currentState = targetState;
+          s.flashIntensity = 1.0;
+          s.transitionTime = 0;
+        } else {
+          // Already settled — go straight to IDLE (invisible)
+          s.currentState = EdgeState.IDLE;
+        }
       } else if (targetState === EdgeState.IDLE) {
         s.currentState = EdgeState.IDLE;
       } else {
@@ -170,10 +193,14 @@ export class EdgeStateManager {
     if (s.currentState === EdgeState.SURGE) {
       s.surgeProgress += deltaTime / SURGE_DURATION;
       if (s.surgeProgress >= 1.0) {
-        // Transition to flow
         s.currentState = EdgeState.FLOW;
         s.surgeProgress = 1.0;
+        s.flowAge = 0; // start warmup from zero
       }
+    }
+
+    if (s.currentState === EdgeState.FLOW) {
+      s.flowAge += deltaTime;
     }
 
     if (
@@ -181,6 +208,10 @@ export class EdgeStateManager {
       s.currentState === EdgeState.FAILED
     ) {
       s.flashIntensity = Math.max(0, s.flashIntensity - deltaTime / FLASH_DURATION);
+      // Once flash fades, go to IDLE so WebGL renders nothing (SVG handles settled state)
+      if (s.flashIntensity <= 0) {
+        s.currentState = EdgeState.IDLE;
+      }
     }
   }
 
@@ -188,7 +219,7 @@ export class EdgeStateManager {
   hasActiveAnimations(): boolean {
     for (const s of this.states.values()) {
       if (s.currentState === EdgeState.SURGE) return true;
-      if (s.currentState === EdgeState.FLOW) return true;
+      if (s.currentState === EdgeState.FLOW) return true; // includes warmup
       if (s.flashIntensity > 0.01) return true;
     }
     return false;

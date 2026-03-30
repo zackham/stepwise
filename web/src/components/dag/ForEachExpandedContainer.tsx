@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, Suspense, lazy } from "react";
 import { ChevronDown, ChevronUp, Layers } from "lucide-react";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { StepNode } from "./StepNode";
@@ -9,6 +9,10 @@ import type { HierarchicalDagNode, ForEachInstance } from "@/lib/dag-layout";
 import type { FlowDefinition, StepRun, JobTreeNode, JobStatus } from "@/lib/types";
 import { JOB_STATUS_COLORS } from "@/lib/status-colors";
 import { cn } from "@/lib/utils";
+import { useTheme } from "@/hooks/useTheme";
+import { canUseWebGL } from "@/lib/webgl/webgl-utils";
+
+const WebGLEdgeLayer = lazy(() => import("./WebGLEdgeLayer"));
 
 interface ForEachExpandedContainerProps {
   node: HierarchicalDagNode;
@@ -65,6 +69,8 @@ export function ForEachExpandedContainer({
   onNavigateSubJob,
   depth,
 }: ForEachExpandedContainerProps) {
+  const theme = useTheme();
+  const isDark = theme === "dark";
   const [collapsed, setCollapsed] = useState(false);
   const borderColor = DEPTH_BORDER_COLORS[Math.min(depth, DEPTH_BORDER_COLORS.length - 1)];
   const bgColor = DEPTH_BG_COLORS[Math.min(depth, DEPTH_BG_COLORS.length - 1)];
@@ -226,6 +232,16 @@ export function ForEachExpandedContainer({
                   height: instance.layout.height,
                 }}
               >
+                {canUseWebGL() && isDark && (
+                  <Suspense fallback={null}>
+                    <WebGLEdgeLayer
+                      layout={instance.layout}
+                      latestRuns={latestRuns}
+                      onReady={() => {}}
+                      onLost={() => {}}
+                    />
+                  </Suspense>
+                )}
                 <DagEdges
                   edges={instance.layout.edges}
                   loopEdges={instance.layout.loopEdges}
