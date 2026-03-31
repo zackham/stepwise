@@ -59,20 +59,20 @@ export function FlowPortNode({ port, selection, onSelect, latestRuns }: FlowPort
         className={cn(
           "flex flex-col items-center justify-center rounded-md border px-3 py-2",
           allOutputsReady
-            ? "border-emerald-500/40 bg-emerald-100/40 dark:bg-emerald-950/40 shadow-lg shadow-emerald-500/5"
+            ? "border-emerald-500/40 bg-emerald-100/40 dark:bg-emerald-950/40 output-completed-glow"
             : "border-dashed border-zinc-400/50 dark:border-zinc-600/50 bg-zinc-100/30 dark:bg-zinc-900/30 px-2 py-1",
         )}
       >
         <div className={cn(
-          "flex items-center gap-1 text-[10px] mb-1",
-          allOutputsReady ? "text-emerald-400" : "text-zinc-500",
+          "flex items-center gap-1 mb-1",
+          allOutputsReady ? "text-emerald-400 text-[11px]" : "text-zinc-500 text-[10px]",
         )}>
           {allOutputsReady ? (
-            <CheckCircle2 className="w-3 h-3" />
+            <CheckCircle2 className="w-3.5 h-3.5" />
           ) : (
             <ArrowDown className="w-3 h-3" />
           )}
-          <span className="font-medium">{title}</span>
+          <span className="font-semibold">{title}</span>
         </div>
 
         <div className={cn(
@@ -99,7 +99,8 @@ export function FlowPortNode({ port, selection, onSelect, latestRuns }: FlowPort
                   }
                 }}
                 className={cn(
-                  "px-1.5 py-0.5 rounded text-[9px] font-mono leading-4 transition-colors text-left",
+                  "px-1.5 py-0.5 rounded font-mono leading-4 transition-colors text-left",
+                  allOutputsReady && hasValue ? "text-[10px]" : "text-[9px]",
                   isSelected
                     ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
                     : hasValue
@@ -110,7 +111,9 @@ export function FlowPortNode({ port, selection, onSelect, latestRuns }: FlowPort
                 {hasValue ? (
                   <>
                     <span className="text-emerald-600 dark:text-emerald-400/70">{field}: </span>
-                    <span className="text-emerald-500 dark:text-emerald-200/60">{formatPreview(value, 24)}</span>
+                    <span className={cn(
+                      allOutputsReady ? "text-emerald-600 dark:text-emerald-100/80 font-semibold" : "text-emerald-500 dark:text-emerald-200/60",
+                    )}>{formatPreview(value, 28)}</span>
                   </>
                 ) : (
                   field
