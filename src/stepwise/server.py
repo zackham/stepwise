@@ -996,6 +996,9 @@ async def lifespan(app: FastAPI):
 
     _engine.on_broadcast = _schedule_broadcast
     _engine.on_event = _schedule_event_stream
+    # Set event loop reference BEFORE starting the engine task — _launch()
+    # may be called from request handlers before run() gets its first iteration.
+    _engine._loop = asyncio.get_running_loop()
     _engine_task = asyncio.create_task(_engine.run())
     _stream_monitor = asyncio.create_task(_agent_stream_monitor())
     global _script_monitor_task
