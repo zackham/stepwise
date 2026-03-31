@@ -10,7 +10,7 @@ packages = ["src/stepwise"]
 
 [project]
 name = "stepwise-run"
-version = "0.25.0"
+version = "0.25.1"
 description = "Enter the flow state. Portable orchestration for agents and humans."
 readme = "README.md"
 license = "MIT"
