@@ -16,6 +16,8 @@ import {
   Sun,
   Moon,
   Network,
+  Bell,
+  BellOff,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CommandPalette } from "@/components/CommandPalette";
@@ -174,7 +176,7 @@ function ShortcutsDialog({
 
 export function AppLayout() {
   const { wsState } = useStepwiseWebSocket();
-  useNotifySuspended();
+  const { enabled: notificationsEnabled, toggle: toggleNotifications } = useNotifySuspended();
   const location = useLocation();
   const navigate = useNavigate();
   const { data: status } = useEngineStatus();
@@ -361,6 +363,20 @@ export function AppLayout() {
               </span>
             )}
           </div>
+
+          {/* Notification toggle */}
+          <button
+            onClick={toggleNotifications}
+            className={cn(
+              "flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md p-1.5 transition-colors md:min-h-0 md:min-w-0",
+              notificationsEnabled
+                ? "text-blue-400 hover:bg-zinc-200/50 hover:text-blue-300 dark:hover:bg-zinc-800/50"
+                : "text-zinc-500 hover:bg-zinc-200/50 hover:text-foreground dark:hover:bg-zinc-800/50"
+            )}
+            title={notificationsEnabled ? "Notifications on — click to disable" : "Notifications off — click to enable"}
+          >
+            {notificationsEnabled ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4" />}
+          </button>
 
           {/* Theme toggle */}
           <button
