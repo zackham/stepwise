@@ -14,12 +14,14 @@ interface EntityContextMenuProps<T> {
   type: EntityType;
   data: T;
   children: React.ReactNode;
+  className?: string;
 }
 
 export function EntityContextMenu<T>({
   type,
   data,
   children,
+  className,
 }: EntityContextMenuProps<T>) {
   const ctx = useActionContext();
   const actions = useMemo(() => getActionsForEntity(type, data), [type, data]);
@@ -34,7 +36,7 @@ export function EntityContextMenu<T>({
   return (
     <>
       <ContextMenu>
-        <ContextMenuTrigger>{children}</ContextMenuTrigger>
+        <ContextMenuTrigger className={className}>{children}</ContextMenuTrigger>
         <ContextMenuContent>
           <ActionMenuItems
             actions={actions}

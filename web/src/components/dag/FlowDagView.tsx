@@ -537,7 +537,7 @@ export function FlowDagView({
         onToggleFollowFlow: () => setFollowFlow(!followFlow),
       }}
     >
-    <EntityContextMenu type="canvas" data={{}}>
+    <EntityContextMenu type="canvas" data={{}} className="h-full">
     <div
       ref={containerRef}
       className="relative w-full h-full overflow-hidden bg-zinc-100/50 dark:bg-zinc-950 rounded-lg touch-none"
