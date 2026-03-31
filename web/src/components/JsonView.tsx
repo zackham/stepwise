@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { ChevronRight, ChevronDown, Copy, Check } from "lucide-react";
+import { ChevronRight, ChevronDown, Copy, Check, Maximize2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ContentModal } from "@/components/ui/content-modal";
 import {
   Tooltip,
   TooltipTrigger,
@@ -153,6 +154,97 @@ function JsonStringWrapper({
   );
 }
 
+function JsonObjectView({
+  data,
+  entries,
+  name,
+  expanded,
+  setExpanded,
+  copied,
+  handleCopy,
+  isSingleKeyObject,
+  depth,
+}: {
+  data: Record<string, unknown>;
+  entries: [string, unknown][];
+  name?: string;
+  expanded: boolean;
+  setExpanded: (v: boolean) => void;
+  copied: boolean;
+  handleCopy: () => void;
+  isSingleKeyObject: boolean;
+  depth: number;
+}) {
+  const [modalOpen, setModalOpen] = useState(false);
+  const showExpandButton = depth === 0 && entries.length > 3;
+
+  return (
+    <div className={cn(depth === 0 ? "overflow-x-auto relative" : undefined)}>
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="flex items-center gap-1 hover:text-foreground text-zinc-500 dark:text-zinc-400 text-sm"
+        >
+          {expanded ? (
+            <ChevronDown className="w-3 h-3" />
+          ) : (
+            <ChevronRight className="w-3 h-3" />
+          )}
+          {name && <span className="mr-1">{name}:</span>}
+          <span className="text-zinc-500">
+            {"{"}
+            {entries.length} key{entries.length !== 1 ? "s" : ""}
+            {"}"}
+          </span>
+        </button>
+        {depth === 0 && (
+          <button
+            onClick={handleCopy}
+            className="text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 ml-2"
+            title="Copy JSON"
+          >
+            {copied ? (
+              <Check className="w-3 h-3 text-emerald-400" />
+            ) : (
+              <Copy className="w-3 h-3" />
+            )}
+          </button>
+        )}
+        {showExpandButton && (
+          <button
+            onClick={() => setModalOpen(true)}
+            className="text-zinc-600 hover:text-zinc-400 ml-1 transition-colors"
+            title="Expand in modal"
+          >
+            <Maximize2 className="w-3 h-3" />
+          </button>
+        )}
+      </div>
+      {expanded && (
+        <div className="ml-4 border-l border-zinc-300/50 dark:border-zinc-700/50 pl-3 mt-1 space-y-0.5 min-w-0">
+          {entries.map(([key, value]) => (
+            <div key={key} className="text-sm min-w-0">
+              <JsonView
+                data={value}
+                name={key}
+                defaultExpanded={isSingleKeyObject || depth < 1}
+                depth={depth + 1}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+      {showExpandButton && (
+        <ContentModal open={modalOpen} onOpenChange={setModalOpen} title={name ?? "JSON"}>
+          <pre className="text-sm text-zinc-300 font-mono p-2 whitespace-pre-wrap break-words">
+            {JSON.stringify(data, null, 2)}
+          </pre>
+        </ContentModal>
+      )}
+    </div>
+  );
+}
+
 interface JsonViewProps {
   data: unknown;
   name?: string;
@@ -282,53 +374,17 @@ export function JsonView({
     }
 
     return (
-      <div className={depth === 0 ? "overflow-x-auto" : undefined}>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setExpanded(!expanded)}
-            className="flex items-center gap-1 hover:text-foreground text-zinc-500 dark:text-zinc-400 text-sm"
-          >
-            {expanded ? (
-              <ChevronDown className="w-3 h-3" />
-            ) : (
-              <ChevronRight className="w-3 h-3" />
-            )}
-            {name && <span className="mr-1">{name}:</span>}
-            <span className="text-zinc-500">
-              {"{"}
-              {entries.length} key{entries.length !== 1 ? "s" : ""}
-              {"}"}
-            </span>
-          </button>
-          {depth === 0 && (
-            <button
-              onClick={handleCopy}
-              className="text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 ml-2"
-              title="Copy JSON"
-            >
-              {copied ? (
-                <Check className="w-3 h-3 text-emerald-400" />
-              ) : (
-                <Copy className="w-3 h-3" />
-              )}
-            </button>
-          )}
-        </div>
-        {expanded && (
-          <div className="ml-4 border-l border-zinc-300/50 dark:border-zinc-700/50 pl-3 mt-1 space-y-0.5 min-w-0">
-            {entries.map(([key, value]) => (
-              <div key={key} className="text-sm min-w-0">
-                <JsonView
-                  data={value}
-                  name={key}
-                  defaultExpanded={isSingleKeyObject || depth < 1}
-                  depth={depth + 1}
-                />
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      <JsonObjectView
+        data={data as Record<string, unknown>}
+        entries={entries}
+        name={name}
+        expanded={expanded}
+        setExpanded={setExpanded}
+        copied={copied}
+        handleCopy={handleCopy}
+        isSingleKeyObject={isSingleKeyObject}
+        depth={depth}
+      />
     );
   }
 
