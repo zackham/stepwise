@@ -1,12 +1,13 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { useJobs, useGroups, useStepwiseMutations } from "@/hooks/useStepwise";
 import { JobCard } from "@/components/canvas/JobCard";
 import { DependencyArrows } from "@/components/canvas/DependencyArrows";
+import { BulkActionBar } from "@/components/canvas/BulkActionBar";
 import { computeCanvasLayout } from "@/components/canvas/CanvasLayout";
 import { ActionContextProvider } from "@/components/menus/ActionContextProvider";
 import { fetchRuns } from "@/lib/api";
-import { Eye, EyeOff, Minus, Plus } from "lucide-react";
+import { CheckSquare, Eye, EyeOff, Minus, Plus, XSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Job, StepRun } from "@/lib/types";
 
@@ -26,6 +27,10 @@ export function CanvasPage() {
   const { data: groups = [] } = useGroups();
   const { updateGroupLimit } = useStepwiseMutations();
   const [hideCompleted, setHideCompleted] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const lastSelectedRef = useRef<string | null>(null);
+
+  const isSelectionActive = selectedIds.size > 0;
 
   // Build group_name -> max_concurrent map for layout
   const groupSettings = useMemo(() => {
@@ -49,11 +54,52 @@ export function CanvasPage() {
     updateGroupLimit.mutate({ group, maxConcurrent: Math.max(0, newLimit) });
   }, [updateGroupLimit]);
 
+  // Build a flat ordered list of all visible job IDs for shift+click range selection
+  // (order: dependent jobs by layout, then grouped, then ungrouped — filled lazily after computed)
+  const orderedJobIdsRef = useRef<string[]>([]);
+
+  const handleToggleSelect = useCallback((jobId: string, shiftKey: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (shiftKey && lastSelectedRef.current) {
+        // Range selection
+        const ordered = orderedJobIdsRef.current;
+        const startIdx = ordered.indexOf(lastSelectedRef.current);
+        const endIdx = ordered.indexOf(jobId);
+        if (startIdx !== -1 && endIdx !== -1) {
+          const [lo, hi] = startIdx < endIdx ? [startIdx, endIdx] : [endIdx, startIdx];
+          for (let i = lo; i <= hi; i++) {
+            next.add(ordered[i]);
+          }
+        } else {
+          next.has(jobId) ? next.delete(jobId) : next.add(jobId);
+        }
+      } else {
+        if (next.has(jobId)) {
+          next.delete(jobId);
+        } else {
+          next.add(jobId);
+        }
+      }
+      lastSelectedRef.current = jobId;
+      return next;
+    });
+  }, []);
+
+  const handleClearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+    lastSelectedRef.current = null;
+  }, []);
+
   // Filter jobs
   const visibleJobs = useMemo(() => {
     if (hideCompleted) return jobs.filter((j) => j.status !== "completed");
     return jobs;
   }, [jobs, hideCompleted]);
+
+  const handleSelectAll = useCallback(() => {
+    setSelectedIds(new Set(visibleJobs.map((j) => j.id)));
+  }, [visibleJobs]);
 
   // Fetch runs for all visible jobs
   const runsQueries = useQueries({
@@ -161,6 +207,27 @@ export function CanvasPage() {
     };
   }, [sortedIndependentJobs]);
 
+  // Build ordered job ID list for shift+click range selection
+  useMemo(() => {
+    const ids: string[] = [];
+    for (const card of layout.cards) ids.push(card.jobId);
+    for (const [, groupJobs] of grouped) {
+      for (const job of groupJobs) ids.push(job.id);
+    }
+    for (const job of ungrouped) ids.push(job.id);
+    orderedJobIdsRef.current = ids;
+  }, [layout.cards, grouped, ungrouped]);
+
+  // Clean up selection when jobs disappear (e.g. filtered out)
+  useEffect(() => {
+    const visibleIds = new Set(visibleJobs.map((j) => j.id));
+    setSelectedIds((prev) => {
+      const filtered = new Set([...prev].filter((id) => visibleIds.has(id)));
+      if (filtered.size !== prev.size) return filtered;
+      return prev;
+    });
+  }, [visibleJobs]);
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full text-zinc-500 text-sm">
@@ -188,6 +255,9 @@ export function CanvasPage() {
             .filter(Boolean) as string[] | undefined
         }
         isGroupQueued={groupQueuedSet.has(job.id)}
+        isSelected={selectedIds.has(job.id)}
+        isSelectionActive={isSelectionActive}
+        onToggleSelect={handleToggleSelect}
       />
     </div>
   );
@@ -196,7 +266,28 @@ export function CanvasPage() {
     <ActionContextProvider>
     <div className="h-full overflow-y-auto">
       {/* Toolbar */}
-      <div className="sticky top-0 z-10 flex items-center justify-end px-6 py-3 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-sm border-b border-zinc-200 dark:border-zinc-800/50">
+      <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-3 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-sm border-b border-zinc-200 dark:border-zinc-800/50">
+        <div className="flex items-center gap-2">
+          {isSelectionActive ? (
+            <button
+              onClick={handleClearSelection}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border border-zinc-300 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/80 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors"
+              title="Deselect all"
+            >
+              <XSquare className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Deselect</span>
+            </button>
+          ) : (
+            <button
+              onClick={handleSelectAll}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border border-zinc-300 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/80 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors"
+              title="Select all"
+            >
+              <CheckSquare className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Select all</span>
+            </button>
+          )}
+        </div>
         <button
           onClick={() => setHideCompleted(!hideCompleted)}
           className={cn(
@@ -295,6 +386,9 @@ export function CanvasPage() {
                           .filter(Boolean) as string[] | undefined
                       }
                       isGroupQueued={groupQueuedSet.has(job.id)}
+                      isSelected={selectedIds.has(job.id)}
+                      isSelectionActive={isSelectionActive}
+                      onToggleSelect={handleToggleSelect}
                     />
                   </div>
                 );
@@ -361,6 +455,13 @@ export function CanvasPage() {
           </section>
         )}
       </div>
+
+      {/* Bulk action bar */}
+      <BulkActionBar
+        selectedIds={selectedIds}
+        jobs={visibleJobs}
+        onClearSelection={handleClearSelection}
+      />
     </div>
     </ActionContextProvider>
   );
