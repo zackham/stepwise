@@ -28,6 +28,12 @@ stepwise run @stepwise:code-review --watch
 
 An agent reviews your code, pauses for your decision, and continues based on your input. Three executor types in one flow.
 
+Want to browse a flow without running it?
+
+```bash
+stepwise open @stepwise:demo
+```
+
 ## Your first flow
 
 No `.stepwise/` directory needed. No configuration. Just a YAML file.

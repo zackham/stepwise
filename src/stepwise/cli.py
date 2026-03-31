@@ -3,6 +3,7 @@
 Usage:
     stepwise init                          Create .stepwise/ in cwd
     stepwise run <flow> [flags]            Run a flow
+    stepwise open <target>                 Open a flow or job in the web UI
     stepwise new <name>                    Create a new flow
     stepwise server start [--detach]       Start server (foreground or background)
     stepwise server stop                   Stop the server
@@ -2159,6 +2160,127 @@ def cmd_run(args: argparse.Namespace) -> int:
         metadata=metadata,
     )
 
+
+
+def cmd_open(args: argparse.Namespace) -> int:
+    """Open a flow or job in the web UI without executing anything."""
+    import os
+    import threading
+
+    from stepwise.flow_resolution import (
+        FlowResolutionError,
+        flow_display_name,
+        parse_registry_ref,
+        resolve_flow,
+    )
+    from stepwise.server_detect import (
+        ServerAlreadyRunning,
+        acquire_pidfile_guard,
+        detect_server,
+        remove_pidfile,
+    )
+
+    target = args.target
+    io = _io(args)
+    project = _find_project_or_exit(args, auto_init=True)
+    project_dir = _project_dir(args) or Path.cwd()
+
+    # Detect if target is a job ID
+    if target.startswith("job-"):
+        url_path = f"/jobs/{target}"
+    else:
+        # Resolve as flow
+        parsed = parse_registry_ref(target)
+        if parsed:
+            author, slug = parsed
+            # Registry ref — check local cache first, fetch if missing
+            try:
+                from stepwise.flow_resolution import resolve_registry_flow
+
+                resolve_registry_flow(author, slug, project_dir)
+            except FlowResolutionError:
+                fetched = _try_registry_fetch(target, project_dir, io)
+                if not fetched:
+                    io.log("error", f"Flow not found: {target}")
+                    return EXIT_USAGE_ERROR
+
+        try:
+            flow_path = resolve_flow(target, project_dir)
+        except FlowResolutionError as e:
+            io.log("error", str(e))
+            return EXIT_USAGE_ERROR
+
+        flow_name = flow_display_name(flow_path)
+        url_path = f"/flows/{flow_name}"
+
+    # Check for existing server
+    existing_url = detect_server(project.dot_dir)
+
+    if existing_url:
+        url = f"{existing_url}{url_path}"
+        io.log("info", f"Opening {url}")
+        if not args.no_open:
+            _open_browser(url)
+        else:
+            print(url)
+        return EXIT_SUCCESS
+
+    # Start ephemeral server
+    port = args.port or _find_free_port()
+    host = "127.0.0.1"
+    server_url = f"http://{host}:{port}"
+
+    os.environ["STEPWISE_DB"] = str(project.db_path)
+    os.environ["STEPWISE_TEMPLATES"] = str(project.templates_dir)
+    os.environ["STEPWISE_JOBS_DIR"] = str(project.jobs_dir)
+    os.environ["STEPWISE_PROJECT_DIR"] = str(project.root)
+
+    print(f"▸ opening {url_path} ...")
+    print(f"  {server_url}")
+    print()
+    print(f"  Press Ctrl+C to stop.")
+
+    # Open browser when server is ready
+    def _open_when_ready():
+        import socket
+        import time
+
+        for _ in range(50):
+            try:
+                with socket.create_connection((host, port), timeout=0.5):
+                    break
+            except OSError:
+                time.sleep(0.1)
+        else:
+            return  # server never came up
+        url = f"{server_url}{url_path}"
+        if not getattr(args, "no_open", False):
+            _open_browser(url)
+        else:
+            print(url)
+
+    t = threading.Thread(target=_open_when_ready, daemon=True)
+    t.start()
+
+    try:
+        acquire_pidfile_guard(project.dot_dir, port)
+    except ServerAlreadyRunning as e:
+        io.log("error", f"Cannot start: {e}")
+        return EXIT_JOB_FAILED
+
+    import uvicorn
+
+    try:
+        uvicorn.run(
+            "stepwise.server:app",
+            host=host,
+            port=port,
+            log_level="error",
+        )
+    finally:
+        remove_pidfile(project.dot_dir)
+
+    return EXIT_SUCCESS
 
 
 def _run_watch(
@@ -4340,7 +4462,7 @@ def _open_browser_when_ready(host: str, port: int) -> None:
 
 # Command groups for --help display
 _COMMAND_GROUPS: list[tuple[str, list[str]]] = [
-    ("Execution", ["run", "validate", "check", "preflight", "diagram"]),
+    ("Execution", ["run", "open", "validate", "check", "preflight", "diagram"]),
     ("Jobs", ["jobs", "status", "cancel", "tail", "logs", "output", "wait", "fulfill", "list"]),
     ("Server", ["server"]),
     ("Project", ["init", "new", "flows", "config", "templates"]),
@@ -4467,6 +4589,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--meta", action="append", default=[], dest="meta",
                        metavar="KEY=VALUE",
                        help="Set job metadata (dot notation: sys.origin=cli, app.project=foo)")
+
+    # open
+    p_open = sub.add_parser("open", help="Open a flow or job in the web UI")
+    p_open.add_argument("target", help="Flow name, path, @registry:ref, or job ID")
+    p_open.add_argument("--port", type=int, help="Override port for ephemeral server")
+    p_open.add_argument("--no-open", action="store_true", help="Print URL instead of opening browser")
 
     # check
     p_check = sub.add_parser("check", help="Validate flow structure and model resolution")
@@ -5713,6 +5841,7 @@ def main(argv: list[str] | None = None) -> int:
         "init": cmd_init,
         "server": cmd_server,
         "run": cmd_run,
+        "open": cmd_open,
         "new": cmd_new,
         "validate": cmd_validate,
         "test-fixture": cmd_test_fixture,

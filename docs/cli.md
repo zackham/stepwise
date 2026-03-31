@@ -8,7 +8,7 @@ See [Quickstart](quickstart.md) for installation and first-run instructions. See
 
 | Group | Commands |
 |-------|----------|
-| [Core](#core-commands) | `run`, `new`, `validate`, `check`, `preflight`, `test-fixture` |
+| [Core](#core-commands) | `run`, `open`, `new`, `validate`, `check`, `preflight`, `test-fixture` |
 | [Jobs](#job-commands) | `jobs`, `status`, `output`, `tail`, `logs`, `wait`, `cancel`, `fulfill`, `list` |
 | [Job Lifecycle](#job-lifecycle-commands) | `archive`, `unarchive`, `rm` |
 | [Job Staging](#job-staging-commands) | `job create`, `job show`, `job run`, `job dep`, `job approve`, `job cancel`, `job rm` |
@@ -217,6 +217,24 @@ Same as headless mode (shows step progress to stderr) but prints structured JSON
 | `--notify URL` | Webhook URL for job event notifications |
 | `--notify-context JSON` | JSON context to include in webhook payloads |
 | `--meta KEY=VALUE` | Set job metadata (dot notation: `sys.origin=cli`, `app.project=foo`) |
+
+---
+
+### `stepwise open`
+
+Open a flow or job in the web UI. Starts an ephemeral server if none is running.
+
+```bash
+stepwise open my-flow                    # open flow detail page
+stepwise open @stepwise:demo             # open registry flow (auto-fetches)
+stepwise open flows/my-flow/FLOW.yaml    # open flow by path
+stepwise open job-abc123                 # open job detail page
+```
+
+| Flag | Description |
+|------|-------------|
+| `--port INT` | Override port for ephemeral server |
+| `--no-open` | Print URL instead of opening browser |
 
 ---
 
