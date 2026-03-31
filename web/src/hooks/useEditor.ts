@@ -48,6 +48,17 @@ export function useDeleteFlow() {
   });
 }
 
+export function useForkFlow() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ sourcePath, name }: { sourcePath: string; name: string }) =>
+      api.forkFlow(sourcePath, name),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["localFlows"] });
+    },
+  });
+}
+
 export function useLocalFlow(path: string | undefined) {
   return useQuery({
     queryKey: ["localFlow", path],

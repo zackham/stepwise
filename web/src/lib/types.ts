@@ -361,6 +361,8 @@ export interface LocalFlow {
   is_directory: boolean;
   executor_types: string[];
   visibility: "interactive" | "background" | "internal";
+  source?: "local" | "registry";
+  registry_ref?: string;
 }
 
 export interface FlowGraphNode {
