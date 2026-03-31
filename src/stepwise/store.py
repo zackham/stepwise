@@ -907,13 +907,8 @@ class SQLiteStore:
         if not completed:
             return None, False
 
-        # Identify terminal steps: steps with no downstream deps in the workflow
-        all_dep_targets = set()
-        for step_def in job.workflow.steps.values():
-            for inp in step_def.inputs:
-                if inp.source_step and inp.source_step != "$job":
-                    all_dep_targets.add(inp.source_step)
-        terminal_steps = {name for name in job.workflow.steps if name not in all_dep_targets}
+        # Use workflow's terminal_steps() which excludes boomerang steps
+        terminal_steps = set(job.workflow.terminal_steps())
 
         def _extract_field(artifact: dict, path: str) -> tuple[Any, bool]:
             """Navigate dot-path into artifact. Returns (value, found)."""

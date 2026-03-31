@@ -2878,13 +2878,29 @@ class Engine:
         return depth
 
     def _terminal_output(self, job: Job) -> HandoffEnvelope:
-        """Get the output of a job's terminal step."""
+        """Merge outputs from all completed terminal steps.
+
+        Terminal steps may be mutually exclusive (conditional branches) or
+        parallel. Merging all completed terminals produces the union of
+        whichever branches actually ran.
+        """
         terminal = job.workflow.terminal_steps()
         if not terminal:
             return HandoffEnvelope(artifact={}, sidecar=Sidecar(), workspace=job.workspace_path, timestamp=_now())
-        terminal_run = self.store.latest_completed_run(job.id, terminal[0])
-        if terminal_run and terminal_run.result:
-            return terminal_run.result
+        merged: dict = {}
+        last_result: HandoffEnvelope | None = None
+        for name in terminal:
+            run = self.store.latest_completed_run(job.id, name)
+            if run and run.result and run.result.artifact:
+                merged.update(run.result.artifact)
+                last_result = run.result
+        if last_result:
+            return HandoffEnvelope(
+                artifact=merged,
+                sidecar=last_result.sidecar,
+                workspace=last_result.workspace,
+                timestamp=last_result.timestamp,
+            )
         return HandoffEnvelope(artifact={}, sidecar=Sidecar(), workspace=job.workspace_path, timestamp=_now())
 
     # ── Limits ─────────────────────────────────────────────────────────────
