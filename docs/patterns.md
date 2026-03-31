@@ -1,8 +1,8 @@
 # Stepwise Patterns
 
-Idioms for building effective multi-agent flows. Complements [flow-reference.md](flow-reference.md) (YAML syntax), [executors.md](executors.md) (executor details), and [concepts.md](concepts.md) (core concepts).
+Idioms for building effective multi-agent flows. Complements [Writing Flows](writing-flows.md) (authoring guide), [YAML Format](yaml-format.md) (field-by-field spec), [Executors](executors.md) (executor details), and [Troubleshooting](troubleshooting.md) (error reference).
 
-**Prerequisites:** This document assumes familiarity with the core YAML syntax from flow-reference.md. Key concepts used throughout:
+**Prerequisites:** This document assumes familiarity with the core YAML syntax. Key concepts used throughout:
 
 - **`$variable`** in prompts resolves from the step's `inputs:` bindings
 - **`$job.variable`** references job-level inputs (from `--input` or `config:` block)
@@ -54,20 +54,10 @@ steps:
 
 ### Using path-in-output (lighter variant)
 
-When `output_mode: file` is too rigid, the agent writes to a file and outputs the path. This is what the `plan-and-build` flow does — the plan agent saves to `$plan_report_path`, and the implement agent reads selectively.
+When `output_mode: file` is too rigid, the agent writes to a file and outputs the path. The downstream agent reads selectively.
 
 ```yaml
 steps:
-  ingest:
-    run: |
-      python3 -c "
-      import json; print(json.dumps({
-        'project_path': '/home/user/myrepo',
-        'plan_path': '/home/user/myrepo/.stepwise/plan.md'
-      }))
-      "
-    outputs: [project_path, plan_path]
-
   plan:
     executor: agent
     working_dir: $project_path
@@ -77,8 +67,8 @@ steps:
       Your final response must be the complete plan text.
     outputs: [result]
     inputs:
-      project_path: ingest.project_path
-      plan_path: ingest.plan_path
+      project_path: $job.project_path
+      plan_path: $job.plan_path
 
   implement:
     executor: agent
@@ -88,15 +78,15 @@ steps:
       **Plan location:** $plan_path
       Read sections selectively as you work through each step.
     inputs:
-      project_path: ingest.project_path
-      plan_path: ingest.plan_path
+      project_path: $job.project_path
+      plan_path: $job.plan_path
     after: [plan]
     outputs: [result]
 ```
 
 ### Prompting for selective reads
 
-When downstream agents receive file paths, tell them **how** to read selectively. Use structured formats upstream so agents can navigate:
+When downstream agents receive file paths, tell them **how** to read selectively:
 
 ```yaml
 # Upstream: instruct structured output
@@ -121,28 +111,20 @@ prompt: |
   4. Reference test results only when fixing failures
 ```
 
-The downstream agent can `grep -n "^## " .stepwise/analysis.md` to find sections and read only what it needs.
-
 ### Cross-codebase paths must be absolute
 
-When using `working_dir` to run agent steps in a different codebase, the path must be absolute or use `~` expansion. Relative paths resolve against the flow's project directory, not the target codebase.
+When using `working_dir` to run agent steps in a different codebase, file paths must be absolute or use `~` expansion:
 
 ```yaml
 # Correct — absolute path
 working_dir: /home/user/other-repo
 
-# Correct — passed as job input (caller provides absolute path)
+# Correct — passed as job input
 working_dir: $project_path
-# stepwise run flow.yaml --input project_path=/home/user/other-repo
 
-# Correct — ~ expansion
-working_dir: ~/other-repo
-
-# WRONG — resolves relative to the flow's .stepwise/ project, not the target
+# WRONG — resolves relative to the flow's project, not the target
 working_dir: ../other-repo
 ```
-
-This applies to `output_path` and any file paths in agent prompts that reference the target codebase. Always use absolute paths or pass them as job inputs.
 
 **When to use file-based passing:**
 - Prior step output exceeds ~4K tokens
@@ -167,8 +149,7 @@ steps:
   plan:
     executor: agent
     working_dir: $project_path
-    config:
-      emit_flow: true
+    emit_flow: true
     prompt: |
       Analyze the codebase and create an implementation plan for: $spec
 
@@ -226,7 +207,6 @@ steps:
 - The agent decides the parallelism at runtime — not the flow author at authoring time
 - Each sub-job gets its own isolated context
 - `on_error: continue` lets other modules finish even if one fails
-- The integration step sees all results as an array
 - Engine auto-detects `.stepwise/emit.flow.yaml` — no special output needed
 
 **When to use:**
@@ -237,7 +217,6 @@ steps:
 **When not to use:**
 - Decomposition is always the same — use static `for_each` in YAML
 - Units have sequential dependencies — use regular step ordering
-- The agent needs to explore first — let it explore in a separate step, then emit
 
 ---
 
@@ -273,6 +252,7 @@ steps:
 
   review:
     executor: llm
+    model: anthropic/claude-sonnet-4
     prompt: "Risk assessment: $risk_summary. Modules: $module_list. Recommend action."
     inputs:
       risk_summary: prepare.risk_summary
@@ -284,23 +264,19 @@ steps:
 
 Note: `after: [analyze]` on the `prepare` step creates ordering without data transfer — the script reads the file directly rather than receiving output through inputs. Use `after` when a step depends on a prior step's **side effects** (files written) but doesn't consume its output fields.
 
-**When to use scripts:**
-- Parsing, filtering, or reformatting data between steps
-- Conditionals that don't need judgment (file existence checks, threshold comparisons)
-- Extracting specific fields from large outputs for downstream consumption
-
 For simple computations (aggregations, thresholds, sorting), prefer `derived_outputs` over a script step — it's inline, no extra step, and the computed fields become real outputs:
 
 ```yaml
 score:
   executor: llm
+  model: anthropic/claude-sonnet-4
   outputs: [scores]
   derived_outputs:
     average: "sum(scores.values()) / len(scores)"
     passed: "average >= 4.0"
 ```
 
-See [YAML Format — Derived Outputs](yaml-format.md#derived-outputs-computed-fields) for full details.
+See [YAML Format -- Derived Outputs](yaml-format.md#derived-outputs-computed-fields) for full details.
 
 ---
 
@@ -308,7 +284,7 @@ See [YAML Format — Derived Outputs](yaml-format.md#derived-outputs-computed-fi
 
 **Problem:** Agent steps may encounter decisions outside their scope — architectural choices, product tradeoffs, ambiguous requirements. Without explicit boundaries, agents guess silently.
 
-**Pattern:** Define escalation markers in agent prompts. Exit rules detect them and suspend the job for external input. After the human responds, the agent resumes with the answer via `continue_session`. This is exactly how the `plan-and-build` flow handles both planning and implementation questions.
+**Pattern:** Define escalation markers in agent prompts. Exit rules detect them and suspend the job for external input. After the human responds, the agent resumes with the answer via `continue_session`.
 
 ```yaml
 steps:
@@ -352,10 +328,10 @@ steps:
 
 **How the cycle works:**
 1. `implement` runs. If it hits an ambiguous decision, it outputs `>>>ESCALATE: ...`
-2. Exit rule matches → `action: escalate` suspends the job at `implement_escalate`
+2. Exit rule matches -> `action: escalate` suspends the job at `implement_escalate`
 3. Human provides answer via web UI or terminal
 4. Engine resumes: `implement` re-runs with `escalation_answer` now resolved
-5. `continue_session: true` preserves the agent's full history — it picks up where it left off, now with the guidance in context
+5. `continue_session: true` preserves the agent's full history — it picks up where it left off
 
 **Key details:**
 - `continue_session: true` — agent retains full context across the escalation round-trip
@@ -410,6 +386,7 @@ steps:
 
   evaluate:
     executor: llm
+    model: anthropic/claude-sonnet-4
     prompt: |
       Score this spec on 5 dimensions (1-5 each): $spec_text
       Return JSON: {"scores": {...}, "average": N, "lowest_three": [...], "critique": "..."}
@@ -456,13 +433,14 @@ config:
 steps:
   score:
     executor: llm
+    model: anthropic/claude-sonnet-4
     prompt: |
       Evaluate this content against the rubric.
       Content: $content
       Rubric: $rubric
       Return JSON with scores, average, and critique.
     inputs:
-      content: $job.content    # ← resolves from parent's inputs mapping
+      content: $job.content
       rubric: $job.rubric
     outputs: [scores, average, critique]
 ```
@@ -480,7 +458,7 @@ steps:
   evaluate:
     flow: evaluate-quality              # bare name — preferred over file paths
     inputs:
-      content: generate.report          # → becomes $job.content in sub-flow
+      content: generate.report          # becomes $job.content in sub-flow
       rubric: "Score on depth, accuracy, actionability, writing quality"
     outputs: [scores, average, critique]
 ```
@@ -491,6 +469,7 @@ steps:
 - Use bare flow names (`flow: evaluate-quality`), not file paths — portable across machines
 - Keep sub-flows focused: one responsibility, clear inputs/outputs
 - `for_each` supports sub-flows for fan-out over composed flows
+- Sub-flow steps support `when` conditions for conditional activation
 
 ---
 
@@ -516,18 +495,10 @@ steps:
           backoff: exponential
       - type: timeout
         config:
-          minutes: 15
-
-  research_fallback:
-    executor: llm
-    prompt: "Summarize what you know about: $topic"
-    inputs:
-      topic: $job.topic
-    outputs: [findings]
-    when: "false"    # only runs as fallback — see decorator below
+          seconds: 900
 ```
 
-For steps where failure should route to a simpler alternative:
+For steps where failure should route to a simpler alternative, use a `fallback` decorator:
 
 ```yaml
   expensive_analysis:
@@ -538,7 +509,7 @@ For steps where failure should route to a simpler alternative:
       data: fetch.data
     decorators:
       - type: timeout
-        config: { minutes: 30 }
+        config: { seconds: 1800 }
       - type: fallback
         config:
           fallback_ref:
@@ -552,8 +523,6 @@ For steps where failure should route to a simpler alternative:
 - Agent steps calling external tools that may fail transiently
 - Expensive steps that should have a cheaper fallback
 - Steps where partial results are better than job failure
-
-See [flow-reference.md § Decorators](flow-reference.md#decorators) for full decorator syntax.
 
 ---
 
@@ -604,9 +573,57 @@ stepwise job run --group auth-batch
 | Agent decides decomposition at runtime | `emit_flow: true` (dynamic, single job) |
 | Human reviews decomposition before execution | **Plan-light to implement** (staged, multi-job) |
 
-The plan-light pattern is most valuable when the cost of execution is high (agent steps that take minutes, deploy steps that are hard to reverse) and you want a human checkpoint between planning and doing.
+---
 
-See [Concepts: Job Staging](concepts.md#job-staging) for the full mental model and [CLI: Job Staging](cli.md#job-staging-commands) for command reference.
+## 9. Gating Post-Loop Steps
+
+**Problem:** Steps run as soon as their inputs or `after` deps are satisfied — they don't wait for a loop to finish. A step ordered after a looping step fires after the **first iteration**, not after the loop exits.
+
+**Bug (runs too early):**
+
+```yaml
+steps:
+  draft:
+    executor: llm
+    model: anthropic/claude-sonnet-4
+    prompt: "Write about $topic"
+    inputs: { topic: $job.topic }
+    outputs: [content]
+
+  review:
+    executor: external
+    prompt: "Score this: $content"
+    inputs: { content: draft.content }
+    outputs: [score]
+    exits:
+      - name: good
+        when: "float(outputs.score) >= 0.8"
+        action: advance
+      - name: retry
+        when: "attempt < 3"
+        action: loop
+        target: draft
+
+  publish:
+    run: './publish.sh "$content"'
+    inputs: { content: draft.content }
+    after: [review]                    # BUG: runs after review's first completion
+    outputs: [url]
+```
+
+**Fix (gated with `when`):**
+
+```yaml
+  publish:
+    run: './publish.sh "$content"'
+    inputs:
+      content: draft.content
+      score: review.score
+    when: "float(score) >= 0.8"       # only runs when the loop exits via "good"
+    outputs: [url]
+```
+
+**General principle:** Any step downstream of a loop needs an explicit `when` condition to ensure it only runs after the loop terminates with the desired outcome. The engine has no concept of "loop finished" — it only knows "step completed." `stepwise validate` will warn about this pattern.
 
 ---
 
@@ -614,16 +631,17 @@ See [Concepts: Job Staging](concepts.md#job-staging) for the full mental model a
 
 | Situation | Pattern |
 |-----------|---------|
-| Prior step output > 4K tokens | **File-based context** — write to file, pass path (§1) |
-| Downstream agent only needs parts of upstream output | **Selective reading** — pass path, instruct agent to read on demand (§1) |
-| Decomposition shape unknown until runtime | **Dynamic fan-out** — `emit_flow: true` with for_each (§2) |
-| Decomposition shape always the same | Static `for_each` in YAML ([flow-reference.md](flow-reference.md#for-each-fan-outfan-in)) |
-| Mechanical data transformation between steps | **Script step** — deterministic, no LLM needed (§3) |
-| Step depends on prior step's files, not its outputs | `after: [step]` — ordering without data transfer (§3) |
-| Agent may hit decisions outside its scope | **Escalation boundary** — `>>>ESCALATE:` + human step + loop (§4) |
-| Quality-gated iteration loop | **Progressive refinement** — `continue_session` + `loop_prompt` (§5) |
-| Same pattern used in multiple flows | **Flow composition** — extract sub-flow, reference via `flow:` (§6) |
-| Agent step may fail transiently | **Retry decorator** — `max_retries` + `backoff` (§7) |
-| Expensive step needs a cheaper fallback | **Fallback decorator** — simpler executor as backup (§7) |
-| Planning determines implementation shape | **Plan-light to implement** — stage jobs referencing plan outputs (§8) |
-| Short output (scores, booleans, paths) | Inline `$variable` substitution — simple and direct |
+| Prior step output > 4K tokens | **File-based context** -- write to file, pass path |
+| Downstream agent only needs parts of upstream output | **Selective reading** -- pass path, instruct agent to read on demand |
+| Decomposition shape unknown until runtime | **Dynamic fan-out** -- `emit_flow: true` with for_each |
+| Decomposition shape always the same | Static `for_each` in YAML |
+| Mechanical data transformation between steps | **Script step** -- deterministic, no LLM needed |
+| Step depends on prior step's files, not its outputs | `after: [step]` -- ordering without data transfer |
+| Agent may hit decisions outside its scope | **Escalation boundary** -- `>>>ESCALATE:` + external step + loop |
+| Quality-gated iteration loop | **Progressive refinement** -- `continue_session` + `loop_prompt` |
+| Same pattern used in multiple flows | **Flow composition** -- extract sub-flow, reference via `flow:` |
+| Agent step may fail transiently | **Retry decorator** -- `max_retries` + `backoff` |
+| Expensive step needs a cheaper fallback | **Fallback decorator** -- simpler executor as backup |
+| Planning determines implementation shape | **Plan-light to implement** -- stage jobs referencing plan outputs |
+| Post-loop step fires too early | **Gate with `when`** -- condition on loop exit state |
+| Short output (scores, booleans, paths) | Inline `$variable` substitution -- simple and direct |

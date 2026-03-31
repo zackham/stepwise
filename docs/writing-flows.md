@@ -2,7 +2,7 @@
 
 A flow is a YAML file that defines a workflow — a directed acyclic graph of steps. Each step declares what it does, what it needs, and what it produces. The engine handles ordering, parallelism, retries, and persistence.
 
-This guide covers everything you need to author flows from scratch. For the complete field-by-field schema, see the [Flow Reference](flow-reference.md).
+This guide covers everything you need to author flows from scratch. For the complete field-by-field schema, see the [YAML Format](yaml-format.md).
 
 ## Flow file structure
 
@@ -102,8 +102,31 @@ steps:
 | `continue_session` | If `true`, reuses the agent session across loop iterations |
 | `loop_prompt` | Alternate prompt used on attempt > 1 |
 | `max_continuous_attempts` | Circuit breaker for continued sessions |
+| `output_mode` | `"effect"` (default), `"stream_result"`, or `"file"` |
+| `output_path` | File path for `output_mode: file` |
 
 When `outputs` is declared, the agent automatically receives a `STEPWISE_OUTPUT_FILE` environment variable and prompt instructions explaining the expected JSON structure. The agent writes the file; the engine reads and validates it.
+
+**Agent output modes:**
+
+| Mode | Artifact | Use When |
+|---|---|---|
+| `"effect"` (default) | `{"status": "completed"}` | Agent modifies files; workspace IS the output |
+| `"stream_result"` | `{"result": "<full agent text>"}` | You need the agent's textual response downstream |
+| `"file"` | Parsed JSON from `output_path` | Agent writes structured JSON to a specific file |
+
+```yaml
+analyze:
+  executor: agent
+  output_mode: file
+  output_path: .stepwise/analysis.json
+  prompt: |
+    Analyze the codebase. Write your findings as JSON to .stepwise/analysis.json
+    with keys: overview, modules, risks.
+  outputs: [overview, modules, risks]
+```
+
+**`output_mode: file` requires explicit prompt instructions.** The engine reads `output_path` after the agent finishes and parses it as JSON. Your prompt must tell the agent to write JSON to that location with keys matching the declared `outputs`.
 
 **Dynamic sub-flows** with `emit_flow: true`:
 
@@ -130,17 +153,26 @@ name: score-example
 steps:
   score:
     executor: llm
-    config:
-      model: anthropic/claude-sonnet-4-20250514
-      prompt: |
-        Score this content on a 0-10 scale. Return JSON with "score" and "reasoning".
-        Content: $content
+    model: anthropic/claude-sonnet-4
+    prompt: |
+      Score this content on a 0-10 scale. Return JSON with "score" and "reasoning".
+      Content: $content
     inputs:
       content: $job.content
     outputs: [score, reasoning]
 ```
 
-The `config.model` field accepts any model available through your configured LLM provider. The response must be parseable as JSON matching the declared outputs.
+**Configuration fields** (all set at step level, not nested in `config:`):
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `model` | Yes | Full model ID (e.g., `anthropic/claude-sonnet-4`) or tier alias (e.g., `balanced`) |
+| `prompt` | Yes | The user message. Supports `$variable` substitution from inputs. |
+| `system` | No | System prompt |
+| `temperature` | No | Sampling temperature (default: 0.0) |
+| `max_tokens` | No | Maximum output tokens (default: 4096) |
+
+The response must be parseable as JSON matching the declared outputs. The LLM executor uses structured output tooling to enforce this.
 
 ## External steps
 
@@ -175,13 +207,15 @@ stepwise fulfill <run-id> '{"decision": "approve", "feedback": "Looks good"}'
 ```yaml
     output_fields:
       decision:
-        type: enum
+        type: choice
         options: [approve, revise, reject]
         description: "Your decision"
       feedback:
         type: text
         description: "Optional notes"
 ```
+
+Valid field types: `str`, `text`, `number`, `bool`, `choice`.
 
 ## Poll steps
 
@@ -245,9 +279,8 @@ steps:
 
   review:
     executor: llm
-    config:
-      model: anthropic/claude-sonnet-4-20250514
-      prompt: "Score this content 0-10: $content"
+    model: anthropic/claude-sonnet-4
+    prompt: "Score this content 0-10: $content"
     inputs:
       content: generate.content
     outputs: [score]
@@ -299,9 +332,8 @@ steps:
 
         review:
           executor: llm
-          config:
-            model: anthropic/claude-sonnet-4-20250514
-            prompt: "Review quality: $content"
+          model: anthropic/claude-sonnet-4
+          prompt: "Review quality: $content"
           inputs:
             content: write.content
           outputs: [pass, feedback]
@@ -316,7 +348,33 @@ steps:
 Each iteration runs as an independent sub-job. Items execute in parallel. Results are collected in source list order.
 
 - `on_error: continue` — other items keep running if one fails (default: `fail_fast`)
-- The `as` variable is available as an input to steps within the sub-flow
+- The `as` variable is available as an input to steps within the sub-flow via `$job.<as_variable>`
+- Empty source lists complete immediately with `{"results": []}`
+- If all items fail under `on_error: continue`, the for-each step itself fails
+
+For-each steps support `when` conditions for conditional activation, just like regular steps.
+
+## Sub-flow composition
+
+Steps can delegate to other flows via the `flow:` field:
+
+```yaml
+steps:
+  evaluate:
+    flow: evaluate-quality              # bare name — resolved from project
+    inputs:
+      content: generate.report          # becomes $job.content in sub-flow
+      rubric: "Score on depth, accuracy"
+    outputs: [scores, average, critique]
+```
+
+Sub-flow sources can be:
+- **Bare flow names** — `flow: evaluate-quality` (resolved from `flows/`, project root, `.stepwise/flows/`)
+- **File paths** — `flow: ./sub-flows/eval.flow.yaml`
+- **Registry refs** — `flow: @alice:evaluate-quality`
+- **Inline dicts** — embed a `flow: { steps: { ... } }` directly
+
+Sub-flow steps support `when` conditions for conditional activation.
 
 ## Exit rules
 
@@ -348,7 +406,7 @@ exits:
 | `escalate` | Pause the job for human inspection |
 | `abandon` | Fail the job |
 
-Rules evaluate in order — first match wins. No match with explicit `advance` rules = step fails (prevents silent advancement past unhandled cases).
+Rules evaluate in order — first match wins. No match with explicit `advance` rules = step fails (prevents silent advancement past unhandled cases). No match with only loop/escalate/abandon rules = implicit advance. No exit rules at all = implicit advance.
 
 **The escalate pattern:** Use `escalate` as a safety bound between success and retry:
 
@@ -367,6 +425,8 @@ exits:
 ```
 
 Priority: success first, then escalate as ceiling, then loop as fallback. Escalated jobs appear in `stepwise list --suspended`.
+
+**Boomerang steps:** Steps with no `advance` exit rules (only loop + escalate/abandon) are excluded from terminal step detection. They exist purely as loop machinery, not as workflow outputs.
 
 ## Conditional branching
 
@@ -411,6 +471,77 @@ Branching is **pull-based** — each step decides when it activates. When `class
 - `inputs: { f: step-x.f }` — data dependency (implies ordering)
 - `when: "expr"` — conditional gate on resolved inputs
 
+## Derived outputs
+
+Compute fields deterministically from a step's executor output. Evaluated after the executor returns but before exit rules.
+
+```yaml
+score:
+  executor: llm
+  prompt: |
+    Score this plan on 8 dimensions (1-5 each).
+    Respond with ONLY: {"scores": {"completeness": 4, "grounding": 3, ...}}
+  outputs: [scores]
+  derived_outputs:
+    average: "sum(scores.values()) / len(scores)"
+    passed: "sum(scores.values()) / len(scores) >= 4.0"
+    lowest_three: "sorted(scores, key=scores.get)[:3]"
+```
+
+The LLM returns only `scores`. The engine computes `average`, `passed`, and `lowest_three` deterministically. All three become real step outputs that downstream steps and exit rules can reference.
+
+**Expression environment:** Artifact fields as local variables, plus Python builtins (`sum`, `len`, `sorted`, `min`, `max`, `float`, `int`, `str`, `list`, `dict`, `set`, `tuple`, `round`, `abs`, `any`, `all`, `enumerate`, `zip`, `map`, `filter`, `range`, `True`, `False`, `None`) and `regex_extract(pattern, text, default)`.
+
+## Session continuity
+
+Agent and LLM steps with `continue_session: true` reuse the same session across loop iterations, continuing the conversation instead of starting fresh.
+
+```yaml
+implement:
+  executor: agent
+  prompt: "Implement: $spec"
+  loop_prompt: "Tests failed:\n$failures\nFix the issues."
+  continue_session: true
+  max_continuous_attempts: 5
+  inputs:
+    spec: $job.spec
+    failures:
+      from: run-tests.failures
+      optional: true
+  outputs: [result]
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `continue_session` | bool | `false` | Reuse agent session across loop iterations |
+| `loop_prompt` | string | --- | Alternate prompt template on attempt > 1 (falls back to `prompt`) |
+| `max_continuous_attempts` | int | --- | After N iterations, force a fresh session |
+
+**Cross-step session sharing:** Agent steps with `continue_session: true` auto-emit `_session_id`. Downstream steps continue the same conversation via optional input:
+
+```yaml
+steps:
+  plan:
+    executor: agent
+    prompt: "Plan: $spec"
+    continue_session: true
+    inputs: { spec: $job.spec }
+    outputs: [plan]
+
+  implement:
+    executor: agent
+    prompt: "Implement the plan."
+    continue_session: true
+    inputs:
+      plan: plan.plan
+      _session_id:
+        from: plan._session_id
+        optional: true
+    outputs: [result]
+```
+
+`_session_id` is a reserved output field — don't declare it in `outputs:`.
+
 ## Caching
 
 Opt-in, content-addressable caching for step results:
@@ -426,8 +557,8 @@ steps:
 
   analyze:
     executor: llm
-    config:
-      prompt: "Analyze: $data"
+    model: anthropic/claude-sonnet-4
+    prompt: "Analyze: $data"
     inputs:
       data: fetch.data
     outputs: [analysis]
@@ -454,6 +585,47 @@ stepwise cache clear                     # clear all
 stepwise cache clear --step fetch        # clear one step
 stepwise cache debug my-flow fetch --input url=https://...  # inspect cache key
 ```
+
+## Config variables
+
+Declare configurable variables in a top-level `config:` block. These map to `$job.*` input bindings.
+
+```yaml
+config:
+  persona:
+    description: "Your AI persona"
+    type: str
+    required: true
+    example: "You are a researcher..."
+  api_key:
+    description: "Service API key"
+    sensitive: true                # masks in output, resolves from STEPWISE_VAR_API_KEY
+  max_rounds:
+    type: number
+    default: 5
+  voice_style:
+    type: choice
+    options: [conversational, formal, casual]
+    default: conversational
+```
+
+**Resolution priority** (highest wins): `--input` > `--vars-file` > `config.local.yaml` > `STEPWISE_VAR_{NAME}` env vars > config defaults.
+
+## Requirements
+
+Declare external tool dependencies in a top-level `requires:` block.
+
+```yaml
+requires:
+  - name: ffmpeg
+    description: "Audio processing"
+    check: "ffmpeg -version"
+    install: "apt install ffmpeg"
+    url: "https://ffmpeg.org"
+  - camofox                        # shorthand: just a name
+```
+
+Requirements are checked by `stepwise validate`, `stepwise info`, and `stepwise preflight`. They are advisory — they don't block `stepwise run`.
 
 ## Validation and preflight
 
@@ -483,8 +655,7 @@ Checks that required API keys are configured, models are accessible, and script 
 
 ## What's next
 
-- [Flow Reference](flow-reference.md) — complete field-by-field schema for every YAML option
+- [YAML Format](yaml-format.md) — complete field-by-field schema for every YAML option
 - [Executors](executors.md) — deep dive into executor configuration and decorators
 - [Patterns](patterns.md) — advanced idioms: session continuity, iterative delegation, fan-out/fan-in
-- [Concepts](concepts.md) — the mental model behind jobs, steps, and the engine
 - [Troubleshooting](troubleshooting.md) — error messages and fixes

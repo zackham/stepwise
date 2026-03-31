@@ -101,9 +101,9 @@ Shows the step's current state:
 - **Sidecar** — decisions, assumptions, confidence levels (if the executor provided them)
 - **Timing** — start time, duration, queue wait
 
-For agent steps, the **Agent Stream** section shows the agent's output in real time — text generation, tool calls, and tool results as they happen. This streams via WebSocket, so you see it live, not after the fact. You can watch an agent reason through a problem, call tools, evaluate results, and iterate — all in the panel. This is the observability that turns "the agent ran for 40 minutes" into "I watched the agent work."
+For agent steps, the **Agent Stream** section shows the agent's output in real time — text generation, tool calls, and tool results as they happen. This streams via WebSocket, so you see it live, not after the fact.
 
-For failed steps, the error message and stack trace are shown inline with the full context of what inputs the step received, making it straightforward to diagnose what went wrong.
+For failed steps, the error message and stack trace are shown inline with the full context of what inputs the step received.
 
 ### Data Flow tab (`?tab=data-flow`)
 
@@ -132,7 +132,7 @@ Three ways to provide input:
 |--------|-----|
 | **Web UI** | Fill in the form, click Submit |
 | **CLI** | `stepwise fulfill <run-id> '{"decision": "approve"}'` |
-| **API** | `POST /api/jobs/{job_id}/runs/{run_id}/fulfill` with JSON body |
+| **API** | `POST /api/runs/{run_id}/fulfill` with JSON body |
 
 After fulfillment, the job resumes immediately. The DAG updates in real time — you'll see the suspended step transition to completed and downstream steps begin executing.
 
@@ -142,9 +142,9 @@ After fulfillment, the job resumes immediately. The DAG updates in real time —
 stepwise list --suspended
 ```
 
-This is the agent's "inbox" — the list of places where human input is needed. In the web UI, the job list's "awaiting input" tab serves the same purpose.
+In the web UI, the job list's "awaiting input" tab serves the same purpose.
 
-**Schema-driven forms:** When a step declares `output_fields` with types like `enum`, `text`, `number`, or `boolean`, the web UI renders appropriate form controls — dropdowns, text areas, number inputs, checkboxes. This makes human input structured and validated, not freeform.
+**Schema-driven forms:** When a step declares `output_fields` with types like `choice`, `text`, `number`, or `bool`, the web UI renders appropriate form controls — dropdowns, text areas, number inputs, checkboxes. This makes human input structured and validated, not freeform.
 
 ## Canvas View
 
@@ -154,15 +154,15 @@ Jobs are grouped by status. Click any job to jump to its detail view.
 
 ## Flow Editor
 
-The editor page (`/editor`) provides a visual flow authoring environment with four integrated panels:
+The editor page (`/editor`) provides a visual flow authoring environment with integrated panels:
 
 **YAML editor** — CodeMirror-based with syntax highlighting, error markers, and auto-completion for step references. Changes are validated in real-time — structural errors appear inline before you save.
 
-**Chat panel** — Agent-assisted flow editing. Describe what you want in natural language ("add an approval step after deploy") and the AI modifies the YAML directly. Supports multiple AI backends (Claude, Codex, or a simpler completion mode). The chat has full context of your current flow, so it understands step names, input bindings, and executor types.
+**Chat panel** — Agent-assisted flow editing. Describe what you want in natural language ("add an approval step after deploy") and the AI modifies the YAML directly. The chat has full context of your current flow, so it understands step names, input bindings, and executor types.
 
 **Step panel** — Click any step in the preview DAG to edit its properties visually: executor type, prompt, inputs, outputs, exit rules. Changes sync back to the YAML editor.
 
-**Registry browser** — Search the [stepwise.run](https://stepwise.run) registry, preview flow details, and install community flows into your project with one click. Installed flows appear in your local flow list.
+**Registry browser** — Search the [stepwise.run](https://stepwise.run) registry, preview flow details, and install community flows into your project with one click.
 
 **File tree** — Browse and switch between flow files in your project. Create new flows, rename, or delete from the sidebar.
 
@@ -180,11 +180,11 @@ The settings page (`/settings`) manages runtime configuration:
 
 **Default model** — Set which model LLM and agent steps use when no explicit `model` is configured in the flow.
 
-**Model labels** — Create short aliases for long model identifiers. For example, define `fast` → `anthropic/claude-haiku-4-5-20251001` and then use `model: fast` in your flows. This makes it easy to switch models across all flows by updating one label.
+**Model labels** — Create short aliases for long model identifiers. For example, define `fast` -> `anthropic/claude-haiku-4-5-20251001` and then use `model: fast` in your flows. This makes it easy to switch models across all flows by updating one label.
 
 **OpenRouter model search** — Browse and search available models if you're using OpenRouter as your provider.
 
-## Common patterns
+## Common Patterns
 
 **Watch a flow from start to finish:**
 ```bash
@@ -208,3 +208,4 @@ Filter the job list to "awaiting input" to see all jobs waiting for human decisi
 - [Quickstart](quickstart.md) — run your first flow and see it in the UI
 - [Writing Flows](writing-flows.md) — author workflows that use all step types
 - [CLI Reference](cli.md) — server management, job control, and fulfillment commands
+- [API Reference](api.md) — REST endpoints and WebSocket protocol

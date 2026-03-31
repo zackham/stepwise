@@ -20,7 +20,7 @@ GET /api/jobs
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `status` | string | Filter by status: `pending`, `running`, `paused`, `completed`, `failed`, `cancelled` |
+| `status` | string | Filter by status: `pending`, `running`, `paused`, `completed`, `failed`, `cancelled`, `staged`, `archived` |
 | `top_level` | boolean | Only return top-level jobs (exclude sub-jobs) |
 
 **Response:** Array of job objects.
@@ -63,8 +63,6 @@ POST /api/jobs
 | `config` | object | No | Job configuration overrides |
 | `workspace_path` | string | No | Override workspace directory |
 
-**Response:** The created job object. Status will be `pending`.
-
 **Note:** Most users should use `stepwise run` or the web UI rather than creating jobs via the API directly. The CLI handles YAML parsing, validation, and workspace setup.
 
 ### Get a job
@@ -100,6 +98,14 @@ POST /api/jobs/{job_id}/cancel
 
 Cancels the job and kills any running executor processes (agents, scripts).
 
+### Reset a job
+
+```
+POST /api/jobs/{job_id}/reset
+```
+
+Resets a failed or completed job back to pending state for re-execution.
+
 ### Delete a job
 
 ```
@@ -107,6 +113,46 @@ DELETE /api/jobs/{job_id}
 ```
 
 Permanently removes the job and all its data from the store.
+
+### Bulk delete
+
+```
+POST /api/jobs/bulk-delete
+```
+
+**Request body:**
+
+```json
+{
+  "job_ids": ["job-abc", "job-def"]
+}
+```
+
+Delete multiple jobs in one request.
+
+### Archive / Unarchive
+
+```
+POST /api/jobs/{job_id}/archive
+POST /api/jobs/{job_id}/unarchive
+```
+
+Archive hides jobs from default listing. Unarchive restores them.
+
+**Bulk archive/unarchive:**
+
+```
+POST /api/jobs/archive
+POST /api/jobs/unarchive
+```
+
+**Request body:**
+
+```json
+{
+  "job_ids": ["job-abc", "job-def"]
+}
+```
 
 ### Get job tree
 
@@ -120,12 +166,12 @@ Returns the job hierarchy — the job, its runs, and any sub-jobs (recursively).
 
 ```json
 {
-  "job": { "id": "job-abc", "status": "completed", ... },
-  "runs": [ ... ],
+  "job": { "id": "job-abc", "status": "completed" },
+  "runs": [],
   "sub_jobs": [
     {
-      "job": { "id": "job-def", ... },
-      "runs": [ ... ],
+      "job": { "id": "job-def" },
+      "runs": [],
       "sub_jobs": []
     }
   ]
@@ -144,15 +190,21 @@ GET /api/jobs/{job_id}/runs
 
 **Response:** Array of step run objects, ordered by creation time.
 
+### Get children
+
+```
+GET /api/jobs/{job_id}/children
+```
+
+Returns direct child jobs (sub-jobs spawned by this job).
+
 ### Re-run a step
 
 ```
 POST /api/jobs/{job_id}/steps/{step_name}/rerun
 ```
 
-Creates a new step run (next attempt number) for the specified step. Useful for retrying failed steps or re-running completed steps with different upstream data.
-
-**Response:** The new step run object.
+Creates a new step run (next attempt number) for the specified step.
 
 ### Get job events
 
@@ -165,6 +217,46 @@ GET /api/jobs/{job_id}/events
 | `since` | ISO 8601 string | Only return events after this timestamp |
 
 **Response:** Array of structured events (state transitions, step launches, completions, errors).
+
+### Get job status
+
+```
+GET /api/jobs/{job_id}/status
+```
+
+Returns a detailed status breakdown with per-step information, costs, and suspension details.
+
+### Get job cost
+
+```
+GET /api/jobs/{job_id}/cost
+```
+
+Returns total accumulated cost across all steps.
+
+### Get suspended steps
+
+```
+GET /api/jobs/{job_id}/suspended
+```
+
+Returns all currently suspended steps for this job.
+
+### Get job output
+
+```
+GET /api/jobs/{job_id}/output
+```
+
+Returns terminal step outputs for completed jobs.
+
+### Get job outputs (all steps)
+
+```
+GET /api/jobs/{job_id}/outputs
+```
+
+Returns outputs from all completed steps, keyed by step name.
 
 ### Inject context
 
@@ -182,11 +274,119 @@ POST /api/jobs/{job_id}/context
 
 Adds supplemental context to a running job. Available to agent and LLM executors.
 
+### Get live source
+
+```
+GET /api/jobs/{job_id}/live-source
+```
+
+Returns the YAML source of the flow that was used to create this job.
+
+---
+
+## Job Staging
+
+### Stage a job
+
+```
+POST /api/jobs/{job_id}/stage
+```
+
+Transition a job to STAGED status.
+
+### Run a staged job
+
+```
+POST /api/jobs/{job_id}/run
+```
+
+Transition a STAGED job to PENDING.
+
+### Approve a job
+
+```
+POST /api/jobs/{job_id}/approve
+```
+
+Approve a job in AWAITING_APPROVAL status.
+
+### Run a group
+
+```
+POST /api/jobs/run-group
+```
+
+**Request body:**
+
+```json
+{
+  "group": "sprint-1"
+}
+```
+
+Transition all STAGED jobs in a group to PENDING.
+
+### Manage dependencies
+
+```
+POST /api/jobs/{job_id}/deps
+```
+
+**Request body:**
+
+```json
+{
+  "dep_job_id": "job-abc123"
+}
+```
+
+Add a dependency (this job waits for the specified job).
+
+```
+DELETE /api/jobs/{job_id}/deps/{dep_job_id}
+```
+
+Remove a dependency.
+
+```
+GET /api/jobs/{job_id}/deps
+```
+
+List dependencies for a job.
+
+---
+
+## Groups
+
+### List groups
+
+```
+GET /api/groups
+```
+
+Returns all job groups with their job counts and statuses.
+
+### Get group detail
+
+```
+GET /api/groups/{group}
+```
+
+Returns jobs in a specific group.
+
+### Update group
+
+```
+PATCH /api/groups/{group}
+```
+
+Update group metadata (e.g., rename).
+
 ---
 
 ## Runs (Step Executions)
 
-### Fulfill a watch (human step)
+### Fulfill a watch (external step)
 
 ```
 POST /api/runs/{run_id}/fulfill
@@ -235,17 +435,13 @@ GET /api/runs/{run_id}/cost
 }
 ```
 
-Accumulated cost from all cost events for this run. Useful for LLM and agent steps.
-
 ### Cancel a run
 
 ```
 POST /api/runs/{run_id}/cancel
 ```
 
-Cancels a running step. Kills the executor process (if applicable) and marks the run as failed with `error_category: "user_cancelled"`.
-
-Returns `400` if the run is not in `running` status.
+Cancels a running step. Kills the executor process and marks the run as failed with `error_category: "user_cancelled"`. Returns `400` if the run is not in `running` status.
 
 ### Get agent output
 
@@ -253,7 +449,7 @@ Returns `400` if the run is not in `running` status.
 GET /api/runs/{run_id}/agent-output
 ```
 
-Returns condensed agent output events for a run. Works for both running and completed agent steps.
+Returns condensed agent output events for a run.
 
 **Response:**
 
@@ -263,7 +459,7 @@ Returns condensed agent output events for a run. Works for both running and comp
     {"t": "text", "text": "Analyzing the codebase structure..."},
     {"t": "tool_start", "id": "tc_1", "title": "Search files", "kind": "search"},
     {"t": "tool_end", "id": "tc_1"},
-    {"t": "text", "text": "Found 12 relevant files. Let me read..."},
+    {"t": "text", "text": "Found 12 relevant files."},
     {"t": "usage", "used": 9434, "size": 258400}
   ]
 }
@@ -277,6 +473,14 @@ Returns condensed agent output events for a run. Works for both running and comp
 | `tool_start` | `id`, `title`, `kind` | Agent started using a tool |
 | `tool_end` | `id` | Tool call completed |
 | `usage` | `used`, `size` | Context window usage (tokens used / total) |
+
+### Get script output
+
+```
+GET /api/runs/{run_id}/script-output
+```
+
+Returns stdout and stderr for a script step execution.
 
 ---
 
@@ -306,6 +510,14 @@ GET /api/status
 }
 ```
 
+### Health check
+
+```
+GET /api/health
+```
+
+Returns server health status. Used by the CLI for server detection.
+
 ### List executors
 
 ```
@@ -316,9 +528,177 @@ GET /api/executors
 
 ```json
 {
-  "executors": ["script", "external", "mock_llm", "llm", "agent"]
+  "executors": ["script", "external", "mock_llm", "llm", "agent", "poll"]
 }
 ```
+
+---
+
+## Flows
+
+### List local flows
+
+```
+GET /api/local-flows
+```
+
+Returns all flow files discovered in the project.
+
+### Get a local flow
+
+```
+GET /api/flows/local/{flow_path}
+```
+
+Returns the parsed flow definition, metadata, and YAML source.
+
+### Create a local flow
+
+```
+POST /api/local-flows
+```
+
+Create a new flow file in the project.
+
+### Update a local flow
+
+```
+PUT /api/flows/local/{flow_path}
+```
+
+Replace the contents of a flow file.
+
+### Patch a local flow
+
+```
+PATCH /api/flows/local/{flow_path}
+```
+
+Partially update a flow file (e.g., modify a single step).
+
+### Delete a local flow
+
+```
+DELETE /api/flows/local/{path}
+```
+
+### Fork a flow
+
+```
+POST /api/local-flows/fork
+```
+
+Create a local copy of a registry flow.
+
+### Parse YAML
+
+```
+POST /api/flows/parse
+```
+
+Parse YAML content and return the workflow definition. Useful for validation in the editor.
+
+### Patch/Add/Delete steps
+
+```
+POST /api/flows/patch-step
+POST /api/flows/add-step
+POST /api/flows/delete-step
+```
+
+Granular step modification endpoints used by the visual editor.
+
+### Flow file management
+
+```
+GET /api/flows/local/{flow_path}/files
+GET /api/flows/local/{flow_path}/files/{file_path}
+POST /api/flows/local/{flow_path}/files/{file_path}
+DELETE /api/flows/local/{flow_path}/files/{file_path}
+```
+
+Manage co-located files within directory flows (scripts, prompts, data).
+
+### Flow config
+
+```
+GET /api/flows/local/{path}/config
+PUT /api/flows/local/{path}/config
+```
+
+Per-flow configuration overrides.
+
+### Flow statistics
+
+```
+GET /api/flow-stats
+```
+
+Returns execution statistics across all flows (run counts, success rates, costs).
+
+### Flow jobs
+
+```
+GET /api/flow-jobs
+```
+
+Returns recent jobs for a specific flow.
+
+### Flow modification timestamps
+
+```
+GET /api/flows/mtime
+```
+
+Returns last modification times for all flow files. Used by the editor for change detection.
+
+---
+
+## Registry
+
+### Search registry
+
+```
+GET /api/registry/search
+```
+
+Search the public flow registry.
+
+### Get registry flow
+
+```
+GET /api/registry/flow/{slug}
+```
+
+Get details about a published flow.
+
+### Install registry flow
+
+```
+POST /api/registry/install
+```
+
+Download and install a flow from the registry into the local project.
+
+---
+
+## Editor
+
+### Chat
+
+```
+POST /api/editor/chat
+```
+
+Send a message to the AI-assisted flow editor. Returns suggested YAML modifications.
+
+### Clear session
+
+```
+POST /api/editor/clear-session
+```
+
+Reset the editor chat session.
 
 ---
 
@@ -333,8 +713,8 @@ POST /api/templates
 ```json
 {
   "name": "iterative-review",
-  "description": "Draft → Review → Loop pattern",
-  "workflow": { ... }
+  "description": "Draft -> Review -> Loop pattern",
+  "workflow": {}
 }
 ```
 
@@ -380,27 +760,28 @@ GET /api/config
 
 Note: The API key value is never exposed via the API. Only `has_api_key` (boolean) is returned.
 
-### Get models
+### Model management
 
 ```
 GET /api/config/models
-```
-
-### Update models
-
-```
 PUT /api/config/models
+POST /api/config/models
+DELETE /api/config/models/{model_id}
+GET /api/config/models/search
 ```
 
-```json
-{
-  "models": [
-    {"id": "anthropic/claude-opus-4", "name": "Opus", "provider": "anthropic", "tier": "strong"},
-    {"id": "anthropic/claude-sonnet-4", "name": "Sonnet", "provider": "anthropic", "tier": "balanced"}
-  ],
-  "default_model": "anthropic/claude-sonnet-4"
-}
+Manage the model registry. `search` queries OpenRouter for available models.
+
+### Model labels
+
 ```
+GET /api/config/labels
+POST /api/config/labels
+PUT /api/config/labels/{name}
+DELETE /api/config/labels/{name}
+```
+
+Manage short aliases for model IDs (e.g., `fast` -> `anthropic/claude-haiku-4-5-20251001`).
 
 ### Set API key
 
@@ -413,6 +794,46 @@ PUT /api/config/api-key
   "api_key": "sk-or-v1-abc123..."
 }
 ```
+
+### Set default model
+
+```
+PUT /api/config/default-model
+```
+
+### Set default agent
+
+```
+PUT /api/config/default-agent
+```
+
+### Set concurrency
+
+```
+PUT /api/config/concurrency
+```
+
+Configure the maximum number of concurrent step executions.
+
+### Reload config
+
+```
+POST /api/config/reload
+```
+
+Reload configuration from disk without restarting the server.
+
+---
+
+## Error Similarity
+
+### Find similar errors
+
+```
+GET /api/errors/similar
+```
+
+Find past errors similar to a given error message. Useful for diagnosing recurring failures.
 
 ---
 
@@ -463,10 +884,8 @@ const ws = new WebSocket("ws://localhost:8340/ws");
 ws.onmessage = (event) => {
   const msg = JSON.parse(event.data);
   if (msg.type === "tick") {
-    // Re-fetch changed jobs
     msg.changed_jobs.forEach(id => refetchJob(id));
   } else if (msg.type === "agent_output") {
-    // Append streaming output for run
     appendAgentOutput(msg.run_id, msg.events);
   }
 };
@@ -502,6 +921,5 @@ The server reads these environment variables (set automatically by the CLI):
 | `STEPWISE_TEMPLATES` | Path to templates directory | `templates` |
 | `STEPWISE_JOBS_DIR` | Path to jobs workspace directory | `jobs` |
 | `STEPWISE_PORT` | Server port (legacy entry point only) | `8340` |
-| `STEPWISE_RELOAD` | Enable hot reload (legacy, dev only) | `false` |
 
 You generally don't need to set these — the CLI manages them based on `.stepwise/` project discovery.

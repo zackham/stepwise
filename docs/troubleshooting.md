@@ -24,11 +24,10 @@ Run `stepwise validate <flow>` before every run. These errors come from YAML par
 | `Step '<name>': must have either 'run' or 'executor'` | Step has no execution method | Add `run: <command>` for scripts or `executor: <type>` for other executors. |
 | `Step '<name>': cannot combine flow with run/executor` | A flow delegation step also has `run` or `executor` | Remove `run`/`executor` — flow steps delegate to a sub-flow, not run directly. |
 | `Step '<name>': Agent executor requires 'prompt'` | Agent step missing prompt | Add `prompt:` or `prompt_file:` to the step. |
-| `Step '<name>': LLM executor requires 'prompt'` | LLM step missing prompt | Add `prompt:` or `prompt_file:` to the step config. |
+| `Step '<name>': LLM executor requires 'prompt'` | LLM step missing prompt | Add `prompt:` or `prompt_file:` to the step. |
 | `Step '<name>': Poll executor requires 'check_command'` | Poll step missing check command | Add `check_command:` with the shell command to poll. |
 | `Step '<name>': cannot specify both 'prompt' and 'prompt_file'` | Both inline and file-based prompt declared | Use one or the other, not both. |
 | `Step '<name>': flow steps must declare outputs` | Sub-flow step has no `outputs` list | Add `outputs: [field1, field2]` matching the sub-flow's terminal step outputs. |
-| `Step '<name>': cannot use both 'after' and 'sequencing'` | Both old and new ordering syntax used | Remove `sequencing:` — use `after:` instead (sequencing is deprecated). |
 
 ### Input Bindings
 
@@ -54,6 +53,7 @@ Run `stepwise validate <flow>` before every run. These errors come from YAML par
 | `Invalid expression syntax: <detail>` | `when:` condition has a Python syntax error | Fix the expression. Valid: `outputs.score >= 0.8`, `attempt < 3`, etc. |
 | `Access to '<attr>' is not allowed in expressions` | Expression accesses `_private` attributes | Only access public attributes. No `__dunder__` or `_private` access. |
 | `Lambda expressions are not allowed` | Expression uses `lambda` | Use simple expressions, not lambdas. |
+| `f-strings are not allowed in expressions` | Expression uses an f-string | Use string concatenation or keep f-strings in scripts instead. |
 
 ### Outputs
 
@@ -61,7 +61,7 @@ Run `stepwise validate <flow>` before every run. These errors come from YAML par
 |-------|-------|-----|
 | `Step '<name>': duplicate output '<field>'` | Same output field name listed twice | Remove the duplicate from the `outputs:` list. |
 | `Step '<name>': 'outputs' must be a list or mapping` | Outputs is a string or other non-list/dict type | Use `outputs: [field1, field2]` (list) or `outputs: {field1: {type: string}}` (mapping). |
-| `Step '<name>': output field '<field>' has invalid type '<type>'` | Unknown output field type in schema | Valid types: `string`, `number`, `boolean`, `text`, `choice`, `json`. |
+| `Step '<name>': output field '<field>' has invalid type '<type>'` | Unknown output field type in schema | Valid types: `str`, `text`, `number`, `bool`, `choice`. |
 | `Step '<name>': output field '<field>' (type=choice) requires non-empty 'options' list` | Choice field without options | Add `options: [opt1, opt2, ...]` to the field spec. |
 
 ### Workflow Structure
@@ -96,7 +96,8 @@ Errors that occur during job execution.
 | `Step '<name>' executor crashed: <ExceptionType>: <message>` | Executor raised an unhandled exception | Check the step's command/config. Use `stepwise logs <job-id>` for full context. |
 | `Exit code <N>` | Script step returned non-zero exit code | Fix the script. Test it standalone: `bash -c '<command>'`. |
 | `No exit rule matched for step '<name>' (artifact: [keys])` | Step has explicit `advance` rules but none matched the output | Add exit rules covering all output combinations, or add a catch-all `when: "True"` rule. |
-| `Unknown executor type: '<type>'` | Executor type not registered | Valid built-in types: `script`, `llm`, `agent`, `external`, `poll`. Check spelling. |
+| `Unknown executor type: '<type>'` | Executor type not registered | Valid built-in types: `script`, `llm`, `agent`, `external`, `poll`, `mock_llm`. Check spelling. |
+| `Input names rejected by blocklist: <names>` | Input name matches a protected env var name | Rename the input. Blocked names: `LD_PRELOAD`, `LD_LIBRARY_PATH`, `PYTHONPATH`, `PATH`, `HOME`. |
 
 ### Limits
 
@@ -142,6 +143,12 @@ Errors that occur during job execution.
 | `LLM API error: <detail>` | OpenRouter API call failed | Check your API key: `stepwise config get openrouter_api_key`. Verify the model exists. |
 | `Could not parse LLM output into declared output fields` | LLM response didn't contain the expected JSON structure | Simplify outputs, improve the prompt, or try a different model. |
 | `Missing output fields: <fields>` | LLM response is missing some declared output fields | Ensure your prompt instructs the model to produce all declared outputs. |
+
+### Derived Outputs
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `Derived output '<field>' expression failed: <error>` | Python expression in `derived_outputs` raised an exception | Check the expression syntax. Common issues: referencing fields not in the artifact, division by zero, type mismatches. |
 
 ---
 
