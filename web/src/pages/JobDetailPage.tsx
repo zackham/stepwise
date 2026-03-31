@@ -2,16 +2,16 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { useParams, useNavigate, useSearch, Link } from "@tanstack/react-router";
 import type { JobDetailSearch } from "@/router";
 import { useJob, useRuns, useJobTree, useJobOutput, useJobCost, useStepwiseMutations } from "@/hooks/useStepwise";
-import { useConfig } from "@/hooks/useConfig";
 import { JobList } from "@/components/jobs/JobList";
 import { ActionContextProvider } from "@/components/menus/ActionContextProvider";
 import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
 import { FlowDagView } from "@/components/dag/FlowDagView";
-import { StepDetailPanel } from "@/components/jobs/StepDetailPanel";
+import { RunView } from "@/components/jobs/RunView";
+import { StepConfigView } from "@/components/jobs/StepConfigView";
+import { JobOverview } from "@/components/jobs/JobOverview";
 import { DataFlowPanel } from "@/components/dag/DataFlowPanel";
 import { JobControls } from "@/components/jobs/JobControls";
 import { JobStatusBadge } from "@/components/StatusBadge";
-import { JsonView } from "@/components/JsonView";
 import type { DagSelection } from "@/lib/dag-layout";
 import { useAutoSelectSuspended } from "@/hooks/useAutoSelectSuspended";
 import { useAutoExpand } from "@/hooks/useAutoExpand";
@@ -26,20 +26,18 @@ import {
   ScrollText,
   GitBranch,
   GanttChart,
-  Package,
   Clock,
   Info,
-  Terminal,
-  Monitor,
   AlertTriangle,
   DollarSign,
+  X,
 } from "lucide-react";
-import { toast } from "sonner";
 import { useCopyFeedback } from "@/hooks/useCopyFeedback";
-import type { Job, JobTreeNode, StepDefinition } from "@/lib/types";
+import type { JobTreeNode, StepDefinition } from "@/lib/types";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn, formatDuration } from "@/lib/utils";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 
 function CopyableId({ id }: { id: string }) {
@@ -76,152 +74,7 @@ function resolveStep(
   return null;
 }
 
-function parseJsonString(value: string): unknown {
-  const trimmed = value.trimStart();
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    try {
-      return JSON.parse(value);
-    } catch {
-      // Leave invalid JSON-like strings unchanged.
-    }
-  }
-  return value;
-}
-
-function normalizeOutputValue(value: unknown): unknown {
-  if (typeof value === "string") {
-    const parsed = parseJsonString(value);
-    return parsed === value ? value : normalizeOutputValue(parsed);
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((item) => normalizeOutputValue(item));
-  }
-
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
-        key,
-        normalizeOutputValue(item),
-      ])
-    );
-  }
-
-  return value;
-}
-
-type RightPanelTab = "step" | "data-flow" | "job";
-
-function JobDetailsPanel({
-  job,
-  costData,
-  normalizedOutputs,
-  isTerminal,
-}: {
-  job: Job;
-  costData: { cost_usd: number; billing_mode: string } | undefined;
-  normalizedOutputs: Record<string, unknown> | null;
-  isTerminal: boolean;
-}) {
-  const stepCount = Object.keys(job.workflow.steps).length;
-  const hasInputs = job.inputs && Object.keys(job.inputs).length > 0;
-  const hasOutputs = normalizedOutputs && Object.keys(normalizedOutputs).length > 0;
-
-  return (
-    <div className="flex-1 overflow-y-auto p-3 space-y-4">
-      {/* Stats */}
-      <div className="text-xs space-y-1.5">
-        <div className="flex items-center gap-2">
-          <span className="text-zinc-500 w-16">Status</span>
-          <JobStatusBadge status={job.status} />
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-zinc-500 w-16">Steps</span>
-          <span className="font-mono text-zinc-700 dark:text-zinc-300">{stepCount}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-zinc-500 w-16">Duration</span>
-          <span className="font-mono text-zinc-400">
-            {formatDuration(job.created_at, job.updated_at)}
-          </span>
-        </div>
-        {costData && (costData.cost_usd > 0 || costData.billing_mode === "subscription") && (
-          <div className="flex items-center gap-2">
-            <span className="text-zinc-500 w-16">Cost</span>
-            <span className="font-mono text-zinc-400">
-              {costData.billing_mode === "subscription"
-                ? "$0 (Max)"
-                : `$${costData.cost_usd.toFixed(4)}`}
-            </span>
-          </div>
-        )}
-        <div className="flex items-center gap-2">
-          <span className="text-zinc-500 w-16">Created</span>
-          <span className="font-mono text-zinc-500 text-[10px]">
-            {new Date(job.created_at).toLocaleString()}
-          </span>
-        </div>
-        {isTerminal && (
-          <div className="flex items-center gap-2">
-            <span className="text-zinc-500 w-16">Finished</span>
-            <span className="font-mono text-zinc-500 text-[10px]">
-              {new Date(job.updated_at).toLocaleString()}
-            </span>
-          </div>
-        )}
-        <div className="flex items-center gap-2">
-          <span className="text-zinc-500 w-16">Source</span>
-          <span className="flex items-center gap-1 text-zinc-400 text-[10px] font-mono">
-            {job.created_by.startsWith("cli:") ? (
-              <>
-                <Terminal className="w-3 h-3" />
-                CLI (PID {job.runner_pid ?? job.created_by.slice(4)})
-              </>
-            ) : (
-              <>
-                <Monitor className="w-3 h-3" />
-                Server
-              </>
-            )}
-          </span>
-        </div>
-        {job.heartbeat_at && (
-          <div className="flex items-center gap-2">
-            <span className="text-zinc-500 w-16">Heartbeat</span>
-            <span className="font-mono text-zinc-500 text-[10px]">
-              {new Date(job.heartbeat_at).toLocaleString()}
-            </span>
-          </div>
-        )}
-      </div>
-
-      {/* Inputs */}
-      {hasInputs && (
-        <div>
-          <div className="text-[10px] font-medium text-zinc-500 uppercase tracking-wide mb-1.5">
-            Inputs
-          </div>
-          <div className="max-h-40 overflow-y-auto bg-zinc-50/50 dark:bg-zinc-900/50 rounded border border-zinc-200 dark:border-zinc-800 p-2">
-            <JsonView data={job.inputs} defaultExpanded={false} />
-          </div>
-        </div>
-      )}
-
-      {/* Outputs */}
-      {isTerminal && hasOutputs && (
-        <div>
-          <div className="text-[10px] font-medium text-zinc-500 uppercase tracking-wide mb-1.5 flex items-center gap-1">
-            <Package className="w-3 h-3" />
-            Outputs
-          </div>
-          <div className="max-h-40 overflow-y-auto bg-zinc-50/50 dark:bg-zinc-900/50 rounded border border-zinc-200 dark:border-zinc-800 p-2">
-            <JsonView data={normalizedOutputs} defaultExpanded={false} />
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
+type RightPanelTab = "run" | "step";
 
 export function JobDetailPage() {
   const { jobId } = useParams({ from: "/jobs/$jobId" });
@@ -232,7 +85,6 @@ export function JobDetailPage() {
   const { data: jobTree } = useJobTree(jobId);
   const { data: runs = [] } = useRuns(jobId);
   const { data: costData } = useJobCost(jobId);
-  const { data: configData } = useConfig();
   const searchParams = useSearch({ from: "/jobs/$jobId" }) as JobDetailSearch;
   const [dataFlowSelection, setDataFlowSelection] = useState<DagSelection>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -254,10 +106,8 @@ export function JobDetailPage() {
   const selectedStep = searchParams.step ?? null;
   const selection: DagSelection = dataFlowSelection ?? (selectedStep ? { kind: "step", stepName: selectedStep } : null);
 
-  // Derive activeTab: URL tab param > auto-derive from selection kind > default "job"
-  const activeTab: RightPanelTab = dataFlowSelection
-    ? "data-flow"
-    : searchParams.tab ?? (selectedStep ? "step" : "job");
+  // Derive activeTab: URL tab param > default "run" when step selected
+  const activeTab: RightPanelTab = searchParams.tab ?? "run";
 
   // Derive rightPanelOpen: URL panel param > auto-open for terminal jobs > default closed
   const rightPanelOpen = searchParams.panel === "open"
@@ -277,16 +127,11 @@ export function JobDetailPage() {
     }
     return map;
   }, [runs]);
-  const normalizedOutputs = useMemo(
-    () => (outputs ? normalizeOutputValue(outputs) as Record<string, unknown> : null),
-    [outputs]
-  );
-
   const handleSelectStep = useCallback((stepName: string | null) => {
     setDataFlowSelection(null);
     if (stepName) {
       navigate({
-        search: (prev: JobDetailSearch) => ({ ...prev, step: stepName, tab: "step" as const, panel: "open" as const }),
+        search: (prev: JobDetailSearch) => ({ ...prev, step: stepName, tab: "run" as const, panel: "open" as const }),
         replace: false,
       });
     } else {
@@ -407,7 +252,7 @@ export function JobDetailPage() {
             e.preventDefault();
             setDataFlowSelection(null);
             navigate({
-              search: (prev: JobDetailSearch) => ({ ...prev, panel: "open" as const, tab: "step" as const }),
+              search: (prev: JobDetailSearch) => ({ ...prev, panel: "open" as const, tab: "run" as const }),
               replace: true,
             });
           }
@@ -796,126 +641,146 @@ export function JobDetailPage() {
         </div>
       </div>
 
-      {/* Right sidebar: tabbed panel */}
+      {/* Right sidebar */}
       {(() => {
-        const panelContent = showRightPanel ? (
-          <Tabs
-            value={activeTab}
-            onValueChange={(v) => {
-              setDataFlowSelection(null);
-              navigate({ search: (prev: JobDetailSearch) => ({ ...prev, tab: v as RightPanelTab }), replace: true });
-            }}
-            className="flex flex-col flex-1 min-h-0 gap-0"
-          >
-            <div className="flex items-center justify-between border-b border-border bg-zinc-50/50 dark:bg-zinc-950/50 shrink-0">
-              <TabsList variant="line" className="px-1">
-                <TabsTrigger
-                  value="step"
-                  disabled={!resolvedStep}
-                  className={cn("text-xs gap-1 px-2.5", !selectedStep && "opacity-50 cursor-default")}
-                  title={!selectedStep ? "Select a step to view details" : undefined}
-                >
-                  Step
-                </TabsTrigger>
-                <TabsTrigger
-                  value="data-flow"
-                  disabled={!selection}
-                  className={cn("text-xs gap-1 px-2.5", !selectedStep && "opacity-50 cursor-default")}
-                  title={!selectedStep ? "Select a step to view details" : undefined}
-                >
-                  Data Flow
-                </TabsTrigger>
-                <TabsTrigger value="job" className="text-xs gap-1 px-2.5">
-                  Job
-                </TabsTrigger>
-              </TabsList>
-              <button
-                onClick={() => {
-                  setDataFlowSelection(null);
-                  setAutoOpenedPanel(false);
-                  navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined, panel: undefined }), replace: true });
-                }}
-                className="text-zinc-500 dark:text-zinc-600 hover:text-zinc-700 dark:hover:text-zinc-300 p-0.5 mr-2"
-              >
-                <PanelRightOpen className="w-3.5 h-3.5" />
-              </button>
-            </div>
+        const closePanel = () => {
+          setDataFlowSelection(null);
+          setAutoOpenedPanel(false);
+          navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined, panel: undefined }), replace: true });
+        };
 
-            <TabsContent
-              value="step"
-              className={cn(
-                "flex-1 min-h-0 overflow-hidden",
-                activeTab !== "step" && "hidden"
-              )}
+        const deselectStep = () => {
+          setDataFlowSelection(null);
+          navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined }), replace: true });
+        };
+
+        // DataFlow selection takes priority (shown as overlay panel)
+        if (isDataFlowSelection && selection) {
+          const dfPanel = (
+            <div className="flex flex-col flex-1 min-h-0">
+              <DataFlowPanel
+                selection={selection}
+                job={job}
+                latestRuns={latestRuns}
+                outputs={outputs ? outputs as Record<string, unknown> : null}
+                onClose={() => { setDataFlowSelection(null); }}
+              />
+            </div>
+          );
+
+          if (isMobile) {
+            return (
+              <MobileFullScreen open={true} onClose={() => setDataFlowSelection(null)} title="Data Flow">
+                {dfPanel}
+              </MobileFullScreen>
+            );
+          }
+          return (
+            <div className="w-80 border-l border-border shrink-0 flex flex-col overflow-y-auto" style={{ maxHeight: 'calc(100vh - 3rem)' }}>
+              {dfPanel}
+            </div>
+          );
+        }
+
+        // No step selected: show JobOverview (no tabs)
+        let panelContent: React.ReactNode = null;
+        if (showRightPanel && !resolvedStep) {
+          panelContent = (
+            <div className="flex flex-col flex-1 min-h-0">
+              <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-zinc-50/50 dark:bg-zinc-950/50 shrink-0">
+                <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">Job Details</span>
+                <button
+                  onClick={closePanel}
+                  className="text-zinc-500 dark:text-zinc-600 hover:text-zinc-700 dark:hover:text-zinc-300 p-0.5"
+                >
+                  <PanelRightOpen className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <ScrollArea className="flex-1 min-h-0">
+                <JobOverview job={job} />
+              </ScrollArea>
+            </div>
+          );
+        }
+
+        // Step selected: show Run/Step tabs
+        if (showRightPanel && resolvedStep) {
+          panelContent = (
+            <Tabs
+              value={activeTab}
+              onValueChange={(v) => {
+                navigate({ search: (prev: JobDetailSearch) => ({ ...prev, tab: v as RightPanelTab }), replace: true });
+              }}
+              className="flex flex-col flex-1 min-h-0 gap-0"
             >
-              {resolvedStep && (
-                <div key={selectedStep} className="animate-step-fade h-full">
-                  <StepDetailPanel
+              <div className="flex items-center justify-between border-b border-border bg-zinc-50/50 dark:bg-zinc-950/50 shrink-0">
+                <TabsList variant="line" className="px-1">
+                  <TabsTrigger value="run" className="text-xs gap-1 px-2.5">
+                    Run
+                  </TabsTrigger>
+                  <TabsTrigger value="step" className="text-xs gap-1 px-2.5">
+                    Step
+                  </TabsTrigger>
+                </TabsList>
+                <button
+                  onClick={deselectStep}
+                  className="text-zinc-500 dark:text-zinc-600 hover:text-zinc-700 dark:hover:text-zinc-300 p-0.5 mr-2"
+                  title="Close step details"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              <TabsContent
+                value="run"
+                className={cn(
+                  "flex-1 min-h-0 overflow-y-auto",
+                  activeTab !== "run" && "hidden"
+                )}
+              >
+                <div key={selectedStep} className="animate-step-fade">
+                  <RunView
                     jobId={resolvedStep.jobId}
                     stepDef={resolvedStep.stepDef}
-                    onClose={() => { setDataFlowSelection(null); navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: "job" as const }), replace: true }); }}
                     hasLiveSource={!!job?.flow_source_path}
                   />
                 </div>
-              )}
-            </TabsContent>
+              </TabsContent>
 
-            <TabsContent
-              value="data-flow"
-              className={cn(
-                "flex-1 min-h-0 overflow-hidden",
-                activeTab !== "data-flow" && "hidden"
-              )}
-            >
-              {selection && (
-                <DataFlowPanel
-                  selection={selection}
-                  job={job}
-                  latestRuns={latestRuns}
-                  outputs={normalizedOutputs}
-                  onClose={() => { setDataFlowSelection(null); navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: "job" as const }), replace: true }); }}
-                />
-              )}
-            </TabsContent>
+              <TabsContent
+                value="step"
+                className={cn(
+                  "flex-1 min-h-0 overflow-y-auto",
+                  activeTab !== "step" && "hidden"
+                )}
+              >
+                <div key={selectedStep} className="animate-step-fade">
+                  <StepConfigView stepDef={resolvedStep.stepDef} />
+                </div>
+              </TabsContent>
+            </Tabs>
+          );
+        }
 
-            <TabsContent
-              value="job"
-              className={cn(
-                "flex-1 min-h-0 overflow-y-auto",
-                activeTab !== "job" && "hidden"
-              )}
-            >
-              <JobDetailsPanel
-                job={job}
-                costData={costData}
-                normalizedOutputs={normalizedOutputs}
-                isTerminal={isTerminal}
-              />
-            </TabsContent>
-          </Tabs>
-        ) : null;
+        if (!showRightPanel) return null;
 
         if (isMobile) {
           return (
             <MobileFullScreen
               open={showRightPanel}
-              onClose={() => {
-                setDataFlowSelection(null);
-                setAutoOpenedPanel(false);
-                navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined, panel: undefined }), replace: true });
-              }}
-              title="Details"
+              onClose={closePanel}
+              title={resolvedStep ? resolvedStep.stepDef.name : "Details"}
             >
               {panelContent}
             </MobileFullScreen>
           );
         }
 
-        return showRightPanel ? (
+        return (
           <div className="w-80 border-l border-border shrink-0 flex flex-col overflow-y-auto" style={{ maxHeight: 'calc(100vh - 3rem)' }}>
             {panelContent}
           </div>
-        ) : null;
+        );
       })()}
 
       {/* Expanded step overlay */}
@@ -926,11 +791,9 @@ export function JobDetailPage() {
           title={resolvedStep?.stepDef.name ?? "Step Detail"}
         >
           {resolvedStep && (
-            <StepDetailPanel
+            <RunView
               jobId={resolvedStep.jobId}
               stepDef={resolvedStep.stepDef}
-              onClose={() => { setExpandedStep(false); setDataFlowSelection(null); navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined, panel: undefined }), replace: true }); }}
-              expanded={true}
               hasLiveSource={!!job?.flow_source_path}
             />
           )}
@@ -939,11 +802,9 @@ export function JobDetailPage() {
         <Sheet open={expandedStep && !!resolvedStep} onOpenChange={(open) => !open && setExpandedStep(false)}>
           <SheetContent side="right" showCloseButton={false} className="w-[70vw] max-w-4xl p-0 overflow-y-auto">
             {resolvedStep && (
-              <StepDetailPanel
+              <RunView
                 jobId={resolvedStep.jobId}
                 stepDef={resolvedStep.stepDef}
-                onClose={() => { setExpandedStep(false); setDataFlowSelection(null); navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined, panel: undefined }), replace: true }); }}
-                expanded={true}
                 hasLiveSource={!!job?.flow_source_path}
               />
             )}
