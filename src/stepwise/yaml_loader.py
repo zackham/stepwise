@@ -830,6 +830,7 @@ def _parse_step(
             inputs=input_bindings,
             after=after,
             sub_flow=sub_flow,
+            when=step_data.get("when"),
         )
 
     # Check for for_each (changes how the step is parsed)
@@ -871,6 +872,7 @@ def _parse_step(
             after=after,
             for_each=for_each_spec,
             sub_flow=sub_flow,
+            when=step_data.get("when"),
         )
 
     # Normal step parsing

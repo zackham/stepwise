@@ -1040,6 +1040,12 @@ class WorkflowDefinition:
                     if dn in hard_desc:
                         continue
 
+                    # If the downstream step has a `when` condition, it won't
+                    # launch prematurely — the engine re-evaluates `when` on
+                    # every dispatch cycle and only launches when it's true.
+                    if ds.when is not None:
+                        continue
+
                     _premature_warned.add(dn)
                     dep_list = ", ".join(
                         f"'{d}'" for d in sorted(body_deps)
