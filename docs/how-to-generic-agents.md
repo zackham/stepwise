@@ -1,6 +1,10 @@
 # Using Stepwise with Non-Claude Agents
 
-Stepwise agent steps aren't locked to Claude. The `AgentExecutor` uses [acpx](https://agentclientprotocol.com) — a headless client for the Agent Client Protocol (ACP) — which supports any ACP-compatible agent. Today that includes Claude, Codex, and Gemini, with more backends as acpx adds them.
+How to run agent steps with Codex, Gemini, or any ACP-compatible agent — and when to use different agents in the same flow.
+
+---
+
+Stepwise agent steps use [acpx](https://agentclientprotocol.com) — a headless client for the Agent Client Protocol (ACP). Any ACP-compatible agent works: Claude, Codex, Gemini, and others as acpx adds support.
 
 ## Specifying the Agent
 
@@ -18,17 +22,17 @@ steps:
     outputs: [result]
 ```
 
-If you omit `agent`, it defaults to `claude`. The value maps directly to what acpx accepts — `acpx codex`, `acpx gemini`, etc.
+If you omit `agent`, it defaults to `claude`. The value maps directly to what acpx accepts.
 
 ## Why Use Different Agents?
 
-Different agents have different strengths. Codex is fast and cheap for straightforward code tasks. Gemini handles large context windows well. Claude excels at nuanced reasoning and careful analysis. In a multi-step flow, you can use different agents for different steps based on what the step actually needs.
+Different agents have different strengths. Codex is fast and cheap for straightforward code tasks. Gemini handles large context windows well. Claude excels at nuanced reasoning.
 
-More practically: adversarial patterns work better with diverse agents. If one agent writes the code and a different agent reviews it, you get genuinely different perspectives rather than one model agreeing with itself.
+More practically: adversarial patterns work better with diverse agents. If one agent writes the code and a different agent reviews it, you get genuinely different perspectives instead of one model agreeing with itself.
 
 ## Example: Adversarial Code Review
 
-A flow where one agent implements a feature and a different agent reviews the implementation. If the review fails, the implementer loops with the feedback.
+One agent implements, a different agent reviews. If the review fails, the implementer loops with the feedback.
 
 ```yaml
 name: adversarial-review
@@ -79,14 +83,14 @@ steps:
 Run it:
 
 ```bash
-stepwise run adversarial-review --input spec="Add rate limiting to the /api/submit endpoint" --input project_path=/path/to/repo
+stepwise run adversarial-review --input spec="Add rate limiting to /api/submit" --input project_path=/path/to/repo
 ```
 
 Codex implements. Claude reviews. If Claude says `needs_work`, Codex gets the feedback and tries again. After 3 rounds without approval, the job escalates for human review.
 
 ## Example: Model-Appropriate Task Routing
 
-Use a cheap/fast agent for grunt work and a stronger agent for judgment calls:
+Use a cheap/fast model for grunt work and a stronger agent for judgment calls:
 
 ```yaml
 name: research-and-analyze
@@ -115,7 +119,7 @@ steps:
     outputs: [analysis]
 ```
 
-Gemini handles the broad information gathering. Claude handles the critical analysis that requires more nuanced reasoning.
+Gemini handles broad information gathering. Claude handles critical analysis.
 
 ## Configuration and Limits
 
@@ -136,21 +140,11 @@ steps:
     outputs: [result]
 ```
 
-Cost limits, duration limits, `working_dir`, `continue_session`, `emit_flow`, exit rules — all of these work identically across agent backends. The `agent` field only controls which agent binary acpx launches.
-
-## What ACP Compatibility Means
-
-ACP (Agent Client Protocol) standardizes how clients talk to agents. When stepwise spawns an agent step, it:
-
-1. Calls `acpx {agent} prompt --session {name} --working-dir {path}` with the resolved prompt
-2. Monitors the process for completion
-3. Captures the agent's output as the step artifact
-
-Any agent that acpx supports works with stepwise. As new backends are added to acpx, they're automatically available in your flows — just change the `agent` field.
+Cost limits, duration limits, `working_dir`, `continue_session`, exit rules — all work identically across agent backends. The `agent` field only controls which agent binary acpx launches.
 
 ## Mixing LLM and Agent Steps
 
-Remember that `executor: agent` and `executor: llm` are different things. An agent step launches a full agentic session with tool access — the agent can read files, run commands, browse the web. An LLM step is a single API call that returns structured output. Use the right one:
+`executor: agent` and `executor: llm` are different things. An agent step launches a full agentic session with tool access — reading files, running commands, browsing the web. An LLM step is a single API call that returns structured output. Use the right one:
 
 ```yaml
 steps:
@@ -176,4 +170,8 @@ steps:
     outputs: [result]
 ```
 
-A Gemini Flash LLM call classifies the issue (fast, cheap). A Claude agent session investigates and fixes it (thorough, tool-using). Each step uses the right tool for the job.
+A Gemini Flash LLM call classifies the issue (fast, cheap). A Claude agent session investigates and fixes it (thorough, tool-using).
+
+---
+
+See [Executors](executors.md) for the full executor reference. See [Writing Flows](writing-flows.md) for YAML syntax.

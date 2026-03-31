@@ -1,8 +1,8 @@
 # Agent Integration
 
-> **TL;DR:** `stepwise run flow.yaml --wait --input key=value` → JSON on stdout. `stepwise agent-help --update CLAUDE.md` to teach your agent about available flows. No MCP, no background services.
+How AI agents (Claude Code, Codex, etc.) call Stepwise flows as tools — discovery, execution, output handling, and error recovery.
 
-How to make your AI agent call Stepwise flows as tools. This guide covers the complete workflow — from discovery to execution to handling every response shape.
+---
 
 ## Overview
 
@@ -13,7 +13,9 @@ stepwise run review.flow.yaml --wait --input repo="/path/to/repo" --input branch
 # → {"status": "completed", "job_id": "job-...", "outputs": [{...}], ...}
 ```
 
-The design prioritizes reliability for non-human callers: stdout purity, actionable errors, explicit exit codes, and partial outputs on failure.
+`--wait` guarantees stdout purity: exactly one JSON object on stdout, all logging on stderr. Agents can parse stdout directly.
+
+---
 
 ## 1. Generate Instructions for Your Agent
 
@@ -30,33 +32,25 @@ stepwise agent-help --update CLAUDE.md
 This scans your project for `.flow.yaml` files and generates a markdown block with:
 - Per-flow entries (inputs, outputs, external steps, run command)
 - Expected output shapes for every terminal state
-- CLI quick reference
-- Exit codes
+- CLI quick reference and exit codes
 
-The `--update` flag finds `<!-- stepwise-agent-help -->` / `<!-- /stepwise-agent-help -->` markers and replaces just that section. Run it again after adding flows — it's idempotent.
+The `--update` flag finds `<!-- stepwise-agent-help -->` / `<!-- /stepwise-agent-help -->` markers and replaces just that section. Idempotent — run it again after adding flows.
 
 ```bash
 # Scan a specific directory instead of the project root
 stepwise agent-help --flows-dir ./workflows --update CLAUDE.md
 ```
 
-## 1b. From Claude Code
-
-If you're using Claude Code, the fastest setup is:
+### Claude Code Setup
 
 ```bash
 # Add flow instructions to your project
 stepwise agent-help --update CLAUDE.md
-
-# Claude Code now knows how to call your flows
-# It will use --wait for blocking calls, --async for background work
 ```
 
-Claude Code reads `CLAUDE.md` automatically. After running `agent-help --update`, Claude can discover and call your flows without additional prompting. It will:
-- Use `stepwise schema <flow>` to check inputs before calling
-- Use `--wait` for flows it needs results from
-- Use `--timeout` for flows with external steps
-- Handle errors based on exit codes
+Claude Code reads `CLAUDE.md` automatically. After running `agent-help --update`, Claude can discover and call your flows without additional prompting. It will use `stepwise schema <flow>` to check inputs, `--wait` for blocking calls, and handle errors based on exit codes.
+
+---
 
 ## 2. Discover What a Flow Needs
 
@@ -79,7 +73,9 @@ stepwise schema council
 Key fields:
 - **inputs** — required `--input` flags. If empty, the flow needs no inputs.
 - **outputs** — fields in the terminal step artifacts. This is what you get back on success.
-- **externalSteps** — steps that will suspend and wait for external input. If non-empty, use `--timeout` with `--wait` to avoid blocking forever.
+- **externalSteps** — steps that will suspend and wait for external input. If non-empty, the flow will exit with code 5 (suspended) when it reaches one. See [handling external steps](#6-handle-external-steps) below.
+
+---
 
 ## 3. Call a Flow (Blocking)
 
@@ -110,6 +106,8 @@ stepwise run flow.yaml --wait --vars-file inputs.yaml
 ```
 
 `--input KEY=@path` reads the file contents as the variable value. Use it when the input is multiline or contains special characters.
+
+---
 
 ## 4. Handle Every Response Shape
 
@@ -163,6 +161,21 @@ Error messages are actionable — they tell you exactly which `--input` flags to
 }
 ```
 
+### Suspended (exit code 5)
+
+```json
+{
+  "status": "suspended",
+  "job_id": "job-a1b2c3d4",
+  "completed_steps": ["plan", "implement"],
+  "suspended_step": "review"
+}
+```
+
+The flow reached an `executor: external` step and is waiting for input. See [handling external steps](#6-handle-external-steps).
+
+---
+
 ## 5. Fire-and-Forget (Async)
 
 For long-running flows or when you don't want to block:
@@ -172,8 +185,6 @@ For long-running flows or when you don't want to block:
 stepwise run deploy.flow.yaml --async --input repo="/path" --input branch="main"
 # → {"job_id": "job-e5f6g7h8", "status": "running"}
 ```
-
-This spawns a detached background process. No server required.
 
 ```bash
 # Check progress
@@ -187,7 +198,7 @@ stepwise output job-e5f6g7h8
 stepwise output job-e5f6g7h8 --scope full
 ```
 
-Typical agent loop:
+Typical agent polling loop:
 
 ```python
 import subprocess, json, time
@@ -203,35 +214,26 @@ while True:
     output = json.loads(subprocess.check_output([
         "stepwise", "output", job_id
     ]))
-    if output["status"] in ("completed", "failed", "cancelled"):
+    if output["status"] in ("completed", "failed", "cancelled", "suspended"):
         break
     time.sleep(5)
 ```
 
-## 6. Handle Human Steps
+---
 
-Some flows have steps that pause for human input. When you hit one:
+## 6. Handle External Steps
 
-### With --wait and --timeout
+Some flows have steps with `executor: external` that pause for input — human approval, external API responses, or agent decisions.
 
-```bash
-stepwise run review.flow.yaml --wait --timeout 300 --input content="Draft text"
-```
+### Detecting a suspended flow
 
-If the flow reaches an external step and the timeout fires, you get:
-
-```json
-{
-  "status": "timeout",
-  "job_id": "job-a1b2c3d4",
-  "timeout_seconds": 300,
-  "suspended_at_step": "review"
-}
-```
-
-### Find the suspended step
+When `--wait` returns exit code 5 (suspended), or when polling shows `"status": "suspended"`:
 
 ```bash
+# List suspended steps
+stepwise list --suspended
+
+# Or check a specific job
 stepwise output job-a1b2c3d4
 ```
 
@@ -264,16 +266,17 @@ echo '{"decision": "approve"}' | stepwise fulfill run-x1y2z3w4 --stdin
 cat response.json | stepwise fulfill run-x1y2z3w4 -
 ```
 
-After fulfillment, the flow continues. If you're still blocking with `--wait`, it resumes automatically and returns the final result.
+After fulfillment, the flow continues. Use `stepwise wait <job-id>` to block until the next suspension or completion.
 
-### Full human-step lifecycle
+### Full external-step lifecycle
 
 ```bash
-# 1. Start with timeout
-result=$(stepwise run flow.yaml --wait --timeout 60 --input k=v 2>/dev/null)
+# 1. Start the flow
+result=$(stepwise run flow.yaml --wait --input k=v 2>/dev/null)
+exit_code=$?
 
-# 2. If timeout, get suspended step details
-if [ $? -eq 3 ]; then
+# 2. If suspended, get the step details
+if [ "$exit_code" -eq 5 ]; then
     job_id=$(echo "$result" | jq -r .job_id)
     output=$(stepwise output "$job_id" 2>/dev/null)
     run_id=$(echo "$output" | jq -r '.suspended_steps[0].run_id')
@@ -281,10 +284,12 @@ if [ $? -eq 3 ]; then
     # 3. Fulfill (agent decides, or prompts user)
     stepwise fulfill "$run_id" '{"approved": true, "reason": "auto-approved"}'
 
-    # 4. Get final result
-    stepwise output "$job_id"
+    # 4. Wait for completion
+    stepwise wait "$job_id"
 fi
 ```
+
+---
 
 ## 7. Exit Code Reference
 
@@ -292,9 +297,11 @@ fi
 |------|---------|------|
 | `0` | Success | Flow completed |
 | `1` | Failed | A step errored |
-| `2` | Input error | Missing/invalid `--input`, bad file path |
-| `3` | Timeout | `--timeout` exceeded (job still alive) |
+| `2` | Usage error | Missing/invalid `--input`, bad file path |
 | `4` | Cancelled | Job was cancelled |
+| `5` | Suspended | Flow is waiting for external input |
+
+---
 
 ## 8. Common Patterns
 
@@ -323,23 +330,29 @@ stepwise run report.flow.yaml --wait --input findings=@/tmp/findings.txt
 ### Conditional on external steps
 
 ```bash
-# Check schema first — if external steps exist, use timeout
+# Check schema first — if external steps exist, handle suspension
 schema=$(stepwise schema flow.yaml)
-has_human=$(echo "$schema" | jq '.externalSteps | length')
+has_external=$(echo "$schema" | jq '.externalSteps | length')
 
-if [ "$has_human" -gt 0 ]; then
-    stepwise run flow.yaml --wait --timeout 300 --input k=v
-else
-    stepwise run flow.yaml --wait --input k=v
+if [ "$has_external" -gt 0 ]; then
+    echo "Flow has external steps — may suspend for input" >&2
 fi
+
+stepwise run flow.yaml --wait --input k=v
 ```
+
+---
 
 ## Troubleshooting
 
-**"Missing required input"** — The flow needs `--input` flags. Run `stepwise schema flow.yaml` to see what inputs are required.
+**"Missing required input"** — Run `stepwise schema flow.yaml` to see what inputs are required.
 
-**Timeout on external step** — The flow is waiting for external input. Use `stepwise output <job-id>` to see the suspended step, then `stepwise fulfill` to provide the input.
+**Suspended on external step** — The flow is waiting for external input. Use `stepwise output <job-id>` to see the suspended step, then `stepwise fulfill` to provide the input.
 
 **Empty outputs array** — The job may still be running. Check `stepwise status <job-id>`. If it's completed but outputs are empty, the terminal step may not have produced output fields.
 
 **"Job not found"** — Job IDs are scoped to the `.stepwise/` project directory. Make sure you're running commands from the same project, or use `--project-dir`.
+
+---
+
+See [Writing Flows](writing-flows.md) for YAML syntax. See [CLI Reference](cli.md) for the full command list.
