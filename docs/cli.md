@@ -234,7 +234,7 @@ stepwise open job-abc123                 # open job detail page
 | Flag | Description |
 |------|-------------|
 | `--port INT` | Override port for ephemeral server |
-| `--no-open` | Print URL instead of opening browser |
+| `--url` | Print URL instead of opening browser |
 
 ---
 
