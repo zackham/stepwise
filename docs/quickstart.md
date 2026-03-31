@@ -1,6 +1,6 @@
 # Quickstart
 
-Get from zero to a running workflow in under 5 minutes.
+Zero to running workflow in 5 minutes.
 
 ## Install
 
@@ -12,23 +12,25 @@ Or install directly: `uv tool install stepwise-run@git+https://github.com/zackha
 
 ## Try it instantly
 
-Run a real-world code-review flow from the Stepwise registry — no setup, no files to create:
-
-```bash
-stepwise run @stepwise:code-review --watch
-```
-
-This downloads and runs a multi-step code review workflow, opening a browser with real-time DAG visualization. An agent reviews your code, an external step pauses for your decision, and the flow continues based on your input.
-
-No API keys? Try the demo instead:
+Run the interactive demo — no setup, no API keys, no files to create:
 
 ```bash
 stepwise run @stepwise:demo --watch
 ```
 
-## Your first flow in 60 seconds
+This opens a browser with the live DAG viewer. You'll see steps execute in real time, provide input at an external gate, and watch the flow branch based on your decision.
 
-No `.stepwise/` directory needed. No API keys. Just a YAML file anywhere on your machine.
+Have API keys configured? Try a real code review:
+
+```bash
+stepwise run @stepwise:code-review --watch
+```
+
+An agent reviews your code, pauses for your decision, and continues based on your input. Three executor types in one flow.
+
+## Your first flow
+
+No `.stepwise/` directory needed. No configuration. Just a YAML file.
 
 Create `hello.flow.yaml`:
 
@@ -52,13 +54,13 @@ Run it:
 stepwise run hello.flow.yaml
 ```
 
-Two steps, one dependency. `greet` runs first (outputs JSON to stdout), then `shout` runs with `greet`'s output as input. Variables from `inputs:` are available as `$variable_name` in `run:` commands and as `STEPWISE_INPUT_*` environment variables.
+Two steps, one dependency. `greet` runs first and outputs JSON to stdout. `shout` runs with `greet`'s output wired in as `$message`. The engine figures out the order from the `inputs:` declaration.
 
-That's the core model: steps produce outputs, downstream steps consume them, the engine figures out the order.
+That's the core model: steps produce typed outputs, downstream steps consume them, the engine resolves the DAG.
 
 ## A real workflow
 
-Now something closer to real life. Create `code-review.flow.yaml`:
+Create `code-review.flow.yaml`:
 
 ```yaml
 name: code-review
@@ -102,30 +104,38 @@ steps:
 
 Four steps, three executor types:
 
-- **gather-context** — a `script` step (the `run:` shorthand). Runs shell commands, parses JSON from stdout.
-- **review** — an `agent` step. An autonomous AI agent reviews the diff with tool access and streaming output.
-- **decide** — an `external` step. The job pauses and waits for your input via the web UI or terminal.
-- **apply-fixes** — another agent step. Only runs after `decide` completes (via `after`).
+- **gather-context** — a shell script. Runs commands, outputs JSON to stdout.
+- **review** — an agent step. A full agentic session with tools, streaming output.
+- **decide** — an external step. The job pauses, waits for your input via the web UI or terminal.
+- **apply-fixes** — another agent step. Runs after `decide` completes.
 
-Dependencies are implicit from `inputs:` — `review` waits for `gather-context` because it needs `diff_summary` and `commits`. Steps with no data dependencies run in parallel automatically.
+Dependencies are implicit from `inputs:`. Steps with no dependencies run in parallel automatically.
 
-## Run it
+## Running modes
 
-### Headless (CLI output only)
-
-```bash
-stepwise run code-review
-```
-
-Prints step-by-step progress to the terminal. Exits when the job completes or fails.
-
-### With live UI
+### With the live DAG viewer
 
 ```bash
 stepwise run code-review --watch
 ```
 
-Starts an ephemeral web server and opens the browser. You see the DAG execute in real time — steps light up as they run, agents stream output live, and external steps show an inline input form.
+Opens the browser. Steps light up as they run, agents stream output live, external steps show an inline input form. This is the fastest way to understand what Stepwise does.
+
+### Headless
+
+```bash
+stepwise run code-review
+```
+
+Step-by-step progress in the terminal. External steps prompt at the command line. Exits when done.
+
+### As a tool for agents
+
+```bash
+stepwise run code-review --wait --input repo_path="/path/to/repo"
+```
+
+Pure JSON on stdout. Zero logging, zero progress noise. Your agent parses the output and acts on it. See [Agent Integration](agent-integration.md).
 
 ### Generate a report
 
@@ -133,11 +143,11 @@ Starts an ephemeral web server and opens the browser. You see the DAG execute in
 stepwise run code-review --report
 ```
 
-Runs the flow and generates a self-contained HTML report with DAG visualization, step timeline, expandable details for every step, and the YAML source.
+Runs the flow and produces a self-contained HTML report with DAG visualization, step timeline, and expandable details for every step.
 
 ## Adding a loop
 
-Make the review iterative — if the human requests changes, loop back to the review step:
+Make the review iterative — if the human requests changes, loop back:
 
 ```yaml
   decide:
@@ -166,11 +176,11 @@ Make the review iterative — if the human requests changes, loop back to the re
         action: advance
 ```
 
-The `exits:` block evaluates rules in order after the step completes. `action: loop` with `target: review` re-runs the review step with fresh context. The `attempt` variable tracks how many times a step has run, so you can set a ceiling.
+`exits:` evaluates rules in order after the step completes. `action: loop` with `target: review` re-runs the review step. The `attempt` variable tracks iterations, so you can cap it.
 
 ## Adding an external gate
 
-Any step can be replaced with an external executor to add an approval gate:
+Any step can be replaced with an `external` executor to add an approval point:
 
 ```yaml
   approve-deploy:
@@ -184,30 +194,14 @@ Any step can be replaced with an external executor to add an approval gate:
       result: apply-fixes.result
 ```
 
-When the flow reaches this step, it suspends. With `--watch`, you see the prompt in the web UI with typed input fields. Provide your decision and the flow continues. In headless mode, the step pauses at the terminal prompt.
+The flow suspends. With `--watch`, you see the prompt in the web UI with typed input fields. Provide your decision and the flow continues. In headless mode, it prompts at the terminal.
 
-## Call it from your agent
+## Staging and batching jobs
 
-Stepwise flows are callable as tools by AI agents (Claude Code, Codex, etc.) via plain CLI:
-
-```bash
-stepwise run code-review --wait --input repo_path="/path/to/repo"
-```
-
-```json
-{"status": "completed", "job_id": "job-abc123", "outputs": [{"verdict": "approve", "issues": [], "suggestions": []}]}
-```
-
-`--wait` prints **only** JSON to stdout — zero logging, zero progress noise. Your agent parses the output and acts on it. Missing an input? The error tells you exactly which `--input` flags to add.
-
-See [Agent Integration](agent-integration.md) for the full guide.
-
-## Stage and batch jobs
-
-For multi-job workflows, stage jobs before running them. This lets you build a batch, wire data between jobs, review the plan, and release everything at once.
+For multi-job workflows, stage jobs before running them:
 
 ```bash
-# Create two staged jobs in a group
+# Create staged jobs in a group
 stepwise job create my-flow --input task="Build API" --group sprint-1
 stepwise job create my-flow --input task="Write tests" --group sprint-1
 
@@ -216,20 +210,17 @@ stepwise job create my-flow \
   --input spec=job-<first-id>.result \
   --group sprint-1
 
-# Review staged jobs
+# Review, then release the batch
 stepwise job show --group sprint-1
-
-# Release the batch — engine executes in dependency order
 stepwise job run --group sprint-1
 ```
 
-Jobs auto-start when their dependencies complete. See [Concepts: Job Staging](concepts.md#job-staging) for the full mental model and [CLI: Job Staging](cli.md#job-staging-commands) for all commands.
+Jobs auto-start when their dependencies complete. See [Concepts: Job Staging](concepts.md#job-staging).
 
 ## What's next
 
 - [Concepts](concepts.md) — the full mental model: jobs, steps, executors, trust, agents
-- [Writing Flows](writing-flows.md) — flow authorship guide covering all step types and control flow
-- [Executors](executors.md) — deep dive into all five executor types
-- [Web UI](web-ui.md) — the dashboard, DAG viewer, and step detail
+- [Why Stepwise](why-stepwise.md) — the philosophy: the harness, not the intelligence
+- [Writing Flows](writing-flows.md) — all step types, wiring, and control flow
+- [Use Cases](use-cases.md) — real patterns: podcast pipelines, research synthesis, deploy gates
 - [Flow Reference](flow-reference.md) — complete `.flow.yaml` schema
-- [Why Stepwise](why-stepwise.md) — design philosophy: the harness, not the intelligence

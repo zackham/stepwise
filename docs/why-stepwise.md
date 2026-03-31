@@ -1,24 +1,38 @@
 # Why Stepwise
 
-## The Problem
+## The felt problem
 
-AI agent frameworks are stuck on the wrong abstraction.
+You ask an agent to do something that takes 20 minutes. While it runs, you do something else. When you come back: did it work? Did it go off the rails at step 3? Did it burn $14 in API credits retrying a hallucinated command?
 
-CrewAI gives you "Senior Researcher" and "Technical Writer" — roles with backstories, goals, and persistent personas. AutoGen gives you conversations between named agents. These feel intuitive because they mirror how we think about delegating to people.
+You don't know. So you read the logs. You re-run parts of it. You check the output manually. The 20 minutes of agent time saved you 20 minutes of verification time. Net gain: zero.
 
-But they're modeling the wrong thing. An LLM doesn't "become" a Senior Researcher by reading a backstory. It gets a system prompt, a set of tools, and instructions. The persona is semantic sugar. And it comes with real costs: you can't run two instances of the same "role" in parallel without identity conflicts, you can't change the tool set mid-task without redefining the persona, and debugging "why did the researcher do that?" requires reverse-engineering prompt construction from role definitions.
+Now multiply that by a flow that takes 3 hours. Or one that runs overnight. Or one where a human needs to approve step 7 before step 8 can proceed. The agent is capable. But you can't *trust* the run, because the run isn't observable, isn't recoverable, and isn't auditable.
 
-## The Core Insight: Step Over Role
+This is the gap Stepwise fills. Not the intelligence — the harness.
 
-The primitive in any AI workflow is an **agentic loop** — an LLM with tools, iterating until the task is done. The only decisions are:
+## The harness, not the intelligence
 
-1. What context to load
-2. What tools to provide
-3. What instructions to give
+The intelligence commoditizes. Claude, GPT, Gemini, Codex — they get better every quarter. The models are not the bottleneck.
 
-These three things should be properties of **the step the work is in**, not a persistent actor. A "code review" step needs read-only file access, a diff, and review guidelines. A "planning" step needs search tools, a spec, and planning instructions. Same LLM, different configuration. The step IS the role.
+The bottleneck is packaging AI work into something you can delegate, observe, gate, and audit. A brisket doesn't need a better cow. It needs a smoker with a reliable thermometer, predictable airflow, and a way to check the bark without opening the door every 20 minutes.
 
-This is what Stepwise does. Each step declares its executor (script, LLM, agent, or human), its inputs, and its outputs. The engine handles the rest — scheduling, dependency resolution, retries, cost tracking, observability.
+Stepwise is the smoker. Your agents are the brisket.
+
+Concretely, this means:
+
+- **Observable runs.** Every step records inputs, outputs, timing, cost, and attempt count. Not as optional logging — as the execution model. Downstream steps depend on this data.
+- **Human gates.** External steps pause the flow and wait for judgment. In the web UI, CLI, or via API. The human sees full context of what happened before the gate.
+- **Crash recovery.** Everything persists to SQLite. Kill the process, restart, jobs resume from the last completed step. Orphaned jobs get adopted automatically.
+- **Audit trail.** Every state transition is an event. The `--report` flag renders a self-contained HTML trace. You can see exactly what went wrong at step 4, with the exact inputs it received.
+- **Cost controls.** Per-step limits on dollars, wall-clock time, and iterations. When a limit fires, the step fails cleanly and exit rules route to a fallback or human escalation.
+
+## Step over role
+
+Most agent frameworks model *who* does the work. CrewAI gives you "Senior Researcher" and "Technical Writer." AutoGen gives you named agents in conversations.
+
+But an LLM doesn't *become* a Senior Researcher by reading a backstory. It gets a system prompt, a set of tools, and instructions. The persona is semantic sugar — and it comes with real costs: identity conflicts when you parallelize, tool rigidity, and opaque prompt construction.
+
+Stepwise models *what* the work is. Each step declares its executor type, inputs, and outputs. A "research" step needs search tools and a topic. A "review" step needs the draft and approval criteria. Same LLM, different configuration. The step IS the role.
 
 ```yaml
 steps:
@@ -29,71 +43,65 @@ steps:
     inputs:
       topic: $job.topic
 
-  draft:
+  score:
     executor: llm
     model: anthropic/claude-sonnet-4
-    prompt: "Write a report based on these findings: $findings"
-    outputs: [content, word_count]
+    prompt: "Score these findings 0-10 on depth and relevance: $findings"
+    outputs: [score, reasoning]
     inputs:
       findings: research.findings
 
   review:
     executor: external
-    prompt: "Review this draft. Approve or request revisions."
-    outputs: [decision, feedback]
+    prompt: "Score: $score. Approve or request deeper research?"
+    outputs: [decision]
     inputs:
-      content: draft.content
+      score: score.score
 ```
 
-No roles. No personas. No team definitions. Just steps with typed inputs and outputs, connected by data flow.
+Three steps, three executor types, zero role definitions. The agent researches because its step says to research, not because it was cast as a researcher.
 
-## What's Wrong With Existing Tools
+## Deterministic orchestration, nondeterministic execution
 
-### Agent Frameworks (CrewAI, AutoGen, OpenAI Agents SDK)
+The engine's control plane is explicit and reproducible. Dependencies are a DAG. Exit rules are evaluated expressions. Parallel execution follows from graph topology. You can reason about flow structure without reasoning about LLM behavior.
 
-These solve agent *construction* — how to build a single agent or hand off between agents. They don't solve agent *orchestration* — how to coordinate multi-step work with quality gates, cost controls, persistence, and human oversight.
+The nondeterminism lives inside executors — inside agent sessions, LLM calls, and human decisions. The engine doesn't care what an executor does internally. It cares about the contract: declared inputs in, declared outputs out, within stated limits.
 
-- **No durable execution.** If the process crashes mid-workflow, you start over. There's no persistent state to resume from.
-- **No cost controls.** A runaway agent can burn through API credits with no guardrails. Stepwise enforces per-step cost and duration limits.
-- **No human gates.** Most frameworks treat human input as an afterthought. Stepwise treats human steps as first-class — same contract as any other executor.
-- **No observability.** When a 5-step agent pipeline produces wrong output, where did it go wrong? Stepwise logs every transition, every input/output, every attempt. The `--report` flag generates a self-contained HTML trace.
+This separation is what makes the system trustworthy. When you look at a flow definition, you see the structure. When you look at a step run, you see the content. They don't bleed into each other.
 
-### Workflow Engines (Temporal, Prefect, Airflow)
+## What if AI work lived in a system instead of a vibe?
 
-These solve durable execution and scheduling — but they're infrastructure. Temporal requires a server, workers, and persistent storage. Prefect needs a control plane. These are the right tools for distributed production systems with teams of engineers.
+Right now, most AI delegation looks like: copy context into a chat window, prompt carefully, hope for the best, manually verify. The "workflow" lives in your head and your clipboard.
 
-Stepwise is for a different use case: a single developer or small team who wants to orchestrate AI workflows on their machine. SQLite, not Postgres. One process, not a cluster. Install with one command, not Helm charts.
+Stepwise makes the workflow explicit:
 
-### State Machine Libraries (LangGraph)
+- **Declared, not coded.** Flows are YAML files. Version-controlled, diffable, shareable, runnable on any machine. Non-programmers can read and review them.
+- **Mixed executors that compose.** A shell script fetches data. An LLM scores it. An agent implements the fix. A poll waits for CI. A human approves the deploy. One DAG, zero glue code.
+- **Loops with safety caps.** Exit rules fire after each step. If quality is too low, loop back. If attempts hit the ceiling, escalate to a human. Declared in YAML, enforced by the engine.
+- **External fulfillment as a primitive.** The `external` executor pauses a step and waits for input from *anyone* — a human, a webhook, another agent. It's the same execution model as every other step, not a bolt-on.
 
-LangGraph is the closest architectural cousin — explicit graph topology, conditional edges, typed state. But:
+## Design principles
 
-- **Embedded, not standalone.** LangGraph is a Python library you wire into your app. Stepwise is an engine with its own CLI, web UI, and persistence. You author YAML, run `stepwise run`, and get results.
-- **State corruption.** Shared mutable state across nodes leads to race conditions in concurrent execution. Stepwise steps are pure functions — inputs in, outputs out, no shared state.
-- **No process concept.** LangGraph models a single execution graph. Stepwise models *jobs* that can spawn sub-jobs, each running their own workflow. Project workflows decompose into process workflows. Recurse to any depth.
+1. **Steps are pure functions.** Inputs in, outputs out. No shared mutable state. This is what makes retry, parallelism, and observability clean.
 
-## Design Principles
+2. **Deterministic orchestration, nondeterministic execution.** The engine is explicit and reproducible. The AI lives inside executors.
 
-1. **Steps are pure functions.** Inputs in, outputs out. No shared mutable state. This makes retry, parallelism, and observability trivial.
+3. **Human gates over human management.** People approve, redirect, and judge at key points. They don't micromanage every step.
 
-2. **Deterministic orchestration, non-deterministic execution.** The engine's control plane is explicit and reproducible. The AI lives in the data plane — inside executors. You can reason about flow structure without reasoning about LLM behavior.
+4. **Halt on failure, inspect, rerun.** When something breaks, the job stops. You look at the data, fix the issue, rerun the failed step. No hidden retry logic masking bugs.
 
-3. **Human gates over human management.** People approve, redirect, and provide judgment at key decision points. They don't micromanage every step. The engine handles the plumbing.
+5. **Observable by default.** Every transition, every handoff, every cost event is logged — because downstream steps depend on it.
 
-4. **Halt on failure, inspect, rerun.** When something breaks, the job stops. You look at the logs, fix the issue, and rerun the failed step. No hidden retry logic masking bugs.
+6. **Single machine, zero infrastructure.** SQLite. One process. `curl | sh` to install. No servers, no workers, no cloud accounts.
 
-5. **Observable by default.** Every state transition, every input/output handoff, every cost event is logged. The `--report` flag renders it all as an interactive HTML document.
+## Who it's for
 
-6. **Single machine, zero infrastructure.** SQLite persistence. One Python process. Install with `curl -fsSL https://raw.githubusercontent.com/zackham/stepwise/master/install.sh | sh`. No servers, no workers, no cloud accounts required.
+- **The founder with one ugly process held together by duct tape.** You don't think "I need workflow orchestration." You think "I need a better spreadsheet." Stepwise is the upgrade.
+- **Developers building AI pipelines** who want structure without framework lock-in.
+- **Solo builders and small teams** who need orchestration without infrastructure.
+- **Anyone mixing AI with human judgment** — content pipelines, code review, research, anything where quality gates matter.
 
-## Who It's For
-
-- **Developers building AI pipelines** who want structure without framework lock-in
-- **Solo builders and small teams** who need orchestration without infrastructure
-- **Anyone mixing AI with human judgment** — content pipelines, code review, research workflows, anything where quality gates matter
-- **People who think in processes** — if you can describe your workflow as a series of steps with inputs and outputs, Stepwise runs it
-
-## What It's Not
+## What it's not
 
 - Not a hosted platform — it runs on your machine
 - Not an agent framework — it orchestrates agents, it doesn't build them
