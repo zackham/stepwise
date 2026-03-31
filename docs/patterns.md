@@ -561,11 +561,8 @@ stepwise job dep $IMPL --after $PLAN
 # 3. Review the DAG
 stepwise job show --group gumball
 
-# 4. Release — engine runs in dependency order
-stepwise job run --group gumball
-
-# 5. Wait for all jobs to complete (run in background for async notification)
-stepwise wait $RESEARCH $PLAN $IMPL --all
+# 4. Release and wait — engine runs in dependency order
+stepwise job run --group gumball --wait
 ```
 
 ### Example: parallel workstreams with shared research phase
@@ -610,11 +607,8 @@ IMPL_B=$(stepwise job create implement \
 stepwise job dep $IMPL_A --after $PLAN_A
 stepwise job dep $IMPL_B --after $PLAN_B
 
-# Release everything — engine maximizes parallelism within dep constraints
-stepwise job run --group sprint-1
-
-# Wait for all jobs to complete (run in background for async notification)
-stepwise wait $RESEARCH $PLAN_A $PLAN_B $IMPL_A $IMPL_B --all
+# Release everything and wait — engine maximizes parallelism within dep constraints
+stepwise job run --group sprint-1 --wait
 ```
 
 ### Data wiring vs ordering

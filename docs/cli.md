@@ -54,7 +54,7 @@ See [Agent Integration](agent-integration.md) for the full guide. Generate agent
 stepwise job create plan-flow --input spec="new feature" --group sprint-1 --name "plan: feature"
 stepwise job create impl-flow --input plan=job-<plan-id>.plan --group sprint-1 --name "impl: feature"
 stepwise job show --group sprint-1     # review the batch
-stepwise job run --group sprint-1      # release — engine runs in dependency order
+stepwise job run --group sprint-1 --wait  # release and wait for all to complete
 ```
 
 See [Concepts: Job Staging](concepts.md#job-staging) for the mental model.
@@ -568,11 +568,13 @@ Transition STAGED jobs to PENDING, making them eligible for execution. Jobs star
 ```bash
 stepwise job run job-abc123                # release a single job
 stepwise job run --group wave-1            # release all jobs in a group
+stepwise job run --group wave-1 --wait     # release and block until all complete
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--group NAME` | Transition all staged jobs in this group |
+| `--wait` | Block until all released jobs reach a terminal state (JSON output on stdout) |
 
 ---
 
