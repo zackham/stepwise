@@ -47,12 +47,12 @@ function validateJobsSearch(search: Record<string, unknown>): JobsRouteSearch {
   };
 }
 
-const JOB_DETAIL_TAB_VALUES = new Set(["step", "data-flow", "job"]);
+const JOB_DETAIL_TAB_VALUES = new Set(["run", "step"]);
 const JOB_VIEW_VALUES = new Set(["dag", "events", "timeline", "tree"]);
 
 export type JobDetailSearch = JobsRouteSearch & {
   step?: string;
-  tab?: "step" | "data-flow" | "job";
+  tab?: "run" | "step";
   panel?: "open";
   view?: "dag" | "events" | "timeline" | "tree";
 };
