@@ -1221,15 +1221,39 @@ class WorkflowDefinition:
             terminals.append(name)
 
         # If loop-internal exclusion removed all candidates, fall back:
-        # exclude only loop-internal steps that have other non-loop-internal
-        # steps in the workflow. Single-step loops are their own terminal.
+        # rebuild depended_on excluding loop-internal consumers, then pick
+        # non-loop-internal non-depended-on steps. If still empty (all steps
+        # are loop-internal), include any non-depended-on step.
         if not terminals and loop_internal:
+            non_li_depended: set[str] = set()
+            for step in self.steps.values():
+                if step.name in loop_internal:
+                    continue
+                for binding in step.inputs:
+                    if binding.any_of_sources:
+                        for src_step, _ in binding.any_of_sources:
+                            if src_step != step.name and not binding.optional:
+                                non_li_depended.add(src_step)
+                    elif binding.source_step != "$job":
+                        if binding.source_step != step.name and not binding.optional:
+                            non_li_depended.add(binding.source_step)
+                for seq in step.after:
+                    non_li_depended.add(seq)
+                if step.for_each:
+                    non_li_depended.add(step.for_each.source_step)
             for name in self.steps:
-                if name in depended_on:
+                if name in loop_internal:
+                    continue
+                if name in non_li_depended:
                     continue
                 if name in targeted_by_exits:
                     continue
                 terminals.append(name)
+            # Last resort: all steps are loop-internal (single-step loops etc.)
+            if not terminals:
+                for name in self.steps:
+                    if name not in depended_on and name not in targeted_by_exits:
+                        terminals.append(name)
 
         return terminals
 
