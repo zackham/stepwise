@@ -110,6 +110,7 @@ A script runs tests. Based on the output, an agent opens a PR or fixes the failu
 
 ```
 stepwise run <flow> [--watch|--wait|--async]   Run a flow
+stepwise open <flow|job>                       Open in web UI
 stepwise server start [--detach]               Persistent server + web UI
 stepwise validate <flow>                       Check a flow for errors
 stepwise jobs                                  List all jobs
