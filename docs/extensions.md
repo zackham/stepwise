@@ -1,14 +1,16 @@
 # Extensions
 
-Stepwise is designed to integrate with any AI agent platform, CI/CD system, or custom automation. The extension architecture uses three tiers — all built into core — plus a protocol for building third-party integrations.
+How to integrate external systems with Stepwise via events, webhooks, WebSocket streams, and CLI plugins.
 
-## Event Delivery Tiers
+---
 
-Every stepwise event (step started, suspended, completed, failed; job lifecycle) is delivered through three mechanisms simultaneously:
+Stepwise delivers every event (step started, suspended, completed, failed; job lifecycle) through three mechanisms simultaneously. Extensions consume these events and optionally act on them — all via public APIs, never by loading code into the engine.
+
+## Event Delivery
 
 ### 1. Shell Hooks (local, simple)
 
-Scripts in `.stepwise/hooks/` that fire on events. Best for simple automation — deploy on completion, notify on failure, etc.
+Scripts in `.stepwise/hooks/` that fire on events. Best for simple automation — deploy on completion, notify on failure.
 
 ```bash
 # .stepwise/hooks/on-complete
@@ -78,6 +80,8 @@ stepwise logs job-abc123    # Dump full history
 stepwise output job-abc123 plan  # Show step output
 ```
 
+---
+
 ## Job Metadata
 
 Every job can carry structured metadata, set at creation:
@@ -103,13 +107,15 @@ stepwise run my-flow \
 
 **Constraints:** immutable after creation, 8KB total limit.
 
+---
+
 ## Building an Extension
 
-An extension is any external process that consumes stepwise events and optionally acts on them. Extensions interact via the public APIs — no private interfaces.
+An extension is any external process that consumes stepwise events and optionally acts on them. No private interfaces — everything uses the public APIs.
 
 ### Pattern: WebSocket Consumer
 
-The most common extension pattern: connect to the WebSocket stream, filter events, and react.
+The most common extension pattern: connect to the WebSocket stream, filter events, react.
 
 ```python
 import asyncio
@@ -134,29 +140,13 @@ async def listen(server_url, session_id):
 asyncio.run(listen("localhost:8340", "my-session"))
 ```
 
-### Pattern: CLI Extension (Git-style PATH Discovery)
+### Pattern: CLI Extension (Git-style Discovery)
 
-Extensions that add CLI subcommands use PATH discovery. If `stepwise-telegram` is on your PATH, then `stepwise telegram` works automatically.
-
-**Extension requirements:**
-1. Binary/script named `stepwise-<name>` on PATH
-2. Supports `stepwise-<name> --manifest` to report capabilities:
-
-```json
-{
-  "name": "telegram",
-  "version": "0.1.0",
-  "description": "Route stepwise events to Telegram",
-  "capabilities": ["event_consumer", "fulfillment"],
-  "config_keys": ["telegram_bot_token", "telegram_chat_id"]
-}
-```
-
-3. Discoverable via `stepwise extensions list`
+Extensions that add CLI subcommands use PATH discovery. If `stepwise-telegram` is on your PATH, then `stepwise telegram` works automatically. See [How to Build an Extension](how-to-plugins.md) for the full walkthrough.
 
 ### Pattern: Webhook Handler
 
-For serverless or remote integrations, use webhooks:
+For serverless or remote integrations:
 
 ```bash
 stepwise run my-flow --async \
@@ -167,7 +157,7 @@ Your server receives POST requests with the event envelope. React accordingly.
 
 ### Fulfilling External Steps
 
-When a step suspends (e.g., `executor: external`), extensions can fulfill it:
+When a step uses `executor: external` and suspends for input, extensions can fulfill it:
 
 ```bash
 # CLI
@@ -179,13 +169,7 @@ curl -X POST http://localhost:PORT/api/runs/<run-id>/fulfill \
   -d '{"approved": true, "feedback": "Looks good"}'
 ```
 
-## Official Extensions
-
-These are separate packages maintained by the stepwise project. They use the same public APIs as any community extension.
-
-- **`stepwise-channel-claude`** — MCP channel plugin for Claude Code. Pushes events into running sessions.
-- **Codex integration** — equivalent for OpenAI Codex environments.
-- **Reference implementations** — example Telegram bot, Slack integration, Discord bot.
+---
 
 ## Design Principles
 
@@ -193,3 +177,7 @@ These are separate packages maintained by the stepwise project. They use the sam
 - **Out-of-process**: Extensions never load code into the engine. They interact via HTTP, WebSocket, or stdin/stdout.
 - **Core works standalone**: Zero extensions required. Hooks + CLI + web UI cover all basic needs.
 - **Same envelope everywhere**: Hooks, webhooks, and WebSocket stream all use the identical JSON event format.
+
+---
+
+See [How to Build an Extension](how-to-plugins.md) for a step-by-step guide. See [API Reference](api.md) for endpoint documentation.

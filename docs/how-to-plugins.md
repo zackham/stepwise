@@ -1,18 +1,20 @@
 # How to Build a Stepwise Extension
 
-Stepwise extensions are external commands that add CLI subcommands and integrate with the stepwise engine via its public APIs. They follow the git-style discovery model: if `stepwise-telegram` is on your PATH, then `stepwise telegram` works automatically.
+Step-by-step guide to creating a CLI extension that integrates with the Stepwise engine via its public APIs.
 
-Extensions are always out-of-process — they never load code into the engine. They interact via HTTP, WebSocket, stdin/stdout, and the REST API. This keeps the core small and lets you write extensions in any language.
+---
+
+Stepwise extensions are external commands that add CLI subcommands. They follow git-style discovery: if `stepwise-telegram` is on your PATH, then `stepwise telegram` works automatically. Extensions are always out-of-process — they interact via HTTP, WebSocket, and stdin/stdout, never by loading code into the engine.
 
 ## How Discovery Works
 
-When you run `stepwise extensions list`, stepwise scans every directory on your `$PATH` for executables whose name starts with `stepwise-`. The suffix becomes the subcommand name: `stepwise-deploy` becomes `stepwise deploy`.
+When you run `stepwise extensions list`, Stepwise scans every directory on your `$PATH` for executables named `stepwise-*`. The suffix becomes the subcommand: `stepwise-deploy` becomes `stepwise deploy`.
 
 Deduplication follows shell rules — if the same name appears in multiple PATH directories, the first one wins. Results are cached in `.stepwise/extensions.json` for one hour. Use `--refresh` to force a fresh scan.
 
 ## The Extension Manifest
 
-After finding an executable, stepwise runs `<executable> --manifest` and reads the JSON response. This is how your extension reports its name, version, capabilities, and configuration requirements.
+After finding an executable, Stepwise runs `<executable> --manifest` and reads the JSON response. This is how your extension reports its capabilities.
 
 ```json
 {
@@ -24,21 +26,19 @@ After finding an executable, stepwise runs `<executable> --manifest` and reads t
 }
 ```
 
-**Fields:**
-
 | Field | Required | Description |
 |---|---|---|
 | `name` | yes | Extension identifier (shown in `stepwise extensions list`) |
 | `version` | no | Semver string |
 | `description` | no | One-line summary |
-| `capabilities` | no | List of capability tags (e.g., `event_consumer`, `fulfillment`, `executor`) |
+| `capabilities` | no | Capability tags (e.g., `event_consumer`, `fulfillment`, `executor`) |
 | `config_keys` | no | Config keys the extension reads from stepwise config |
 
 If `--manifest` returns a non-zero exit code or invalid JSON, the extension still appears in the listing — just with name and path only.
 
-## Example: Building a Deploy Extension
+## Example: Deploy Extension in Bash
 
-Here's a minimal extension in Bash that deploys on job completion. Save it as `stepwise-deploy` somewhere on your PATH and make it executable.
+A minimal extension that deploys on job completion. Save as `stepwise-deploy` on your PATH and make it executable.
 
 ```bash
 #!/usr/bin/env bash
@@ -89,25 +89,9 @@ $ stepwise deploy watch
 # Listening for job completions...
 ```
 
-## Extension Interaction Patterns
+## Example: Python Extension
 
-Extensions don't get special privileges. They use the same interfaces available to any external tool:
-
-**Consume events** — Connect to `ws://localhost:PORT/api/v1/events/stream` for real-time events. Filter by `?session_id=X` or `?job_id=X`. Use `?since_job_start=true` for replay.
-
-**Fulfill suspended steps** — When a step uses `executor: external` and suspends for input, your extension can fulfill it via the REST API:
-
-```bash
-curl -X POST http://localhost:8340/api/runs/<run-id>/fulfill \
-  -H "Content-Type: application/json" \
-  -d '{"approved": true, "feedback": "Looks good"}'
-```
-
-**Create and manage jobs** — Use the REST API at `/api/jobs/` to create, cancel, or query jobs programmatically.
-
-## Writing Extensions in Python
-
-For more complex extensions, Python with `click` or `argparse` works well. The key requirements are the same: the binary must be named `stepwise-<name>`, be executable, and respond to `--manifest`.
+For more complex extensions, Python with `argparse` or `click` works well. Same requirements: named `stepwise-<name>`, executable, responds to `--manifest`.
 
 ```python
 #!/usr/bin/env python3
@@ -126,10 +110,26 @@ if "--manifest" in sys.argv:
 # Extension logic here...
 ```
 
+## Extension Interaction Patterns
+
+Extensions use the same interfaces available to any external tool:
+
+**Consume events** — Connect to `ws://localhost:PORT/api/v1/events/stream` for real-time events. Filter by `?session_id=X` or `?job_id=X`. Use `?since_job_start=true` for replay. See [Extensions](extensions.md) for the full event envelope format.
+
+**Fulfill suspended steps** — When a step with `executor: external` suspends for input, your extension can fulfill it:
+
+```bash
+curl -X POST http://localhost:8340/api/runs/<run-id>/fulfill \
+  -H "Content-Type: application/json" \
+  -d '{"approved": true, "feedback": "Looks good"}'
+```
+
+**Create and manage jobs** — Use the REST API at `/api/jobs/` to create, cancel, or query jobs programmatically.
+
 ## Reference
 
 - `stepwise extensions list` — show all discovered extensions
 - `stepwise extensions list --refresh` — bypass cache and rescan PATH
 - Extensions cache: `.stepwise/extensions.json` (1-hour TTL)
-- Event envelope format: see [extensions.md](extensions.md) for the full event schema
-- REST API: see [api.md](api.md) for endpoint documentation
+- Event envelope format: [Extensions](extensions.md)
+- REST API endpoints: [API Reference](api.md)
