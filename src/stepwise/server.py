@@ -3142,6 +3142,7 @@ def get_flow_config(path: str):
         raise HTTPException(status_code=400, detail=f"Invalid flow YAML: {'; '.join(e.errors)}")
 
     config_vars = [v.to_dict() for v in workflow.config_vars]
+    input_vars = [v.to_dict() for v in workflow.input_vars]
 
     # Read config.local.yaml if present
     cfg_path = _config_file_path(abs_path)
@@ -3155,6 +3156,7 @@ def get_flow_config(path: str):
 
     return {
         "config_vars": config_vars,
+        "input_vars": input_vars,
         "values": values,
         "raw_yaml": raw_yaml,
         "config_path": cfg_path.name,

@@ -340,7 +340,7 @@ steps:
 """)
         # No config block but has $job.foo — should warn about missing config block
         warns = wf.warnings()
-        assert any("$job.foo" in w and "no config: block is declared" in w for w in warns)
+        assert any("$job.foo" in w and "no config: or inputs: block is declared" in w for w in warns)
 
     def test_no_warning_when_no_job_inputs_and_no_config(self):
         wf = load_workflow_string("""
@@ -369,7 +369,7 @@ steps:
       bar: $job.bar
 """)
         warns = wf.warnings()
-        assert any("foo" in w and "not declared in config" in w for w in warns)
+        assert any("foo" in w and "not declared in config: or inputs:" in w for w in warns)
 
     def test_warning_unused_config_var(self):
         wf = load_workflow_string("""

@@ -119,12 +119,13 @@ def load_flow_config(flow_path: Path, workflow) -> dict:
     import os
     import yaml
 
-    # Extract defaults from config_vars
-    defaults = {v.name: v.default for v in workflow.config_vars if v.default is not None}
+    # Extract defaults from config_vars and input_vars
+    all_vars = [*workflow.config_vars, *workflow.input_vars]
+    defaults = {v.name: v.default for v in all_vars if v.default is not None}
 
-    # Resolve env vars for sensitive config vars (STEPWISE_VAR_{NAME})
+    # Resolve env vars for sensitive config/input vars (STEPWISE_VAR_{NAME})
     env_values: dict = {}
-    for v in workflow.config_vars:
+    for v in all_vars:
         env_key = f"STEPWISE_VAR_{v.name.upper()}"
         env_val = os.environ.get(env_key)
         if env_val is not None:

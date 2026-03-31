@@ -125,6 +125,7 @@ export interface FlowDefinition {
   steps: Record<string, StepDefinition>;
   metadata?: FlowMetadata;
   config_vars?: ConfigVar[];
+  input_vars?: ConfigVar[];
 }
 
 // ── Sidecar ────────────────────────────────────────────────────────────

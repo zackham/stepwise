@@ -595,6 +595,7 @@ class WorkflowDefinition:
     source_dir: str | None = None  # M10: directory containing the flow file
     source_path: str | None = None  # Full path to the flow YAML file
     config_vars: list[ConfigVar] = field(default_factory=list)
+    input_vars: list[ConfigVar] = field(default_factory=list)
     requires: list[FlowRequirement] = field(default_factory=list)
     readme: str = ""
 
@@ -1057,7 +1058,7 @@ class WorkflowDefinition:
                         f"the loop completes"
                     )
 
-        # Config variable cross-checks
+        # Config/input variable cross-checks
         job_fields = {
             b.source_field
             for s in self.steps.values()
@@ -1065,27 +1066,28 @@ class WorkflowDefinition:
             if b.source_step == "$job"
         }
 
-        if self.config_vars:
-            config_names = {v.name for v in self.config_vars}
+        all_vars = [*self.config_vars, *self.input_vars]
+        if all_vars:
+            all_var_names = {v.name for v in all_vars}
 
-            for name in sorted(config_names - job_fields):
+            for name in sorted(all_var_names - job_fields):
                 warns.append(
-                    f"\u26a0 Config variable '{name}' is declared but never referenced as $job.{name}"
+                    f"\u26a0 Config/input variable '{name}' is declared but never referenced as $job.{name}"
                 )
-            for name in sorted(job_fields - config_names):
+            for name in sorted(job_fields - all_var_names):
                 warns.append(
-                    f"\u2139 $job.{name} is not declared in config: block"
+                    f"\u2139 $job.{name} is not declared in config: or inputs: block"
                 )
-            for v in self.config_vars:
+            for v in all_vars:
                 if v.required and v.default is None and not v.example:
                     warns.append(
-                        f"\u2139 Config variable '{v.name}' has no default or example "
+                        f"\u2139 Config/input variable '{v.name}' has no default or example "
                         f"— users may not know what to provide"
                     )
         elif job_fields:
             for name in sorted(job_fields):
                 warns.append(
-                    f"\u2139 $job.{name} is used but no config: block is declared"
+                    f"\u2139 $job.{name} is used but no config: or inputs: block is declared"
                 )
 
         # Cache on uncacheable step types
@@ -1407,6 +1409,8 @@ class WorkflowDefinition:
             d["source_path"] = self.source_path
         if self.config_vars:
             d["config_vars"] = [v.to_dict() for v in self.config_vars]
+        if self.input_vars:
+            d["input_vars"] = [v.to_dict() for v in self.input_vars]
         if self.requires:
             d["requires"] = [r.to_dict() for r in self.requires]
         if self.readme:
@@ -1423,6 +1427,7 @@ class WorkflowDefinition:
         for name, chain_d in d.get("chains", {}).items():
             chains[name] = ChainConfig.from_dict(chain_d)
         config_vars = [ConfigVar.from_dict(v) for v in d.get("config_vars", [])]
+        input_vars = [ConfigVar.from_dict(v) for v in d.get("input_vars", [])]
         requires = [FlowRequirement.from_dict(r) for r in d.get("requires", [])]
         return cls(
             steps=steps,
@@ -1431,6 +1436,7 @@ class WorkflowDefinition:
             source_dir=d.get("source_dir"),
             source_path=d.get("source_path"),
             config_vars=config_vars,
+            input_vars=input_vars,
             requires=requires,
             readme=d.get("readme", ""),
         )

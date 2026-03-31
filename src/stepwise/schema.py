@@ -60,6 +60,8 @@ def generate_schema(workflow: WorkflowDefinition) -> dict:
 
     if workflow.config_vars:
         schema["config"] = {v.name: v.to_dict() for v in workflow.config_vars}
+    if workflow.input_vars:
+        schema["input_vars"] = {v.name: v.to_dict() for v in workflow.input_vars}
     if workflow.requires:
         schema["requires"] = [r.to_dict() for r in workflow.requires]
 
@@ -87,7 +89,7 @@ def generate_input_schema(workflow: WorkflowDefinition) -> dict:
     properties: dict[str, dict] = {}
     required: list[str] = []
 
-    for var in workflow.config_vars:
+    for var in [*workflow.input_vars, *workflow.config_vars]:
         prop: dict = {
             "type": _TYPE_MAP.get(var.type, "string"),
         }
