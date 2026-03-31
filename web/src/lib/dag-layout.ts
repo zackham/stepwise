@@ -536,8 +536,23 @@ export function computeHierarchicalLayout(
     }
     for (const seq of step.after) referencedAsSource.add(seq);
   }
+  // Identify boomerang steps: steps with exit rules where none advance.
+  // These are loop machinery (e.g., fix-tests, push-fix) — not terminals.
+  const boomerangSteps = new Set<string>();
   for (const name of stepNames) {
-    if (!referencedAsSource.has(name)) {
+    const step = workflow.steps[name];
+    if (step.exit_rules.length > 0) {
+      const hasAdvance = step.exit_rules.some(
+        (r) => (r.config.action ?? "advance") === "advance"
+      );
+      if (!hasAdvance) {
+        boomerangSteps.add(name);
+      }
+    }
+  }
+
+  for (const name of stepNames) {
+    if (!referencedAsSource.has(name) && !boomerangSteps.has(name)) {
       const step = workflow.steps[name];
       if (step.outputs.length > 0) {
         terminalStepOutputs.set(name, step.outputs);
