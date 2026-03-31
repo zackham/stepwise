@@ -2620,8 +2620,8 @@ def get_flow_jobs(flow_dir: str = Query(...), limit: int = Query(10, ge=1, le=50
 
 @app.get("/api/local-flows")
 def list_local_flows():
-    """List all flows discoverable in the project directory."""
-    from stepwise.flow_resolution import discover_flows
+    """List all flows discoverable in the project directory (local + registry)."""
+    from stepwise.flow_resolution import discover_flows, discover_registry_flows
     from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
 
     flows = discover_flows(_project_dir)
@@ -2669,6 +2669,54 @@ def list_local_flows():
             "is_directory": flow_info.is_directory,
             "executor_types": executor_types,
             "visibility": visibility,
+            "source": "local",
+        })
+
+    # Also include cached registry flows
+    seen_names = {r["name"] for r in result}
+    registry_flows = discover_registry_flows(_project_dir)
+    for reg_flow in registry_flows:
+        # Skip if a local flow with the same name already exists
+        if reg_flow.slug in seen_names:
+            continue
+
+        steps_count = 0
+        description = ""
+        executor_types_reg: list[str] = []
+        visibility_reg = "interactive"
+        try:
+            wf = load_workflow_yaml(reg_flow.path)
+            steps_count = len(wf.steps)
+            description = wf.metadata.description or ""
+            executor_types_reg = sorted(
+                {s.executor.type for s in wf.steps.values() if s.executor}
+            )
+            visibility_reg = wf.metadata.visibility or "interactive"
+        except (YAMLLoadError, Exception):
+            pass
+
+        try:
+            mtime = reg_flow.path.stat().st_mtime
+            modified_at = datetime.fromtimestamp(mtime).isoformat()
+        except OSError:
+            modified_at = ""
+
+        try:
+            rel_path = str(reg_flow.path.relative_to(_project_dir))
+        except ValueError:
+            rel_path = str(reg_flow.path)
+
+        result.append({
+            "path": rel_path,
+            "name": reg_flow.slug,
+            "description": description,
+            "steps_count": steps_count,
+            "modified_at": modified_at,
+            "is_directory": True,
+            "executor_types": executor_types_reg,
+            "visibility": visibility_reg,
+            "source": "registry",
+            "registry_ref": reg_flow.ref,
         })
 
     return result
@@ -2677,6 +2725,68 @@ def list_local_flows():
 class CreateFlowRequest(BaseModel):
     name: str
     template: str = "blank"
+
+
+class ForkFlowRequest(BaseModel):
+    source_path: str
+    name: str
+
+
+@app.post("/api/local-flows/fork")
+def fork_flow(req: ForkFlowRequest):
+    """Fork a registry flow into the local flows/ directory."""
+    import re
+    import shutil
+
+    from stepwise.flow_resolution import FLOW_NAME_PATTERN
+
+    if not FLOW_NAME_PATTERN.match(req.name):
+        raise HTTPException(status_code=400, detail=f"Invalid flow name: '{req.name}'")
+
+    source = _project_dir / req.source_path
+    if not source.is_file():
+        raise HTTPException(status_code=404, detail=f"Source flow not found: {req.source_path}")
+
+    dest_dir = _project_dir / "flows" / req.name
+    if dest_dir.exists():
+        raise HTTPException(status_code=409, detail=f"Flow '{req.name}' already exists")
+
+    # Copy the entire flow directory (co-located files: prompts, scripts, etc.)
+    source_dir = source.parent
+    shutil.copytree(source_dir, dest_dir)
+
+    # Update the name field in the FLOW.yaml
+    flow_yaml_path = dest_dir / "FLOW.yaml"
+    if flow_yaml_path.is_file():
+        content = flow_yaml_path.read_text()
+        # Replace the first name: line
+        content = re.sub(r"^name:\s*.*$", f"name: {req.name}", content, count=1, flags=re.MULTILINE)
+        flow_yaml_path.write_text(content)
+
+    # Return flow info
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+    steps_count = 0
+    description = ""
+    executor_types: list[str] = []
+    try:
+        wf = load_workflow_yaml(flow_yaml_path)
+        steps_count = len(wf.steps)
+        description = wf.metadata.description or ""
+        executor_types = sorted({s.executor.type for s in wf.steps.values() if s.executor})
+    except (YAMLLoadError, Exception):
+        pass
+
+    rel_path = str(flow_yaml_path.relative_to(_project_dir))
+    return {
+        "path": rel_path,
+        "name": req.name,
+        "description": description,
+        "steps_count": steps_count,
+        "is_directory": True,
+        "executor_types": executor_types,
+        "source": "local",
+    }
 
 
 def _flow_template_yaml(name: str, template: str) -> str:

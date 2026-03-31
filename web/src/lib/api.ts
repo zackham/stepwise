@@ -364,6 +364,16 @@ export function fetchLocalFlow(path: string): Promise<LocalFlowDetail> {
   return request<LocalFlowDetail>(`/flows/local/${path}`);
 }
 
+export function forkFlow(
+  sourcePath: string,
+  name: string
+): Promise<LocalFlow> {
+  return request<LocalFlow>("/local-flows/fork", {
+    method: "POST",
+    body: JSON.stringify({ source_path: sourcePath, name }),
+  });
+}
+
 export function parseYaml(yaml: string): Promise<ParseResult> {
   return request<ParseResult>("/flows/parse", {
     method: "POST",

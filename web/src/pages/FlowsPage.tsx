@@ -8,6 +8,7 @@ import {
   useLocalFlows,
   useLocalFlow,
   useDeleteFlow,
+  useForkFlow,
   useRegistryFlow,
   useInstallFlow,
   useFlowStats,
@@ -15,6 +16,7 @@ import {
 import { useStepwiseMutations } from "@/hooks/useStepwise";
 import {
   Eye,
+  GitFork,
   Hand,
   FileText,
   FolderOpen,
@@ -29,7 +31,16 @@ import {
 import { ActionContextProvider } from "@/components/menus/ActionContextProvider";
 import { EntityContextMenu } from "@/components/menus/EntityContextMenu";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { MobileFullScreen } from "@/components/layout/MobileFullScreen";
 import {
   Select,
@@ -84,6 +95,7 @@ export function FlowsPage() {
   const { data: flows = [] } = useLocalFlows();
   const { data: flowStats = [] } = useFlowStats();
   const deleteFlowMutation = useDeleteFlow();
+  const forkFlowMutation = useForkFlow();
   const mutations = useStepwiseMutations();
 
   // Local selection
@@ -211,6 +223,35 @@ export function FlowsPage() {
       },
     });
   }, [selectedRegistryFlow, installMutation, navigate]);
+
+  // Fork flow
+  const [showForkDialog, setShowForkDialog] = useState(false);
+  const [forkName, setForkName] = useState("");
+  const [forkSource, setForkSource] = useState<LocalFlow | null>(null);
+
+  const handleFork = useCallback(
+    (flow: LocalFlow) => {
+      setForkSource(flow);
+      setForkName(flow.name);
+      setShowForkDialog(true);
+    },
+    []
+  );
+
+  const handleForkSubmit = useCallback(() => {
+    if (!forkSource || !forkName.trim()) return;
+    forkFlowMutation.mutate(
+      { sourcePath: forkSource.path, name: forkName.trim() },
+      {
+        onSuccess: (result) => {
+          setShowForkDialog(false);
+          setForkSource(null);
+          setForkName("");
+          navigate({ to: "/flows/$flowName", params: { flowName: result.name } });
+        },
+      }
+    );
+  }, [forkSource, forkName, forkFlowMutation, navigate]);
 
   const registryDagWorkflow = registryFlowDetail?.flow ?? { steps: {} };
   const localDagWorkflow = localFlowDetail?.flow ?? { steps: {} };
@@ -374,7 +415,9 @@ export function FlowsPage() {
                             : "text-zinc-600 dark:text-zinc-400 hover:text-foreground hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
                         )}
                       >
-                        {flow.is_directory ? (
+                        {flow.source === "registry" ? (
+                          <Globe className="w-3.5 h-3.5 shrink-0 text-violet-400" />
+                        ) : flow.is_directory ? (
                           <FolderOpen className="w-3.5 h-3.5 shrink-0 text-blue-400" />
                         ) : (
                           <FileText className="w-3.5 h-3.5 shrink-0 text-zinc-500" />
@@ -382,6 +425,11 @@ export function FlowsPage() {
                         <div className="flex flex-col min-w-0 flex-1">
                           <span className="truncate inline-flex items-center gap-1.5">
                             <span className="truncate">{flow.name}</span>
+                            {flow.source === "registry" && (
+                              <span className="text-[9px] px-1 py-0.5 rounded bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-400 uppercase tracking-wider">
+                                Registry
+                              </span>
+                            )}
                             {flow.visibility && flow.visibility !== "interactive" && (
                               <span className="text-[9px] px-1 py-0.5 rounded bg-zinc-200 dark:bg-zinc-700 text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
                                 {flow.visibility}
@@ -400,7 +448,12 @@ export function FlowsPage() {
                               </Tooltip>
                             )}
                           </span>
-                          {flow.description && (
+                          {flow.registry_ref && (
+                            <span className="text-[10px] text-violet-500 dark:text-violet-400 truncate leading-tight">
+                              {flow.registry_ref}
+                            </span>
+                          )}
+                          {flow.description && !flow.registry_ref && (
                             <span className="text-[10px] text-zinc-500 dark:text-zinc-600 truncate leading-tight">
                               {flow.description}
                             </span>
@@ -435,29 +488,43 @@ export function FlowsPage() {
                       <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 p-4">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
-                            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 break-words">
-                              {selectedLocalFlow.name}
-                            </h2>
+                            <div className="flex items-center gap-2">
+                              <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 break-words">
+                                {selectedLocalFlow.name}
+                              </h2>
+                              {selectedLocalFlow.source === "registry" && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-400 uppercase tracking-wider font-medium">
+                                  Registry
+                                </span>
+                              )}
+                            </div>
+                            {selectedLocalFlow.registry_ref && (
+                              <p className="mt-0.5 text-xs text-violet-500 dark:text-violet-400 font-mono">
+                                {selectedLocalFlow.registry_ref}
+                              </p>
+                            )}
                             <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
                               {localDescription}
                             </p>
                           </div>
-                          <Button
-                            onClick={() => {
-                              deleteFlowMutation.mutate(selectedLocalFlow.path, {
-                                onSuccess: () => {
-                                  setSelectedLocalFlow(null);
-                                  navigate({ to: "/flows", search: {}, replace: true });
-                                },
-                              });
-                            }}
-                            variant="ghost"
-                            size="icon-sm"
-                            className="shrink-0 text-red-400 hover:text-red-300"
-                            aria-label={`Delete ${selectedLocalFlow.name}`}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </Button>
+                          {selectedLocalFlow.source !== "registry" && (
+                            <Button
+                              onClick={() => {
+                                deleteFlowMutation.mutate(selectedLocalFlow.path, {
+                                  onSuccess: () => {
+                                    setSelectedLocalFlow(null);
+                                    navigate({ to: "/flows", search: {}, replace: true });
+                                  },
+                                });
+                              }}
+                              variant="ghost"
+                              size="icon-sm"
+                              className="shrink-0 text-red-400 hover:text-red-300"
+                              aria-label={`Delete ${selectedLocalFlow.name}`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          )}
                         </div>
                         <div className="mt-4 flex flex-wrap items-center gap-2">
                           {localMetadata?.author && (
@@ -476,18 +543,29 @@ export function FlowsPage() {
                             <Play className="w-3.5 h-3.5 mr-1.5" />
                             Run
                           </Button>
-                          <Button
-                            onClick={() => handleEdit(selectedLocalFlow)}
-                            variant="outline"
-                            size="sm"
-                          >
-                            <Pencil className="w-3.5 h-3.5 mr-1.5" />
-                            Edit
-                          </Button>
+                          {selectedLocalFlow.source === "registry" ? (
+                            <Button
+                              onClick={() => handleFork(selectedLocalFlow)}
+                              variant="outline"
+                              size="sm"
+                            >
+                              <GitFork className="w-3.5 h-3.5 mr-1.5" />
+                              Fork
+                            </Button>
+                          ) : (
+                            <Button
+                              onClick={() => handleEdit(selectedLocalFlow)}
+                              variant="outline"
+                              size="sm"
+                            >
+                              <Pencil className="w-3.5 h-3.5 mr-1.5" />
+                              Edit
+                            </Button>
+                          )}
                         </div>
                       </div>
 
-                      {selectedLocalFlow && (
+                      {selectedLocalFlow && selectedLocalFlow.source !== "registry" && (
                         <FlowConfigPanel flowPath={selectedLocalFlow.path} />
                       )}
 
@@ -528,8 +606,18 @@ export function FlowsPage() {
                   {selectedLocalFlow && (
                     <div className="flex flex-col h-full">
                       <div className="p-4 space-y-3">
+                        {selectedLocalFlow.registry_ref && (
+                          <p className="text-xs text-violet-500 dark:text-violet-400 font-mono">
+                            {selectedLocalFlow.registry_ref}
+                          </p>
+                        )}
                         <p className="text-sm text-zinc-500 dark:text-zinc-400">{localDescription}</p>
                         <div className="flex flex-wrap items-center gap-2">
+                          {selectedLocalFlow.source === "registry" && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-400 uppercase tracking-wider font-medium">
+                              Registry
+                            </span>
+                          )}
                           {localMetadata?.author && (
                             <span className="inline-flex items-center gap-1 rounded-md border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-950/70 px-2 py-1 text-xs text-zinc-700 dark:text-zinc-300">
                               <User className="w-3 h-3" />
@@ -547,29 +635,38 @@ export function FlowsPage() {
                             <Play className="w-3.5 h-3.5 mr-1.5" />
                             Run
                           </Button>
-                          <Button onClick={() => handleEdit(selectedLocalFlow)} variant="outline" size="sm" className="flex-1">
-                            <Pencil className="w-3.5 h-3.5 mr-1.5" />
-                            Edit
-                          </Button>
-                          <Button
-                            onClick={() => {
-                              deleteFlowMutation.mutate(selectedLocalFlow.path, {
-                                onSuccess: () => {
-                                  setSelectedLocalFlow(null);
-                                  navigate({ to: "/flows", search: {}, replace: true });
-                                },
-                              });
-                            }}
-                            variant="ghost"
-                            size="icon-sm"
-                            className="shrink-0 text-red-400 hover:text-red-300"
-                            aria-label={`Delete ${selectedLocalFlow.name}`}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </Button>
+                          {selectedLocalFlow.source === "registry" ? (
+                            <Button onClick={() => handleFork(selectedLocalFlow)} variant="outline" size="sm" className="flex-1">
+                              <GitFork className="w-3.5 h-3.5 mr-1.5" />
+                              Fork
+                            </Button>
+                          ) : (
+                            <>
+                              <Button onClick={() => handleEdit(selectedLocalFlow)} variant="outline" size="sm" className="flex-1">
+                                <Pencil className="w-3.5 h-3.5 mr-1.5" />
+                                Edit
+                              </Button>
+                              <Button
+                                onClick={() => {
+                                  deleteFlowMutation.mutate(selectedLocalFlow.path, {
+                                    onSuccess: () => {
+                                      setSelectedLocalFlow(null);
+                                      navigate({ to: "/flows", search: {}, replace: true });
+                                    },
+                                  });
+                                }}
+                                variant="ghost"
+                                size="icon-sm"
+                                className="shrink-0 text-red-400 hover:text-red-300"
+                                aria-label={`Delete ${selectedLocalFlow.name}`}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </Button>
+                            </>
+                          )}
                         </div>
                       </div>
-                      {selectedLocalFlow && (
+                      {selectedLocalFlow && selectedLocalFlow.source !== "registry" && (
                         <div className="px-4">
                           <FlowConfigPanel flowPath={selectedLocalFlow.path} />
                         </div>
@@ -664,6 +761,42 @@ export function FlowsPage() {
         </div>
       </TooltipProvider>
 
+      {/* Fork Dialog */}
+      <Dialog open={showForkDialog} onOpenChange={setShowForkDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Fork Registry Flow</DialogTitle>
+            <DialogDescription>
+              Copy {forkSource?.registry_ref ?? forkSource?.name} to your local flows directory for editing.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <Label htmlFor="fork-name">Flow name</Label>
+            <Input
+              id="fork-name"
+              value={forkName}
+              onChange={(e) => setForkName(e.target.value)}
+              placeholder="my-flow"
+              className="mt-1.5"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleForkSubmit();
+              }}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowForkDialog(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleForkSubmit}
+              disabled={!forkName.trim() || forkFlowMutation.isPending}
+            >
+              <GitFork className="w-3.5 h-3.5 mr-1.5" />
+              {forkFlowMutation.isPending ? "Forking..." : "Fork"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
