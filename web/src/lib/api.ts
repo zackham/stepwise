@@ -98,6 +98,10 @@ export function resetJob(jobId: string): Promise<{ status: string }> {
   return request(`/jobs/${jobId}/reset`, { method: "POST" });
 }
 
+export function approveJob(jobId: string): Promise<{ status: string }> {
+  return request(`/jobs/${jobId}/approve`, { method: "POST" });
+}
+
 export function adoptJob(jobId: string): Promise<{ status: string; job_id: string }> {
   return request(`/jobs/${jobId}/adopt`, { method: "POST" });
 }
