@@ -241,7 +241,7 @@ describe("JobList", () => {
     ];
     renderJobList();
 
-    fireEvent.click(screen.getByRole("button", { name: "30 days" }));
+    fireEvent.click(screen.getByRole("button", { name: "30d" }));
 
     expect(mockSearchState.range).toBe("30d");
     expect(screen.getByText("Recent Job")).toBeInTheDocument();

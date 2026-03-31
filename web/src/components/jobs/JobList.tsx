@@ -67,10 +67,13 @@ const DATE_RANGE_VALUES = new Set<JobListDateRange>(["today", "7d", "30d", "all"
 
 const DATE_RANGE_OPTIONS: { value: JobListDateRange; label: string }[] = [
   { value: "today", label: "Today" },
-  { value: "7d", label: "7 days" },
-  { value: "30d", label: "30 days" },
+  { value: "7d", label: "7d" },
+  { value: "30d", label: "30d" },
   { value: "all", label: "All" },
 ];
+
+const PRIMARY_STATUSES: JobListStatusFilter[] = ["running", "completed", "failed"];
+const SECONDARY_STATUSES: JobListStatusFilter[] = ["paused", "pending", "cancelled", "archived"];
 
 function getDateRangeStart(range: JobListDateRange): Date | null {
   const now = new Date();
@@ -752,24 +755,70 @@ export function JobList({
           </button>
         )}
 
-        {/* Status pills + sort */}
-        <div className="flex items-center gap-1">
-          <div className="flex gap-0.5 flex-1 overflow-x-auto md:flex-wrap md:overflow-x-visible scrollbar-none">
-            {STATUS_OPTIONS.map((opt) => (
+        {/* Status filter pills */}
+        <div className="flex flex-col gap-1.5 pt-0.5">
+          {/* Primary status row */}
+          <div className="flex gap-1.5 flex-wrap">
+            {PRIMARY_STATUSES.map((value) => {
+              const opt = STATUS_OPTIONS.find((o) => o.value === value)!;
+              const count = displayCounts[opt.value] ?? 0;
+              return (
+                <button
+                  key={opt.value}
+                  onClick={() => setStatusFilter(statusFilter === opt.value ? null : opt.value)}
+                  className={cn(
+                    "px-2 py-0.5 rounded-full text-[11px] transition-colors border",
+                    statusFilter === opt.value
+                      ? "bg-zinc-700 border-zinc-500 text-white"
+                      : "border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300",
+                  )}
+                >
+                  {opt.label}{count > 0 ? ` (${count})` : ""}
+                </button>
+              );
+            })}
+          </div>
+          {/* Secondary status row */}
+          <div className="flex gap-1.5 flex-wrap">
+            {SECONDARY_STATUSES.map((value) => {
+              const opt = STATUS_OPTIONS.find((o) => o.value === value)!;
+              const count = displayCounts[opt.value] ?? 0;
+              return (
+                <button
+                  key={opt.value}
+                  onClick={() => setStatusFilter(statusFilter === opt.value ? null : opt.value)}
+                  className={cn(
+                    "px-2 py-0.5 rounded-full text-[10px] transition-colors border",
+                    statusFilter === opt.value
+                      ? "bg-zinc-700 border-zinc-500 text-white"
+                      : "border-zinc-800 text-zinc-600 hover:border-zinc-600 hover:text-zinc-400",
+                  )}
+                >
+                  {opt.label}{count > 0 ? ` (${count})` : ""}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Time range segmented control + sort */}
+        <div className="flex items-center gap-2 pt-0.5">
+          <div className="inline-flex rounded-md border border-zinc-700">
+            {DATE_RANGE_OPTIONS.map((opt, i) => (
               <button
                 key={opt.value}
-                onClick={() => setStatusFilter(statusFilter === opt.value ? null : opt.value)}
+                onClick={() => setDateRange(opt.value)}
                 className={cn(
-                  "px-1.5 py-0.5 rounded text-[10px] transition-colors shrink-0 min-h-[44px] md:min-h-0",
-                  statusFilter === opt.value
-                    ? "bg-zinc-200 dark:bg-zinc-700 text-foreground"
-                    : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
+                  "px-2 py-0.5 text-[11px] transition-colors",
+                  i === 0 && "rounded-l-md",
+                  i === DATE_RANGE_OPTIONS.length - 1 && "rounded-r-md",
+                  i > 0 && "border-l border-zinc-700",
+                  dateRange === opt.value
+                    ? "bg-zinc-700 text-white"
+                    : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800",
                 )}
               >
                 {opt.label}
-                {displayCounts[opt.value] ? (
-                  <span className="text-zinc-500"> ({displayCounts[opt.value]})</span>
-                ) : null}
               </button>
             ))}
           </div>
@@ -781,7 +830,7 @@ export function JobList({
               try { localStorage.setItem("stepwise-job-sort", val); } catch {}
             }}
           >
-            <SelectTrigger className="h-5 w-auto gap-1 px-1.5 border-none bg-transparent text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 focus:ring-0 shadow-none min-h-[44px] md:min-h-0">
+            <SelectTrigger className="h-5 w-auto gap-1 px-1.5 border-none bg-transparent text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 focus:ring-0 shadow-none">
               <ArrowUpDown className="w-2.5 h-2.5 shrink-0" />
               <SelectValue />
             </SelectTrigger>
@@ -793,23 +842,6 @@ export function JobList({
               ))}
             </SelectContent>
           </Select>
-        </div>
-
-        <div className="flex gap-0.5 overflow-x-auto scrollbar-none">
-          {DATE_RANGE_OPTIONS.map((opt) => (
-            <button
-              key={opt.value}
-              onClick={() => setDateRange(opt.value)}
-              className={cn(
-                "px-1.5 py-0.5 rounded text-[10px] transition-colors shrink-0 min-h-[44px] md:min-h-0",
-                dateRange === opt.value
-                  ? "bg-zinc-200 dark:bg-zinc-700 text-foreground"
-                  : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
-              )}
-            >
-              {opt.label}
-            </button>
-          ))}
         </div>
       </div>
 
