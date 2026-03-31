@@ -1180,11 +1180,10 @@ class WorkflowDefinition:
             if has_loop:
                 loop_internal.add(name)
 
-        # Second pass: build depended_on, ignoring loop-internal steps
+        # Second pass: build depended_on (all steps, including loop-internal —
+        # their deps are real even though the step itself isn't terminal)
         depended_on: set[str] = set()
         for step in self.steps.values():
-            if step.name in loop_internal:
-                continue
             for binding in step.inputs:
                 if binding.any_of_sources:
                     for src_step, _ in binding.any_of_sources:
