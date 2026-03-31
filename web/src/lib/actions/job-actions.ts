@@ -198,7 +198,7 @@ export const JOB_ACTIONS: ActionDefinition<Job>[] = [
         icon: Copy,
         group: "",
         groupOrder: 0,
-        isAvailable: (job) => Object.keys(job.inputs).length > 0,
+        isAvailable: (job) => Object.keys(job.inputs ?? {}).length > 0,
         execute: (job, ctx) => ctx.clipboard(JSON.stringify(job.inputs, null, 2), "Inputs"),
       },
     ],
