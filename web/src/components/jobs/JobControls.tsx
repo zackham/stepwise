@@ -1,25 +1,15 @@
-import { useState } from "react";
 import { useStepwiseMutations } from "@/hooks/useStepwise";
 import { getActionsForEntity } from "@/lib/actions";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Textarea } from "@/components/ui/textarea";
 import type { Job, StepRun } from "@/lib/types";
 import type { ActionContext } from "@/lib/actions/types";
-import { RefreshCw, MessageSquare, AlertTriangle } from "lucide-react";
+import { RefreshCw, AlertTriangle } from "lucide-react";
 import { isStale } from "@/lib/actions/job-actions";
 
 const TOOLTIP_MAP: Record<string, string> = {
@@ -43,8 +33,6 @@ interface JobControlsProps {
 
 export function JobControls({ job, selectedStep, runs }: JobControlsProps) {
   const mutations = useStepwiseMutations();
-  const [contextDialogOpen, setContextDialogOpen] = useState(false);
-  const [contextText, setContextText] = useState("");
   const stale = isStale(job);
 
   // Get lifecycle actions from registry (exclude inject-context — handled separately)
@@ -61,19 +49,6 @@ export function JobControls({ job, selectedStep, runs }: JobControlsProps) {
     selectedRun.status === "failed" ||
     selectedRun.status === "cancelled"
   );
-
-  const handleInjectContext = () => {
-    if (!contextText.trim()) return;
-    mutations.injectContext.mutate(
-      { jobId: job.id, context: contextText.trim() },
-      {
-        onSuccess: () => {
-          setContextDialogOpen(false);
-          setContextText("");
-        },
-      }
-    );
-  };
 
   // Minimal ActionContext for executing registry actions directly
   const ctx: ActionContext = {
@@ -145,61 +120,8 @@ export function JobControls({ job, selectedStep, runs }: JobControlsProps) {
           )}
 
           <div className="flex-1" />
-
-          {/* Inject Context — only for running jobs */}
-          {job.status === "running" && (
-            <Tooltip>
-              <TooltipTrigger render={
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setContextDialogOpen(true)}
-                  className="text-zinc-500 dark:text-zinc-400"
-                >
-                  <MessageSquare className="w-3.5 h-3.5 mr-1.5" />
-                  Inject Context
-                </Button>
-              } />
-              <TooltipContent>Add text to the agent's next prompt</TooltipContent>
-            </Tooltip>
-          )}
         </TooltipProvider>
       </div>
-
-      {/* Inject Context Dialog */}
-      <Dialog open={contextDialogOpen} onOpenChange={setContextDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Inject Context</DialogTitle>
-            <DialogDescription>
-              Add context information that will be available to future step
-              executions.
-            </DialogDescription>
-          </DialogHeader>
-          <Textarea
-            value={contextText}
-            onChange={(e) => setContextText(e.target.value)}
-            placeholder="Enter context information..."
-            className="min-h-[100px]"
-          />
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setContextDialogOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={handleInjectContext}
-              disabled={
-                !contextText.trim() || mutations.injectContext.isPending
-              }
-            >
-              Inject
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </>
   );
 }

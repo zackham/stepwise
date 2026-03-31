@@ -10,7 +10,6 @@ import { ExpandedStepContainer } from "./ExpandedStepContainer";
 import { ForEachExpandedContainer } from "./ForEachExpandedContainer";
 import { FlowPortNode } from "./FlowPortNode";
 import { ExternalInputPanel, getWatchProps } from "./ExternalInputPanel";
-import { CanvasJobControls } from "./CanvasJobControls";
 import type { FlowDefinition, StepRun, JobTreeNode, JobStatus } from "@/lib/types";
 import { EntityContextMenu } from "@/components/menus/EntityContextMenu";
 import { ActionContextProvider } from "@/components/menus/ActionContextProvider";
@@ -563,20 +562,6 @@ export function FlowDagView({
         }}
       />
 
-      {/* Canvas job controls */}
-      {jobStatus && jobActions && (
-        <CanvasJobControls
-          jobStatus={jobStatus}
-          onPause={() => jobActions.onPauseJob?.()}
-          onResume={() => (jobStatus === "pending" || jobStatus === "staged" ? jobActions.onStartJob?.() : jobActions.onResumeJob?.())}
-          onCancel={() => jobActions.onCancelJob?.()}
-          onRetry={() => jobActions.onRetryJob?.()}
-          isPausePending={jobActions.isPausePending}
-          isResumePending={jobActions.isResumePending}
-          isCancelPending={jobActions.isCancelPending}
-          isRetryPending={jobActions.isRetryPending}
-        />
-      )}
 
       <div
         ref={canvasRef}

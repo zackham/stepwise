@@ -19,12 +19,9 @@ import {
   RefreshCw,
   Clock,
   AlertTriangle,
-  Eye,
   DollarSign,
   StopCircle,
   Gauge,
-  Maximize2,
-  Minimize2,
   Copy,
   Check,
   Terminal,
@@ -34,7 +31,6 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { useLiveSource } from "@/hooks/useLiveSource";
 import { useAgentOutput } from "@/hooks/useStepwise";
 import { useScriptStream } from "@/hooks/useScriptStream";
-import { FulfillWatchDialog } from "./FulfillWatchDialog";
 import { toast } from "sonner";
 import { cn, safeRenderValue } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -46,7 +42,6 @@ interface StepDetailPanelProps {
   jobId: string;
   stepDef: StepDefinition;
   onClose: () => void;
-  onExpand?: () => void;
   expanded?: boolean;
   hasLiveSource?: boolean;
 }
@@ -254,14 +249,12 @@ export function StepDetailPanel({
   jobId,
   stepDef,
   onClose,
-  onExpand,
   expanded,
   hasLiveSource,
 }: StepDetailPanelProps) {
   const { data: runs = [] } = useRuns(jobId, stepDef.name);
   const { data: events = [] } = useEvents(jobId);
   const mutations = useStepwiseMutations();
-  const [fulfillDialogOpen, setFulfillDialogOpen] = useState(false);
   const [agentViewMode, setAgentViewMode] = useState<"stream" | "raw">("stream");
   const [copiedErrorRunId, setCopiedErrorRunId] = useState<string | null>(null);
 
@@ -323,9 +316,6 @@ export function StepDetailPanel({
     latestRun.status === "cancelled" ||
     latestRun.status === "skipped";
 
-  const isSuspended =
-    latestRun?.status === "suspended" && latestRun?.watch?.mode === "external";
-
   const isWaitingReset =
     latestRun?.status === "running" &&
     !!(latestRun?.executor_state as Record<string, unknown> | undefined)?.usage_limit_waiting;
@@ -360,15 +350,6 @@ export function StepDetailPanel({
           <h3 className="font-semibold text-foreground">{stepDef.name}</h3>
         </div>
         <div className="flex items-center gap-1">
-          {onExpand && (
-            <button
-              onClick={onExpand}
-              className="text-zinc-500 hover:text-foreground"
-              title={expanded ? "Collapse" : "Expand"}
-            >
-              {expanded ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-            </button>
-          )}
           <button
             onClick={onClose}
             className="text-zinc-500 hover:text-foreground"
@@ -635,17 +616,6 @@ export function StepDetailPanel({
                 Cancel
               </Button>
             )}
-            {isSuspended && latestRun && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="border-amber-500/30 text-amber-400 hover:bg-amber-500/10"
-                onClick={() => setFulfillDialogOpen(true)}
-              >
-                <Eye className="w-3.5 h-3.5 mr-1.5" />
-                Fulfill Watch
-              </Button>
-            )}
           </div>
 
           {isWaitingReset && (() => {
@@ -769,8 +739,9 @@ export function StepDetailPanel({
                           </div>
                         )}
 
-                        {/* Cost (from executor_meta) */}
-                        {(isSubscription || (run.result?.executor_meta?.cost_usd != null &&
+                        {/* Cost (from executor_meta) — only for agent/llm steps */}
+                        {(stepDef.executor.type === "agent" || stepDef.executor.type === "llm") &&
+                          (isSubscription || (run.result?.executor_meta?.cost_usd != null &&
                           (run.result.executor_meta.cost_usd as number) > 0)) && (
                           <div className="flex items-center gap-1.5 text-xs">
                             <DollarSign className="w-3 h-3 text-emerald-500" />
@@ -911,21 +882,6 @@ export function StepDetailPanel({
         </div>
       </ScrollArea>
 
-      {/* Fulfill Watch Dialog */}
-      {latestRun && latestRun.watch && (
-        <FulfillWatchDialog
-          open={fulfillDialogOpen}
-          onOpenChange={setFulfillDialogOpen}
-          run={latestRun}
-          onFulfill={(payload) => {
-            mutations.fulfillWatch.mutate(
-              { runId: latestRun.id, payload },
-              { onSuccess: () => setFulfillDialogOpen(false) }
-            );
-          }}
-          isPending={mutations.fulfillWatch.isPending}
-        />
-      )}
     </div>
   );
 }
