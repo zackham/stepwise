@@ -168,6 +168,30 @@
   animation: fade-in 150ms ease-out both;
 }
 
+/* Sidebar step-change transition */
+@keyframes step-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.animate-step-fade {
+  animation: step-fade-in 150ms ease-out;
+}
+
+/* Completed outputs glow */
+@keyframes output-glow {
+  0%, 100% {
+    box-shadow: 0 0 8px rgba(16, 185, 129, 0.3), 0 0 20px rgba(16, 185, 129, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.5), 0 0 30px rgba(16, 185, 129, 0.2);
+  }
+}
+
+.output-completed-glow {
+  animation: output-glow 2s ease-in-out infinite;
+}
+
 /* Custom scrollbar styling for dark mode */
 * {
   scrollbar-color: oklch(0.8 0 0) transparent;

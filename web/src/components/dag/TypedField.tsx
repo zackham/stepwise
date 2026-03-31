@@ -24,18 +24,19 @@ function FieldLabel({
   return (
     <label className="block text-[10px] font-medium text-zinc-500 uppercase tracking-wide mb-1">
       {name}
-      {schema.required === false && (
+      {schema.description && (
+        <span className="ml-1 normal-case text-zinc-400 dark:text-zinc-500">({schema.description})</span>
+      )}
+      {schema.required === false && !schema.description && (
         <span className="ml-1 normal-case text-zinc-500 dark:text-zinc-600">(optional)</span>
       )}
     </label>
   );
 }
 
-function FieldDescription({ schema }: { schema: OutputFieldSchema }) {
-  if (!schema.description) return null;
-  return (
-    <p className="text-[10px] text-zinc-500 dark:text-zinc-600 mt-0.5">{schema.description}</p>
-  );
+// Description is now shown inline in FieldLabel — kept as no-op for compatibility
+function FieldDescription({ schema: _schema }: { schema: OutputFieldSchema }) {
+  return null;
 }
 
 function FieldError({ error }: { error?: string }) {

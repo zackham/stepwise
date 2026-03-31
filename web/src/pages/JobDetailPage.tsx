@@ -849,12 +849,14 @@ export function JobDetailPage() {
               )}
             >
               {resolvedStep && (
-                <StepDetailPanel
-                  jobId={resolvedStep.jobId}
-                  stepDef={resolvedStep.stepDef}
-                  onClose={() => { setDataFlowSelection(null); navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: "job" as const }), replace: true }); }}
-                  hasLiveSource={!!job?.flow_source_path}
-                />
+                <div key={selectedStep} className="animate-step-fade h-full">
+                  <StepDetailPanel
+                    jobId={resolvedStep.jobId}
+                    stepDef={resolvedStep.stepDef}
+                    onClose={() => { setDataFlowSelection(null); navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: "job" as const }), replace: true }); }}
+                    hasLiveSource={!!job?.flow_source_path}
+                  />
+                </div>
               )}
             </TabsContent>
 

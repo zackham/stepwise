@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Send, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import type { WatchSpec, OutputSchema } from "@/lib/types";
 import { TypedField } from "./TypedField";
 import { validateAll } from "@/lib/validate-fields";
@@ -214,11 +214,11 @@ export function ExternalInputPanel({
         </div>
 
         {/* Submit — fixed at bottom, never scrolls away */}
-        <div className="p-3 pt-0 shrink-0">
+        <div className="p-3 pt-1.5 shrink-0 flex justify-end">
           <button
             type="submit"
             disabled={isPending || !hasValues}
-            className="w-full min-h-[44px] h-8 rounded-md bg-amber-600/90 hover:bg-amber-500/90 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-medium text-white flex items-center justify-center gap-1.5 transition-colors"
+            className="px-6 py-2 rounded-md bg-amber-600 hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium text-white flex items-center justify-center gap-1.5 transition-colors"
           >
             {isPending ? (
               <>
@@ -226,10 +226,7 @@ export function ExternalInputPanel({
                 Submitting...
               </>
             ) : (
-              <>
-                <Send className="w-3 h-3" />
-                Submit
-              </>
+              "Submit"
             )}
           </button>
         </div>
