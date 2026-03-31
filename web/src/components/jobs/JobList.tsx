@@ -452,7 +452,9 @@ export function JobList({
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const job of dateFilteredJobs) {
-      counts[job.status] = (counts[job.status] || 0) + 1;
+      // Count awaiting_approval under "pending" for filter pills
+      const countKey = job.status === "awaiting_approval" ? "pending" : job.status;
+      counts[countKey] = (counts[countKey] || 0) + 1;
       if (job.has_suspended_steps) {
         counts["awaiting_input"] = (counts["awaiting_input"] || 0) + 1;
       }
@@ -469,7 +471,8 @@ export function JobList({
       const nameMatch = (job.name || "").toLowerCase().includes(q);
       const objMatch = (job.objective || "").toLowerCase().includes(q);
       if (!nameMatch && !objMatch) continue;
-      counts[job.status] = (counts[job.status] || 0) + 1;
+      const countKey = job.status === "awaiting_approval" ? "pending" : job.status;
+      counts[countKey] = (counts[countKey] || 0) + 1;
       if (job.has_suspended_steps) {
         counts["awaiting_input"] = (counts["awaiting_input"] || 0) + 1;
       }
@@ -486,6 +489,8 @@ export function JobList({
       if (statusFilter) {
         if (statusFilter === "awaiting_input") {
           if (!job.has_suspended_steps) return false;
+        } else if (statusFilter === "pending") {
+          if (job.status !== "pending" && job.status !== "awaiting_approval") return false;
         } else if (job.status !== statusFilter) {
           return false;
         }

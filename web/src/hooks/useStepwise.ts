@@ -213,6 +213,17 @@ export function useStepwiseMutations() {
     },
   });
 
+  const approveJobMutation = useMutation({
+    mutationFn: api.approveJob,
+    onSuccess: () => {
+      invalidateAll();
+      toast.success("Job approved");
+    },
+    onError: (error) => {
+      toast.error("Failed to approve job", { description: error.message });
+    },
+  });
+
   const rerunStepMutation = useMutation({
     mutationFn: ({ jobId, stepName }: { jobId: string; stepName: string }) =>
       api.rerunStep(jobId, stepName),
@@ -374,6 +385,7 @@ export function useStepwiseMutations() {
     resumeJob: resumeJobMutation,
     cancelJob: cancelJobMutation,
     resetJob: resetJobMutation,
+    approveJob: approveJobMutation,
     rerunStep: rerunStepMutation,
     fulfillWatch: fulfillWatchMutation,
     injectContext: injectContextMutation,

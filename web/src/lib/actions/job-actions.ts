@@ -57,6 +57,15 @@ export function isStale(job: Pick<Job, "status" | "created_by" | "heartbeat_at">
 export const JOB_ACTIONS: ActionDefinition<Job>[] = [
   // ── lifecycle (0) ──
   {
+    id: "job.approve",
+    label: "Approve",
+    icon: Play,
+    group: "lifecycle",
+    groupOrder: 0,
+    isAvailable: (job) => job.status === "awaiting_approval",
+    execute: (job, ctx) => ctx.mutations.approveJob.mutate(job.id),
+  },
+  {
     id: "job.start",
     label: "Start",
     icon: Play,
