@@ -1080,6 +1080,50 @@ def _parse_config(data: dict) -> list[ConfigVar]:
     return config_vars
 
 
+def _parse_input_vars(data: dict) -> list[ConfigVar]:
+    """Parse input variable declarations from top-level 'inputs' block."""
+    input_data = data.get("inputs")
+    if not input_data:
+        return []
+    if not isinstance(input_data, dict):
+        raise ValueError("'inputs' must be a mapping")
+
+    input_vars: list[ConfigVar] = []
+    for name, spec in input_data.items():
+        if not str(name).isidentifier():
+            raise ValueError(f"Input variable '{name}': not a valid identifier")
+
+        if spec is None:
+            spec = {}
+        if not isinstance(spec, dict):
+            raise ValueError(f"Input variable '{name}': spec must be a mapping")
+
+        typ = spec.get("type", "str")
+        if typ not in VALID_FIELD_TYPES:
+            raise ValueError(
+                f"Input variable '{name}': invalid type '{typ}' "
+                f"(valid: {', '.join(sorted(VALID_FIELD_TYPES))})"
+            )
+        if typ == "choice" and not spec.get("options"):
+            raise ValueError(
+                f"Input variable '{name}': type 'choice' requires non-empty 'options' list"
+            )
+
+        has_default = "default" in spec
+        input_vars.append(ConfigVar(
+            name=str(name),
+            description=spec.get("description", ""),
+            type=typ,
+            default=spec.get("default"),
+            required=spec.get("required", not has_default),
+            example=str(spec["example"]) if "example" in spec else "",
+            options=spec.get("options"),
+            sensitive=bool(spec.get("sensitive", False)),
+        ))
+
+    return input_vars
+
+
 def _parse_requires(data: dict) -> list[FlowRequirement]:
     """Parse requirement declarations from top-level 'requires' block."""
     requires_data = data.get("requires")
@@ -1234,12 +1278,18 @@ def load_workflow_yaml(
     # Parse metadata from top-level fields
     metadata = _parse_metadata(data, source_path)
 
-    # Parse config variables and requirements
+    # Parse config variables, input variables, and requirements
     try:
         config_vars = _parse_config(data)
     except ValueError as e:
         errors.append(str(e))
         config_vars = []
+
+    try:
+        input_vars = _parse_input_vars(data)
+    except ValueError as e:
+        errors.append(str(e))
+        input_vars = []
 
     try:
         requires = _parse_requires(data)
@@ -1264,7 +1314,7 @@ def load_workflow_yaml(
     workflow = WorkflowDefinition(
         steps=steps, metadata=metadata, chains=chains, source_dir=source_dir_str,
         source_path=source_path_str,
-        config_vars=config_vars, requires=requires, readme=readme,
+        config_vars=config_vars, input_vars=input_vars, requires=requires, readme=readme,
     )
 
     # Run the standard workflow validation
@@ -1334,12 +1384,18 @@ def load_workflow_string(yaml_str: str) -> WorkflowDefinition:
         errors.append(str(e))
         chains = {}
 
-    # Parse config variables and requirements
+    # Parse config variables, input variables, and requirements
     try:
         config_vars = _parse_config(data)
     except ValueError as e:
         errors.append(str(e))
         config_vars = []
+
+    try:
+        input_vars = _parse_input_vars(data)
+    except ValueError as e:
+        errors.append(str(e))
+        input_vars = []
 
     try:
         requires = _parse_requires(data)
@@ -1355,7 +1411,7 @@ def load_workflow_string(yaml_str: str) -> WorkflowDefinition:
 
     workflow = WorkflowDefinition(
         steps=steps, chains=chains,
-        config_vars=config_vars, requires=requires, readme=readme,
+        config_vars=config_vars, input_vars=input_vars, requires=requires, readme=readme,
     )
     validation_errors = workflow.validate()
     if validation_errors:

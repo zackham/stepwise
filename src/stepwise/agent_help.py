@@ -60,8 +60,10 @@ def _build_flow_entries(
                 run_ref = str(flow_path.relative_to(project_dir))
             except ValueError:
                 run_ref = flow_path.name
-        # Use config var descriptions for --input hints when available
+        # Use config/input var descriptions for --input hints when available
         config_map = {v.name: v for v in wf.config_vars} if wf.config_vars else {}
+        if wf.input_vars:
+            config_map.update({v.name: v for v in wf.input_vars})
         var_parts = []
         for inp in inputs:
             cv = config_map.get(inp)
@@ -89,6 +91,8 @@ def _build_flow_entries(
             entry["description"] = desc
         if wf.config_vars:
             entry["config"] = {v.name: v.to_dict() for v in wf.config_vars}
+        if wf.input_vars:
+            entry["inputs_schema"] = {v.name: v.to_dict() for v in wf.input_vars}
         if wf.requires:
             entry["requires"] = [r.name for r in wf.requires]
         if external_steps:

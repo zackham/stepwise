@@ -1825,8 +1825,9 @@ def cmd_preflight(args: argparse.Namespace) -> int:
                 input_overrides[k] = v
         merged = {**config, **input_overrides}
 
-        from_defaults = sum(1 for v in wf.config_vars if v.default is not None and v.name in job_fields)
-        from_local = sum(1 for k in merged if k not in {v.name: v for v in wf.config_vars if v.default is not None} and k in job_fields)
+        all_vars = [*wf.config_vars, *wf.input_vars]
+        from_defaults = sum(1 for v in all_vars if v.default is not None and v.name in job_fields)
+        from_local = sum(1 for k in merged if k not in {v.name: v for v in all_vars if v.default is not None} and k in job_fields)
         resolved = sum(1 for f in job_fields if f in merged)
         missing = sorted(job_fields - set(merged.keys()))
 
@@ -1836,7 +1837,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
         )
         if missing:
             has_issues = True
-            config_map = {v.name: v for v in wf.config_vars}
+            config_map = {v.name: v for v in all_vars}
             for m in missing:
                 cv = config_map.get(m)
                 desc = f" ({cv.description})" if cv and cv.description else ""
@@ -3289,12 +3290,12 @@ def cmd_share(args: argparse.Namespace) -> int:
         for b in s.inputs
         if b.source_step == "$job"
     }
-    config_names = {v.name for v in wf.config_vars}
+    all_var_names = {v.name for v in wf.config_vars} | {v.name for v in wf.input_vars}
 
-    # Check required config vars have descriptions
-    for v in wf.config_vars:
+    # Check required config/input vars have descriptions
+    for v in [*wf.config_vars, *wf.input_vars]:
         if v.required and not v.description:
-            io.log("warn", f"  ⚠ Config variable '{v.name}' has no description — consumers won't know what to provide")
+            io.log("warn", f"  ⚠ Config/input variable '{v.name}' has no description — consumers won't know what to provide")
 
     # Check requirements have check commands
     for r in wf.requires:
@@ -3302,9 +3303,10 @@ def cmd_share(args: argparse.Namespace) -> int:
             io.log("info", f"  ℹ Requirement '{r.name}' has no check command — consumers can't verify availability")
 
     # Note zero-config flows
+    all_vars = [*wf.config_vars, *wf.input_vars]
     all_have_defaults = all(
-        v.default is not None for v in wf.config_vars
-    ) if wf.config_vars else not job_fields
+        v.default is not None for v in all_vars
+    ) if all_vars else not job_fields
     if all_have_defaults and not wf.requires:
         io.log("success", "  Zero-config flow — runs immediately after install")
 
@@ -3447,10 +3449,29 @@ def cmd_info(args: argparse.Namespace) -> int:
         lines.append(f"Steps:       {len(wf.steps)}")
         lines.append(f"File:        {local_flow}")
 
-        # Config variables
+        # Input variables (per-run)
+        if wf.input_vars:
+            lines.append("")
+            lines.append("Inputs:")
+            for v in wf.input_vars:
+                if v.sensitive:
+                    req = "required, sensitive" if v.required else f"default: ***, sensitive"
+                else:
+                    req = "required" if v.required else f"default: {v.default}"
+                line = f"  {v.name} ({v.type}, {req})"
+                if v.description:
+                    line += f" — {v.description}"
+                lines.append(line)
+                if v.example:
+                    lines.append(f"    example: {v.example}")
+                if v.sensitive:
+                    env_name = f"STEPWISE_VAR_{v.name.upper()}"
+                    lines.append(f"    env: {env_name}")
+
+        # Config variables (set-and-forget)
         if wf.config_vars:
             lines.append("")
-            lines.append("Config variables:")
+            lines.append("Config:")
             for v in wf.config_vars:
                 if v.sensitive:
                     req = "required, sensitive" if v.required else f"default: ***, sensitive"
@@ -3504,7 +3525,7 @@ def cmd_info(args: argparse.Namespace) -> int:
         # Ready-to-run assessment
         lines.append("")
         required_without_defaults = [
-            v for v in wf.config_vars if v.required and v.default is None
+            v for v in [*wf.config_vars, *wf.input_vars] if v.required and v.default is None
         ]
         if req_failed:
             failed_names = ", ".join(req_failed)

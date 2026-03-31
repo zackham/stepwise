@@ -586,11 +586,22 @@ stepwise cache clear --step fetch        # clear one step
 stepwise cache debug my-flow fetch --input url=https://...  # inspect cache key
 ```
 
-## Config variables
+## Input variables and config variables
 
-Declare configurable variables in a top-level `config:` block. These map to `$job.*` input bindings.
+Flows support two kinds of declared variables, both mapping to `$job.*` input bindings at runtime:
+
+- **`inputs:`** — per-run parameters that change every job (e.g., a topic to research, a URL to fetch). Shown in the run dialog, passed via `--input` on the CLI.
+- **`config:`** — set-and-forget settings configured once and reused across runs (e.g., API keys, model names, persona prompts). Saved to `config.local.yaml`, shown in the settings panel.
+
+Both use the same field schema (`description`, `type`, `default`, `required`, `example`, `options`, `sensitive`).
 
 ```yaml
+inputs:
+  topic:
+    description: "Subject to research"
+    type: str
+    required: true
+
 config:
   persona:
     description: "Your AI persona"
@@ -609,7 +620,9 @@ config:
     default: conversational
 ```
 
-**Resolution priority** (highest wins): `--input` > `--vars-file` > `config.local.yaml` > `STEPWISE_VAR_{NAME}` env vars > config defaults.
+**Resolution priority** (highest wins): `--input` > inputs (run dialog) > `config.local.yaml` > `STEPWISE_VAR_{NAME}` env vars > config/input defaults.
+
+**`config.local.yaml`** only stores `config:` values. Input values are transient — passed at run time. Use `stepwise config init` to scaffold a `config.local.yaml` from the flow's `config:` block (it does not include `inputs:` variables).
 
 ## Requirements
 

@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
-import { Settings, Code, Save, Eye, EyeOff } from "lucide-react";
+import { Settings, Code, Save, Eye, EyeOff, PlayCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -149,6 +149,24 @@ function ConfigField({
   );
 }
 
+function InputVarDisplay({ configVar }: { configVar: ConfigVar }) {
+  const req = configVar.required ? "required" : configVar.default != null ? `default: ${configVar.default}` : "optional";
+  return (
+    <div className="space-y-0.5">
+      <div className="flex items-center gap-1.5">
+        <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">{configVar.name}</span>
+        <span className="text-[10px] text-zinc-500 dark:text-zinc-500">({configVar.type || "str"}, {req})</span>
+      </div>
+      {configVar.description && (
+        <p className="text-[10px] text-zinc-500 dark:text-zinc-400">{configVar.description}</p>
+      )}
+      {configVar.example && (
+        <p className="text-[10px] text-zinc-400 dark:text-zinc-500">example: {configVar.example}</p>
+      )}
+    </div>
+  );
+}
+
 export function FlowConfigPanel({ flowPath }: FlowConfigPanelProps) {
   const { data: config } = useFlowConfig(flowPath);
   const saveMutation = useSaveFlowConfig();
@@ -199,73 +217,97 @@ export function FlowConfigPanel({ flowPath }: FlowConfigPanelProps) {
   if (!config) return null;
 
   const configVars: ConfigVar[] = config.config_vars;
+  const inputVars: ConfigVar[] = config.input_vars || [];
   const hasConfigVars = configVars.length > 0;
+  const hasInputVars = inputVars.length > 0;
   const hasValues = Object.keys(config.values).length > 0;
 
-  // Nothing to show if no config vars declared and no config file exists
-  if (!hasConfigVars && !hasValues) return null;
+  // Nothing to show if no vars declared and no config file exists
+  if (!hasConfigVars && !hasInputVars && !hasValues) return null;
 
   return (
-    <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-200 dark:border-zinc-800">
-        <div className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
-          <Settings className="w-3.5 h-3.5" />
-          <span className="font-medium">Config</span>
-          <span className="text-zinc-600">({config.config_path})</span>
-        </div>
-        <div className="flex items-center gap-1">
-          {hasConfigVars && (
-            <button
-              onClick={() => setMode(mode === "form" ? "raw" : "form")}
-              className="text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 px-1.5 py-0.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800"
-            >
-              <Code className="w-3 h-3 inline mr-1" />
-              {mode === "form" ? "YAML" : "Form"}
-            </button>
-          )}
-          {dirty && (
-            <Button
-              onClick={handleSave}
-              size="sm"
-              variant="ghost"
-              className="h-6 px-2 text-xs"
-              disabled={saveMutation.isPending}
-            >
-              <Save className="w-3 h-3 mr-1" />
-              {saveMutation.isPending ? "Saving..." : "Save"}
-            </Button>
-          )}
-        </div>
-      </div>
-
-      <div className="p-3">
-        {mode === "form" && hasConfigVars ? (
-          <div className="space-y-3">
-            {configVars.map((cv) => (
-              <ConfigField
-                key={cv.name}
-                configVar={cv}
-                value={formValues[cv.name] ?? null}
-                onChange={(v) => handleFieldChange(cv.name, v)}
-              />
+    <div className="space-y-3">
+      {/* Input variables (per-run) — read-only documentation */}
+      {hasInputVars && (
+        <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50">
+          <div className="flex items-center px-3 py-2 border-b border-zinc-200 dark:border-zinc-800">
+            <div className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+              <PlayCircle className="w-3.5 h-3.5" />
+              <span className="font-medium">Inputs (per-run)</span>
+            </div>
+          </div>
+          <div className="p-3 space-y-2">
+            {inputVars.map((iv) => (
+              <InputVarDisplay key={iv.name} configVar={iv} />
             ))}
           </div>
-        ) : (
-          <Textarea
-            value={rawYaml}
-            onChange={handleRawChange}
-            placeholder="# key: value"
-            className="font-mono text-xs bg-zinc-50 dark:bg-zinc-950 border-zinc-300 dark:border-zinc-700 min-h-[80px]"
-            rows={Math.max(4, rawYaml.split("\n").length + 1)}
-            onKeyDown={(e) => {
-              if (e.key === "s" && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                if (dirty) handleSave();
-              }
-            }}
-          />
-        )}
-      </div>
+        </div>
+      )}
+
+      {/* Config variables (set-and-forget) — editable */}
+      {(hasConfigVars || hasValues) && (
+        <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-200 dark:border-zinc-800">
+            <div className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+              <Settings className="w-3.5 h-3.5" />
+              <span className="font-medium">Config</span>
+              <span className="text-zinc-600">({config.config_path})</span>
+            </div>
+            <div className="flex items-center gap-1">
+              {hasConfigVars && (
+                <button
+                  onClick={() => setMode(mode === "form" ? "raw" : "form")}
+                  className="text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 px-1.5 py-0.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                >
+                  <Code className="w-3 h-3 inline mr-1" />
+                  {mode === "form" ? "YAML" : "Form"}
+                </button>
+              )}
+              {dirty && (
+                <Button
+                  onClick={handleSave}
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-2 text-xs"
+                  disabled={saveMutation.isPending}
+                >
+                  <Save className="w-3 h-3 mr-1" />
+                  {saveMutation.isPending ? "Saving..." : "Save"}
+                </Button>
+              )}
+            </div>
+          </div>
+
+          <div className="p-3">
+            {mode === "form" && hasConfigVars ? (
+              <div className="space-y-3">
+                {configVars.map((cv) => (
+                  <ConfigField
+                    key={cv.name}
+                    configVar={cv}
+                    value={formValues[cv.name] ?? null}
+                    onChange={(v) => handleFieldChange(cv.name, v)}
+                  />
+                ))}
+              </div>
+            ) : (
+              <Textarea
+                value={rawYaml}
+                onChange={handleRawChange}
+                placeholder="# key: value"
+                className="font-mono text-xs bg-zinc-50 dark:bg-zinc-950 border-zinc-300 dark:border-zinc-700 min-h-[80px]"
+                rows={Math.max(4, rawYaml.split("\n").length + 1)}
+                onKeyDown={(e) => {
+                  if (e.key === "s" && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault();
+                    if (dirty) handleSave();
+                  }
+                }}
+              />
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -95,7 +95,11 @@ version: "1.0"               # optional
 tags: [research, agent]      # optional
 forked_from: "@bob:original" # optional, provenance for forked flows
 visibility: interactive      # optional: interactive | background | internal
-config:                      # optional, declared config variables
+inputs:                      # optional, per-run parameters
+  var_name:
+    description: "..."
+    type: str                # str, text, number, bool, choice
+config:                      # optional, set-and-forget settings
   var_name:
     description: "..."
     type: str                # str, text, number, bool, choice
@@ -588,9 +592,32 @@ score:
 
 **Evaluation order:** Derived outputs are evaluated after the executor returns but before exit rules. This means exit rules can reference derived fields.
 
+## Input Variables
+
+Declare per-run parameters in a top-level `inputs:` block. These are values that change every time the flow runs — shown in the run dialog, passed via `--input` on the CLI.
+
+```yaml
+inputs:
+  topic:
+    description: "Subject to research"
+    type: str
+    required: true
+    example: "quantum computing advances"
+  depth:
+    description: "How deep to go"
+    type: choice
+    options: [shallow, moderate, deep]
+    default: moderate
+```
+
+Input variables use the same field schema as config variables (see table below). Both map to `$job.*` input bindings at runtime. The distinction is about authoring intent and UI presentation:
+
+- **`inputs:`** = per-run parameters. Shown in the run dialog. Change every job.
+- **`config:`** = set-and-forget settings. Shown in the settings panel. Saved to `config.local.yaml`.
+
 ## Config Variables
 
-Declare configurable variables in a top-level `config:` block. These map to `$job.*` input bindings.
+Declare set-and-forget settings in a top-level `config:` block. These are values configured once and reused across runs — API keys, model choices, persona prompts.
 
 ```yaml
 config:
@@ -611,6 +638,10 @@ config:
     default: conversational
 ```
 
+### Variable Field Schema
+
+Both `inputs:` and `config:` variables share the same field schema:
+
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `description` | string | `""` | Human-readable description |
@@ -621,9 +652,11 @@ config:
 | `options` | list | `None` | Required for `choice` type |
 | `sensitive` | bool | `false` | Masks value in output, suggests env var |
 
-**Resolution priority** (highest wins): `--input` > `--vars-file` > `config.local.yaml` > `STEPWISE_VAR_{NAME}` env vars > config defaults.
+**Resolution priority** (highest wins): `--input` > inputs (run dialog) > `config.local.yaml` > `STEPWISE_VAR_{NAME}` env vars > config/input defaults.
 
 **Sensitive variables:** When `sensitive: true`, the value is masked in `stepwise info` output, missing-input errors suggest `STEPWISE_VAR_{NAME}` instead of `--input`, and the env var is auto-resolved by `load_flow_config`.
+
+**`config.local.yaml`** only stores `config:` values, not `inputs:` values. Input values are transient — passed at run time via `--input` or the run dialog.
 
 ## Requirements
 

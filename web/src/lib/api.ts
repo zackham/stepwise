@@ -527,6 +527,7 @@ export function deleteFlowFile(
 
 export interface FlowConfigResponse {
   config_vars: import("./types").ConfigVar[];
+  input_vars: import("./types").ConfigVar[];
   values: Record<string, unknown>;
   raw_yaml: string;
   config_path: string;
