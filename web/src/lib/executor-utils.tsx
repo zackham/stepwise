@@ -1,6 +1,6 @@
 import {
   Terminal,
-  User,
+  Globe,
   Brain,
   Bot,
   Cog,
@@ -18,7 +18,7 @@ export function executorIcon(type: string, className = "w-4 h-4") {
     case "script":
       return <Terminal className={className} />;
     case "external":
-      return <User className={className} />;
+      return <Globe className={className} />;
     case "mock_llm":
     case "llm":
       return <Brain className={className} />;

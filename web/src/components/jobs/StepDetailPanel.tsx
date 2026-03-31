@@ -27,7 +27,9 @@ import {
   Terminal,
   StickyNote,
 } from "lucide-react";
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useCopyFeedback } from "@/hooks/useCopyFeedback";
+import { ContentModal } from "@/components/ui/content-modal";
 import { useLiveSource } from "@/hooks/useLiveSource";
 import { useAgentOutput } from "@/hooks/useStepwise";
 import { useScriptStream } from "@/hooks/useScriptStream";
@@ -245,6 +247,121 @@ function AgentRawView({ runId }: { runId: string }) {
   );
 }
 
+function WatchDisplay({ watch }: { watch: { mode: string; config: Record<string, unknown>; fulfillment_outputs: string[]; output_schema?: Record<string, unknown> } }) {
+  const [promptModalOpen, setPromptModalOpen] = useState(false);
+
+  if (watch.mode === "external") {
+    const prompt = typeof watch.config.prompt === "string" ? watch.config.prompt : null;
+    return (
+      <div>
+        <div className="text-xs text-zinc-500 mb-1">Watch</div>
+        <div className="space-y-2">
+          <div>
+            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+              external
+            </span>
+          </div>
+          {prompt && (
+            <div>
+              <div className="text-xs text-zinc-500 mb-1">Prompt:</div>
+              <div
+                onClick={() => setPromptModalOpen(true)}
+                className="text-sm text-zinc-300 bg-zinc-900/50 rounded-lg p-3 line-clamp-3 cursor-pointer hover:bg-zinc-900/70 transition-colors"
+              >
+                {prompt}
+              </div>
+              <ContentModal open={promptModalOpen} onOpenChange={setPromptModalOpen} title="Watch Prompt">
+                <div className="whitespace-pre-wrap text-sm text-zinc-300 font-mono p-2">
+                  {prompt}
+                </div>
+              </ContentModal>
+            </div>
+          )}
+          {watch.fulfillment_outputs.length > 0 && (
+            <div>
+              <div className="text-xs text-zinc-500 mb-1">Expected outputs:</div>
+              <div className="flex flex-wrap gap-1">
+                {watch.fulfillment_outputs.map((output) => (
+                  <span
+                    key={output}
+                    className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono bg-zinc-800 text-zinc-300 border border-zinc-700"
+                  >
+                    {output}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Non-external watch modes: show generic JSON
+  return (
+    <div>
+      <div className="text-xs text-zinc-500 mb-1">Watch</div>
+      <JsonView data={watch} defaultExpanded />
+    </div>
+  );
+}
+
+function ExternalPromptDisplay({
+  prompt,
+  changed,
+  showLiveIndicator,
+}: {
+  prompt: string;
+  changed: boolean;
+  showLiveIndicator: boolean;
+}) {
+  const [modalOpen, setModalOpen] = useState(false);
+
+  return (
+    <div className="mt-2">
+      <div className="flex items-center gap-2 text-zinc-500 text-sm mb-1">
+        Prompt
+        {changed && (
+          <span className={cn(
+            "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20",
+            showLiveIndicator && "animate-pulse"
+          )}>
+            <RefreshCw className="w-2.5 h-2.5" />
+            Updated
+          </span>
+        )}
+      </div>
+      <div
+        onClick={() => setModalOpen(true)}
+        className="text-sm text-zinc-300 bg-zinc-900/50 rounded-lg p-3 line-clamp-3 cursor-pointer hover:bg-zinc-900/70 transition-colors"
+      >
+        {prompt}
+      </div>
+      <ContentModal open={modalOpen} onOpenChange={setModalOpen} title="Prompt">
+        <div className="whitespace-pre-wrap text-sm text-zinc-300 font-mono p-2">
+          {prompt}
+        </div>
+      </ContentModal>
+    </div>
+  );
+}
+
+function RunIdCopyable({ id }: { id: string }) {
+  const { copy, justCopied } = useCopyFeedback();
+  return (
+    <span
+      onClick={() => copy(id)}
+      className={cn(
+        "font-mono text-[10px] break-all cursor-pointer hover:text-blue-400 transition-colors",
+        justCopied ? "text-green-400" : "text-zinc-600"
+      )}
+      title="Click to copy"
+    >
+      {id}
+    </span>
+  );
+}
+
 export function StepDetailPanel({
   jobId,
   stepDef,
@@ -416,29 +533,11 @@ export function StepDetailPanel({
               )}
             {stepDef.executor.type === "external" &&
               Boolean(stepDef.executor.config.prompt) && (
-                <div className="mt-2">
-                  <div className="flex items-center gap-2 text-zinc-500 text-sm mb-1">
-                    Prompt
-                    {effectivePrompt.changed && (
-                      <span className={cn(
-                        "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20",
-                        showLiveIndicator && "animate-pulse"
-                      )}>
-                        <RefreshCw className="w-2.5 h-2.5" />
-                        Updated
-                      </span>
-                    )}
-                  </div>
-                  <pre className={cn(
-                    "text-xs font-mono bg-zinc-50 dark:bg-zinc-900 rounded p-2 text-amber-700 dark:text-amber-300 whitespace-pre-wrap break-words",
-                    effectivePrompt.changed
-                      ? "border border-cyan-500/30"
-                      : "border border-amber-500/20",
-                    !expanded && "max-h-32 overflow-auto"
-                  )}>
-{effectivePrompt.value.trim()}
-                  </pre>
-                </div>
+                <ExternalPromptDisplay
+                  prompt={effectivePrompt.value.trim()}
+                  changed={effectivePrompt.changed}
+                  showLiveIndicator={showLiveIndicator}
+                />
               )}
             {stepDef.executor.type === "agent" && (
               <div className="mt-2 space-y-2">
@@ -690,9 +789,7 @@ export function StepDetailPanel({
                             {formatTimestamp(run.completed_at)}
                           </span>
                           <span className="text-zinc-500">Run ID</span>
-                          <span className="text-zinc-600 font-mono text-[10px] break-all">
-                            {run.id}
-                          </span>
+                          <RunIdCopyable id={run.id} />
                         </div>
 
                         {/* Fulfillment Notes */}
@@ -865,12 +962,7 @@ export function StepDetailPanel({
 
                         {/* Watch State */}
                         {run.watch && (
-                          <div>
-                            <div className="text-xs text-zinc-500 mb-1">
-                              Watch
-                            </div>
-                            <JsonView data={run.watch} defaultExpanded />
-                          </div>
+                          <WatchDisplay watch={run.watch} />
                         )}
                       </div>
                     </AccordionContent>

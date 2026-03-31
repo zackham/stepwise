@@ -33,14 +33,30 @@ import {
   Monitor,
   AlertTriangle,
   DollarSign,
-  ClipboardCopy,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 import type { Job, JobTreeNode, StepDefinition } from "@/lib/types";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn, formatDuration } from "@/lib/utils";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
+
+function CopyableId({ id }: { id: string }) {
+  const { copy, justCopied } = useCopyFeedback();
+  return (
+    <span
+      onClick={() => copy(id)}
+      className={cn(
+        "cursor-pointer hover:text-blue-400 transition-colors",
+        justCopied && "text-green-400"
+      )}
+      title="Click to copy"
+    >
+      {id}
+    </span>
+  );
+}
 
 function resolveStep(
   stepName: string,
@@ -658,17 +674,7 @@ export function JobDetailPage() {
                       {job.workflow.metadata.name}
                     </Link>
                   )}
-                  <span>{job.id}</span>
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(job.id);
-                      toast.success("Copied job ID");
-                    }}
-                    className="text-zinc-500 hover:text-foreground p-0.5 rounded hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 transition-colors"
-                    title="Copy job ID"
-                  >
-                    <ClipboardCopy className="w-3 h-3" />
-                  </button>
+                  <CopyableId id={job.id} />
                 </div>
               </div>
 
@@ -803,10 +809,20 @@ export function JobDetailPage() {
           >
             <div className="flex items-center justify-between border-b border-border bg-zinc-50/50 dark:bg-zinc-950/50 shrink-0">
               <TabsList variant="line" className="px-1">
-                <TabsTrigger value="step" disabled={!resolvedStep} className="text-xs gap-1 px-2.5">
+                <TabsTrigger
+                  value="step"
+                  disabled={!resolvedStep}
+                  className={cn("text-xs gap-1 px-2.5", !selectedStep && "opacity-50 cursor-default")}
+                  title={!selectedStep ? "Select a step to view details" : undefined}
+                >
                   Step
                 </TabsTrigger>
-                <TabsTrigger value="data-flow" disabled={!selection} className="text-xs gap-1 px-2.5">
+                <TabsTrigger
+                  value="data-flow"
+                  disabled={!selection}
+                  className={cn("text-xs gap-1 px-2.5", !selectedStep && "opacity-50 cursor-default")}
+                  title={!selectedStep ? "Select a step to view details" : undefined}
+                >
                   Data Flow
                 </TabsTrigger>
                 <TabsTrigger value="job" className="text-xs gap-1 px-2.5">

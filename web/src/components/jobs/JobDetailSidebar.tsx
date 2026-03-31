@@ -3,8 +3,8 @@ import { JsonView } from "@/components/JsonView";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { EntityDropdownMenu } from "@/components/menus/EntityDropdownMenu";
-import { X, Package, Copy, Check } from "lucide-react";
-import { useState } from "react";
+import { X, Package } from "lucide-react";
+import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 import type { Job } from "@/lib/types";
 import { formatDuration } from "@/lib/utils";
 
@@ -14,7 +14,7 @@ interface JobDetailSidebarProps {
 }
 
 export function JobDetailSidebar({ job, onClose }: JobDetailSidebarProps) {
-  const [copied, setCopied] = useState(false);
+  const { copy: copyId, justCopied: idCopied } = useCopyFeedback();
   const isTerminal =
     job.status === "completed" || job.status === "failed" || job.status === "cancelled";
   const { data: outputs, isLoading } = useJobOutput(job.id, isTerminal);
@@ -34,19 +34,14 @@ export function JobDetailSidebar({ job, onClose }: JobDetailSidebarProps) {
             <JobStatusBadge status={job.status} />
             <EntityDropdownMenu type="job" data={job} />
           </div>
-          <div className="flex items-center gap-1 mt-1">
-            <span className="text-[10px] font-mono text-zinc-600">{job.id}</span>
-            <button
-              onClick={() => {
-                navigator.clipboard.writeText(job.id);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
-              }}
-              className="text-zinc-500 hover:text-foreground"
-              title="Copy job ID"
+          <div className="mt-1">
+            <span
+              onClick={() => copyId(job.id)}
+              className={`text-[10px] font-mono cursor-pointer hover:text-blue-400 transition-colors ${idCopied ? "text-green-400" : "text-zinc-600"}`}
+              title="Click to copy"
             >
-              {copied ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
-            </button>
+              {job.id}
+            </span>
           </div>
         </div>
         <button
