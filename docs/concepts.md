@@ -319,11 +319,8 @@ stepwise job dep $IMPL --after $PLAN
 # 3. Review the DAG
 stepwise job show --group widget
 
-# 4. Release — engine cascades execution in dependency order
-stepwise job run --group widget
-
-# 5. Wait for all jobs to complete (run in background for async notification)
-stepwise wait $RESEARCH $PLAN $IMPL --all
+# 4. Release and wait — engine cascades execution in dependency order
+stepwise job run --group widget --wait
 ```
 
 ### Data wiring between jobs
@@ -356,11 +353,8 @@ stepwise job create plan --input spec="Memory game" --group gumball --name "plan
 stepwise job create plan --input spec="Reading module" --group gumball --name "plan: reading module"
 stepwise job create research-v2 --input topic="Scene composers" --group gumball --name "research: scene composer"
 
-# Release all — engine runs all three in parallel
-stepwise job run --group gumball
-
-# Wait for everything to finish
-stepwise wait $PLAN_A $PLAN_B $RESEARCH --all
+# Release all and wait — engine runs all three in parallel
+stepwise job run --group gumball --wait
 ```
 
 ### Concurrency control

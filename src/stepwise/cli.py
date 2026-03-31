@@ -4728,6 +4728,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_job_run.add_argument("--group", "-g", help="Run all staged jobs in group")
     p_job_run.add_argument("--max-concurrent", type=int, default=None,
                            help="Max concurrent jobs in group (0=unlimited, requires --group)")
+    p_job_run.add_argument("--wait", action="store_true",
+                           help="Block until all released jobs complete (JSON output on stdout)")
     p_job_run.add_argument("--output", choices=["table", "json"], default="table")
 
     # job dep
@@ -5029,12 +5031,13 @@ def _cmd_job_show(args) -> int:
 
 
 def _cmd_job_run(args) -> int:
-    """Transition staged jobs to PENDING."""
+    """Transition staged jobs to PENDING, optionally wait for completion."""
     from stepwise.models import JobStatus
     from stepwise.store import SQLiteStore
 
     io = _io(args)
     max_concurrent = getattr(args, "max_concurrent", None)
+    do_wait = getattr(args, "wait", False)
 
     if max_concurrent is not None and not getattr(args, "group", None):
         io.log("error", "--max-concurrent requires --group")
@@ -5052,20 +5055,39 @@ def _cmd_job_run(args) -> int:
         try:
             if args.job_id:
                 result = client._request("POST", f"/api/jobs/{args.job_id}/run")
+                released_ids = [args.job_id]
             else:
                 payload = {"group": args.group}
                 if max_concurrent is not None:
                     payload["max_concurrent"] = max_concurrent
                 result = client._request("POST", "/api/jobs/run-group", payload)
-            if args.output == "json":
-                print(json.dumps(result, indent=2, default=str))
-            else:
-                if args.job_id:
-                    io.log("success", f"Job {args.job_id} is now PENDING")
+                released_ids = result.get("job_ids", [])
+
+            if not do_wait:
+                if args.output == "json":
+                    print(json.dumps(result, indent=2, default=str))
                 else:
-                    count = result.get("count", 0)
-                    io.log("success", f"Transitioned {count} job(s) in group '{args.group}' to PENDING")
-            return EXIT_SUCCESS
+                    if args.job_id:
+                        io.log("success", f"Job {args.job_id} is now PENDING")
+                    else:
+                        count = result.get("count", 0)
+                        io.log("success", f"Transitioned {count} job(s) in group '{args.group}' to PENDING")
+                return EXIT_SUCCESS
+
+            # --wait: block until all released jobs complete
+            if not released_ids:
+                io.log("info", "No jobs to wait for")
+                return EXIT_SUCCESS
+
+            if args.job_id:
+                io.log("info", f"Job {args.job_id} released, waiting for completion...")
+            else:
+                io.log("info", f"Released {len(released_ids)} job(s), waiting for completion...")
+
+            from stepwise.runner import wait_for_job_ids
+            project = _find_project_or_exit(args)
+            return wait_for_job_ids(server_url, released_ids, "all", project_dir=project.dot_dir)
+
         except StepwiseAPIError as e:
             io.log("error", e.detail)
             return EXIT_JOB_FAILED
@@ -5074,23 +5096,26 @@ def _cmd_job_run(args) -> int:
     project = _find_project_or_exit(args)
     store = SQLiteStore(str(project.db_path))
     try:
+        released_ids = []
         if args.job_id:
             try:
                 store.transition_job_to_pending(args.job_id)
             except (KeyError, ValueError) as e:
                 io.log("error", str(e))
                 return EXIT_JOB_FAILED
-            if args.output == "json":
-                print(json.dumps({"job_id": args.job_id, "status": "pending"}))
-            else:
-                io.log("success", f"Job {args.job_id} is now PENDING")
+            released_ids = [args.job_id]
+            if not do_wait:
+                if args.output == "json":
+                    print(json.dumps({"job_id": args.job_id, "status": "pending"}))
+                else:
+                    io.log("success", f"Job {args.job_id} is now PENDING")
         else:
             if max_concurrent is not None:
                 store.set_group_max_concurrent(args.group, max_concurrent)
-            job_ids = store.transition_group_to_pending(args.group)
+            released_ids = store.transition_group_to_pending(args.group)
             # Check for cross-group unmet deps
             cross_group_count = 0
-            for jid in job_ids:
+            for jid in released_ids:
                 deps = store.get_job_dependencies(jid)
                 for dep_id in deps:
                     try:
@@ -5101,16 +5126,39 @@ def _cmd_job_run(args) -> int:
                     except KeyError:
                         cross_group_count += 1
                         break
-            if args.output == "json":
-                print(json.dumps({"group": args.group, "count": len(job_ids),
-                                  "job_ids": job_ids}))
-            else:
-                io.log("success", f"Transitioned {len(job_ids)} job(s) in group '{args.group}' to PENDING")
-                if cross_group_count:
-                    io.log("info", f"{cross_group_count} job(s) have unmet dependencies outside this group")
-        return EXIT_SUCCESS
+            if not do_wait:
+                if args.output == "json":
+                    print(json.dumps({"group": args.group, "count": len(released_ids),
+                                      "job_ids": released_ids}))
+                else:
+                    io.log("success", f"Transitioned {len(released_ids)} job(s) in group '{args.group}' to PENDING")
+                    if cross_group_count:
+                        io.log("info", f"{cross_group_count} job(s) have unmet dependencies outside this group")
+
+        if not do_wait:
+            return EXIT_SUCCESS
+
+        # --wait: block until all released jobs complete
+        if not released_ids:
+            io.log("info", "No jobs to wait for")
+            return EXIT_SUCCESS
+
+        io.log("info", f"Released {len(released_ids)} job(s), waiting for completion...")
     finally:
         store.close()
+
+    # Re-use the wait infrastructure (needs its own store/engine)
+    from stepwise.engine import Engine
+    from stepwise.registry_factory import create_default_registry
+    from stepwise.runner import wait_for_jobs
+
+    store2 = SQLiteStore(str(project.db_path))
+    try:
+        engine = Engine(store2, create_default_registry(), jobs_dir=str(project.jobs_dir),
+                        project_dir=project.dot_dir)
+        return wait_for_jobs(engine, store2, released_ids, "all", project_dir=project.dot_dir)
+    finally:
+        store2.close()
 
 
 def _cmd_job_approve(args) -> int:
