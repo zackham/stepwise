@@ -526,44 +526,126 @@ For steps where failure should route to a simpler alternative, use a `fallback` 
 
 ---
 
-## 8. Plan-Light to Implement
+## 8. Multi-Job DAGs (create → dep → run)
 
-**Problem:** Complex tasks need a planning phase that determines the implementation shape. Static flows can't adapt — the number and nature of implementation jobs emerges from planning. `for_each` requires the list shape to be known at author time. `emit_flow` keeps decomposition inside a single job. Sometimes you want a human to review the decomposition before execution begins.
+**Problem:** A project requires multiple flows chained together — research feeds planning, planning feeds implementation. Some workstreams are independent and should run in parallel. You need to create the full execution graph upfront, wire data between jobs, and release it all at once.
 
-**Pattern:** Run a planning job, then stage implementation jobs that reference the plan's outputs via data wiring. Review the staged batch, then release.
+**Pattern:** Use `stepwise job create` with `--output json` to stage jobs and capture their IDs. Wire dependencies with `--input key=job-id.field` (auto-creates dep + passes data) or `stepwise job dep` (ordering only). Release the group with `stepwise job run --group`.
+
+### Example: research → plan → implement pipeline
 
 ```bash
-# 1. Run the planning flow — blocks until complete
-stepwise run plan-task --wait --input spec="Build auth system"
-# Returns job-plan-abc with outputs: {plan, tasks}
+# 1. Create all jobs upfront — capture IDs
+RESEARCH=$(stepwise job create research-v2 \
+  --input topic="AI-powered scene composer for kids" \
+  --input project="gumball" \
+  --group gumball --name "research: scene composer" \
+  --output json | jq -r .id)
 
-# 2. Stage implementation jobs referencing the plan
-stepwise job create implement.flow.yaml \
-  --input spec="Implement auth middleware" \
-  --input plan=job-plan-abc.plan \
-  --group auth-batch
+PLAN=$(stepwise job create plan-strong \
+  --input spec="Design AI scene composer module" \
+  --input project="gumball" \
+  --group gumball --name "plan: scene composer" \
+  --output json | jq -r .id)
 
-stepwise job create implement.flow.yaml \
-  --input spec="Implement auth tests" \
-  --input plan=job-plan-abc.plan \
-  --group auth-batch
+IMPL=$(stepwise job create implement \
+  --input spec="Build AI scene composer" \
+  --input project="gumball" \
+  --group gumball --name "impl: scene composer" \
+  --output json | jq -r .id)
 
-# 3. Add ordering between implementation jobs if needed
-stepwise job dep job-tests-456 --after job-middleware-123
+# 2. Wire the pipeline: research → plan → implement
+stepwise job dep $PLAN --after $RESEARCH
+stepwise job dep $IMPL --after $PLAN
 
-# 4. Review what's staged
-stepwise job show --group auth-batch
+# 3. Review the DAG
+stepwise job show --group gumball
 
-# 5. Release the batch
-stepwise job run --group auth-batch
-# Engine cascades execution based on dependency graph
+# 4. Release — engine runs in dependency order
+stepwise job run --group gumball
+
+# 5. Wait for all jobs to complete (run in background for async notification)
+stepwise wait $RESEARCH $PLAN $IMPL --all
 ```
 
-**Key mechanics:**
-- `--input plan=job-plan-abc.plan` wires data from the planning job's output and auto-creates a dependency
-- `--group auth-batch` organizes related jobs for batch review and release
-- `job run --group` atomically transitions all staged jobs to PENDING
-- The engine auto-starts jobs as their dependencies complete
+### Example: parallel workstreams with shared research phase
+
+```bash
+# Research phase (runs first)
+RESEARCH=$(stepwise job create research-v2 \
+  --input topic="Kid-friendly creative app patterns" \
+  --group sprint-1 --name "research: creative apps" \
+  --output json | jq -r .id)
+
+# Two independent planning jobs (run in parallel after research)
+PLAN_A=$(stepwise job create plan \
+  --input spec="Design memory game module" \
+  --input project="gumball" \
+  --group sprint-1 --name "plan: memory game" \
+  --output json | jq -r .id)
+
+PLAN_B=$(stepwise job create plan \
+  --input spec="Design reading module" \
+  --input project="gumball" \
+  --group sprint-1 --name "plan: reading module" \
+  --output json | jq -r .id)
+
+# Both plans wait for research (ordering only — no data wired)
+stepwise job dep $PLAN_A --after $RESEARCH
+stepwise job dep $PLAN_B --after $RESEARCH
+
+# Two implementation jobs (each waits for its own plan)
+IMPL_A=$(stepwise job create implement \
+  --input spec="Build memory game" \
+  --input project="gumball" \
+  --group sprint-1 --name "impl: memory game" \
+  --output json | jq -r .id)
+
+IMPL_B=$(stepwise job create implement \
+  --input spec="Build reading module" \
+  --input project="gumball" \
+  --group sprint-1 --name "impl: reading module" \
+  --output json | jq -r .id)
+
+stepwise job dep $IMPL_A --after $PLAN_A
+stepwise job dep $IMPL_B --after $PLAN_B
+
+# Release everything — engine maximizes parallelism within dep constraints
+stepwise job run --group sprint-1
+
+# Wait for all jobs to complete (run in background for async notification)
+stepwise wait $RESEARCH $PLAN_A $PLAN_B $IMPL_A $IMPL_B --all
+```
+
+### Data wiring vs ordering
+
+Two ways to create dependencies between jobs:
+
+**Data wiring** — passes output AND creates ordering:
+```bash
+# IMPL receives PLAN's plan_file output as its plan_file input
+stepwise job create implement \
+  --input plan_file=$PLAN.plan_file \
+  --group batch
+```
+
+**Ordering only** — no data flow:
+```bash
+# IMPL just waits for PLAN to finish, no data passed
+stepwise job dep $IMPL --after $PLAN
+```
+
+Use data wiring when the downstream job needs the upstream's output. Use ordering when jobs must be sequenced but are self-contained (e.g., both write to the same repo).
+
+### Key mechanics
+
+- `--output json` returns `{"id": "job-xxx", "status": "staged", "job_group": "..."}` — pipe to `jq -r .id` to capture the ID
+- `--input key=job-id.field` auto-creates a dependency edge AND wires data
+- `stepwise job dep A --after B` creates ordering without data flow
+- `--group name` organizes jobs for batch review (`job show`) and release (`job run --group`)
+- `--max-concurrent N` on `job run --group` limits parallel execution
+- The engine auto-starts jobs when all their dependencies complete
+- Cycle detection prevents circular dependencies
 
 **When to use vs alternatives:**
 
@@ -571,7 +653,8 @@ stepwise job run --group auth-batch
 |-----------|----------|
 | Decomposition known at author time | Static `for_each` in YAML |
 | Agent decides decomposition at runtime | `emit_flow: true` (dynamic, single job) |
-| Human reviews decomposition before execution | **Plan-light to implement** (staged, multi-job) |
+| Human reviews decomposition before execution | **Multi-job DAG** (staged, reviewed, released) |
+| Multiple independent workstreams with shared phases | **Multi-job DAG** with parallel branches |
 
 ---
 

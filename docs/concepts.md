@@ -289,20 +289,86 @@ Create jobs in a **STAGED** state, build up a batch with dependencies, review, t
 STAGED -> (add deps, wire data, review) -> job run -> PENDING -> RUNNING -> COMPLETED/FAILED
 ```
 
+### The create → dep → run pattern
+
+The core workflow: create all jobs upfront, wire dependencies between them, then release the group. The engine handles execution ordering automatically.
+
 ```bash
-# Create staged jobs in a group
-stepwise job create my-flow --input task="Build API" --group wave-1
-stepwise job create my-flow --input task="Write tests" --group wave-1
+# 1. Create staged jobs — capture IDs from JSON output
+RESEARCH=$(stepwise job create research-v2 \
+  --input topic="Widget architecture" \
+  --group widget --name "research: widget arch" \
+  --output json | jq -r .id)
 
-# Wire data between jobs
-stepwise job create impl-flow --input plan=job-plan-456.plan --group wave-1
+PLAN=$(stepwise job create plan \
+  --input spec="Design widget system" \
+  --input project="my-app" \
+  --group widget --name "plan: widget system" \
+  --output json | jq -r .id)
 
-# Review and release
-stepwise job show --group wave-1
-stepwise job run --group wave-1
+IMPL=$(stepwise job create implement \
+  --input spec="Build widget system" \
+  --input project="my-app" \
+  --group widget --name "impl: widget system" \
+  --output json | jq -r .id)
+
+# 2. Wire dependencies — plan waits for research, impl waits for plan
+stepwise job dep $PLAN --after $RESEARCH
+stepwise job dep $IMPL --after $PLAN
+
+# 3. Review the DAG
+stepwise job show --group widget
+
+# 4. Release — engine cascades execution in dependency order
+stepwise job run --group widget
+
+# 5. Wait for all jobs to complete (run in background for async notification)
+stepwise wait $RESEARCH $PLAN $IMPL --all
 ```
 
-The `job-plan-456.plan` syntax means "the `plan` output from job `job-plan-456`." This auto-creates a dependency edge. Releasing a group triggers execution in dependency order.
+### Data wiring between jobs
+
+Use `--input key=job-id.field` to pass outputs from one job as inputs to another. This **auto-creates a dependency edge** — no separate `job dep` call needed:
+
+```bash
+# Plan job ran and produced outputs including "plan" and "plan_file"
+IMPL=$(stepwise job create implement \
+  --input spec="Build auth middleware" \
+  --input plan_file=$PLAN.plan_file \
+  --group auth --name "impl: auth middleware" \
+  --output json | jq -r .id)
+```
+
+The `$PLAN.plan_file` syntax means "the `plan_file` output from the job whose ID is in `$PLAN`." The engine resolves this at runtime when the upstream job completes.
+
+### Ordering vs data dependencies
+
+- **Data wiring** (`--input key=job-id.field`) — passes data AND creates ordering. Use when the downstream job needs the upstream job's output.
+- **Ordering only** (`job dep A --after B`) — no data flow, just "B must finish before A starts." Use when jobs must run sequentially but don't share data (e.g., both write to the same directory).
+
+### Parallel workstreams
+
+Jobs in the same group with no dependencies between them run in parallel:
+
+```bash
+# These three run concurrently — no deps between them
+stepwise job create plan --input spec="Memory game" --group gumball --name "plan: memory game"
+stepwise job create plan --input spec="Reading module" --group gumball --name "plan: reading module"
+stepwise job create research-v2 --input topic="Scene composers" --group gumball --name "research: scene composer"
+
+# Release all — engine runs all three in parallel
+stepwise job run --group gumball
+
+# Wait for everything to finish
+stepwise wait $PLAN_A $PLAN_B $RESEARCH --all
+```
+
+### Concurrency control
+
+```bash
+# Limit to 2 concurrent jobs in the group
+stepwise job run --group gumball --max-concurrent 2
+```
 
 ## The trust model
 
