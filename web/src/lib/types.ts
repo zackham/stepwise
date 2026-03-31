@@ -2,6 +2,7 @@
 
 export type JobStatus =
   | "staged"
+  | "awaiting_approval"
   | "pending"
   | "running"
   | "paused"

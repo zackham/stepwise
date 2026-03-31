@@ -10,6 +10,12 @@ export const JOB_STATUS_COLORS: Record<
     ring: "ring-violet-500/30",
     dot: "bg-violet-400",
   },
+  awaiting_approval: {
+    bg: "bg-amber-100 dark:bg-amber-500/10",
+    text: "text-amber-600 dark:text-amber-400",
+    ring: "ring-amber-500/30",
+    dot: "bg-amber-400",
+  },
   pending: {
     bg: "bg-zinc-100 dark:bg-zinc-500/10",
     text: "text-zinc-500 dark:text-zinc-400",
