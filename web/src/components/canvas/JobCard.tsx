@@ -1,6 +1,6 @@
-import { memo } from "react";
+import { memo, useCallback } from "react";
 import { Link } from "@tanstack/react-router";
-import { Clock } from "lucide-react";
+import { Check, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MiniDag } from "./MiniDag";
 import { JobStatusBadge } from "@/components/StatusBadge";
@@ -13,12 +13,15 @@ export interface JobCardProps {
   runs: StepRun[];
   dependencyNames?: string[];
   isGroupQueued?: boolean;
+  isSelected?: boolean;
+  isSelectionActive?: boolean;
+  onToggleSelect?: (jobId: string, shiftKey: boolean) => void;
 }
 
 const DAG_W = 268;
 const DAG_H = 90;
 
-export const JobCard = memo(function JobCard({ job, runs, dependencyNames, isGroupQueued }: JobCardProps) {
+export const JobCard = memo(function JobCard({ job, runs, dependencyNames, isGroupQueued, isSelected, isSelectionActive, onToggleSelect }: JobCardProps) {
   const isCompleted = job.status === "completed";
   const isFailed = job.status === "failed";
   const isActive = job.status === "running" || job.status === "paused";
@@ -30,8 +33,32 @@ export const JobCard = memo(function JobCard({ job, runs, dependencyNames, isGro
   // Find current running step
   const currentStep = job.current_step ?? null;
 
+  const handleCheckboxClick = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onToggleSelect?.(job.id, e.shiftKey);
+  }, [job.id, onToggleSelect]);
+
   return (
     <EntityContextMenu type="job" data={job}>
+    <div className="relative group/card">
+      {/* Selection checkbox */}
+      {onToggleSelect && (
+        <button
+          onClick={handleCheckboxClick}
+          className={cn(
+            "absolute top-1.5 left-1.5 z-10 w-5 h-5 rounded border flex items-center justify-center transition-all duration-150",
+            isSelected
+              ? "bg-blue-500 border-blue-500 text-white"
+              : "border-zinc-400 dark:border-zinc-600 bg-white/90 dark:bg-zinc-800/90 hover:border-blue-400",
+            isSelectionActive || isSelected
+              ? "opacity-100"
+              : "opacity-0 group-hover/card:opacity-100",
+          )}
+        >
+          {isSelected && <Check className="w-3 h-3" />}
+        </button>
+      )}
     <Link
       to="/jobs/$jobId"
       params={{ jobId: job.id }}
@@ -42,6 +69,7 @@ export const JobCard = memo(function JobCard({ job, runs, dependencyNames, isGro
         isCompleted && "opacity-45 hover:opacity-70",
         isFailed && "border-red-900/60 shadow-[0_0_12px_rgba(239,68,68,0.15)]",
         isActive && "border-blue-900/40",
+        isSelected && "ring-2 ring-blue-500",
       )}
     >
       {/* Header */}
@@ -115,6 +143,7 @@ export const JobCard = memo(function JobCard({ job, runs, dependencyNames, isGro
         )}
       </div>
     </Link>
+    </div>
     </EntityContextMenu>
   );
 });
