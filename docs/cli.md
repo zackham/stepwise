@@ -2,7 +2,7 @@
 
 Stepwise is a CLI-first tool. All commands are available via `stepwise <command>`.
 
-See [Quickstart](quickstart.md) for installation and first-run instructions. See [Concepts](concepts.md) for the mental model behind jobs and steps, [Writing Flows](writing-flows.md) for flow authorship, and [Troubleshooting](troubleshooting.md) for error messages and diagnostic commands.
+See [Quickstart](quickstart.md) for installation and first-run instructions. See [Writing Flows](writing-flows.md) for flow authorship, and [Troubleshooting](troubleshooting.md) for error messages and diagnostic commands.
 
 ## Overview
 
@@ -10,15 +10,16 @@ See [Quickstart](quickstart.md) for installation and first-run instructions. See
 |-------|----------|
 | [Core](#core-commands) | `run`, `new`, `validate`, `check`, `preflight`, `test-fixture` |
 | [Jobs](#job-commands) | `jobs`, `status`, `output`, `tail`, `logs`, `wait`, `cancel`, `fulfill`, `list` |
-| [Job Staging](#job-staging-commands) | `job create`, `job show`, `job run`, `job dep`, `job cancel`, `job rm` |
+| [Job Lifecycle](#job-lifecycle-commands) | `archive`, `unarchive`, `rm` |
+| [Job Staging](#job-staging-commands) | `job create`, `job show`, `job run`, `job dep`, `job approve`, `job cancel`, `job rm` |
 | [Server](#server-commands) | `server start`, `server stop`, `server restart`, `server status` |
 | [Registry](#registry-commands) | `share`, `get`, `search`, `info`, `login`, `logout` |
 | [Configuration](#configuration-commands) | `config`, `init`, `templates`, `schema`, `diagram` |
-| [Utility](#utility-commands) | `agent-help`, `flows`, `extensions`, `docs`, `cache`, `version`, `update`, `uninstall` |
+| [Utility](#utility-commands) | `agent-help`, `flows`, `extensions`, `docs`, `cache`, `help`, `version`, `update`, `uninstall` |
 
 ## Common Workflows
 
-Quick recipes for the most frequent tasks. Each one combines several commands.
+Quick recipes for the most frequent tasks.
 
 ### Run a flow and watch it live
 
@@ -27,6 +28,14 @@ stepwise run my-flow --watch --input task="build the API" --name "impl: API"
 ```
 
 Opens the [web UI](web-ui.md) with real-time DAG visualization. External steps prompt in the browser.
+
+### Run the demo flow
+
+```bash
+stepwise run @stepwise:demo --watch
+```
+
+Downloads and runs the demo flow from the registry with the web UI.
 
 ### Agent calls a flow as a tool
 
@@ -66,8 +75,6 @@ stepwise output <job-id>               # retrieve terminal outputs
 stepwise validate my-flow.flow.yaml    # structural check (fast, no execution)
 stepwise preflight my-flow.flow.yaml   # runtime check (API keys, models, scripts)
 ```
-
-See [Writing Flows: Validation](writing-flows.md#validation-and-preflight) for what the validator catches.
 
 ### Server lifecycle
 
@@ -122,9 +129,7 @@ The server provides the [web UI](web-ui.md), WebSocket live updates, and job ado
 
 Execute a flow. The primary command — three modes depending on flags.
 
-The `<flow>` argument accepts flow names (e.g., `my-flow`), file paths (e.g., `flows/my-flow.flow.yaml`), or directory paths (e.g., `flows/my-flow/`). Names are resolved across the project root, `flows/`, and `.stepwise/flows/`.
-
-See [YAML Format](yaml-format.md) for flow file syntax.
+The `<flow>` argument accepts flow names (e.g., `my-flow`), file paths (e.g., `flows/my-flow.flow.yaml`), directory paths (e.g., `flows/my-flow/`), or registry refs (e.g., `@alice:code-review`). Names are resolved across the project root, `flows/`, and `.stepwise/flows/`.
 
 #### Headless (default)
 
@@ -155,17 +160,11 @@ Runs the flow headless and generates a self-contained HTML report on completion.
 
 ```bash
 stepwise run my-flow.flow.yaml --input topic="distributed caching" --input depth=3
+stepwise run my-flow.flow.yaml --input spec=@spec.md      # @ prefix reads from file
 stepwise run my-flow.flow.yaml --vars-file inputs.yaml
 ```
 
-Input variables are available in steps via `$job.field_name`:
-
-```yaml
-steps:
-  research:
-    inputs:
-      topic: $job.topic       # ← reads from --input topic="..."
-```
+Input variables are available in steps via `$job.field_name`.
 
 #### Agent mode (--wait)
 
@@ -174,11 +173,6 @@ stepwise run council --wait --input question="Should we use Postgres?"
 ```
 
 Blocks until the flow completes. Prints a single JSON object to stdout — nothing else. All logging goes to stderr. This is the primary integration path for agents calling flows as tools.
-
-```bash
-stepwise run deploy.flow.yaml --wait --input repo=/path --input branch=main
-stepwise run review.flow.yaml --wait --input spec=@spec.md
-```
 
 Exit codes in wait mode: 0=success, 1=failed, 2=input error, 4=cancelled, 5=suspended.
 
@@ -192,7 +186,7 @@ stepwise run council --async --input question="..."
 
 Returns `{"job_id": "job-a1b2c3d4", "status": "running"}`.
 
-Fire-and-forget. Spawns a detached background process (no server required), returns the job ID immediately. Poll with stepwise status or retrieve results with stepwise output.
+Fire-and-forget. Spawns a detached background process (no server required), returns the job ID immediately. Poll with `stepwise status` or retrieve results with `stepwise output`.
 
 #### JSON output (--output json)
 
@@ -200,7 +194,7 @@ Fire-and-forget. Spawns a detached background process (no server required), retu
 stepwise run my-flow.flow.yaml --output json --input k=v
 ```
 
-Same as headless mode (shows step progress to stderr) but prints structured JSON result to stdout on completion. Combine with --wait for fully silent machine-readable output.
+Same as headless mode (shows step progress to stderr) but prints structured JSON result to stdout on completion.
 
 | Flag | Description |
 |------|-------------|
@@ -209,7 +203,7 @@ Same as headless mode (shows step progress to stderr) but prints structured JSON
 | `--async` | Fire-and-forget, returns job_id immediately |
 | `--output json` | Print structured JSON result to stdout on completion |
 | `--input KEY=VALUE` | Pass input variable (repeatable) |
-| `--input KEY=@PATH` | Pass input from file contents (`@` prefix, repeatable, avoids shell escaping) |
+| `--input KEY=@PATH` | Pass input from file contents (`@` prefix, repeatable) |
 | `--vars-file PATH` | Load variables from YAML or JSON file |
 | `--port INT` | Override port for --watch (default: random) |
 | `--objective STR` | Set job objective (default: flow filename) |
@@ -240,8 +234,6 @@ Created flows/my-flow/FLOW.yaml
 
 Creates `flows/<name>/FLOW.yaml` in the current project. The name must match `[a-zA-Z0-9_-]+`. Fails if the directory already exists.
 
-See [YAML Format](yaml-format.md) for flow file syntax.
-
 ---
 
 ### `stepwise validate`
@@ -252,19 +244,7 @@ Check a flow file for syntax and structural errors without running it.
 stepwise validate my-flow.flow.yaml
 ```
 
-```
-✓ my-flow.flow.yaml (5 steps, 2 loops)
-```
-
-```
-✗ my-flow.flow.yaml:
-  - Step "deploy" references unknown input source "bild.artifact"
-  - Exit rule on "review" targets unknown step "draf"
-```
-
 Catches: YAML syntax errors, missing step references, invalid input bindings, bad exit rule targets, undeclared outputs, unbounded loops, uncovered output combinations.
-
-See [YAML Format](yaml-format.md) for the flow file spec.
 
 ---
 
@@ -275,10 +255,6 @@ Verify model resolution for a flow. Confirms that all LLM/agent steps can resolv
 ```bash
 stepwise check my-flow.flow.yaml
 ```
-
-| Argument | Description |
-|----------|-------------|
-| `flow` | Flow name or path to `.flow.yaml` file |
 
 ---
 
@@ -293,7 +269,6 @@ stepwise preflight my-flow.flow.yaml --input api_key=sk-test
 
 | Flag | Description |
 |------|-------------|
-| `flow` | Flow name or path to `.flow.yaml` file (positional) |
 | `--input KEY=VALUE` | Variable override (repeatable) |
 
 ---
@@ -307,11 +282,8 @@ stepwise test-fixture my-flow.flow.yaml               # print to stdout
 stepwise test-fixture my-flow.flow.yaml -o tests/test_my_flow.py
 ```
 
-The generated test uses `register_step_fn()` and `run_job_sync()` from the standard test fixtures (see [Testing](../CLAUDE.md#testing)).
-
 | Flag | Description |
 |------|-------------|
-| `flow` | Flow name or path to `.flow.yaml` file (positional) |
 | `-o, --output PATH` | Output file path (default: stdout) |
 
 ---
@@ -329,13 +301,6 @@ stepwise jobs --limit 5            # last 5 jobs
 stepwise jobs --status running     # filter by status
 stepwise jobs --output json        # JSON output
 stepwise jobs --meta sys.origin=cli  # filter by metadata
-```
-
-```
-ID               NAME              STATUS       OBJECTIVE                STEPS    CREATED
-job-a1b2c3d4     ux-fix            completed    deploy-pipeline          3/3      2 hours ago
-job-e5f6g7h8                       running      content-review           2/4      5 min ago
-job-i9j0k1l2                       failed       data-analysis            1/3      1 hours ago
 ```
 
 | Flag | Description |
@@ -358,19 +323,7 @@ stepwise status job-a1b2c3d4
 stepwise status job-a1b2c3d4 --output json
 ```
 
-```
-Job: job-a1b2c3d4
-Status: completed
-Objective: deploy-pipeline
-Created: 2 hours ago
-
-Steps:
-  ✓ build            completed    script   (3.2s, $0.000)
-  ✓ test             completed    script   (8.1s, $0.000)
-  ✓ deploy           completed    script   (1.4s, $0.000)
-```
-
-Status icons: `✓` completed, `✗` failed, `⠋` running, `◆` suspended (waiting for external input), `↗` delegated (sub-job), `○` pending.
+Status icons: `checkmark` completed, `x` failed, `spinner` running, `diamond` suspended (waiting for external input), `arrow` delegated (sub-job), `circle` pending.
 
 **JSON output** provides a full resolved flow status (DAG view) with per-step costs, outputs, suspension details, route decisions, and sub-jobs.
 
@@ -393,16 +346,8 @@ stepwise output job-a1b2c3d4 --step review --inputs   # step inputs instead of o
 stepwise output --run run-abc12345                     # direct run access by ID
 ```
 
-**Per-step mode** (--step or positional step_name): Returns a JSON object keyed by step name. Steps not yet completed have `null` values with a `_status` field. Non-existent steps have an `_error` field.
-
-**Input mode** (--inputs): Returns the inputs that were fed to the step instead of its outputs.
-
-**Direct run mode** (--run): Access any run's output by its global run ID, without needing the job ID.
-
 | Flag | Description |
 |------|-------------|
-| `job_id` | Job ID (positional) |
-| `step_name` | Step name (positional shorthand for --step) |
 | `--scope {default,full}` | Output scope (default: terminal outputs only) |
 | `--step NAMES` | Comma-separated step names for per-step output |
 | `--inputs` | Return step inputs instead of outputs (use with `--step`) |
@@ -418,10 +363,6 @@ Stream live events for a running job. Attaches to the event stream and prints ev
 stepwise tail job-e5f6g7h8
 ```
 
-| Argument | Description |
-|----------|-------------|
-| `job_id` | Job ID to tail |
-
 ---
 
 ### `stepwise logs`
@@ -431,10 +372,6 @@ Show the full event history for a job. Unlike `tail`, this prints all past event
 ```bash
 stepwise logs job-a1b2c3d4
 ```
-
-| Argument | Description |
-|----------|-------------|
-| `job_id` | Job ID |
 
 ---
 
@@ -450,13 +387,10 @@ stepwise wait job-a1b2c3d4 job-e5f6g7h8 --any     # wait for first to finish
 
 Returns the same JSON format as `stepwise run --wait`. Exit code 0 for completion, 1 for failure, 5 for suspension.
 
-Useful for attaching to a job started with `--async`, or for re-checking a job after fulfilling a step without using `fulfill --wait`.
-
 Unlike `stepwise run --wait` (which creates and waits on a new job), `stepwise wait` attaches to an already-running job.
 
 | Flag | Description |
 |------|-------------|
-| `JOB_ID` | One or more job IDs (positional, repeatable) |
 | `--all` | Wait for all specified jobs to reach terminal state |
 | `--any` | Wait for the first specified job to reach terminal state |
 
@@ -471,13 +405,7 @@ stepwise cancel job-e5f6g7h8
 stepwise cancel job-e5f6g7h8 --output json
 ```
 
-```
-✓ Cancelled job-e5f6g7h8
-```
-
-**JSON output** returns `{job_id, status, completed_steps, cancelled_steps, remaining_steps}` where `remaining_steps` includes prompts/descriptions from the workflow definition.
-
-Returns an error if the job is already completed, failed, or cancelled.
+**JSON output** returns `{job_id, status, completed_steps, cancelled_steps, remaining_steps}`.
 
 | Flag | Description |
 |------|-------------|
@@ -489,17 +417,11 @@ Returns an error if the job is already completed, failed, or cancelled.
 
 Satisfy a suspended external step from the command line. Used by agents to complete external steps programmatically.
 
-See [Agent Integration](agent-integration.md) for the full wait/fulfill mediation pattern.
-
 ```bash
 stepwise fulfill run-abc12345 '{"approved": true, "reason": "looks good"}'
 echo '{"approved": true}' | stepwise fulfill run-abc12345 --stdin
 cat payload.json | stepwise fulfill run-abc12345 -
 stepwise fulfill run-abc12345 '{"approved": true}' --wait
-```
-
-```json
-{"status": "fulfilled", "run_id": "run-abc12345"}
 ```
 
 The run ID comes from `--wait` responses (which include `suspended_steps`), `stepwise list --suspended`, or `stepwise status --output json`.
@@ -540,6 +462,62 @@ Each item includes: `job_id`, `flow_name`, `run_id`, `step_name`, `prompt`, `exp
 
 ---
 
+## Job Lifecycle Commands
+
+### `stepwise archive`
+
+Archive completed, failed, or cancelled jobs. Archived jobs are hidden from `stepwise jobs` but preserved in the database.
+
+```bash
+stepwise archive job-a1b2c3d4                     # archive specific job(s)
+stepwise archive --status completed                # archive all completed jobs
+stepwise archive --group sprint-1                  # archive all terminal jobs in a group
+```
+
+| Flag | Description |
+|------|-------------|
+| `--status STR` | Archive all jobs with this status (completed, failed, cancelled) |
+| `--group NAME` | Archive all terminal jobs in this group |
+| `--output {table,json}` | Output format (default: table) |
+
+---
+
+### `stepwise unarchive`
+
+Restore archived jobs to their original status.
+
+```bash
+stepwise unarchive job-a1b2c3d4
+```
+
+| Flag | Description |
+|------|-------------|
+| `--output {table,json}` | Output format (default: table) |
+
+---
+
+### `stepwise rm`
+
+Permanently delete jobs from the database. Irreversible.
+
+```bash
+stepwise rm job-a1b2c3d4                          # delete specific job(s)
+stepwise rm --status failed                        # delete all failed jobs
+stepwise rm --group old-batch                      # delete all jobs in a group
+stepwise rm --archived                             # delete all archived jobs
+stepwise rm --archived --force                     # skip confirmation
+```
+
+| Flag | Description |
+|------|-------------|
+| `--status STR` | Delete all jobs with this status |
+| `--group NAME` | Delete all jobs in this group |
+| `--archived` | Delete all archived jobs |
+| `--force, -f` | Skip confirmation for bulk deletes |
+| `--output {table,json}` | Output format (default: table) |
+
+---
+
 ## Job Staging Commands
 
 Stage, review, and release jobs before execution. Wire data between jobs and organize them into groups. See [Concepts: Job Staging](concepts.md#job-staging) for the mental model.
@@ -555,11 +533,6 @@ stepwise job create my-flow --input plan=job-abc123.plan --group wave-1
 ```
 
 Data wiring: `--input key=job-id.field` references another job's output. This auto-creates a dependency edge.
-
-```
-Created job-def456 (staged, group: wave-1)
-  Auto-dependency: job-def456 → job-abc123 (via input "plan")
-```
 
 | Flag | Description |
 |------|-------------|
@@ -581,12 +554,6 @@ stepwise job show job-def456               # detail for one job
 stepwise job show job-def456 --output json # JSON detail
 ```
 
-```
-GROUP     ID               FLOW        STATUS    DEPS         INPUTS
-wave-1    job-abc123       plan-flow   staged    —            task="Build API"
-wave-1    job-def456       impl-flow   staged    job-abc123   plan=job-abc123.plan
-```
-
 | Flag | Description |
 |------|-------------|
 | `--group NAME` | Filter by group |
@@ -601,12 +568,6 @@ Transition STAGED jobs to PENDING, making them eligible for execution. Jobs star
 ```bash
 stepwise job run job-abc123                # release a single job
 stepwise job run --group wave-1            # release all jobs in a group
-```
-
-```
-✓ Transitioned 2 jobs to pending (group: wave-1)
-  job-abc123 → pending (no deps, starting immediately)
-  job-def456 → pending (waiting for job-abc123)
 ```
 
 | Flag | Description |
@@ -631,6 +592,20 @@ Cycle detection: if adding the dependency would create a cycle, the command fail
 |------|-------------|
 | `--after JOB_ID` | Add a dependency (this job waits for the specified job) |
 | `--rm JOB_ID` | Remove a dependency |
+
+---
+
+### `stepwise job approve`
+
+Approve a job that is in `awaiting_approval` status.
+
+```bash
+stepwise job approve job-abc123
+```
+
+| Flag | Description |
+|------|-------------|
+| `--output {table,json}` | Output format (default: table) |
 
 ---
 
@@ -724,15 +699,6 @@ Publish a flow to the registry.
 stepwise share my-pipeline.flow.yaml
 ```
 
-```
-Validating my-pipeline.flow.yaml... ✓ (3 steps)
-Publishing as "my-pipeline"...
-
-✓ Published: https://stepwise.run/flows/my-pipeline
-  Get: stepwise get my-pipeline
-  Token saved to ~/.config/stepwise/tokens.json
-```
-
 Validates the flow, reads metadata from the YAML header, and uploads to the registry. The update token is saved locally for future updates.
 
 | Flag | Description |
@@ -751,11 +717,6 @@ stepwise get code-review
 stepwise get https://example.com/code-review.flow.yaml
 ```
 
-```
-✓ Downloaded code-review.flow.yaml (3 steps, by alice, 1,247 downloads)
-  Run: stepwise run code-review.flow.yaml
-```
-
 Saves to the current directory. Fails if a file with the same name already exists.
 
 | Flag | Description |
@@ -771,12 +732,6 @@ Search the flow registry.
 ```bash
 stepwise search "code review"
 stepwise search --tag agent --sort downloads
-```
-
-```
-NAME                 AUTHOR     STEPS  DOWNLOADS  TAGS
-code-review          alice      3      1,247      agent, external-fulfillment
-pr-review-lite       bob        2      892        script, code-review
 ```
 
 | Flag | Description |
@@ -906,16 +861,6 @@ List available workflow templates (built-in and project-local).
 stepwise templates
 ```
 
-```
-BUILT-IN:
-  hello-world
-  iterative-review
-
-PROJECT:
-  deploy-pipeline
-  content-engine
-```
-
 Templates are saved via the web UI and stored in `.stepwise/templates/`.
 
 ---
@@ -938,19 +883,7 @@ stepwise schema council
 }
 ```
 
-For flows with external steps, includes the step name, prompt, and required fields:
-
-```json
-{
-  "externalSteps": [
-    {
-      "step": "approve",
-      "prompt": "Review this deployment package. Approve or reject.",
-      "fields": ["approved", "reason"]
-    }
-  ]
-}
-```
+For flows with external steps, includes the step name, prompt, and required fields.
 
 ---
 
@@ -965,13 +898,7 @@ stepwise diagram my-flow.flow.yaml -o output/my-flow.svg
 stepwise diagram @alice:code-review              # registry flow
 ```
 
-```
-✓ my-flow.svg
-```
-
-Renders a dark-themed DAG matching the web UI aesthetic. Node shapes indicate executor type (box for script, parallelogram for external, rounded box for LLM, double octagon for agent, hexagon for poll). Edges are color-coded: blue for data flow, gray dashed for `after` ordering, amber dotted for loops, green bold for conditional advance, purple bold for for-each.
-
-Requires the system `graphviz` package (`dot` binary). Install with `brew install graphviz` or `apt install graphviz`.
+Renders a dark-themed DAG matching the web UI aesthetic. Requires the system `graphviz` package (`dot` binary). Install with `brew install graphviz` or `apt install graphviz`.
 
 | Flag | Description |
 |------|-------------|
@@ -985,8 +912,6 @@ Requires the system `graphviz` package (`dot` binary). Install with `brew instal
 ### `stepwise agent-help`
 
 Generate agent-readable instructions for all flows in the current project. Output is a markdown block suitable for pasting into CLAUDE.md or similar.
-
-See [Agent Integration](agent-integration.md) for how agents use flows as tools.
 
 ```bash
 stepwise agent-help                        # print to stdout (compact format)
@@ -1042,9 +967,16 @@ stepwise docs cli              # show CLI reference
 stepwise docs executors        # show executor reference
 ```
 
-| Argument | Description |
-|----------|-------------|
-| `topic` | Documentation topic (e.g., `patterns`, `cli`, `executors`). Omit to list available topics. |
+---
+
+### `stepwise help`
+
+Ask a question about Stepwise in natural language. Uses LLM to answer based on the documentation.
+
+```bash
+stepwise help "how do I add a retry loop?"
+stepwise help "what are exit rules?"
+```
 
 ---
 
@@ -1052,9 +984,7 @@ stepwise docs executors        # show executor reference
 
 Manage the step result cache. Cached results are stored in `.stepwise/cache/results.db`.
 
-To bypass the cache for a specific step during a run, use `stepwise run --rerun <step>` (see [`run` flags](#stepwise-run)).
-
----
+To bypass the cache for a specific step during a run, use `stepwise run --rerun <step>`.
 
 #### `stepwise cache stats`
 
@@ -1087,15 +1017,6 @@ Show the computed cache key for a step. Useful for understanding why a step is o
 stepwise cache debug my-flow.flow.yaml fetch --input url="https://example.com"
 ```
 
-| Argument | Description |
-|----------|-------------|
-| `flow` | Flow file path (positional) |
-| `step` | Step name (positional) |
-
-| Flag | Description |
-|------|-------------|
-| `--input KEY=VALUE` | Input variable (repeatable) |
-
 ---
 
 ### `stepwise update`
@@ -1104,18 +1025,6 @@ Upgrade stepwise to the latest version. Automatically detects the install method
 
 ```bash
 stepwise update
-```
-
-```
-Upgrading via uv...
-Updated: 0.1.0 → 0.2.0
-```
-
-If already on the latest version:
-
-```
-Upgrading via uv...
-Already up to date (0.2.0).
 ```
 
 ---
@@ -1194,13 +1103,11 @@ When the Stepwise server is running, CLI commands can automatically route throug
 - `--standalone` — force direct SQLite mode (skip server detection)
 - `--server URL` — force API mode with a specific server URL
 
-The server writes `.stepwise/server.pid` on startup and removes it on clean shutdown.
-
 ---
 
 ## Signal Handling
 
-Ctrl+C during stepwise run cleanly cancels the active job. Running agent processes are killed, the job is marked as cancelled, and the process exits. In --watch mode, Ctrl+C stops the ephemeral server.
+Ctrl+C during `stepwise run` cleanly cancels the active job. Running agent processes are killed, the job is marked as cancelled, and the process exits. In `--watch` mode, Ctrl+C stops the ephemeral server.
 
 ## Project Discovery
 
