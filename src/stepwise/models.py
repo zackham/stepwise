@@ -1154,35 +1154,30 @@ class WorkflowDefinition:
         toward excluding other steps — they're loop machinery, not real consumers.
         """
         # First pass: identify loop-internal steps — steps that exist purely
-        # to serve a loop cycle. A step is loop-internal only if:
-        # 1. ALL its exit rules are loops (no advance/escalate/abandon exits)
+        # to serve a loop cycle. A step is loop-internal if:
+        # 1. It has NO advance exits (implicit or explicit)
         # 2. At least one loop target is one of its own dependencies
-        # This excludes steps like external-checkpoint that have both advance
-        # and loop exits — those are decision points, not pure loop machinery.
+        # Steps with only loop + escalate/abandon exits are still loop-internal:
+        # escalate/abandon are emergency escapes, not forward progression.
+        # Steps with no exit rules have implicit advance and are NOT loop-internal.
         loop_internal: set[str] = set()
         for name, step_def in self.steps.items():
             if not step_def.exit_rules:
+                continue  # implicit advance — not loop-internal
+            # Check that no exit is an advance
+            has_advance = any(
+                rule.config.get("action", "advance") == "advance"
+                for rule in step_def.exit_rules
+            )
+            if has_advance:
                 continue
-            # Check that every exit is a loop
-            all_loops = all(
+            # A step with no advance exit and at least one loop exit
+            # is loop-internal — it only exists to loop back.
+            has_loop = any(
                 rule.config.get("action") == "loop"
                 for rule in step_def.exit_rules
             )
-            if not all_loops:
-                continue
-            own_deps: set[str] = set()
-            for b in step_def.inputs:
-                if b.any_of_sources:
-                    for src, _ in b.any_of_sources:
-                        own_deps.add(src)
-                elif b.source_step != "$job":
-                    own_deps.add(b.source_step)
-            own_deps.update(step_def.after)
-            loops_to_dep = any(
-                rule.config.get("target", name) in own_deps
-                for rule in step_def.exit_rules
-            )
-            if loops_to_dep:
+            if has_loop:
                 loop_internal.add(name)
 
         # Second pass: build depended_on, ignoring loop-internal steps
@@ -1225,6 +1220,18 @@ class WorkflowDefinition:
             if name in loop_internal:
                 continue
             terminals.append(name)
+
+        # If loop-internal exclusion removed all candidates, fall back:
+        # exclude only loop-internal steps that have other non-loop-internal
+        # steps in the workflow. Single-step loops are their own terminal.
+        if not terminals and loop_internal:
+            for name in self.steps:
+                if name in depended_on:
+                    continue
+                if name in targeted_by_exits:
+                    continue
+                terminals.append(name)
+
         return terminals
 
     def _detect_cycles(self) -> list[str]:
