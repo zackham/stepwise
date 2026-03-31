@@ -43,6 +43,7 @@ function formatTooltipValue(value: unknown): string {
 function getStatusColors(isDark: boolean): Record<JobStatus, string> {
   return {
     staged: "#8b5cf6",
+    awaiting_approval: "#f59e0b",
     pending: isDark ? "#71717a" : "#a1a1aa",
     running: "#3b82f6",
     paused: "#f59e0b",
@@ -55,6 +56,7 @@ function getStatusColors(isDark: boolean): Record<JobStatus, string> {
 
 const STATUS_LABELS: Record<JobStatus, string> = {
   staged: "Staged",
+  awaiting_approval: "Awaiting Approval",
   pending: "Pending",
   running: "Running",
   paused: "Paused",

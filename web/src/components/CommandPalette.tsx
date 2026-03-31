@@ -21,6 +21,7 @@ const STATUS_ICON: Record<JobStatus, typeof Circle> = {
   running: CircleDot,
   pending: Circle,
   staged: Circle,
+  awaiting_approval: CirclePause,
   paused: CirclePause,
   completed: CircleCheck,
   failed: CircleX,
