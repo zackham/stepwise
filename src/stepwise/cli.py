@@ -2219,7 +2219,7 @@ def cmd_open(args: argparse.Namespace) -> int:
     if existing_url:
         url = f"{existing_url}{url_path}"
         io.log("info", f"Opening {url}")
-        if not args.no_open:
+        if not args.url:
             _open_browser(url)
         else:
             print(url)
@@ -2254,7 +2254,7 @@ def cmd_open(args: argparse.Namespace) -> int:
         else:
             return  # server never came up
         url = f"{server_url}{url_path}"
-        if not getattr(args, "no_open", False):
+        if not getattr(args, "url", False):
             _open_browser(url)
         else:
             print(url)
@@ -4594,7 +4594,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_open = sub.add_parser("open", help="Open a flow or job in the web UI")
     p_open.add_argument("target", help="Flow name, path, @registry:ref, or job ID")
     p_open.add_argument("--port", type=int, help="Override port for ephemeral server")
-    p_open.add_argument("--no-open", action="store_true", help="Print URL instead of opening browser")
+    p_open.add_argument("--url", action="store_true", help="Print URL instead of opening browser")
 
     # check
     p_check = sub.add_parser("check", help="Validate flow structure and model resolution")
