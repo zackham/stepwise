@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { useState } from "react";
 import type { ToolCallState, StreamSegment } from "@/hooks/useAgentStream";
 import {
@@ -13,8 +14,6 @@ import {
 } from "lucide-react";
 import { highlightMatches, countMatches } from "@/lib/log-search";
 import { cn } from "@/lib/utils";
-
-export const VIRTUAL_THRESHOLD = 200;
 
 export function toolIcon(kind: string) {
   switch (kind) {

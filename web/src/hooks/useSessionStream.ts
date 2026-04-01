@@ -100,12 +100,14 @@ export function useSessionStream(
   }, [backfillEvents, backfillBoundaries, processEvents]);
 
   // Reset when runIds change fundamentally
+  const runIdKey = runIds.join(",");
   useEffect(() => {
     stateRef.current = { segments: [], boundaries: [], usage: null };
     setVersion(0);
     backfilledRef.current = false;
     liveQueueRef.current = [];
-  }, [runIds.join(",")]);
+  }, [runIdKey]);
 
+  // eslint-disable-next-line react-hooks/refs -- intentional ref-as-mutable-state pattern (same as useAgentStream)
   return { state: stateRef.current, version };
 }
