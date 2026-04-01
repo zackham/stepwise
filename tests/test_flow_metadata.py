@@ -22,7 +22,6 @@ class TestFlowMetadata:
         assert m.description == ""
         assert m.author == ""
         assert m.version == ""
-        assert m.tags == []
         assert m.visibility == "interactive"
 
     def test_to_dict_omits_empty(self):
@@ -32,11 +31,10 @@ class TestFlowMetadata:
         assert "visibility" not in m.to_dict()
 
     def test_to_dict_includes_set_fields(self):
-        m = FlowMetadata(name="test", author="zack", tags=["ai", "demo"])
+        m = FlowMetadata(name="test", author="zack")
         d = m.to_dict()
         assert d["name"] == "test"
         assert d["author"] == "zack"
-        assert d["tags"] == ["ai", "demo"]
         assert "description" not in d
         assert "version" not in d
 
@@ -56,14 +54,12 @@ class TestFlowMetadata:
             "description": "A test flow",
             "author": "zack",
             "version": "1.0",
-            "tags": ["test", "demo"],
         }
         m = FlowMetadata.from_dict(d)
         assert m.name == "my-flow"
         assert m.description == "A test flow"
         assert m.author == "zack"
         assert m.version == "1.0"
-        assert m.tags == ["test", "demo"]
         assert m.visibility == "interactive"
 
     def test_from_dict_with_visibility(self):
@@ -74,7 +70,6 @@ class TestFlowMetadata:
     def test_from_dict_empty(self):
         m = FlowMetadata.from_dict({})
         assert m.name == ""
-        assert m.tags == []
         assert m.visibility == "interactive"
 
     def test_round_trip(self):
@@ -83,14 +78,12 @@ class TestFlowMetadata:
             description="Test round trip",
             author="tester",
             version="2.0",
-            tags=["a", "b"],
         )
         restored = FlowMetadata.from_dict(original.to_dict())
         assert restored.name == original.name
         assert restored.description == original.description
         assert restored.author == original.author
         assert restored.version == original.version
-        assert restored.tags == original.tags
         assert restored.visibility == original.visibility
 
     def test_round_trip_visibility(self):
@@ -119,11 +112,10 @@ class TestWorkflowDefinitionMetadata:
     def test_from_dict_restores_metadata(self):
         d = {
             "steps": {},
-            "metadata": {"name": "restored", "tags": ["x"]},
+            "metadata": {"name": "restored"},
         }
         wf = WorkflowDefinition.from_dict(d)
         assert wf.metadata.name == "restored"
-        assert wf.metadata.tags == ["x"]
 
 
 class TestYAMLMetadataParsing:
@@ -134,7 +126,6 @@ name: my-demo
 description: A demo workflow
 author: zack
 version: "1.0"
-tags: [ai, demo]
 steps:
   hello:
     run: 'echo "{\\"msg\\": \\"hi\\"}"'
@@ -164,7 +155,6 @@ steps:
         assert wf.metadata.description == "A demo workflow"
         assert wf.metadata.author == "zack"
         assert wf.metadata.version == "1.0"
-        assert wf.metadata.tags == ["ai", "demo"]
 
     def test_backward_compatible_no_metadata(self, tmp_path):
         flow = tmp_path / "bare.flow.yaml"
@@ -173,7 +163,6 @@ steps:
         # No metadata fields → defaults
         assert wf.metadata.description == ""
         assert wf.metadata.author == ""
-        assert wf.metadata.tags == []
         # But name should default from filename
         assert wf.metadata.name == "bare"
 
@@ -201,7 +190,6 @@ steps:
         wf = load_workflow_yaml(flow)
         assert wf.metadata.name == "partial"
         assert wf.metadata.description == ""
-        assert wf.metadata.tags == []
 
     def test_string_source_no_filename_fallback(self):
         wf = load_workflow_yaml(self.FLOW_WITHOUT_METADATA)
@@ -219,18 +207,6 @@ steps:
         flow.write_text(self.FLOW_WITH_METADATA)
         wf = load_workflow_yaml(str(flow))
         assert wf.metadata.name == "my-demo"
-
-    def test_tags_non_list_ignored(self):
-        yaml_str = """\
-name: test
-tags: "not-a-list"
-steps:
-  hello:
-    run: 'echo "{\\"msg\\": \\"hi\\"}"'
-    outputs: [msg]
-"""
-        wf = load_workflow_yaml(yaml_str)
-        assert wf.metadata.tags == []
 
     def test_visibility_defaults_to_interactive(self, tmp_path):
         flow = tmp_path / "test.flow.yaml"

@@ -62,7 +62,7 @@ export const JobCard = memo(function JobCard({ job, runs, dependencyNames, isGro
     <Link
       to="/jobs/$jobId"
       params={{ jobId: job.id }}
-      search={(prev: Record<string, unknown>) => ({ ...prev })}
+      search={(prev: Record<string, unknown>) => ({ ...prev, sidebar: "0" })}
       className={cn(
         "block w-full rounded-lg border transition-all duration-200 overflow-hidden",
         "bg-white/80 hover:bg-white dark:bg-zinc-900/80 dark:hover:bg-zinc-900",

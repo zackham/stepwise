@@ -66,7 +66,7 @@ Published: https://stepwise.run/flows/my-pipeline
 
 What happens:
 1. Validates the flow (must pass `stepwise validate`)
-2. Reads metadata from YAML header (`name`, `description`, `author`, `tags`)
+2. Reads metadata from YAML header (`name`, `description`, `author`)
 3. Auto-populates `author` from `git config user.name` if not set in YAML
 4. Uploads to the registry API
 5. Returns the public URL
@@ -200,14 +200,13 @@ Shared flows must be **self-contained**:
 
 1. **No external dependencies** — for single-file flows, avoid `run: scripts/deploy.sh` (the consumer won't have it). For directory flows, all referenced scripts must be co-located in the flow directory.
 2. **Job inputs for configuration** — use `$job.field` for values the consumer provides.
-3. **Meaningful metadata** — `name`, `description`, and `tags` are required for publishing.
+3. **Meaningful metadata** — `name` and `description` are required for publishing.
 
 ```yaml
 # Good: single-file, self-contained, configurable via job inputs
 name: code-review
 description: AI-powered PR review with human approval gate
 author: zack
-tags: [agent, external-fulfillment, code-review]
 
 steps:
   analyze:
@@ -236,7 +235,7 @@ steps:
 
 The `stepwise share` command validates this constraint before publishing. It warns on:
 - Single-file flows with `run:` commands referencing relative paths
-- Missing `name`, `description`, or `tags` in metadata
+- Missing `name` or `description` in metadata
 - Missing `author` (auto-populated from git config, but warns if empty)
 
 ---

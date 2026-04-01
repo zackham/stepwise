@@ -3,9 +3,6 @@ import { useParams, useNavigate, useSearch, Link } from "@tanstack/react-router"
 import type { JobDetailSearch } from "@/router";
 import { useJob, useRuns, useJobTree, useJobOutput, useJobCost, useStepwiseMutations, useJobSessions } from "@/hooks/useStepwise";
 import { SessionTab } from "@/components/jobs/SessionTab";
-import { JobList } from "@/components/jobs/JobList";
-import { ActionContextProvider } from "@/components/menus/ActionContextProvider";
-import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
 import { FlowDagView } from "@/components/dag/FlowDagView";
 import { RunView } from "@/components/jobs/RunView";
 import { StepConfigView } from "@/components/jobs/StepConfigView";
@@ -19,40 +16,54 @@ import { useAutoExpand } from "@/hooks/useAutoExpand";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { MobileFullScreen } from "@/components/layout/MobileFullScreen";
 import { useIsMobile } from "@/hooks/useMediaQuery";
-import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import {
-  PanelRightClose,
+  PanelLeft,
+  PanelRight,
   PanelLeftClose,
-  PanelRightOpen,
   ScrollText,
   GitBranch,
   GanttChart,
   Clock,
-  Info,
   AlertTriangle,
   DollarSign,
   X,
 } from "lucide-react";
 import { useCopyFeedback } from "@/hooks/useCopyFeedback";
+import { ResizablePanel } from "@/components/ui/ResizablePanel";
 import type { JobTreeNode, StepDefinition } from "@/lib/types";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn, formatDuration } from "@/lib/utils";
+import { cn, formatDuration, formatCost } from "@/lib/utils";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
+
+function extractErrorMessage(error: string): string {
+  const firstLine = error.split("\n")[0];
+  // Try to extract message from embedded JSON like: OpenRouter 400 for model=...: {"error":{"message":"...",...}}
+  const jsonMatch = firstLine.match(/\{.*"message"\s*:\s*"([^"]+)"/);
+  if (jsonMatch) {
+    // Return the prefix (e.g. "OpenRouter 400 for model=x") + the extracted message
+    const jsonStart = firstLine.indexOf("{");
+    const prefix = firstLine.slice(0, jsonStart).replace(/:\s*$/, "");
+    return `${prefix}: ${jsonMatch[1]}`;
+  }
+  return firstLine;
+}
 
 function CopyableId({ id }: { id: string }) {
   const { copy, justCopied } = useCopyFeedback();
   return (
     <span
       onClick={() => copy(id)}
-      className={cn(
-        "cursor-pointer hover:text-blue-400 transition-colors",
-        justCopied && "text-green-400"
-      )}
+      className="cursor-pointer hover:text-blue-400 relative"
       title="Click to copy"
     >
       {id}
+      {justCopied && (
+        <span className="absolute -top-6 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-zinc-800 text-green-400 text-[10px] font-sans whitespace-nowrap animate-in fade-in zoom-in-95 duration-100 pointer-events-none">
+          Copied
+        </span>
+      )}
     </span>
   );
 }
@@ -63,6 +74,19 @@ function resolveStep(
   workflow: { steps: Record<string, StepDefinition> },
   jobTree: JobTreeNode | null,
 ): { stepDef: StepDefinition; jobId: string } | null {
+  // Handle for_each scoped keys: "forEach:<instanceJobId>:<childStepName>"
+  const forEachMatch = stepName.match(/^forEach:([^:]+):(.+)$/);
+  if (forEachMatch) {
+    const [, instanceJobId, childStepName] = forEachMatch;
+    // Find the sub-job matching instanceJobId and resolve within it
+    if (jobTree) {
+      const target = findJobTreeById(jobTree, instanceJobId);
+      if (target) {
+        return resolveStep(childStepName, target.job.id, target.job.workflow, target);
+      }
+    }
+    return null;
+  }
   if (workflow.steps[stepName]) {
     return { stepDef: workflow.steps[stepName], jobId };
   }
@@ -75,6 +99,16 @@ function resolveStep(
   return null;
 }
 
+function findJobTreeById(tree: JobTreeNode, targetId: string): JobTreeNode | null {
+  if (tree.job.id === targetId) return tree;
+  for (const child of tree.sub_jobs) {
+    const found = findJobTreeById(child, targetId);
+    if (found) return found;
+  }
+  return null;
+}
+
+type LeftPanelTab = "overview" | "session";
 type RightPanelTab = "run" | "step" | "session";
 
 export function JobDetailPage() {
@@ -90,9 +124,10 @@ export function JobDetailPage() {
   const hasSessions = (sessionData?.sessions?.length ?? 0) > 0;
   const searchParams = useSearch({ from: "/jobs/$jobId" }) as JobDetailSearch;
   const [dataFlowSelection, setDataFlowSelection] = useState<DagSelection>(null);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
   const [expandedStep, setExpandedStep] = useState(false);
   const [autoOpenedPanel, setAutoOpenedPanel] = useState(false);
+  const [leftTab, setLeftTab] = useState<LeftPanelTab>("overview");
   const mutations = useStepwiseMutations();
   const { expandedSteps, toggleExpand } = useAutoExpand(jobId, runs, job, jobTree ?? null);
 
@@ -111,13 +146,6 @@ export function JobDetailPage() {
 
   // Derive activeTab: URL tab param > default "run" when step selected
   const activeTab: RightPanelTab = searchParams.tab ?? "run";
-
-  // Derive rightPanelOpen: URL panel param > auto-open for terminal jobs > default closed
-  const rightPanelOpen = searchParams.panel === "open"
-    ? true
-    : autoOpenedPanel
-      ? true
-      : false;
 
   // Build latestRuns map for DataFlowPanel
   const latestRuns = useMemo(() => {
@@ -157,6 +185,7 @@ export function JobDetailPage() {
     setDataFlowSelection(null);
     setExpandedStep(false);
     setAutoOpenedPanel(false);
+    setLeftTab("overview");
   }, [jobId]);
 
   // Auto-open right panel for terminal jobs (only on initial load, when no URL panel param)
@@ -281,7 +310,7 @@ export function JobDetailPage() {
   if (isLoading) {
     return (
       <div className="flex h-full" data-testid="job-detail-skeleton">
-        {/* Sidebar skeleton */}
+        {/* Left sidebar skeleton */}
         <div className="hidden md:flex w-72 border-r border-border flex-col shrink-0">
           <div className="p-3 border-b border-border">
             <Skeleton className="h-5 w-24" />
@@ -344,62 +373,136 @@ export function JobDetailPage() {
     selection?.kind === "edge-field" ||
     selection?.kind === "flow-input" ||
     selection?.kind === "flow-output";
-  const showRightPanel = rightPanelOpen || !!resolvedStep || isDataFlowSelection;
+  // Right panel only shows when a step is selected or data flow is selected
+  const showRightPanel = !!resolvedStep || isDataFlowSelection;
 
   return (
-    <div className="flex h-full">
-      {/* Left sidebar: job list (hidden on mobile) */}
-      {!isMobile && !sidebarCollapsed && (
-        <div className="w-72 border-r border-border flex flex-col shrink-0 overflow-hidden" style={{ maxHeight: 'calc(100vh - 3rem)' }}>
-          <div className="flex items-center justify-between p-2 border-b border-border">
-            <CreateJobDialog
-              onCreated={(id) =>
-                navigate({ to: "/jobs/$jobId", params: { jobId: id } })
-              }
-            />
-            <button
-              onClick={() => setSidebarCollapsed(true)}
-              className="text-zinc-500 hover:text-foreground p-1"
-            >
-              <PanelLeftClose className="w-4 h-4" />
-            </button>
-          </div>
-          <div className="flex-1 overflow-hidden">
-            <ActionContextProvider>
-              <JobList
-                selectedJobId={jobId}
-                onSelectJob={(id) =>
-                  navigate({ to: "/jobs/$jobId", params: { jobId: id }, search: true })
-                }
-              />
-            </ActionContextProvider>
-          </div>
-        </div>
-      )}
+    <div className="flex flex-col h-full">
+      {/* Breadcrumb with panel toggles — above sidebars */}
+      <nav
+        aria-label="Breadcrumb"
+        className="flex items-center gap-1 px-4 py-1.5 border-b border-border text-xs shrink-0"
+      >
+          {/* Breadcrumb segments */}
+          <Link
+            to="/jobs"
+            className="truncate max-w-[200px] text-zinc-400 hover:text-foreground transition-colors"
+          >
+            Jobs
+          </Link>
+          <span className="text-zinc-600 shrink-0">/</span>
+          {job.parent_job_id && (
+            <>
+              <Link
+                to="/jobs/$jobId"
+                params={{ jobId: job.parent_job_id }}
+                className="truncate max-w-[200px] text-zinc-400 hover:text-foreground transition-colors"
+              >
+                {parentJob?.name || parentJob?.objective || job.parent_job_id}
+              </Link>
+              <span className="text-zinc-600 shrink-0">/</span>
+            </>
+          )}
+          <span className="truncate max-w-[200px] text-zinc-500">
+            {job.name || job.objective || "Untitled Job"}
+          </span>
 
-      {/* Collapse toggle when sidebar is hidden (desktop only) */}
-      {!isMobile && sidebarCollapsed && (
-        <button
-          onClick={() => setSidebarCollapsed(false)}
-          className="w-8 border-r border-border flex items-center justify-center text-zinc-500 hover:text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50 shrink-0"
-        >
-          <PanelRightClose className="w-4 h-4" />
-        </button>
-      )}
+          <div className="flex-1" />
 
-      {/* Center: header + controls + DAG */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Breadcrumb */}
-        <Breadcrumb
-          segments={[
-            { label: "Jobs", to: "/jobs" },
-            ...(job.parent_job_id
-              ? [{ label: parentJob?.name || parentJob?.objective || job.parent_job_id, to: "/jobs/$jobId", params: { jobId: job.parent_job_id } }]
-              : []),
-            { label: job.name || job.objective || "Untitled Job" },
-          ]}
-        />
+          {/* Panel toggle icons */}
+          {!isMobile && (
+            <>
+              <button
+                onClick={() => setLeftPanelCollapsed((c) => !c)}
+                className={cn(
+                  "p-1 rounded transition-colors",
+                  !leftPanelCollapsed
+                    ? "text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
+                    : "text-zinc-400 dark:text-zinc-600 hover:text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
+                )}
+                title={leftPanelCollapsed ? "Show left panel" : "Hide left panel"}
+              >
+                <PanelLeft className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => {
+                  if (showRightPanel) {
+                    // Close right panel by deselecting step
+                    setDataFlowSelection(null);
+                    navigate({
+                      search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined, panel: undefined }),
+                      replace: true,
+                    });
+                  }
+                  // Can't open right panel from here — it requires a step selection
+                }}
+                className={cn(
+                  "p-1 rounded transition-colors",
+                  showRightPanel
+                    ? "text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
+                    : "text-zinc-400 dark:text-zinc-600 cursor-default"
+                )}
+                title={showRightPanel ? "Hide right panel" : "Select a step to show details"}
+                disabled={!showRightPanel}
+              >
+                <PanelRight className="w-4 h-4" />
+              </button>
+            </>
+          )}
+      </nav>
 
+      <div className="flex-1 flex min-h-0">
+        {/* Left sidebar: Job Overview + Sessions */}
+        {!isMobile && !leftPanelCollapsed && (
+          <ResizablePanel
+            storageKey="stepwise-job-left-panel-width"
+            defaultWidth={320}
+            min={240}
+            max={480}
+            side="left"
+            onCollapse={() => setLeftPanelCollapsed(true)}
+          >
+            <Tabs value={leftTab} onValueChange={(v) => setLeftTab(v as LeftPanelTab)} className="flex flex-col h-full gap-0">
+              <div className="flex items-center justify-between border-b border-border bg-zinc-50/50 dark:bg-zinc-950/50 shrink-0">
+                <TabsList variant="line" className="px-1">
+                  <TabsTrigger value="overview" className="text-xs gap-1 px-2.5">
+                    Overview
+                  </TabsTrigger>
+                  {hasSessions && (
+                    <TabsTrigger value="session" className="text-xs gap-1 px-2.5">
+                      Sessions
+                    </TabsTrigger>
+                  )}
+                </TabsList>
+              </div>
+              <TabsContent value="overview" className={cn("flex-1 min-h-0 overflow-y-auto", leftTab !== "overview" && "hidden")}>
+                <JobOverview job={job} />
+              </TabsContent>
+              {hasSessions && (
+                <TabsContent value="session" className={cn("flex-1 min-h-0 overflow-y-auto", leftTab !== "session" && "hidden")}>
+                  <SessionTab
+                    jobId={jobId}
+                    highlightStep={selectedStep}
+                    onNavigateToStep={(stepName) =>
+                      navigate({
+                        search: (prev: JobDetailSearch) => ({
+                          ...prev,
+                          step: stepName,
+                          tab: "run" as const,
+                          panel: "open" as const,
+                        }),
+                        replace: true,
+                      })
+                    }
+                  />
+                </TabsContent>
+              )}
+            </Tabs>
+          </ResizablePanel>
+        )}
+
+        {/* Center: header + controls + DAG */}
+        <div className="flex-1 flex flex-col min-w-0">
         {/* Job header */}
         <div className="px-4 py-2 border-b border-border bg-zinc-50/30 dark:bg-zinc-950/30 shrink-0">
           {isMobile ? (
@@ -430,7 +533,7 @@ export function JobDetailPage() {
                       <DollarSign className="w-2.5 h-2.5" />
                       {costData.billing_mode === "subscription"
                         ? "$0 (Max)"
-                        : `$${costData.cost_usd.toFixed(4)}`}
+                        : formatCost(costData.cost_usd)}
                     </span>
                   )}
                 </div>
@@ -462,16 +565,6 @@ export function JobDetailPage() {
                   >
                     <GitBranch className="w-3.5 h-3.5" />
                   </Link>
-                  {!showRightPanel && (
-                    <button
-                      onClick={() => navigate({ search: (prev: JobDetailSearch) => ({ ...prev, panel: "open" as const }), replace: true })}
-                      className="flex items-center justify-center min-w-[44px] min-h-[44px] text-xs text-zinc-500 hover:text-foreground rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
-                      aria-label="Details"
-                      title="Details"
-                    >
-                      <Info className="w-3.5 h-3.5" />
-                    </button>
-                  )}
                 </div>
               </div>
             </>
@@ -505,7 +598,7 @@ export function JobDetailPage() {
                       <DollarSign className="w-2.5 h-2.5" />
                       {costData.billing_mode === "subscription"
                         ? "$0 (Max)"
-                        : `$${costData.cost_usd.toFixed(4)}`}
+                        : formatCost(costData.cost_usd)}
                     </span>
                   )}
                 </div>
@@ -551,15 +644,6 @@ export function JobDetailPage() {
                   <GitBranch className="w-3.5 h-3.5" />
                   Tree
                 </Link>
-                {!showRightPanel && (
-                  <button
-                    onClick={() => navigate({ search: (prev: JobDetailSearch) => ({ ...prev, panel: "open" as const }), replace: true })}
-                    className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
-                  >
-                    <Info className="w-3.5 h-3.5" />
-                    Details
-                  </button>
-                )}
               </div>
             </div>
           )}
@@ -572,13 +656,13 @@ export function JobDetailPage() {
         {failedRun && (
           <div className="flex items-center gap-2 px-4 py-2 border-b border-red-300/50 dark:border-red-900/50 bg-red-100/30 dark:bg-red-950/30 text-xs">
             <AlertTriangle className="w-3.5 h-3.5 text-red-500 dark:text-red-400 shrink-0" />
-            <div className="flex-1 min-w-0">
+            <div className="flex-1 min-w-0 truncate">
               <span className="text-red-700 dark:text-red-300 font-medium">
                 Step "{failedRun.step_name}" failed
               </span>
               {failedRun.error && (
-                <span className="text-red-500/70 dark:text-red-400/70 font-mono ml-2 truncate">
-                  — {failedRun.error.split("\n")[0]}
+                <span className="text-red-500/70 dark:text-red-400/70 ml-2">
+                  — {extractErrorMessage(failedRun.error)}
                 </span>
               )}
             </div>
@@ -644,17 +728,11 @@ export function JobDetailPage() {
         </div>
       </div>
 
-      {/* Right sidebar */}
+      {/* Right sidebar — step detail only */}
       {(() => {
-        const closePanel = () => {
-          setDataFlowSelection(null);
-          setAutoOpenedPanel(false);
-          navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined, panel: undefined }), replace: true });
-        };
-
         const deselectStep = () => {
           setDataFlowSelection(null);
-          navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined }), replace: true });
+          navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined, panel: undefined }), replace: true });
         };
 
         // DataFlow selection takes priority (shown as overlay panel)
@@ -679,79 +757,15 @@ export function JobDetailPage() {
             );
           }
           return (
-            <div className="w-80 border-l border-border shrink-0 flex flex-col overflow-y-auto" style={{ maxHeight: 'calc(100vh - 3rem)' }}>
+            <ResizablePanel storageKey="stepwise-job-right-panel-width">
               {dfPanel}
-            </div>
+            </ResizablePanel>
           );
         }
 
-        // No step selected: show JobOverview or Session tab
-        let panelContent: React.ReactNode = null;
-        if (showRightPanel && !resolvedStep) {
-          const showSessionInOverview = hasSessions && activeTab === "session";
-          panelContent = (
-            <div className="flex flex-col flex-1 min-h-0">
-              <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-zinc-50/50 dark:bg-zinc-950/50 shrink-0">
-                {hasSessions ? (
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => navigate({ search: (prev: JobDetailSearch) => ({ ...prev, tab: undefined }), replace: true })}
-                      className={cn(
-                        "text-xs font-medium px-2 py-0.5 rounded transition-colors",
-                        !showSessionInOverview ? "text-zinc-700 dark:text-zinc-300 bg-zinc-200/60 dark:bg-zinc-800/60" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300",
-                      )}
-                    >
-                      Overview
-                    </button>
-                    <button
-                      onClick={() => navigate({ search: (prev: JobDetailSearch) => ({ ...prev, tab: "session" as const }), replace: true })}
-                      className={cn(
-                        "text-xs font-medium px-2 py-0.5 rounded transition-colors",
-                        showSessionInOverview ? "text-zinc-700 dark:text-zinc-300 bg-zinc-200/60 dark:bg-zinc-800/60" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300",
-                      )}
-                    >
-                      Session
-                    </button>
-                  </div>
-                ) : (
-                  <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">Job Details</span>
-                )}
-                <button
-                  onClick={closePanel}
-                  className="text-zinc-500 dark:text-zinc-600 hover:text-zinc-700 dark:hover:text-zinc-300 p-0.5"
-                >
-                  <PanelRightOpen className="w-3.5 h-3.5" />
-                </button>
-              </div>
-              {showSessionInOverview ? (
-                <div className="flex-1 min-h-0 overflow-y-auto">
-                  <SessionTab
-                    jobId={jobId}
-                    onNavigateToStep={(stepName) =>
-                      navigate({
-                        search: (prev: JobDetailSearch) => ({
-                          ...prev,
-                          step: stepName,
-                          tab: "run" as const,
-                          panel: "open" as const,
-                        }),
-                        replace: true,
-                      })
-                    }
-                  />
-                </div>
-              ) : (
-                <ScrollArea className="flex-1 min-h-0">
-                  <JobOverview job={job} />
-                </ScrollArea>
-              )}
-            </div>
-          );
-        }
-
-        // Step selected: show Run/Step tabs
-        if (showRightPanel && resolvedStep) {
-          panelContent = (
+        // Step selected: show Run/Step/Session tabs
+        if (resolvedStep) {
+          const panelContent = (
             <Tabs
               value={activeTab}
               onValueChange={(v) => {
@@ -837,27 +851,27 @@ export function JobDetailPage() {
               )}
             </Tabs>
           );
-        }
 
-        if (!showRightPanel) return null;
+          if (isMobile) {
+            return (
+              <MobileFullScreen
+                open={true}
+                onClose={deselectStep}
+                title={resolvedStep.stepDef.name}
+              >
+                {panelContent}
+              </MobileFullScreen>
+            );
+          }
 
-        if (isMobile) {
           return (
-            <MobileFullScreen
-              open={showRightPanel}
-              onClose={closePanel}
-              title={resolvedStep ? resolvedStep.stepDef.name : "Details"}
-            >
+            <ResizablePanel storageKey="stepwise-job-right-panel-width">
               {panelContent}
-            </MobileFullScreen>
+            </ResizablePanel>
           );
         }
 
-        return (
-          <div className="w-80 border-l border-border shrink-0 flex flex-col overflow-y-auto" style={{ maxHeight: 'calc(100vh - 3rem)' }}>
-            {panelContent}
-          </div>
-        );
+        return null;
       })()}
 
       {/* Expanded step overlay */}
@@ -888,6 +902,7 @@ export function JobDetailPage() {
           </SheetContent>
         </Sheet>
       )}
+      </div>
     </div>
   );
 }

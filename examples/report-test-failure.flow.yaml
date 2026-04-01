@@ -1,7 +1,6 @@
 name: failing-pipeline
 description: Flow where a step fails (tests error rendering in report)
 author: zack
-tags: [test, failure, error-handling]
 
 steps:
   setup:

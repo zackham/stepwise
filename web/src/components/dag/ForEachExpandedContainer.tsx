@@ -213,6 +213,21 @@ export function ForEachExpandedContainer({
           // Get an item label from the sub-job's inputs if available
           const itemLabel = subTree?.job.objective?.match(/\[(\d+)\]/)?.[0] ?? `[${instance.index}]`;
 
+          // Instance-scoped selection key: disambiguates steps across fan-out lanes
+          const instancePrefix = `forEach:${instance.jobId}:`;
+          const scopedOnSelectStep = (key: string | null) => {
+            if (key === null) {
+              onSelectStep(null);
+            } else {
+              onSelectStep(instancePrefix + key);
+            }
+          };
+          // Strip our prefix from selectedStep so child components see bare step names
+          const scopedSelectedStep =
+            selectedStep?.startsWith(instancePrefix)
+              ? selectedStep.slice(instancePrefix.length)
+              : null;
+
           return (
             <div
               key={instance.jobId}
@@ -280,8 +295,8 @@ export function ForEachExpandedContainer({
                           childJobTree={cSubTree ?? null}
                           childStatus={cSubTree?.job.status ?? null}
                           expandedSteps={expandedSteps}
-                          selectedStep={selectedStep}
-                          onSelectStep={onSelectStep}
+                          selectedStep={scopedSelectedStep}
+                          onSelectStep={scopedOnSelectStep}
                           onToggleExpand={onToggleExpand}
                           onNavigateSubJob={onNavigateSubJob}
                           depth={depth + 1}
@@ -297,9 +312,9 @@ export function ForEachExpandedContainer({
                         latestRun={latestRuns[childNode.id] ?? null}
                         latestRuns={latestRuns}
                         maxAttempts={maxAttemptsMap[childNode.id] ?? null}
-                        isSelected={selectedStep === childNode.id}
+                        isSelected={scopedSelectedStep === childNode.id}
                         onClick={() =>
-                          onSelectStep(selectedStep === childNode.id ? null : childNode.id)
+                          scopedOnSelectStep(scopedSelectedStep === childNode.id ? null : childNode.id)
                         }
                         onNavigateSubJob={onNavigateSubJob}
                         onToggleExpand={

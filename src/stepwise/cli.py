@@ -1420,14 +1420,12 @@ def cmd_flows(args: argparse.Namespace) -> int:
                         raw = {}
                     name = raw.get("name") or entry.name
                     desc = raw.get("description", "")
-                    tags = raw.get("tags") or []
                     visibility = raw.get("visibility", "interactive")
                     steps = raw.get("steps") or {}
                     found.append({
                         "name": name,
                         "description": desc,
                         "steps": len(steps),
-                        "tags": tags,
                         "visibility": visibility,
                     })
 
@@ -1439,14 +1437,12 @@ def cmd_flows(args: argparse.Namespace) -> int:
             raw = {}
         name = raw.get("name") or flow_file.stem.replace(".flow", "")
         desc = raw.get("description", "")
-        tags = raw.get("tags") or []
         visibility = raw.get("visibility", "interactive")
         steps = raw.get("steps") or {}
         found.append({
             "name": name,
             "description": desc,
             "steps": len(steps),
-            "tags": tags,
             "visibility": visibility,
         })
 
@@ -1467,13 +1463,12 @@ def cmd_flows(args: argparse.Namespace) -> int:
 
     rows = []
     for f in found:
-        tags_str = ", ".join(f["tags"]) if f["tags"] else ""
         desc = (f["description"] or "")[:50]
         vis = f["visibility"]
         vis_label = vis if vis != "interactive" else ""
-        rows.append([f["name"], desc, str(f["steps"]), tags_str, vis_label])
+        rows.append([f["name"], desc, str(f["steps"]), vis_label])
 
-    io.table(["NAME", "DESCRIPTION", "STEPS", "TAGS", "VISIBILITY"], rows)
+    io.table(["NAME", "DESCRIPTION", "STEPS", "VISIBILITY"], rows)
     return EXIT_SUCCESS
 
 
@@ -3392,15 +3387,13 @@ def cmd_search(args: argparse.Namespace) -> int:
     # Table output
     rows = []
     for f in flows:
-        tags = ", ".join(f.get("tags", []))
         rows.append([
             f["slug"],
             f.get("author", "?"),
             str(f.get("steps", "?")),
             f"{f.get('downloads', 0):,}",
-            tags,
         ])
-    io.table(["NAME", "AUTHOR", "STEPS", "DOWNLOADS", "TAGS"], rows)
+    io.table(["NAME", "AUTHOR", "STEPS", "DOWNLOADS"], rows)
 
     total = result.get("total", len(flows))
     if total > len(flows):
@@ -3444,8 +3437,6 @@ def cmd_info(args: argparse.Namespace) -> int:
             lines.append(f"Version:     {meta.version}")
         if meta.description:
             lines.append(f"Description: {meta.description}")
-        if meta.tags:
-            lines.append(f"Tags:        {', '.join(meta.tags)}")
         lines.append(f"Steps:       {len(wf.steps)}")
         lines.append(f"File:        {local_flow}")
 
@@ -3555,12 +3546,11 @@ def cmd_info(args: argparse.Namespace) -> int:
     from stepwise.registry_client import fetch_flow, RegistryError
 
     try:
-        data = fetch_flow(flow_ref)
+        data = fetch_flow(flow_ref, count_download=False)
     except RegistryError as e:
         io.log("error", str(e))
         return EXIT_USAGE_ERROR
 
-    tags = ", ".join(data.get("tags", []))
     executors = data.get("executor_types", [])
     steps = data.get("steps", 0)
     loops = data.get("loops", 0)
@@ -3570,7 +3560,6 @@ def cmd_info(args: argparse.Namespace) -> int:
         f"Author:      {data.get('author', '?')}",
         f"Version:     {data.get('version', '?')}",
         f"Description: {data.get('description', '')}",
-        f"Tags:        {tags or '(none)'}",
         f"Downloads:   {data.get('downloads', 0):,}",
         f"Published:   {data.get('created_at', '?')}",
         f"URL:         {data.get('url', '?')}",

@@ -1,4 +1,4 @@
-import { type KeyboardEvent, useState, useRef } from "react";
+import { type KeyboardEvent, type ReactNode, useState, useRef, useCallback } from "react";
 import {
   CirclePause,
   RotateCw,
@@ -11,6 +11,7 @@ import {
   XCircle,
   Link2,
 } from "lucide-react";
+import { ContentModal } from "@/components/ui/content-modal";
 import { StepStatusBadge } from "@/components/StatusBadge";
 import { STEP_STATUS_COLORS, STEP_PENDING_COLORS } from "@/lib/status-colors";
 import { EntityContextMenu } from "@/components/menus/EntityContextMenu";
@@ -159,6 +160,241 @@ function ExitRulesSection({ rules }: { rules: ExitRule[] }) {
       </table>
     </>
   );
+}
+
+/* ── Port tooltip / popover helpers ────────────────────────────── */
+
+function formatPortValue(value: unknown, maxLen = 80): string {
+  if (value === null || value === undefined) return "null";
+  if (typeof value === "boolean" || typeof value === "number") return String(value);
+  if (typeof value === "string") {
+    if (value.length <= maxLen) return value;
+    return value.slice(0, maxLen - 3) + "...";
+  }
+  const json = JSON.stringify(value, null, 2);
+  if (json.length <= maxLen) return json;
+  return json.slice(0, maxLen - 3) + "...";
+}
+
+/** Interactive port dot with hover tooltip and click modal */
+function PortDot({
+  position,
+  colorClasses,
+  tooltipContent,
+  popoverContent,
+  modalTitle,
+}: {
+  position: "top" | "bottom";
+  colorClasses: string;
+  tooltipContent: ReactNode | null;
+  popoverContent: ReactNode | null;
+  modalTitle?: string;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleEnter = useCallback(() => {
+    if (modalOpen) return;
+    hoverTimer.current = setTimeout(() => setHovered(true), 250);
+  }, [modalOpen]);
+
+  const handleLeave = useCallback(() => {
+    if (hoverTimer.current) {
+      clearTimeout(hoverTimer.current);
+      hoverTimer.current = null;
+    }
+    setHovered(false);
+  }, []);
+
+  const handleClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (!popoverContent) return;
+    setModalOpen(true);
+    setHovered(false);
+  }, [popoverContent]);
+
+  const isTop = position === "top";
+  const hasInteraction = !!tooltipContent || !!popoverContent;
+
+  return (
+    <div
+      className={cn(
+        "absolute left-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full border-2",
+        isTop ? "-top-1.5" : "-bottom-1.5",
+        colorClasses,
+        hasInteraction && "cursor-pointer hover:scale-150 hover:brightness-125 transition-transform duration-100"
+      )}
+      onMouseEnter={hasInteraction ? handleEnter : undefined}
+      onMouseLeave={hasInteraction ? handleLeave : undefined}
+      onClick={hasInteraction ? handleClick : undefined}
+    >
+      {/* Hover tooltip */}
+      {hovered && tooltipContent && !modalOpen && (
+        <div
+          className={cn(
+            "absolute left-1/2 -translate-x-1/2 z-[60] pointer-events-none",
+            "bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-zinc-800 dark:text-zinc-200 rounded-md shadow-xl p-2 max-w-[300px]",
+            isTop ? "bottom-full mb-1.5" : "top-full mt-1.5"
+          )}
+        >
+          {tooltipContent}
+        </div>
+      )}
+
+      {/* Click modal */}
+      <ContentModal
+        open={modalOpen}
+        onOpenChange={setModalOpen}
+        title={modalTitle ?? (isTop ? "Inputs" : "Outputs")}
+      >
+        <div className="p-3">
+          {popoverContent}
+        </div>
+      </ContentModal>
+    </div>
+  );
+}
+
+/** Build tooltip + popover content for the input port (top dot) */
+function useInputPortContent(
+  stepDef: StepDefinition,
+  latestRun: StepRun | null,
+  latestRuns?: Record<string, StepRun>,
+) {
+  const inputs = stepDef.inputs;
+  if (inputs.length === 0) return { tooltipContent: null, popoverContent: null };
+
+  // Check if any realized input values exist
+  const realizedInputs: Record<string, unknown> = {};
+  const bindingLines: string[] = [];
+  for (const inp of inputs) {
+    const binding = inp.any_of_sources
+      ? `any_of(${inp.any_of_sources.map((s) => `${s.step}.${s.field}`).join(", ")})`
+      : `${inp.source_step}.${inp.source_field}`;
+    bindingLines.push(`${inp.local_name} ← ${binding}`);
+
+    // Check realized value from upstream run artifacts
+    const sourceRun = inp.source_step && inp.source_step !== "$job"
+      ? latestRuns?.[inp.source_step]
+      : null;
+    const val = sourceRun?.result?.artifact?.[inp.source_field];
+    if (val !== undefined) realizedInputs[inp.local_name] = val;
+
+    // Also check latestRun.inputs for job-level inputs
+    if (inp.source_step === "$job" && latestRun?.inputs) {
+      const jobVal = latestRun.inputs[inp.source_field];
+      if (jobVal !== undefined) realizedInputs[inp.local_name] = jobVal;
+    }
+  }
+
+  const hasRealized = Object.keys(realizedInputs).length > 0;
+
+  // Tooltip: compact summary
+  const tooltipContent = (
+    <div className="flex flex-col gap-1">
+      <div className="text-[10px] font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
+        {inputs.length} input{inputs.length !== 1 ? "s" : ""}
+        {hasRealized ? " — realized" : ""}
+      </div>
+      {bindingLines.slice(0, 3).map((line, i) => (
+        <div key={i} className="text-[11px] font-mono text-zinc-800 dark:text-zinc-200 truncate max-w-[280px]">{line}</div>
+      ))}
+      {bindingLines.length > 3 && (
+        <div className="text-[10px] text-zinc-500">+{bindingLines.length - 3} more</div>
+      )}
+    </div>
+  );
+
+  // Modal: full detail
+  const popoverContent = (
+    <div className="p-3 space-y-3">
+      {inputs.map((inp) => {
+        const binding = inp.any_of_sources
+          ? `any_of(${inp.any_of_sources.map((s) => `${s.step}.${s.field}`).join(", ")})`
+          : `${inp.source_step}.${inp.source_field}`;
+        const realized = realizedInputs[inp.local_name];
+        return (
+          <div key={inp.local_name}>
+            <div className="text-xs text-zinc-400 mb-1">
+              <span className="font-medium text-zinc-200">{inp.local_name}</span>
+              <span className="mx-1.5 text-zinc-600">←</span>
+              <span>{binding}</span>
+            </div>
+            {realized !== undefined && (
+              <pre className="text-xs font-mono text-zinc-300 bg-zinc-950 rounded p-2 overflow-auto max-h-[200px] whitespace-pre-wrap break-words">
+                {typeof realized === "string" ? realized : JSON.stringify(realized, null, 2)}
+              </pre>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  return { tooltipContent, popoverContent };
+}
+
+/** Build tooltip + popover content for the output port (bottom dot) */
+function useOutputPortContent(
+  stepDef: StepDefinition,
+  latestRun: StepRun | null,
+) {
+  const outputs = stepDef.outputs;
+  if (outputs.length === 0) return { tooltipContent: null, popoverContent: null };
+
+  const artifact = latestRun?.result?.artifact;
+  const realizedOutputs: Record<string, unknown> = {};
+  for (const name of outputs) {
+    const val = artifact?.[name];
+    if (val !== undefined) realizedOutputs[name] = val;
+  }
+  const hasRealized = Object.keys(realizedOutputs).length > 0;
+
+  // Tooltip: compact summary
+  const tooltipContent = (
+    <div className="flex flex-col gap-1">
+      <div className="text-[10px] font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
+        {outputs.length} output{outputs.length !== 1 ? "s" : ""}
+        {hasRealized ? " — realized" : ""}
+      </div>
+      {outputs.slice(0, 3).map((name) => (
+        <div key={name} className="text-[11px] font-mono text-zinc-800 dark:text-zinc-200 truncate max-w-[280px]">
+          {name}
+          {realizedOutputs[name] !== undefined
+            ? ` = ${formatPortValue(realizedOutputs[name], 40)}`
+            : ""}
+        </div>
+      ))}
+      {outputs.length > 3 && (
+        <div className="text-[10px] text-zinc-500">+{outputs.length - 3} more</div>
+      )}
+    </div>
+  );
+
+  // Modal: full detail
+  const popoverContent = (
+    <div className="p-3 space-y-3">
+      {outputs.map((name) => {
+        const realized = realizedOutputs[name];
+        return (
+          <div key={name}>
+            <div className="text-xs font-medium text-zinc-200 mb-1">{name}</div>
+            {realized !== undefined ? (
+              <pre className="text-xs font-mono text-zinc-300 bg-zinc-950 rounded p-2 overflow-auto max-h-[200px] whitespace-pre-wrap break-words">
+                {typeof realized === "string" ? realized : JSON.stringify(realized, null, 2)}
+              </pre>
+            ) : (
+              <span className="text-xs text-zinc-600">(pending)</span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  return { tooltipContent, popoverContent };
 }
 
 function StepTooltip({
@@ -356,6 +592,21 @@ export function StepNode({
     stepDef.outputs.length > 0 ||
     !!stepDef.when;
 
+  // Port dot color classes (shared by top and bottom handles)
+  const portColorClasses =
+    status === "pending" ? "bg-zinc-300 border-zinc-400 dark:bg-zinc-700 dark:border-zinc-600" :
+    status === "running" ? "bg-blue-500/60 border-blue-400/60" :
+    status === "completed" ? "bg-emerald-500/60 border-emerald-400/60" :
+    status === "failed" ? "bg-red-500/60 border-red-400/60" :
+    status === "suspended" ? "bg-amber-500/60 border-amber-400/60" :
+    status === "waiting_reset" ? "bg-amber-600/60 border-amber-500/60" :
+    status === "throttled" ? "bg-orange-500/60 border-orange-400/60" :
+    "bg-zinc-300 border-zinc-400 dark:bg-zinc-700 dark:border-zinc-600";
+
+  // Port hover/click content
+  const inputPort = useInputPortContent(stepDef, latestRun, latestRuns);
+  const outputPort = useOutputPortContent(stepDef, latestRun);
+
   const handleMouseEnter = () => {
     setIsHovered(true);
     if (!hasTooltipContent) return;
@@ -371,15 +622,18 @@ export function StepNode({
     setShowTooltip(false);
   };
 
+  const wrapWithContextMenu = !isNested && !!jobId;
+
   const nodeContent = (
     <div
       className={cn(
-        "absolute cursor-pointer border border-l-[3px] rounded-lg p-3 pl-2.5",
+        !wrapWithContextMenu && "absolute",
+        "cursor-pointer border border-l-[3px] rounded-lg p-3 pl-2.5",
         "transition-all duration-200",
         colors.bg,
         colors.border,
         getExecutorAccent(stepDef.executor.type),
-        isSelected && `ring-2 ${colors.ring} shadow-lg`,
+        isSelected && `ring-2 ring-blue-500 dark:ring-blue-400 shadow-lg shadow-blue-500/20 dark:shadow-blue-400/20 brightness-110`,
         isMultiSelected && "ring-2 ring-purple-400/70 shadow-lg shadow-purple-500/10",
         !isSelected && !isMultiSelected && "hover:shadow-md hover:brightness-110 focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:shadow-lg",
         status === "running" && "step-running-glow",
@@ -387,24 +641,20 @@ export function StepNode({
       )}
       role="button"
       tabIndex={0}
-      style={{ left: x, top: y, width, height }}
+      style={wrapWithContextMenu ? { width, height } : { left: x, top: y, width, height }}
       onClick={handleClick}
       onKeyDown={handleKeyDown}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
-      {/* Top handle — color-matched to status */}
-      <div className={cn(
-        "absolute -top-1.5 left-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full border-2",
-        status === "pending" ? "bg-zinc-300 border-zinc-400 dark:bg-zinc-700 dark:border-zinc-600" :
-        status === "running" ? "bg-blue-500/60 border-blue-400/60" :
-        status === "completed" ? "bg-emerald-500/60 border-emerald-400/60" :
-        status === "failed" ? "bg-red-500/60 border-red-400/60" :
-        status === "suspended" ? "bg-amber-500/60 border-amber-400/60" :
-        status === "waiting_reset" ? "bg-amber-600/60 border-amber-500/60" :
-        status === "throttled" ? "bg-orange-500/60 border-orange-400/60" :
-        "bg-zinc-300 border-zinc-400 dark:bg-zinc-700 dark:border-zinc-600"
-      )} />
+      {/* Top handle (input port) — color-matched to status */}
+      <PortDot
+        position="top"
+        colorClasses={portColorClasses}
+        tooltipContent={inputPort.tooltipContent}
+        popoverContent={inputPort.popoverContent}
+        modalTitle={`${stepDef.name} — Inputs`}
+      />
 
       {/* Content */}
       <div className="flex items-start justify-between gap-2">
@@ -494,18 +744,14 @@ export function StepNode({
         )}
       </div>
 
-      {/* Bottom handle — color-matched to status */}
-      <div className={cn(
-        "absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full border-2",
-        status === "pending" ? "bg-zinc-300 border-zinc-400 dark:bg-zinc-700 dark:border-zinc-600" :
-        status === "running" ? "bg-blue-500/60 border-blue-400/60" :
-        status === "completed" ? "bg-emerald-500/60 border-emerald-400/60" :
-        status === "failed" ? "bg-red-500/60 border-red-400/60" :
-        status === "suspended" ? "bg-amber-500/60 border-amber-400/60" :
-        status === "waiting_reset" ? "bg-amber-600/60 border-amber-500/60" :
-        status === "throttled" ? "bg-orange-500/60 border-orange-400/60" :
-        "bg-zinc-300 border-zinc-400 dark:bg-zinc-700 dark:border-zinc-600"
-      )} />
+      {/* Bottom handle (output port) — color-matched to status */}
+      <PortDot
+        position="bottom"
+        colorClasses={portColorClasses}
+        tooltipContent={outputPort.tooltipContent}
+        popoverContent={outputPort.popoverContent}
+        modalTitle={`${stepDef.name} — Outputs`}
+      />
 
       {/* Hover action buttons */}
       {showActions && (
@@ -553,14 +799,12 @@ export function StepNode({
     </div>
   );
 
-  if (isNested || !jobId) return nodeContent;
+  if (!wrapWithContextMenu) return nodeContent;
 
-  const stepEntity: StepEntity = { jobId, stepDef, latestRun };
+  const stepEntity: StepEntity = { jobId: jobId!, stepDef, latestRun };
   return (
-    <EntityContextMenu type="step" data={stepEntity}>
-      <div onContextMenu={(e) => e.stopPropagation()}>
-        {nodeContent}
-      </div>
+    <EntityContextMenu type="step" data={stepEntity} className="absolute" style={{ left: x, top: y, width, height }} stopPropagation>
+      {nodeContent}
     </EntityContextMenu>
   );
 }

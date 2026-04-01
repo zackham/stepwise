@@ -24,7 +24,7 @@ import { useLiveSource } from "@/hooks/useLiveSource";
 import { useAgentOutput } from "@/hooks/useStepwise";
 import { useScriptStream } from "@/hooks/useScriptStream";
 import { toast } from "sonner";
-import { cn, safeRenderValue } from "@/lib/utils";
+import { cn, safeRenderValue, formatCost } from "@/lib/utils";
 import { VirtualizedLogView } from "@/components/logs/VirtualizedLogView";
 import { LiveDuration } from "@/components/LiveDuration";
 
@@ -36,10 +36,9 @@ interface RunViewProps {
 
 /* ── Helpers ───────────────────────────────────────────────────────── */
 
-function formatCost(cost: number | null | undefined): string {
+function formatCostDisplay(cost: number | null | undefined): string {
   if (cost == null || cost === 0) return "-";
-  if (cost < 0.01) return `$${cost.toFixed(4)}`;
-  return `$${cost.toFixed(2)}`;
+  return formatCost(cost);
 }
 
 function formatTimestamp(ts: string | null): string {
@@ -258,6 +257,58 @@ function PromptBlock({ prompt }: { prompt: string }) {
   );
 }
 
+/* ── Result artifact with click-to-expand modal ─────────────────────── */
+
+function ResultBlock({ result, isLatest }: { result: import("@/lib/types").HandoffEnvelope; isLatest: boolean }) {
+  const [modalOpen, setModalOpen] = useState(false);
+
+  const artifactText = useMemo(() => {
+    if (!result.artifact) return "";
+    return JSON.stringify(result.artifact, null, 2);
+  }, [result.artifact]);
+
+  return (
+    <div className="space-y-1.5">
+      <SectionHeading>Result</SectionHeading>
+      <div
+        onClick={() => setModalOpen(true)}
+        className="cursor-pointer hover:bg-zinc-50/80 dark:hover:bg-zinc-900/70 transition-colors rounded"
+      >
+        <HandoffEnvelopeView envelope={result} isLatest={isLatest} />
+      </div>
+      <ContentModal
+        open={modalOpen}
+        onOpenChange={setModalOpen}
+        title="Result Artifact"
+        copyContent={artifactText}
+      >
+        <div className="p-2 space-y-3">
+          {result.artifact && typeof result.artifact === "object" ? (
+            Object.entries(result.artifact).map(([key, value]) => (
+              <div key={key} className="space-y-1">
+                <div className="text-xs font-medium text-zinc-400 uppercase tracking-wide">{key}</div>
+                {typeof value === "string" ? (
+                  <pre className="whitespace-pre-wrap text-sm text-zinc-300 font-mono bg-zinc-950 rounded p-2 max-h-[50vh] overflow-auto">
+                    {value}
+                  </pre>
+                ) : (
+                  <pre className="whitespace-pre-wrap text-sm text-zinc-300 font-mono bg-zinc-950 rounded p-2 max-h-[50vh] overflow-auto">
+                    {JSON.stringify(value, null, 2)}
+                  </pre>
+                )}
+              </div>
+            ))
+          ) : (
+            <pre className="whitespace-pre-wrap text-sm text-zinc-300 font-mono p-2">
+              {artifactText}
+            </pre>
+          )}
+        </div>
+      </ContentModal>
+    </div>
+  );
+}
+
 /* ── Run navigator header ─────────────────────────────────────────── */
 
 function RunNavigator({
@@ -291,7 +342,7 @@ function RunNavigator({
           <ChevronLeft className="w-3.5 h-3.5" />
         </button>
         <span className="text-zinc-500 font-mono text-[10px] min-w-[2rem] text-center">
-          {total === 1 ? `#${run.attempt}` : `${run.attempt}/${total}`}
+          {run.attempt} of {total}
         </span>
         <button
           onClick={() => canNext && onSelect(currentIndex - 1)}
@@ -592,10 +643,7 @@ export function RunView({ jobId, stepDef, hasLiveSource }: RunViewProps) {
 
       {/* Result artifact */}
       {run?.result && (
-        <div className="space-y-1.5">
-          <SectionHeading>Result</SectionHeading>
-          <HandoffEnvelopeView envelope={run.result} isLatest={runIndex === 0} />
-        </div>
+        <ResultBlock result={run.result} isLatest={runIndex === 0} />
       )}
 
       {/* Fulfillment notes */}
@@ -677,7 +725,7 @@ export function RunView({ jobId, stepDef, hasLiveSource }: RunViewProps) {
           <span className="font-mono text-emerald-400">
             {isSubscription
               ? "$0 (Max)"
-              : formatCost(run.result?.executor_meta?.cost_usd as number)}
+              : formatCostDisplay(run.result?.executor_meta?.cost_usd as number)}
           </span>
         </div>
       )}

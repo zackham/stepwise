@@ -1,7 +1,6 @@
 name: parallel-research
 description: Fan-out to parallel branches then converge (tests parallel rendering in report)
 author: zack
-tags: [test, parallel, fan-out]
 
 steps:
   web_search:

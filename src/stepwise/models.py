@@ -552,7 +552,6 @@ class FlowMetadata:
     description: str = ""
     author: str = ""
     version: str = ""
-    tags: list[str] = field(default_factory=list)
     forked_from: str = ""  # e.g. "@bob:code-review" — provenance for forked flows
     visibility: str = "interactive"  # "interactive" | "background" | "internal"
 
@@ -566,8 +565,6 @@ class FlowMetadata:
             d["author"] = self.author
         if self.version:
             d["version"] = self.version
-        if self.tags:
-            d["tags"] = self.tags
         if self.forked_from:
             d["forked_from"] = self.forked_from
         if self.visibility != "interactive":
@@ -581,7 +578,6 @@ class FlowMetadata:
             description=d.get("description", ""),
             author=d.get("author", ""),
             version=d.get("version", ""),
-            tags=d.get("tags", []),
             forked_from=d.get("forked_from", ""),
             visibility=d.get("visibility", "interactive"),
         )

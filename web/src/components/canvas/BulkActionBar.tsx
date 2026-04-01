@@ -20,8 +20,6 @@ export function BulkActionBar({ selectedIds, jobs, onClearSelection }: BulkActio
   const { archiveJobs, bulkDeleteJobs, cancelJob, resetJob } = useStepwiseMutations();
 
   const count = selectedIds.size;
-  if (count === 0) return null;
-
   const selectedJobs = jobs.filter((j) => selectedIds.has(j.id));
   const cancellableCount = selectedJobs.filter((j) => j.status === "running" || j.status === "pending" || j.status === "paused" || j.status === "staged").length;
   const retryableCount = selectedJobs.filter((j) => j.status === "failed" || j.status === "cancelled").length;
@@ -76,6 +74,8 @@ export function BulkActionBar({ selectedIds, jobs, onClearSelection }: BulkActio
       setIsProcessing(false);
     }
   }, [selectedJobs, resetJob, onClearSelection]);
+
+  if (count === 0) return null;
 
   return (
     <>

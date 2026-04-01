@@ -1,7 +1,6 @@
 name: research-proposal
 description: "Deep research → two council review rounds → external checkpoint → finalize"
 author: zack
-tags: [research, council, external-fulfillment, iterative]
 
 config:
   topic:

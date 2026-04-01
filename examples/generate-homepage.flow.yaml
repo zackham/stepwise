@@ -2,7 +2,6 @@ name: generate-homepage
 description: "Generate a complete project homepage from a repo path and a short spec doc. The workflow ingests the repo, plans the design, writes copy, generates HTML sections in parallel, assembles, reviews, and tests."
 author: zackham
 version: "0.1"
-tags: [meta, homepage, code-generation, showcase]
 
 steps:
 

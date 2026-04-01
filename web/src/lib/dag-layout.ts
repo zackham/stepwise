@@ -186,6 +186,15 @@ export function computeDagLayout(workflow: FlowDefinition): DagLayout {
         edgeLabels[key] = [];
       }
     }
+    if (step.for_each && step.for_each.source_step && step.for_each.source_step !== "$job") {
+      const key = `${step.for_each.source_step}->${name}`;
+      if (!edgeSet.has(key)) {
+        g.setEdge(step.for_each.source_step, name);
+        edgeSet.add(key);
+        edgeLabels[key] = [];
+      }
+      edgeLabels[key].push(step.for_each.source_field);
+    }
   }
 
   dagre.layout(g);
@@ -509,6 +518,15 @@ export function computeHierarchicalLayout(
         edgeLabels[key] = [];
       }
     }
+    if (step.for_each && step.for_each.source_step && step.for_each.source_step !== "$job") {
+      const key = `${step.for_each.source_step}->${name}`;
+      if (!edgeSet.has(key)) {
+        g.setEdge(step.for_each.source_step, name);
+        edgeSet.add(key);
+        edgeLabels[key] = [];
+      }
+      edgeLabels[key].push(step.for_each.source_field);
+    }
   }
 
   // Compute entry/terminal step info (used for flow ports at depth 0 and container ports at depth > 0)
@@ -535,6 +553,9 @@ export function computeHierarchicalLayout(
       }
     }
     for (const seq of step.after) referencedAsSource.add(seq);
+    if (step.for_each?.source_step && step.for_each.source_step !== "$job") {
+      referencedAsSource.add(step.for_each.source_step);
+    }
   }
   // Identify boomerang steps: steps with exit rules where none advance.
   // These are loop machinery (e.g., fix-tests, push-fix) — not terminals.

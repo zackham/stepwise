@@ -1,4 +1,4 @@
-import { Download, User, Tag, Hash, Loader2, CheckCircle } from "lucide-react";
+import { Download, User, Hash, Loader2, CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
@@ -46,27 +46,6 @@ export function FlowInfoPanel({
               <span>{flow.steps} steps</span>
             </div>
           </div>
-
-          {flow.tags.length > 0 && (
-            <>
-              <Separator />
-              <div className="space-y-1.5">
-                <span className="text-xs text-zinc-500 flex items-center gap-1">
-                  <Tag className="w-3 h-3" /> Tags
-                </span>
-                <div className="flex flex-wrap gap-1">
-                  {flow.tags.map((tag) => (
-                    <span
-                      key={tag}
-                      className="text-[10px] bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 px-1.5 py-0.5 rounded"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </>
-          )}
 
           <Separator />
 

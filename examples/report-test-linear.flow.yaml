@@ -1,7 +1,6 @@
 name: data-pipeline
 description: Three-step linear pipeline for report testing
 author: zack
-tags: [test, pipeline, script]
 
 steps:
   fetch:

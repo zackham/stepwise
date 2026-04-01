@@ -25,6 +25,7 @@ interface StepDefinitionPanelProps {
   onDelete?: () => void;
   onViewFile?: (path: string) => void;
   onViewSource?: (field: string) => void;
+  onSelectStep?: (stepName: string) => void;
 }
 
 const EXEC_TYPE_COLORS: Record<string, string> = {
@@ -195,6 +196,7 @@ export function StepDefinitionPanel({
   onDelete,
   onViewFile,
   onViewSource,
+  onSelectStep,
 }: StepDefinitionPanelProps) {
   const { data: configData } = useConfig();
   const execType = stepDef.executor.type;
@@ -522,11 +524,22 @@ export function StepDefinitionPanel({
                           <span className="text-zinc-600">&larr;</span>
                           {b.any_of_sources ? (
                             <span className="text-zinc-500 dark:text-zinc-400">
-                              any_of({b.any_of_sources.map(s => `${s.step}.${s.field}`).join(", ")})
+                              any_of({b.any_of_sources.map((s, i) => (
+                                <span key={i}>
+                                  {i > 0 && ", "}
+                                  {onSelectStep && s.step && s.step !== "$job" ? (
+                                    <button onClick={() => onSelectStep(s.step)} className="text-blue-500 dark:text-blue-400 hover:underline">{s.step}</button>
+                                  ) : s.step}.{s.field}
+                                </span>
+                              ))})
                             </span>
                           ) : (
                             <span className="text-zinc-500 dark:text-zinc-400">
-                              {b.source_step}.{b.source_field}
+                              {onSelectStep && b.source_step && b.source_step !== "$job" ? (
+                                <button onClick={() => onSelectStep(b.source_step)} className="text-blue-500 dark:text-blue-400 hover:underline">{b.source_step}</button>
+                              ) : (
+                                <span>{b.source_step}</span>
+                              )}.{b.source_field}
                             </span>
                           )}
                         </div>
@@ -580,12 +593,22 @@ export function StepDefinitionPanel({
                     <span className="text-xs text-zinc-500">After</span>
                     <div className="flex flex-wrap gap-1.5">
                       {stepDef.after.map((s) => (
-                        <span
-                          key={s}
-                          className="text-xs font-mono bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 px-2 py-1 rounded"
-                        >
-                          after {s}
-                        </span>
+                        onSelectStep ? (
+                          <button
+                            key={s}
+                            onClick={() => onSelectStep(s)}
+                            className="text-xs font-mono bg-zinc-200 dark:bg-zinc-800 text-blue-500 dark:text-blue-400 hover:underline px-2 py-1 rounded"
+                          >
+                            after {s}
+                          </button>
+                        ) : (
+                          <span
+                            key={s}
+                            className="text-xs font-mono bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 px-2 py-1 rounded"
+                          >
+                            after {s}
+                          </span>
+                        )
                       ))}
                     </div>
                   </div>
@@ -596,8 +619,11 @@ export function StepDefinitionPanel({
                     <div className="grid grid-cols-2 gap-1 text-xs font-mono">
                       <span className="text-zinc-500">Source</span>
                       <span className="text-zinc-500 dark:text-zinc-400 break-all">
-                        {stepDef.for_each.source_step}.
-                        {stepDef.for_each.source_field}
+                        {onSelectStep && stepDef.for_each.source_step !== "$job" ? (
+                          <button onClick={() => onSelectStep(stepDef.for_each!.source_step)} className="text-blue-500 dark:text-blue-400 hover:underline">{stepDef.for_each.source_step}</button>
+                        ) : (
+                          <span>{stepDef.for_each.source_step}</span>
+                        )}.{stepDef.for_each.source_field}
                       </span>
                       <span className="text-zinc-500">Item Var</span>
                       <span className="text-zinc-500 dark:text-zinc-400 break-all">

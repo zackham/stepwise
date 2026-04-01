@@ -7,6 +7,7 @@ import type { StreamSegment } from "@/hooks/useAgentStream";
 import { useLogSearch } from "@/hooks/useLogSearch";
 import { LogSearchBar } from "@/components/logs/LogSearchBar";
 import { SegmentRow } from "./StreamSegments";
+import { formatCost } from "@/lib/utils";
 
 const VIRTUAL_THRESHOLD = 200;
 
@@ -267,7 +268,7 @@ export function AgentStreamView({ runId, isLive, startedAt, costUsd, billingMode
           <span className="text-xs font-mono text-zinc-600 mt-1 block">
             {billingMode === "subscription"
               ? "$0 (Max)"
-              : `$${costUsd! < 0.01 ? costUsd!.toFixed(4) : costUsd!.toFixed(2)}`}
+              : formatCost(costUsd!)}
           </span>
         )}
       </div>

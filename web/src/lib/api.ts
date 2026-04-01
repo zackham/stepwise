@@ -289,6 +289,26 @@ export function fetchExecutors(): Promise<{ executors: string[] }> {
   return request<{ executors: string[] }>("/executors");
 }
 
+export async function fetchChangelog(): Promise<string> {
+  const res = await fetch(`${BASE_URL}/changelog`);
+  if (!res.ok) {
+    throw new Error(`${res.status}: ${await res.text()}`);
+  }
+  return res.text();
+}
+
+export interface ServerInfo {
+  project_path: string;
+  pid: number;
+  port: number;
+  url: string;
+  started_at: string;
+}
+
+export function fetchServers(): Promise<{ servers: ServerInfo[]; current: string | null }> {
+  return request("/servers");
+}
+
 // ── Groups ────────────────────────────────────────────────────────────
 
 export function fetchGroups(): Promise<GroupInfo[]> {

@@ -6,6 +6,7 @@ import { StepDetailPanel } from "@/components/jobs/StepDetailPanel";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { MobileFullScreen } from "@/components/layout/MobileFullScreen";
 import { useIsMobile } from "@/hooks/useMediaQuery";
+import { ResizablePanel } from "@/components/ui/ResizablePanel";
 import type { StepDefinition } from "@/lib/types";
 
 export function JobTimelinePage() {
@@ -63,9 +64,9 @@ export function JobTimelinePage() {
           {panel}
         </MobileFullScreen>
       ) : panel ? (
-        <div className="w-80 border-l border-border shrink-0 flex flex-col overflow-hidden" style={{ maxHeight: "calc(100vh - 3rem)" }}>
+        <ResizablePanel storageKey="stepwise-job-right-panel-width">
           {panel}
-        </div>
+        </ResizablePanel>
       ) : null}
     </div>
   );

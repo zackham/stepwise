@@ -60,6 +60,7 @@ export type JobDetailSearch = JobsRouteSearch & {
   tab?: "run" | "step" | "session";
   panel?: "open";
   view?: "dag" | "events" | "timeline" | "tree";
+  sidebar?: "0";
 };
 
 function validateJobDetailSearch(search: Record<string, unknown>): JobDetailSearch {
@@ -74,6 +75,7 @@ function validateJobDetailSearch(search: Record<string, unknown>): JobDetailSear
     view: typeof search.view === "string" && JOB_VIEW_VALUES.has(search.view)
       ? search.view as JobDetailSearch["view"]
       : undefined,
+    sidebar: search.sidebar === "0" ? "0" : undefined,
   };
 }
 
@@ -144,10 +146,19 @@ const flowsRoute = createRoute({
 });
 
 // Flow editor
+type EditorSearch = { step?: string };
+
+function validateEditorSearch(search: Record<string, unknown>): EditorSearch {
+  return {
+    step: typeof search.step === "string" && search.step ? search.step : undefined,
+  };
+}
+
 const flowEditorRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/flows/$flowName",
   component: EditorPage,
+  validateSearch: validateEditorSearch,
 });
 
 // Legacy editor redirects

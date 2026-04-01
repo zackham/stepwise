@@ -26,7 +26,6 @@ SAMPLE_REGISTRY_FLOW = {
     "author": "alice",
     "version": 1,
     "description": "A simple task flow",
-    "tags": ["utility"],
     "yaml": SAMPLE_FLOW_YAML,
     "steps": 1,
     "loops": 0,

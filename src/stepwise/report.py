@@ -790,9 +790,6 @@ def _html_header(
     if job.created_at:
         ts = job.created_at.strftime("%Y-%m-%d %H:%M:%S UTC")
         parts.append(f'<div class="meta-item"><span class="meta-value">{ts}</span></div>')
-    if metadata.tags:
-        tags_html = " ".join(f'<span class="tag">{_e(t)}</span>' for t in metadata.tags)
-        parts.append(f'<div class="meta-item">{tags_html}</div>')
     parts.append("</div>")  # meta-row
     parts.append("</div>")  # report-header
 

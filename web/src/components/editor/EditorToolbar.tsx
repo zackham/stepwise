@@ -1,4 +1,4 @@
-import { Play, MessageSquare } from "lucide-react";
+import { Play, MessageSquare, PanelLeft, PanelRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
@@ -20,6 +20,10 @@ interface EditorToolbarProps {
   isChatStreaming?: boolean;
   agentMode?: AgentMode;
   chatBackgrounded?: boolean;
+  leftPanelVisible?: boolean;
+  onToggleLeftPanel?: () => void;
+  rightPanelVisible?: boolean;
+  onToggleRightPanel?: () => void;
 }
 
 export function EditorToolbar({
@@ -32,6 +36,10 @@ export function EditorToolbar({
   isChatStreaming,
   agentMode = "claude",
   chatBackgrounded,
+  leftPanelVisible,
+  onToggleLeftPanel,
+  rightPanelVisible,
+  onToggleRightPanel,
 }: EditorToolbarProps) {
   return (
     <div className="flex items-center gap-3 h-10 px-3 border-b border-border shrink-0">
@@ -57,6 +65,35 @@ export function EditorToolbar({
       )}
 
       <div className="flex-1" />
+
+      {onToggleLeftPanel && (
+        <button
+          onClick={onToggleLeftPanel}
+          className={cn(
+            "p-1 rounded transition-colors",
+            leftPanelVisible
+              ? "text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
+              : "text-zinc-400 dark:text-zinc-600 hover:text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
+          )}
+          title={leftPanelVisible ? "Hide left panel" : "Show left panel"}
+        >
+          <PanelLeft className="w-4 h-4" />
+        </button>
+      )}
+      {onToggleRightPanel && (
+        <button
+          onClick={onToggleRightPanel}
+          className={cn(
+            "p-1 rounded transition-colors",
+            rightPanelVisible
+              ? "text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
+              : "text-zinc-400 dark:text-zinc-600 hover:text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
+          )}
+          title={rightPanelVisible ? "Hide right panel" : "Show right panel"}
+        >
+          <PanelRight className="w-4 h-4" />
+        </button>
+      )}
 
       {parseErrors.length > 0 && (
         <span

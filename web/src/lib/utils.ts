@@ -48,3 +48,16 @@ export function formatDuration(start: string | null, end: string | null): string
   if (ms < 3600000) return `${(ms / 60000).toFixed(1)}m`;
   return `${(ms / 3600000).toFixed(1)}h`;
 }
+
+/** Format cost with min 3 significant figures, always show cents. */
+export function formatCost(cost: number): string {
+  if (cost === 0) return "$0.00";
+  if (cost >= 100) return `$${cost.toFixed(2)}`;
+  if (cost >= 10) return `$${cost.toFixed(2)}`;
+  if (cost >= 1) return `$${cost.toFixed(2)}`;
+  if (cost >= 0.1) return `$${cost.toFixed(3)}`;
+  if (cost >= 0.01) return `$${cost.toFixed(3)}`;
+  // Below 1 cent — show enough decimals for 3 sig figs
+  if (cost >= 0.001) return `$${cost.toFixed(4)}`;
+  return `$${cost.toFixed(5)}`;
+}

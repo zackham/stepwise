@@ -33,7 +33,7 @@ import { useLiveSource } from "@/hooks/useLiveSource";
 import { useAgentOutput } from "@/hooks/useStepwise";
 import { useScriptStream } from "@/hooks/useScriptStream";
 import { toast } from "sonner";
-import { cn, safeRenderValue } from "@/lib/utils";
+import { cn, safeRenderValue, formatCost } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { VirtualizedLogView } from "@/components/logs/VirtualizedLogView";
 import { LiveDuration } from "@/components/LiveDuration";
@@ -57,10 +57,9 @@ export function StepDetailSkeleton() {
   );
 }
 
-function formatCost(cost: number | null | undefined): string {
+function formatCostDisplay(cost: number | null | undefined): string {
   if (cost == null || cost === 0) return "-";
-  if (cost < 0.01) return `$${cost.toFixed(4)}`;
-  return `$${cost.toFixed(2)}`;
+  return formatCost(cost);
 }
 
 function formatTimestamp(ts: string | null): string {
@@ -843,7 +842,7 @@ export function StepDetailPanel({
                               <span className="font-mono text-emerald-400">
                                 {isSubscription
                                   ? "$0 (Max)"
-                                  : formatCost(run.result?.executor_meta?.cost_usd as number)}
+                                  : formatCostDisplay(run.result?.executor_meta?.cost_usd as number)}
                               </span>
                             </div>
                           )}
