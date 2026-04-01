@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useEffect, useRef, useMemo, useCallback } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAgentStream, buildSegmentsFromEvents } from "@/hooks/useAgentStream";
 import { useAgentOutput } from "@/hooks/useStepwise";
@@ -6,8 +6,9 @@ import { usePretextMeasure } from "@/hooks/usePretextMeasure";
 import type { StreamSegment } from "@/hooks/useAgentStream";
 import { useLogSearch } from "@/hooks/useLogSearch";
 import { LogSearchBar } from "@/components/logs/LogSearchBar";
-import { cn } from "@/lib/utils";
-import { SegmentRow, VIRTUAL_THRESHOLD } from "./StreamSegments";
+import { SegmentRow } from "./StreamSegments";
+
+const VIRTUAL_THRESHOLD = 200;
 
 interface AgentStreamViewProps {
   runId: string;
