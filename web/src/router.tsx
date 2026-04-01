@@ -5,12 +5,11 @@ import {
   redirect,
 } from "@tanstack/react-router";
 import { AppLayout } from "@/components/layout/AppLayout";
-import { JobDashboard } from "@/pages/JobDashboard";
+import { JobsPage } from "@/pages/JobsPage";
 import { JobDetailPage } from "@/pages/JobDetailPage";
 import { FlowsPage } from "@/pages/FlowsPage";
 import { EditorPage } from "@/pages/EditorPage";
 import { SettingsPage } from "@/pages/SettingsPage";
-import { CanvasPage } from "@/pages/CanvasPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
 
 const JOB_ROUTE_STATUS_VALUES = new Set([
@@ -24,11 +23,13 @@ const JOB_ROUTE_STATUS_VALUES = new Set([
 ]);
 
 const JOB_ROUTE_RANGE_VALUES = new Set(["today", "7d", "30d", "all"]);
+const JOB_VIEW_MODE_VALUES = new Set(["list", "grid"]);
 
 type JobsRouteSearch = {
   q?: string;
   status?: "running" | "awaiting_input" | "paused" | "completed" | "failed" | "pending" | "cancelled";
   range?: "today" | "7d" | "30d";
+  view_mode?: "list" | "grid";
 };
 
 function validateJobsSearch(search: Record<string, unknown>): JobsRouteSearch {
@@ -44,15 +45,19 @@ function validateJobsSearch(search: Record<string, unknown>): JobsRouteSearch {
       && search.range !== "all"
         ? search.range as JobsRouteSearch["range"]
         : undefined,
+    view_mode:
+      typeof search.view_mode === "string" && JOB_VIEW_MODE_VALUES.has(search.view_mode)
+        ? (search.view_mode as "list" | "grid")
+        : undefined,
   };
 }
 
-const JOB_DETAIL_TAB_VALUES = new Set(["run", "step"]);
+const JOB_DETAIL_TAB_VALUES = new Set(["run", "step", "session"]);
 const JOB_VIEW_VALUES = new Set(["dag", "events", "timeline", "tree"]);
 
 export type JobDetailSearch = JobsRouteSearch & {
   step?: string;
-  tab?: "run" | "step";
+  tab?: "run" | "step" | "session";
   panel?: "open";
   view?: "dag" | "events" | "timeline" | "tree";
 };
@@ -91,7 +96,7 @@ const indexRoute = createRoute({
 const jobsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/jobs",
-  component: JobDashboard,
+  component: JobsPage,
   validateSearch: validateJobsSearch,
 });
 
@@ -162,11 +167,13 @@ const editorFlowRedirectRoute = createRoute({
   },
 });
 
-// Canvas (orchestrator overview)
+// Canvas → redirect to Jobs grid view
 const canvasRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/canvas",
-  component: CanvasPage,
+  beforeLoad: () => {
+    throw redirect({ to: "/jobs", search: { view_mode: "grid" as const } });
+  },
 });
 
 // Settings

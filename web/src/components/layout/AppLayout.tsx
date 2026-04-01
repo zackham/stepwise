@@ -15,7 +15,6 @@ import {
   AlertTriangle,
   Sun,
   Moon,
-  Network,
   Bell,
   BellOff,
 } from "lucide-react";
@@ -190,20 +189,17 @@ export function AppLayout() {
 
   const currentPath = location.pathname;
   const isJobsActive = currentPath === "/jobs" || currentPath.startsWith("/jobs/");
-  const isCanvasActive = currentPath === "/canvas";
   const isFlowsActive = currentPath.startsWith("/flows");
   const isSettingsActive = currentPath.startsWith("/settings");
 
   // Derive a route key for page transition animation - changes on top-level route switches
   const routeKey = isJobsActive
     ? "jobs"
-    : isCanvasActive
-      ? "canvas"
-      : isFlowsActive
-        ? "flows"
-        : isSettingsActive
-          ? "settings"
-          : currentPath;
+    : isFlowsActive
+      ? "flows"
+      : isSettingsActive
+        ? "settings"
+        : currentPath;
 
   // Dynamic tab title
   const { data: allJobs } = useJobs(undefined, true);
@@ -263,8 +259,6 @@ export function AppLayout() {
       title = jobName ? `${jobName} — Stepwise` : "Stepwise";
     } else if (isJobsActive) {
       title = "Jobs — Stepwise";
-    } else if (isCanvasActive) {
-      title = "Canvas — Stepwise";
     } else if (isFlowsActive) {
       title = "Flows — Stepwise";
     } else if (isSettingsActive) {
@@ -279,7 +273,6 @@ export function AppLayout() {
   }, [
     currentPath,
     isJobsActive,
-    isCanvasActive,
     isFlowsActive,
     isSettingsActive,
     detailJobId,
@@ -330,10 +323,6 @@ export function AppLayout() {
                   {pendingCount}
                 </span>
               )}
-            </Link>
-            <Link to="/canvas" className={navItemClass(isCanvasActive)}>
-              <Network className="h-4 w-4 md:mr-1.5 md:h-3.5 md:w-3.5" />
-              <span className="hidden md:inline">Canvas</span>
             </Link>
             <Link to="/flows" className={navItemClass(isFlowsActive)}>
               <FileCode className="h-4 w-4 md:mr-1.5 md:h-3.5 md:w-3.5" />
