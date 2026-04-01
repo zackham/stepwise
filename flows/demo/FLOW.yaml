@@ -1,7 +1,6 @@
 name: demo
 description: "From issue to deploy — a real dev workflow with AI review, config, and escalation"
 author: stepwise
-tags: [demo, external-fulfillment, for-each, branching, loops, config, mock-llm, optional-inputs, escalate]
 
 config:
   team_name:

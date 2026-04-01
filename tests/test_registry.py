@@ -125,6 +125,50 @@ class TestFetchFlow:
         with pytest.raises(RegistryError, match="not found"):
             fetch_flow("nonexistent")
 
+    def test_fetch_flow_sends_download_header(self, monkeypatch):
+        """fetch_flow(count_download=True) sends X-Stepwise-Download header."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.json.return_value = {
+            "name": "test-flow", "slug": "test-flow", "author": "alice",
+            "yaml": "name: test-flow\nsteps:\n  a:\n    run: echo\n    outputs: [r]\n",
+        }
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.return_value = mock_response
+
+        monkeypatch.setattr("stepwise.registry_client._client", lambda: mock_client)
+        monkeypatch.setattr("stepwise.registry_client.cache_flow", lambda *a: None)
+
+        fetch_flow("test-flow", count_download=True)
+        _, kwargs = mock_client.get.call_args
+        assert kwargs["headers"]["X-Stepwise-Download"] == "true"
+
+    def test_fetch_flow_no_download_header_when_disabled(self, monkeypatch):
+        """fetch_flow(count_download=False) omits X-Stepwise-Download header."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.json.return_value = {
+            "name": "test-flow", "slug": "test-flow", "author": "alice",
+            "yaml": "name: test-flow\nsteps:\n  a:\n    run: echo\n    outputs: [r]\n",
+        }
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.return_value = mock_response
+
+        monkeypatch.setattr("stepwise.registry_client._client", lambda: mock_client)
+        monkeypatch.setattr("stepwise.registry_client.cache_flow", lambda *a: None)
+
+        fetch_flow("test-flow", count_download=False)
+        _, kwargs = mock_client.get.call_args
+        assert "X-Stepwise-Download" not in kwargs["headers"]
+
 
 class TestFetchFlowYaml:
     def test_uses_cache(self, tmp_path, monkeypatch):
@@ -155,6 +199,25 @@ class TestFetchFlowYaml:
         assert result == yaml_content
         # Should be cached now
         assert get_cached("fetched-flow") == yaml_content
+
+    def test_sends_download_header_on_cache_miss(self, tmp_path, monkeypatch):
+        """fetch_flow_yaml sends X-Stepwise-Download header when fetching from registry."""
+        monkeypatch.setattr("stepwise.registry_client.CACHE_DIR", tmp_path)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = "name: x\nsteps:\n  a:\n    run: echo\n    outputs: [r]\n"
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.return_value = mock_response
+
+        monkeypatch.setattr("stepwise.registry_client._client", lambda: mock_client)
+
+        fetch_flow_yaml("some-flow")
+        _, kwargs = mock_client.get.call_args
+        assert kwargs["headers"]["X-Stepwise-Download"] == "true"
 
 
 # ── Search ──────────────────────────────────────────────────────────

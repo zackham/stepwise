@@ -5,7 +5,7 @@ import { Toaster } from "sonner";
 import { useStepwiseWebSocket, WsStatusProvider } from "@/hooks/useStepwiseWebSocket";
 import { useNotifySuspended } from "@/hooks/useNotifySuspended";
 import { useHotkeys } from "@/hooks/useHotkeys";
-import { useEngineStatus, useJobs, useJob } from "@/hooks/useStepwise";
+import { useEngineStatus, useJobs, useJob, useServers } from "@/hooks/useStepwise";
 import {
   LayoutGrid,
   FileCode,
@@ -17,6 +17,7 @@ import {
   Moon,
   Bell,
   BellOff,
+  ChevronDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CommandPalette } from "@/components/CommandPalette";
@@ -27,6 +28,23 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ChangelogModal } from "@/components/layout/ChangelogModal";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
+
+function timeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
 
 function getInitialTheme(): "dark" | "light" {
   const stored = localStorage.getItem("stepwise-theme");
@@ -179,9 +197,11 @@ export function AppLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const { data: status } = useEngineStatus();
+  const { data: serversData } = useServers();
   const [theme, setTheme] = useState<"dark" | "light">(getInitialTheme);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [changelogOpen, setChangelogOpen] = useState(false);
 
   useEffect(() => {
     applyTheme(theme);
@@ -305,13 +325,69 @@ export function AppLayout() {
             <span className="text-sm font-semibold tracking-tight">Stepwise</span>
           </Link>
           {status?.cwd && (
-            <div
-              className="hidden max-w-48 items-center gap-1.5 truncate font-mono text-xs text-zinc-600 md:flex"
-              title={status.cwd}
-            >
-              <FolderOpen className="h-3 w-3 shrink-0" />
-              <span className="truncate">{status.cwd.split("/").pop() || status.cwd}</span>
-            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                className="hidden max-w-56 cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 font-mono text-xs text-zinc-600 transition-colors hover:bg-zinc-200/50 hover:text-zinc-800 md:flex dark:hover:bg-zinc-800/50 dark:hover:text-zinc-300"
+                title={status.cwd}
+              >
+                <FolderOpen className="h-3 w-3 shrink-0" />
+                <span className="truncate">{status.cwd.split("/").pop() || status.cwd}</span>
+                <ChevronDown className="h-3 w-3 shrink-0 text-zinc-400" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" sideOffset={6} className="w-72">
+                <div className="px-2 py-1.5 text-xs font-medium text-zinc-500">Running servers</div>
+                {serversData?.servers?.length ? (
+                  serversData.servers.map((server) => {
+                    const folderName = server.project_path.split("/").pop() || server.project_path;
+                    const isCurrent = server.url === serversData.current;
+                    return (
+                      <DropdownMenuItem
+                        key={server.pid}
+                        className={cn(
+                          "flex cursor-pointer items-center gap-3 px-3 py-2.5 rounded-md",
+                          isCurrent && "bg-zinc-800/50"
+                        )}
+                        onClick={() => {
+                          if (!isCurrent) {
+                            window.location.href = server.url;
+                          }
+                        }}
+                      >
+                        <span
+                          className={cn(
+                            "h-2 w-2 shrink-0 rounded-full",
+                            isCurrent ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.4)]" : "bg-zinc-600"
+                          )}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-baseline gap-2">
+                            <span className={cn("text-sm font-medium truncate", isCurrent ? "text-foreground" : "text-zinc-300")}>{folderName}</span>
+                            <span className="ml-auto shrink-0 text-[10px] text-zinc-600 tabular-nums">:{server.port}</span>
+                          </div>
+                          <div className="flex items-center gap-2 mt-0.5 text-[10px] text-zinc-600">
+                            <span
+                              className="truncate hover:text-zinc-400 cursor-copy"
+                              title="Click to copy path"
+                              onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(server.project_path); }}
+                            >{server.project_path}</span>
+                            <span className="shrink-0">·</span>
+                            <span
+                              className="shrink-0 hover:text-zinc-400 cursor-copy"
+                              title="Click to copy PID"
+                              onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(String(server.pid)); }}
+                            >pid {server.pid}</span>
+                            <span className="shrink-0">·</span>
+                            <span className="shrink-0">up {timeAgo(server.started_at)}</span>
+                          </div>
+                        </div>
+                      </DropdownMenuItem>
+                    );
+                  })
+                ) : (
+                  <div className="px-2 py-1.5 text-xs text-zinc-500">No other servers running</div>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
 
           <nav className="ml-auto flex h-full items-stretch gap-1 md:ml-4">
@@ -380,7 +456,13 @@ export function AppLayout() {
           {status && (
             <div className="flex items-center gap-3 text-xs text-zinc-500">
               {status.version && (
-                <span className="hidden font-mono text-zinc-600 md:inline">v{status.version}</span>
+                <button
+                  onClick={() => setChangelogOpen(true)}
+                  className="hidden rounded px-1.5 py-0.5 font-mono text-zinc-600 transition-colors hover:bg-zinc-200/60 hover:text-zinc-800 md:inline dark:hover:bg-zinc-800/60 dark:hover:text-zinc-300"
+                  title="View changelog"
+                >
+                  v{status.version}
+                </button>
               )}
               <div className="hidden items-center gap-1.5 md:flex">
                 <Zap className="h-3 w-3" />
@@ -411,6 +493,7 @@ export function AppLayout() {
         <Toaster theme={theme} richColors position="bottom-right" />
         <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
         <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
+        <ChangelogModal open={changelogOpen} onOpenChange={setChangelogOpen} currentVersion={status?.version} />
       </div>
     </WsStatusProvider>
   );

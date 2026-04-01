@@ -149,6 +149,14 @@ export function useSimilarErrors(
   });
 }
 
+export function useServers() {
+  return useQuery({
+    queryKey: ["servers"],
+    queryFn: api.fetchServers,
+    staleTime: 30_000,
+  });
+}
+
 // ── Mutation hooks ───────────────────────────────────────────────────
 
 export function useGroups() {

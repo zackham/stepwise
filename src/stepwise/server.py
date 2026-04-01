@@ -2148,6 +2148,18 @@ def health_check():
     }
 
 
+@app.get("/api/servers")
+def list_servers():
+    """List all running Stepwise servers across all projects."""
+    from stepwise.server_detect import list_active_servers, read_pidfile
+    servers = list_active_servers()
+    pid_data = read_pidfile(_project_dir / ".stepwise") if _project_dir else {}
+    return {
+        "servers": servers,
+        "current": pid_data.get("url"),
+    }
+
+
 def _parse_server_duration(s: str) -> float | None:
     """Parse duration string like '24h', '7d', '30m' to seconds."""
     if not s:
@@ -2181,6 +2193,37 @@ def engine_status():
         "cwd": os.getcwd(),
         "version": ver,
     }
+
+
+@app.get("/api/changelog")
+def get_changelog():
+    """Return the CHANGELOG.md content as plain text."""
+    from fastapi.responses import PlainTextResponse
+
+    # Try source tree first (editable installs), then installed package
+    source_changelog = Path(__file__).parent.parent.parent / "CHANGELOG.md"
+    if source_changelog.is_file():
+        return PlainTextResponse(source_changelog.read_text(encoding="utf-8"))
+
+    # Fallback: try to find via dist-info
+    try:
+        from importlib.metadata import distribution
+        import json as _json
+        dist = distribution("stepwise-run")
+        for f in dist.files or []:
+            if f.name == "direct_url.json":
+                url_path = Path(dist.locate_file(f))
+                data = _json.loads(url_path.read_text())
+                url = data.get("url", "")
+                if url.startswith("file://"):
+                    candidate = Path(url[7:]) / "CHANGELOG.md"
+                    if candidate.is_file():
+                        return PlainTextResponse(candidate.read_text(encoding="utf-8"))
+                break
+    except Exception:
+        pass
+
+    raise HTTPException(status_code=404, detail="CHANGELOG.md not found")
 
 
 @app.get("/api/executors")
@@ -3434,7 +3477,6 @@ class FlowMetadataPatch(BaseModel):
     description: str | None = None
     author: str | None = None
     version: str | None = None
-    tags: list[str] | None = None
 
 
 @app.patch("/api/flows/local/{path:path}")
@@ -3460,7 +3502,7 @@ def patch_flow_metadata(path: str, req: FlowMetadataPatch):
     data = ryaml.load(raw)
 
     # Apply only the fields that were provided
-    for field_name in ("description", "author", "version", "tags"):
+    for field_name in ("description", "author", "version"):
         value = getattr(req, field_name)
         if value is not None:
             data[field_name] = value
@@ -3739,7 +3781,6 @@ class InstallRequest(BaseModel):
 @app.get("/api/registry/search")
 def registry_search(
     q: str = "",
-    tag: str | None = None,
     sort: str = "downloads",
     limit: int = 20,
     offset: int = 0,
@@ -3748,7 +3789,7 @@ def registry_search(
     from stepwise.registry_client import search_flows, RegistryError
 
     try:
-        result = search_flows(query=q, tag=tag, sort=sort, limit=limit)
+        result = search_flows(query=q, sort=sort, limit=limit)
         return result
     except RegistryError as e:
         raise HTTPException(status_code=502, detail=str(e))
@@ -3763,7 +3804,7 @@ def registry_flow_detail(slug: str):
     from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
 
     try:
-        data = fetch_flow(slug)
+        data = fetch_flow(slug, count_download=False)
         # Build graph and parse flow from the YAML for DAG preview
         if data.get("yaml"):
             data["graph"] = _build_flow_graph(data["yaml"])

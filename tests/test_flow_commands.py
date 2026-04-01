@@ -177,7 +177,7 @@ class TestFlowSearch:
         mock_response.status_code = 200
         mock_response.headers = {"content-type": "application/json"}
         mock_response.json.return_value = {
-            "flows": [{"slug": "pr-review", "author": "alice", "steps": 3, "downloads": 5, "tags": ["code"]}],
+            "flows": [{"slug": "pr-review", "author": "alice", "steps": 3, "downloads": 5}],
             "total": 1,
         }
 

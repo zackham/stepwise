@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/select";
 import { Clock, AlertTriangle, DollarSign } from "lucide-react";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { cn, formatDuration } from "@/lib/utils";
+import { cn, formatDuration, formatCost } from "@/lib/utils";
 
 interface RunComparisonViewProps {
   runs: StepRun[];
@@ -28,10 +28,9 @@ function formatTimestamp(ts: string | null): string {
   return new Date(ts).toLocaleTimeString();
 }
 
-function formatCost(cost: number | null | undefined): string {
+function formatCostDisplay(cost: number | null | undefined): string {
   if (cost == null || cost === 0) return "-";
-  if (cost < 0.01) return `$${cost.toFixed(4)}`;
-  return `$${cost.toFixed(2)}`;
+  return formatCost(cost);
 }
 
 // ── Diff helpers ──────────────────────────────────────────────────────
@@ -284,11 +283,11 @@ function RunComparisonColumn({
           <span
             className={cn(
               "font-mono text-emerald-400",
-              formatCost(cost) !== formatCost(compareCost) &&
+              formatCostDisplay(cost) !== formatCostDisplay(compareCost) &&
                 (side === "left" ? "bg-amber-500/10 rounded px-1" : "bg-blue-500/10 rounded px-1")
             )}
           >
-            {isSubscription ? "$0 (Max)" : formatCost(cost)}
+            {isSubscription ? "$0 (Max)" : formatCostDisplay(cost)}
           </span>
         </div>
       )}

@@ -101,7 +101,6 @@ export interface FlowMetadata {
   description?: string;
   author?: string;
   version?: string;
-  tags?: string[];
   forked_from?: string;
   visibility?: "interactive" | "background" | "internal";
 }
@@ -412,7 +411,6 @@ export interface RegistryFlow {
   author: string;
   version: number;
   description: string;
-  tags: string[];
   yaml?: string;
   steps: number;
   loops: number;

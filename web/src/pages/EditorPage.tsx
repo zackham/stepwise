@@ -1,10 +1,12 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useParams, useNavigate, Link } from "@tanstack/react-router";
+import { useParams, useNavigate, useSearch, Link } from "@tanstack/react-router";
 import { YamlEditor } from "@/components/editor/YamlEditor";
 import { EditorToolbar } from "@/components/editor/EditorToolbar";
 import { FlowDagView } from "@/components/dag/FlowDagView";
 import { StepDefinitionPanel } from "@/components/editor/StepDefinitionPanel";
+import { FlowOverview } from "@/components/editor/FlowOverview";
+import { ResizablePanel } from "@/components/ui/ResizablePanel";
 import { ChatSidebar } from "@/components/editor/ChatSidebar";
 import { FlowFileViewer } from "@/components/editor/FlowFileViewer";
 import { FlowFileTree } from "@/components/editor/FlowFileTree";
@@ -20,9 +22,11 @@ import {
   useFlowFiles,
   useAddStep,
   useDeleteFlow,
+  usePatchFlowMetadata,
 } from "@/hooks/useEditor";
 import { useStepwiseMutations } from "@/hooks/useStepwise";
-import { Code, Workflow, FolderTree, Plus } from "lucide-react";
+import { Code, Workflow, Plus, PanelLeftClose, X } from "lucide-react";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { StepPalette } from "@/components/editor/StepPalette";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { MobileFullScreen } from "@/components/layout/MobileFullScreen";
@@ -45,7 +49,14 @@ import type { FlowDefinition, ParseResult } from "@/lib/types";
 
 const EMPTY_RUNS: never[] = [];
 
-type CenterTab = "flow" | "source";
+const FLOW_TAB_ID = "__flow__";
+const FLOW_YAML_TAB_ID = "FLOW.yaml";
+
+interface EditorTab {
+  id: string;
+  label: string;
+  pinned: boolean;
+}
 
 /** Dedicated prompt editor with local state to avoid cursor jumps from re-renders. */
 function PromptEditor({
@@ -109,6 +120,7 @@ export function EditorPage() {
 
   const params = useParams({ strict: false }) as { flowName?: string };
   const flowName = params.flowName;
+  const searchParams = useSearch({ strict: false }) as { step?: string };
 
   // Sub-flow expand/collapse
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
@@ -131,6 +143,9 @@ export function EditorPage() {
   // Load selected flow detail
   const { data: flowDetail, refetch: refetchFlow } = useLocalFlow(selectedFlow?.path);
 
+  // Registry flows are read-only in the editor
+  const isReadOnly = selectedFlow?.source === "registry";
+
   // Load flow files for directory flows
   const isDirectoryFlow = selectedFlow?.is_directory ?? false;
   const { data: flowFilesData, refetch: refetchFiles, isFetching: isRefetchingFiles } =
@@ -140,13 +155,30 @@ export function EditorPage() {
   const [yamlContent, setYamlContent] = useState("");
   const [parsedFlow, setParsedFlow] = useState<FlowDefinition | null>(null);
   const [parseErrors, setParseErrors] = useState<string[]>([]);
-  const [selectedStep, setSelectedStep] = useState<string | null>(null);
+  const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
+  const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false);
+  const selectedStep = searchParams.step ?? null;
+  const setSelectedStep = useCallback((step: string | null) => {
+    navigate({
+      search: (prev: Record<string, unknown>) => ({
+        ...prev,
+        step: step || undefined,
+      }),
+      replace: false,
+    });
+  }, [navigate]);
   const [stepContext, setStepContext] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
-  const [viewingFile, setViewingFile] = useState<string | null>(null);
-  const [centerTab, setCenterTab] = useState<CenterTab>("flow");
+  const [openTabs, setOpenTabs] = useState<EditorTab[]>([
+    { id: FLOW_TAB_ID, label: "Flow", pinned: true },
+    { id: FLOW_YAML_TAB_ID, label: "FLOW.yaml", pinned: true },
+  ]);
+  const [activeTabId, setActiveTabId] = useState<string>(FLOW_TAB_ID);
+  const [previewTabId, setPreviewTabId] = useState<string | null>(null);
   const [editingPrompt, setEditingPrompt] = useState<{ step: string; field: string } | null>(null);
-  const [showFileTree, setShowFileTree] = useState(false);
+
+  // Derive viewingFile from activeTabId for backward compat
+  const viewingFile = activeTabId === FLOW_TAB_ID ? "FLOW.yaml" : activeTabId;
 
   // Apply YAML from chat (parse + save immediately)
   const saveMutation = useSaveFlow();
@@ -204,9 +236,13 @@ export function EditorPage() {
       setSelectedStep(null);
       setStepContext(null);
       setExpandedSteps(new Set());
-      setViewingFile("FLOW.yaml");
+      setOpenTabs([
+        { id: FLOW_TAB_ID, label: "Flow", pinned: true },
+        { id: FLOW_YAML_TAB_ID, label: "FLOW.yaml", pinned: true },
+      ]);
+      setActiveTabId(FLOW_TAB_ID);
+      setPreviewTabId(null);
       setEditingPrompt(null);
-      setCenterTab("flow");
       chat.reset();
     }
   }, [flowDetail]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -227,7 +263,8 @@ export function EditorPage() {
             setParsedFlow(result.flow);
             setParseErrors([]);
             const path = selectedFlowRef.current?.path;
-            if (path) {
+            const source = selectedFlowRef.current?.source;
+            if (path && source !== "registry") {
               saveMutationRef.current.mutate({ path, yaml: value });
             }
           } else {
@@ -288,8 +325,11 @@ export function EditorPage() {
   // When selecting a step, also set it as chat context
   const handleSelectStep = useCallback((stepName: string | null) => {
     setSelectedStep(stepName);
-    if (stepName) setStepContext(stepName);
-  }, []);
+    if (stepName) {
+      setStepContext(stepName);
+      setRightPanelCollapsed(false);
+    }
+  }, [setSelectedStep]);
 
   const handleAddStep = useCallback(
     (name: string, executor: string) => {
@@ -309,9 +349,25 @@ export function EditorPage() {
     [selectedFlow?.path, addStepMutation, applyVisualResult, handleSelectStep]
   );
 
-  // Run flow directly from editor
+  // Flow metadata + actions
   const mutations = useStepwiseMutations();
   const deleteFlowMutation = useDeleteFlow();
+  const patchMetadataMutation = usePatchFlowMetadata();
+
+  const handleDeleteFlow = useCallback(() => {
+    if (!selectedFlow) return;
+    deleteFlowMutation.mutate(selectedFlow.path, {
+      onSuccess: () => navigate({ to: "/flows" }),
+    });
+  }, [selectedFlow, deleteFlowMutation, navigate]);
+
+  const handlePatchMetadata = useCallback(
+    (metadata: Partial<import("@/lib/types").FlowMetadata>) => {
+      if (!selectedFlow) return;
+      patchMetadataMutation.mutate({ path: selectedFlow.path, metadata });
+    },
+    [selectedFlow, patchMetadataMutation],
+  );
   const [showRunConfig, setShowRunConfig] = useState(false);
   const [runJobName, setRunJobName] = useState("");
   const [runInputValues, setRunInputValues] = useState<Record<string, string>>({});
@@ -412,16 +468,52 @@ export function EditorPage() {
     runWorkspacePath,
   ]);
 
-  // Click file in tree → open source tab with that file
+  // Click file in tree → open as preview tab (or activate if already open)
   const handleSelectFile = useCallback((filePath: string | null) => {
-    setViewingFile(filePath);
     setEditingPrompt(null);
+    if (!filePath) return;
     if (filePath === "FLOW.yaml") {
-      setCenterTab("flow");
-    } else if (filePath) {
-      setCenterTab("source");
+      setActiveTabId(FLOW_YAML_TAB_ID);
+      return;
     }
-  }, []);
+    setOpenTabs((prev) => {
+      const existing = prev.find((t) => t.id === filePath);
+      if (existing) {
+        // Already open — just activate it, don't touch preview state
+        setActiveTabId(filePath);
+        return prev;
+      }
+      // Replace existing preview tab or add new preview tab
+      const newTab: EditorTab = { id: filePath, label: filePath.split("/").pop() ?? filePath, pinned: false };
+      const withoutPreview = previewTabId ? prev.filter((t) => t.id !== previewTabId) : prev;
+      setPreviewTabId(filePath);
+      setActiveTabId(filePath);
+      return [...withoutPreview, newTab];
+    });
+  }, [previewTabId]);
+
+  // Close a tab — Flow tab cannot be closed
+  const handleCloseTab = useCallback((tabId: string) => {
+    if (tabId === FLOW_TAB_ID || tabId === FLOW_YAML_TAB_ID) return;
+    setOpenTabs((prev) => {
+      const idx = prev.findIndex((t) => t.id === tabId);
+      if (idx === -1) return prev;
+      const next = prev.filter((t) => t.id !== tabId);
+      // If closing the active tab, switch to the previous tab (or next, or Flow)
+      if (tabId === activeTabId) {
+        const newActive = next[Math.min(idx, next.length - 1)] ?? next[0];
+        setActiveTabId(newActive?.id ?? FLOW_TAB_ID);
+      }
+      return next;
+    });
+    if (tabId === previewTabId) setPreviewTabId(null);
+  }, [activeTabId, previewTabId]);
+
+  // Double-click a tab to pin it
+  const handlePinTab = useCallback((tabId: string) => {
+    setOpenTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, pinned: true } : t));
+    if (tabId === previewTabId) setPreviewTabId(null);
+  }, [previewTabId]);
 
   // Cleanup parse timer
   useEffect(() => {
@@ -429,9 +521,16 @@ export function EditorPage() {
   }, []);
 
   const dagWorkflow = parsedFlow ?? { steps: {} };
-  const selectedStepDef = selectedStep && parsedFlow?.steps[selectedStep]
-    ? parsedFlow.steps[selectedStep]
-    : null;
+  const selectedStepDef = useMemo(() => {
+    if (!selectedStep || !parsedFlow) return null;
+    // Check top-level steps first
+    if (parsedFlow.steps[selectedStep]) return parsedFlow.steps[selectedStep];
+    // Search sub_flow steps
+    for (const step of Object.values(parsedFlow.steps)) {
+      if (step.sub_flow?.steps[selectedStep]) return step.sub_flow.steps[selectedStep];
+    }
+    return null;
+  }, [selectedStep, parsedFlow]);
 
   if (!flowName) {
     navigate({ to: "/flows" });
@@ -468,93 +567,93 @@ export function EditorPage() {
         onToggleChat={() => setChatOpen((o) => !o)}
         isChatStreaming={chat.isStreaming}
         agentMode={chat.agentMode}
+        leftPanelVisible={!leftPanelCollapsed}
+        onToggleLeftPanel={() => setLeftPanelCollapsed((c) => !c)}
+        rightPanelVisible={!rightPanelCollapsed}
+        onToggleRightPanel={() => setRightPanelCollapsed((c) => !c)}
       />
       <div className="flex-1 flex min-h-0">
-        {/* File tree for directory flows — toggled */}
-        {isMobile ? (
-          <MobileFullScreen
-            open={showFileTree && isDirectoryFlow && !!flowFilesData?.files}
-            onClose={() => setShowFileTree(false)}
-            title="Files"
-          >
-            {flowFilesData?.files && (
-              <FlowFileTree
-                files={flowFilesData.files}
-                selectedFile={viewingFile}
-                onSelectFile={(f) => { handleSelectFile(f); setShowFileTree(false); }}
-                onRefresh={() => refetchFiles()}
-                isRefreshing={isRefetchingFiles}
-              />
-            )}
-          </MobileFullScreen>
-        ) : isCompact ? (
-          <Sheet open={showFileTree && isDirectoryFlow && !!flowFilesData?.files} onOpenChange={setShowFileTree}>
-            <SheetContent side="left" showCloseButton={false} className="w-[70vw] sm:max-w-xs p-0 overflow-y-auto">
-              {flowFilesData?.files && (
-                <FlowFileTree
-                  files={flowFilesData.files}
-                  selectedFile={viewingFile}
-                  onSelectFile={(f) => { handleSelectFile(f); setShowFileTree(false); }}
-                  onRefresh={() => refetchFiles()}
-                  isRefreshing={isRefetchingFiles}
+        {/* Left sidebar: Flow Details + Files */}
+        {!isMobile && !isCompact && selectedFlow && !leftPanelCollapsed && (
+          <ResizablePanel storageKey="stepwise-editor-left-panel-width" side="left" onCollapse={() => setLeftPanelCollapsed(true)}>
+            <Tabs defaultValue="details" className="flex flex-col h-full gap-0">
+              <div className="flex items-center justify-between border-b border-border bg-zinc-50/50 dark:bg-zinc-950/50 shrink-0">
+                <TabsList variant="line" className="px-1">
+                  <TabsTrigger value="details" className="text-xs gap-1 px-2.5">
+                    Details
+                  </TabsTrigger>
+                  {isDirectoryFlow && flowFilesData?.files && (
+                    <TabsTrigger value="files" className="text-xs gap-1 px-2.5">
+                      Files
+                    </TabsTrigger>
+                  )}
+                </TabsList>
+                <button
+                  onClick={() => setLeftPanelCollapsed(true)}
+                  className="text-zinc-500 dark:text-zinc-600 hover:text-zinc-700 dark:hover:text-zinc-300 p-0.5 mr-2"
+                  title="Collapse sidebar"
+                >
+                  <PanelLeftClose className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <TabsContent value="details" className="flex-1 min-h-0 overflow-y-auto mt-0">
+                <FlowOverview
+                  flow={selectedFlow}
+                  detail={flowDetail}
+                  onRun={handleRun}
+                  onDelete={isReadOnly ? undefined : handleDeleteFlow}
+                  onPatchMetadata={handlePatchMetadata}
+                  readOnly={isReadOnly}
                 />
+              </TabsContent>
+              {isDirectoryFlow && flowFilesData?.files && (
+                <TabsContent value="files" className="flex-1 min-h-0 overflow-y-auto mt-0">
+                  <FlowFileTree
+                    files={flowFilesData.files}
+                    selectedFile={viewingFile}
+                    onSelectFile={handleSelectFile}
+                    onRefresh={() => refetchFiles()}
+                    isRefreshing={isRefetchingFiles}
+                  />
+                </TabsContent>
               )}
-            </SheetContent>
-          </Sheet>
-        ) : (
-          showFileTree && isDirectoryFlow && flowFilesData?.files && (
-            <div className="w-48 border-r border-border shrink-0 overflow-y-auto">
-              <FlowFileTree
-                files={flowFilesData.files}
-                selectedFile={viewingFile}
-                onSelectFile={handleSelectFile}
-                onRefresh={() => refetchFiles()}
-                isRefreshing={isRefetchingFiles}
-              />
-            </div>
-          )
+            </Tabs>
+          </ResizablePanel>
         )}
 
         {/* Center panel */}
         <div className="flex-1 min-w-0 flex flex-col">
-          {/* Center tab bar */}
-          <div className="flex items-center border-b border-border bg-zinc-50/50 dark:bg-zinc-950/50 px-4">
-            <button
-              onClick={() => { setCenterTab("flow"); setEditingPrompt(null); }}
-              className={cn(
-                "px-3 py-2 text-xs font-medium border-b-2 transition-colors flex items-center gap-1.5",
-                centerTab === "flow"
-                  ? "border-blue-500 text-foreground"
-                  : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-              )}
-            >
-              <Workflow className="w-3 h-3" />
-              Flow
-            </button>
-            <button
-              onClick={() => setCenterTab("source")}
-              className={cn(
-                "px-3 py-2 text-xs font-medium border-b-2 transition-colors flex items-center gap-1.5",
-                centerTab === "source"
-                  ? "border-blue-500 text-foreground"
-                  : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-              )}
-            >
-              <Code className="w-3 h-3" />
-              Source
-            </button>
-            {isDirectoryFlow && (
-              <button
-                onClick={() => setShowFileTree((s) => !s)}
-                className={cn(
-                  "ml-2 px-2 py-2 text-xs transition-colors flex items-center gap-1",
-                  showFileTree ? "text-foreground" : "text-zinc-500 dark:text-zinc-600 hover:text-zinc-700 dark:hover:text-zinc-400"
-                )}
-                title="Toggle file tree"
-              >
-                <FolderTree className="w-3 h-3" />
-              </button>
-            )}
+          {/* VS Code-style tab bar */}
+          <div className="flex items-center border-b border-border bg-zinc-50/50 dark:bg-zinc-950/50 overflow-x-auto">
+            {openTabs.map((tab) => {
+              const isActive = tab.id === activeTabId;
+              const isPreview = tab.id === previewTabId;
+              const isFlowTab = tab.id === FLOW_TAB_ID;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => { setActiveTabId(tab.id); if (isFlowTab) setEditingPrompt(null); }}
+                  onDoubleClick={() => { if (!tab.pinned) handlePinTab(tab.id); }}
+                  className={cn(
+                    "group relative px-3 py-2 text-xs font-medium border-b-2 transition-colors flex items-center gap-1.5 shrink-0",
+                    isActive
+                      ? "border-blue-500 text-foreground"
+                      : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                  )}
+                >
+                  {isFlowTab ? <Workflow className="w-3 h-3" /> : <Code className="w-3 h-3" />}
+                  <span className={cn(isPreview && "italic")}>{tab.label}</span>
+                  {!isFlowTab && tab.id !== FLOW_YAML_TAB_ID && (
+                    <span
+                      onClick={(e) => { e.stopPropagation(); handleCloseTab(tab.id); }}
+                      className="ml-1 p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-opacity"
+                    >
+                      <X className="w-3 h-3" />
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
           <div className="flex-1 min-w-0 min-h-0 relative">
           {editingPrompt && parsedFlow ? (() => {
@@ -569,10 +668,10 @@ export function EditorPage() {
                 fieldName={editingPrompt.field}
                 initialValue={promptValue}
                 onPatch={handlePatchStep}
-                onClose={() => { setEditingPrompt(null); setViewingFile("FLOW.yaml"); }}
+                onClose={() => { setEditingPrompt(null); setActiveTabId(FLOW_YAML_TAB_ID); }}
               />
             );
-          })() : centerTab === "flow" ? (
+          })() : activeTabId === FLOW_TAB_ID ? (
             <FlowDagView
               workflow={dagWorkflow}
               runs={EMPTY_RUNS}
@@ -582,12 +681,12 @@ export function EditorPage() {
               selectedStep={selectedStep}
               onSelectStep={handleSelectStep}
             />
-          ) : viewingFile && viewingFile !== "FLOW.yaml" && selectedFlow?.path ? (
+          ) : activeTabId !== FLOW_YAML_TAB_ID && selectedFlow?.path ? (
             <FlowFileViewer
               flowPath={selectedFlow.path}
-              filePath={viewingFile}
+              filePath={activeTabId}
               onClose={() => {
-                setViewingFile("FLOW.yaml");
+                handleCloseTab(activeTabId);
               }}
             />
           ) : (
@@ -596,7 +695,7 @@ export function EditorPage() {
               onChange={handleYamlChange}
             />
           )}
-          {centerTab === "flow" && !editingPrompt && (
+          {activeTabId === FLOW_TAB_ID && !editingPrompt && !isReadOnly && (
             <button
               onClick={() => setShowStepPalette(true)}
               className="absolute bottom-14 right-3 z-20 flex items-center gap-1.5 bg-white/80 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-700/50 rounded-md px-2.5 py-1.5 text-zinc-400 hover:text-foreground text-xs shadow-sm hover:bg-white dark:hover:bg-zinc-800 transition-colors min-h-[44px] md:min-h-0"
@@ -616,28 +715,25 @@ export function EditorPage() {
             onClose={() => {
               setSelectedStep(null);
               setEditingPrompt(null);
-              setViewingFile("FLOW.yaml");
             }}
             title={selectedStepDef?.name ?? "Step"}
           >
             {selectedStepDef && (
               <StepDefinitionPanel
                 stepDef={selectedStepDef}
+                onSelectStep={handleSelectStep}
                 onClose={() => {
                   setSelectedStep(null);
                   setEditingPrompt(null);
-                  setViewingFile("FLOW.yaml");
                 }}
                 onDelete={handleDeleteStep}
                 onViewFile={(path) => {
-                  setViewingFile(path);
-                  setCenterTab("source");
+                  handleSelectFile(path);
                   setSelectedStep(null);
                 }}
                 onViewSource={(field) => {
                   setEditingPrompt({ step: selectedStep!, field });
-                  setViewingFile(null);
-                  setCenterTab("source");
+                  setActiveTabId(FLOW_YAML_TAB_ID);
                   setSelectedStep(null);
                 }}
               />
@@ -650,7 +746,6 @@ export function EditorPage() {
               if (!open) {
                 setSelectedStep(null);
                 setEditingPrompt(null);
-                setViewingFile("FLOW.yaml");
               }
             }}
           >
@@ -661,48 +756,41 @@ export function EditorPage() {
                   onClose={() => {
                     setSelectedStep(null);
                     setEditingPrompt(null);
-                    setViewingFile("FLOW.yaml");
                   }}
                   onDelete={handleDeleteStep}
                   onViewFile={(path) => {
-                    setViewingFile(path);
-                    setCenterTab("source");
+                    handleSelectFile(path);
                     setSelectedStep(null);
                   }}
                   onViewSource={(field) => {
                     setEditingPrompt({ step: selectedStep!, field });
-                    setViewingFile(null);
-                    setCenterTab("source");
+                    setActiveTabId(FLOW_YAML_TAB_ID);
                     setSelectedStep(null);
                   }}
                 />
               )}
             </SheetContent>
           </Sheet>
-        ) : (
-          selectedStepDef && (
-            <div className="w-80 border-l border-border shrink-0 flex flex-col">
+        ) : selectedStepDef && !rightPanelCollapsed ? (
+          <ResizablePanel storageKey="stepwise-editor-right-panel-width" onCollapse={() => setRightPanelCollapsed(true)}>
               <StepDefinitionPanel
                 stepDef={selectedStepDef}
+                onSelectStep={handleSelectStep}
                 onClose={() => {
                   setSelectedStep(null);
                   setEditingPrompt(null);
-                  setViewingFile("FLOW.yaml");
                 }}
                 onDelete={handleDeleteStep}
                 onViewFile={(path) => {
-                  setViewingFile(path);
-                  setCenterTab("source");
+                  handleSelectFile(path);
                 }}
                 onViewSource={(field) => {
                   setEditingPrompt({ step: selectedStep!, field });
-                  setViewingFile(null);
-                  setCenterTab("source");
+                  setActiveTabId(FLOW_YAML_TAB_ID);
                 }}
               />
-            </div>
-          )
-        )}
+          </ResizablePanel>
+        ) : null}
 
         {/* Chat sidebar */}
         {isMobile ? (
@@ -745,7 +833,7 @@ export function EditorPage() {
           </Sheet>
         ) : (
           chatOpen && (
-            <div className="w-80 border-l border-border shrink-0 flex flex-col min-h-0">
+            <ResizablePanel storageKey="stepwise-editor-chat-width">
               <ChatSidebar
                 messages={chat.messages}
                 isStreaming={chat.isStreaming}
@@ -759,7 +847,7 @@ export function EditorPage() {
                 stepContext={stepContext}
                 onRemoveStepContext={() => setStepContext(null)}
               />
-            </div>
+            </ResizablePanel>
           )
         )}
       </div>

@@ -1,7 +1,6 @@
 name: test-polling
 description: "Validate polling executor reliability — file-based polling, restart survival, long-running polls, simulated backoff"
 author: stepwise
-tags: [test, polling, reliability]
 
 config:
   basic_delay_seconds:

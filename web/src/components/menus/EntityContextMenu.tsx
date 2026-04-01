@@ -15,6 +15,9 @@ interface EntityContextMenuProps<T> {
   data: T;
   children: React.ReactNode;
   className?: string;
+  style?: React.CSSProperties;
+  /** Stop the contextmenu event from propagating to parent context menus */
+  stopPropagation?: boolean;
 }
 
 export function EntityContextMenu<T>({
@@ -22,6 +25,8 @@ export function EntityContextMenu<T>({
   data,
   children,
   className,
+  style,
+  stopPropagation,
 }: EntityContextMenuProps<T>) {
   const ctx = useActionContext();
   const actions = useMemo(() => getActionsForEntity(type, data), [type, data]);
@@ -36,7 +41,13 @@ export function EntityContextMenu<T>({
   return (
     <>
       <ContextMenu>
-        <ContextMenuTrigger className={className}>{children}</ContextMenuTrigger>
+        <ContextMenuTrigger
+          className={className}
+          style={style}
+          onContextMenu={stopPropagation ? (e: React.MouseEvent) => e.stopPropagation() : undefined}
+        >
+          {children}
+        </ContextMenuTrigger>
         <ContextMenuContent>
           <ActionMenuItems
             actions={actions}

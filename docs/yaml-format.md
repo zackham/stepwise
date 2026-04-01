@@ -92,7 +92,6 @@ name: workflow-name          # required, identifier
 description: "..."           # optional, human-readable
 author: alice                # optional, auto from git config
 version: "1.0"               # optional
-tags: [research, agent]      # optional
 forked_from: "@bob:original" # optional, provenance for forked flows
 visibility: interactive      # optional: interactive | background | internal
 inputs:                      # optional, per-run parameters

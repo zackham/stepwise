@@ -770,7 +770,7 @@ Show details about a published flow.
 stepwise info code-review
 ```
 
-Shows metadata for a published flow without downloading it (name, author, description, tags, step count, downloads).
+Shows metadata for a published flow without downloading it (name, author, description, step count, downloads).
 
 ---
 

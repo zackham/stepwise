@@ -231,6 +231,7 @@ export function useSaveFlowConfig() {
     }) => api.saveFlowConfig(flowPath, data),
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["flowConfig", variables.flowPath] });
+      queryClient.invalidateQueries({ queryKey: ["flowFiles", variables.flowPath] });
       toast.success("Config saved");
     },
     onError: (error) => {

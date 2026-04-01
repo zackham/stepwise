@@ -30,7 +30,6 @@ export function FlowFileViewer({ flowPath, filePath, onClose }: FlowFileViewerPr
 
   const ext = filePath.split(".").pop() ?? "";
   const lang = EXT_LANG[ext] ?? ext;
-  const isYaml = ext === "yaml" || ext === "yml";
   const isDirty = content !== savedContent;
 
   // Load content when data arrives
@@ -84,18 +83,16 @@ export function FlowFileViewer({ flowPath, filePath, onClose }: FlowFileViewerPr
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          {!isYaml && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleSave}
-              disabled={!isDirty || writeMutation.isPending}
-              className="h-7 text-xs"
-            >
-              <Save className="w-3 h-3 mr-1" />
-              {writeMutation.isPending ? "..." : "Save"}
-            </Button>
-          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleSave}
+            disabled={!isDirty || writeMutation.isPending}
+            className="h-7 text-xs"
+          >
+            <Save className="w-3 h-3 mr-1" />
+            {writeMutation.isPending ? "..." : "Save"}
+          </Button>
           <button onClick={onClose} className="text-zinc-500 hover:text-foreground p-1">
             <X className="w-4 h-4" />
           </button>
@@ -103,26 +100,13 @@ export function FlowFileViewer({ flowPath, filePath, onClose }: FlowFileViewerPr
       </div>
 
       {/* Editor */}
-      {isYaml ? (
-        <div className="flex-1 overflow-auto">
-          <pre className="text-xs text-zinc-700 dark:text-zinc-300 p-3 font-mono leading-relaxed whitespace-pre-wrap break-words overflow-x-auto">
-            <code>{content}</code>
-          </pre>
-          <div className="px-3 pb-3">
-            <p className="text-[10px] text-zinc-600">
-              Edit FLOW.yaml in the YAML editor panel instead.
-            </p>
-          </div>
-        </div>
-      ) : (
-        <textarea
-          ref={textareaRef}
-          value={content}
-          onChange={(e) => setContent(e.target.value)}
-          className="flex-1 w-full bg-transparent text-xs text-zinc-700 dark:text-zinc-300 font-mono p-3 leading-relaxed resize-none focus:outline-none"
-          spellCheck={false}
-        />
-      )}
+      <textarea
+        ref={textareaRef}
+        value={content}
+        onChange={(e) => setContent(e.target.value)}
+        className="flex-1 w-full bg-transparent text-xs text-zinc-700 dark:text-zinc-300 font-mono p-3 leading-relaxed resize-none focus:outline-none"
+        spellCheck={false}
+      />
     </div>
   );
 }

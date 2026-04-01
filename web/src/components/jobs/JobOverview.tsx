@@ -4,7 +4,7 @@ import { JsonView } from "@/components/JsonView";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 import type { Job } from "@/lib/types";
-import { cn, formatDuration } from "@/lib/utils";
+import { cn, formatDuration, formatCost } from "@/lib/utils";
 import { Link } from "@tanstack/react-router";
 import { Package, Terminal, Monitor, DollarSign } from "lucide-react";
 import { useMemo } from "react";
@@ -145,7 +145,7 @@ export function JobOverview({ job }: JobOverviewProps) {
             <span className="font-mono text-zinc-400">
               {costData.billing_mode === "subscription"
                 ? "$0 (Max)"
-                : `$${costData.cost_usd.toFixed(4)}`}
+                : formatCost(costData.cost_usd)}
             </span>
           </div>
         )}
@@ -215,7 +215,7 @@ export function JobOverview({ job }: JobOverviewProps) {
       )}
 
       {/* 6. Flow metadata */}
-      {meta && (meta.author || meta.description || (meta.tags && meta.tags.length > 0)) && (
+      {meta && (meta.author || meta.description) && (
         <div className="space-y-1.5">
           <SectionHeading>Flow Metadata</SectionHeading>
           <div className="text-xs space-y-1">
@@ -229,19 +229,6 @@ export function JobOverview({ job }: JobOverviewProps) {
               <div>
                 <span className="text-zinc-500">Description: </span>
                 <span className="text-zinc-400">{meta.description}</span>
-              </div>
-            )}
-            {meta.tags && meta.tags.length > 0 && (
-              <div className="flex items-center gap-1 flex-wrap">
-                <span className="text-zinc-500">Tags:</span>
-                {meta.tags.map((tag) => (
-                  <span
-                    key={tag}
-                    className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500 border border-zinc-200 dark:border-zinc-700"
-                  >
-                    {tag}
-                  </span>
-                ))}
               </div>
             )}
           </div>

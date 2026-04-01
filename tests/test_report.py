@@ -185,7 +185,7 @@ class TestGenerateReport:
             "fetch": {"outputs": ["data"]},
             "transform": {"outputs": ["cleaned"], "inputs": {"data": "fetch.data"}},
         })
-        wf.metadata = FlowMetadata(name="test-pipeline", description="A test", author="tester", tags=["test"])
+        wf.metadata = FlowMetadata(name="test-pipeline", description="A test", author="tester")
         job = _make_job(wf)
         store = SQLiteStore()
         store.save_job(job)

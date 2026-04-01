@@ -129,11 +129,17 @@ export function FlowDagView({
   const [webglSupported] = useState(() => canUseWebGL());
 
   // Clear multi-select when clicking canvas background
-  const handleCanvasClick = useCallback(() => {
+  const handleCanvasClick = useCallback((e: React.MouseEvent) => {
+    // Only deselect when clicking the background, not nodes
+    const target = e.target as HTMLElement;
+    if (target.closest("[data-step-node]")) return;
     if (multiSelected.size > 0) {
       setMultiSelected(new Set());
     }
-  }, [multiSelected]);
+    if (selectedStep) {
+      onSelectStep(null);
+    }
+  }, [multiSelected, selectedStep, onSelectStep]);
 
   const handleMultiSelectToggle = useCallback((stepName: string) => {
     setMultiSelected((prev) => {
@@ -548,6 +554,7 @@ export function FlowDagView({
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
       onClickCapture={handleClickCapture}
+      onClick={handleCanvasClick}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -556,7 +563,6 @@ export function FlowDagView({
       {/* Grid background */}
       <div
         className="absolute inset-0 opacity-[0.03]"
-        onClick={handleCanvasClick}
         style={{
           backgroundImage:
             "radial-gradient(circle, currentColor 1px, transparent 1px)",

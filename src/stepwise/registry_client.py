@@ -189,15 +189,24 @@ def verify_auth(
     return _ensure_json(resp, "verify auth")
 
 
-def fetch_flow(slug: str, *, use_cache: bool = True) -> dict[str, Any]:
+def fetch_flow(
+    slug: str, *, use_cache: bool = True, count_download: bool = True
+) -> dict[str, Any]:
     """Fetch flow metadata + YAML from the registry.
 
     Returns dict with keys: name, slug, author, version, description,
     tags, yaml, steps, loops, etc.
+
+    If count_download is True, sends X-Stepwise-Download header so the
+    registry increments the download counter. Set to False for info-only
+    lookups that shouldn't inflate download counts.
     """
     url = get_registry_url()
+    headers = {}
+    if count_download:
+        headers["X-Stepwise-Download"] = "true"
     with _client() as client:
-        resp = client.get(f"{url}/api/flows/{slug}")
+        resp = client.get(f"{url}/api/flows/{slug}", headers=headers)
     if resp.status_code == 404:
         raise RegistryError(f"Flow '{slug}' not found in registry", 404)
     if resp.status_code != 200:
@@ -219,8 +228,9 @@ def fetch_flow_yaml(slug: str, *, use_cache: bool = True) -> str:
             return cached
 
     url = get_registry_url()
+    headers = {"X-Stepwise-Download": "true"}
     with _client() as client:
-        resp = client.get(f"{url}/api/flows/{slug}/raw")
+        resp = client.get(f"{url}/api/flows/{slug}/raw", headers=headers)
     if resp.status_code == 404:
         raise RegistryError(f"Flow '{slug}' not found in registry", 404)
     if resp.status_code != 200:
@@ -234,7 +244,6 @@ def fetch_flow_yaml(slug: str, *, use_cache: bool = True) -> str:
 
 def search_flows(
     query: str = "",
-    tag: str | None = None,
     sort: str = "downloads",
     limit: int = 20,
 ) -> dict[str, Any]:
@@ -243,8 +252,6 @@ def search_flows(
     params: dict[str, Any] = {"sort": sort, "limit": limit}
     if query:
         params["q"] = query
-    if tag:
-        params["tag"] = tag
 
     with _client() as client:
         resp = client.get(f"{url}/api/flows", params=params)

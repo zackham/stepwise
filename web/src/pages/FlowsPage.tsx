@@ -1,32 +1,31 @@
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { RegistryBrowser } from "@/components/editor/RegistryBrowser";
-import { FlowInfoPanel } from "@/components/editor/FlowInfoPanel";
 import { CreateFlowDialog } from "@/components/editor/CreateFlowDialog";
-import { FlowDagView } from "@/components/dag/FlowDagView";
 import {
   useLocalFlows,
-  useLocalFlow,
   useDeleteFlow,
   useForkFlow,
-  useRegistryFlow,
+  useRegistrySearch,
   useInstallFlow,
   useFlowStats,
 } from "@/hooks/useEditor";
 import { useStepwiseMutations } from "@/hooks/useStepwise";
 import {
+  Check,
+  Download,
   Eye,
   GitFork,
   Hand,
   FileText,
   FolderOpen,
   Globe,
-  Pencil,
-  Play,
+  LayoutGrid,
+  List,
+  Loader2,
   Plus,
   Search,
-  Trash2,
   User,
+  WifiOff,
 } from "lucide-react";
 import { ActionContextProvider } from "@/components/menus/ActionContextProvider";
 import { EntityContextMenu } from "@/components/menus/EntityContextMenu";
@@ -41,7 +40,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { MobileFullScreen } from "@/components/layout/MobileFullScreen";
 import {
   Select,
   SelectContent,
@@ -49,18 +47,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import { cn } from "@/lib/utils";
-import { FlowConfigPanel } from "@/components/editor/FlowConfigPanel";
 import type { LocalFlow, RegistryFlow } from "@/lib/types";
-
-const EMPTY_RUNS: never[] = [];
 
 type Tab = "local" | "registry";
 type SortBy = "name" | "most-used" | "recent";
@@ -90,6 +80,7 @@ export function FlowsPage() {
   const [sortBy, setSortBy] = useState<SortBy>("name");
   const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>("all");
   const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [viewMode, setViewMode] = useState<"cards" | "list">("cards");
 
   // Data
   const { data: flows = [] } = useLocalFlows();
@@ -98,44 +89,53 @@ export function FlowsPage() {
   const forkFlowMutation = useForkFlow();
   const mutations = useStepwiseMutations();
 
-  // Local selection
+  // Local selection (for delete side-effect tracking)
   const { selected: selectedFlowName } = useSearch({ from: "/flows" });
   const [selectedLocalFlow, setSelectedLocalFlow] = useState<LocalFlow | null>(null);
-  const { data: localFlowDetail } = useLocalFlow(selectedLocalFlow?.path);
 
   useEffect(() => {
     if (!selectedFlowName) {
       setSelectedLocalFlow(null);
       return;
     }
-
     const match = flows.find((flow) => flow.name === selectedFlowName) ?? null;
     setSelectedLocalFlow((current) => (current?.path === match?.path ? current : match));
   }, [selectedFlowName, flows]);
-  const [localExpandedSteps, setLocalExpandedSteps] = useState<Set<string>>(new Set());
-  const toggleLocalExpand = useCallback((stepName: string) => {
-    setLocalExpandedSteps((prev) => {
-      const next = new Set(prev);
-      if (next.has(stepName)) next.delete(stepName);
-      else next.add(stepName);
-      return next;
-    });
-  }, []);
 
   // Registry
-  const [selectedRegistryFlow, setSelectedRegistryFlow] = useState<RegistryFlow | null>(null);
-  const { data: registryFlowDetail } = useRegistryFlow(selectedRegistryFlow?.slug);
+  const [registryQuery, setRegistryQuery] = useState("");
+  const [registrySort, setRegistrySort] = useState<"downloads" | "newest">("downloads");
+  const { data: registryData, isLoading: registryLoading, isError: registryError } = useRegistrySearch(registryQuery, registrySort);
+  const registryFlows = registryData?.flows ?? [];
   const installMutation = useInstallFlow();
-  const [installedSlugs, setInstalledSlugs] = useState<Set<string>>(new Set());
-  const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
-  const toggleExpand = useCallback((stepName: string) => {
-    setExpandedSteps((prev) => {
-      const next = new Set(prev);
-      if (next.has(stepName)) next.delete(stepName);
-      else next.add(stepName);
-      return next;
-    });
-  }, []);
+  const [installedSlugs, setInstalledSlugs] = useState<Map<string, string>>(new Map());
+
+  // Map registry slugs to their local flow names so we can detect already-installed flows.
+  // Keys are bare slugs (e.g. "my-flow") so lookups match RegistryFlow.slug directly.
+  // We check two sources:
+  //   1. Cached registry flows (source=registry) whose registry_ref is "@author:slug"
+  //   2. Locally installed flows whose name matches a slug (installed via /registry/install)
+  const localRegistryMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const f of flows) {
+      if (f.source === "registry" && f.registry_ref) {
+        // Extract bare slug from "@author:slug" format
+        const colonIdx = f.registry_ref.indexOf(":");
+        const slug = colonIdx >= 0 ? f.registry_ref.substring(colonIdx + 1) : f.registry_ref;
+        map.set(slug, f.name);
+      }
+    }
+    // Also detect flows installed via /registry/install — they live in flows/<slug>/
+    // and appear as source=local with name equal to the slug.
+    // We add them only if not already covered by registry_ref mapping above.
+    for (const f of flows) {
+      if (f.source === "local" && !map.has(f.name)) {
+        // Will be matched when a registry flow's slug equals this local flow's name
+        map.set(f.name, f.name);
+      }
+    }
+    return map;
+  }, [flows]);
 
   const statsMap = useMemo(
     () => new Map(flowStats.map((s) => [s.flow_dir, s])),
@@ -147,7 +147,6 @@ export function FlowsPage() {
       ? flows.filter((f) => f.name.toLowerCase().includes(filter.toLowerCase()))
       : [...flows];
 
-    // Apply visibility filter (hide internal by default)
     if (visibilityFilter === "all") {
       result = result.filter((f) => (f.visibility ?? "interactive") !== "internal");
     } else {
@@ -155,16 +154,13 @@ export function FlowsPage() {
     }
 
     result.sort((a, b) => {
-      if (sortBy === "name") {
-        return a.name.localeCompare(b.name);
-      }
+      if (sortBy === "name") return a.name.localeCompare(b.name);
       const sa = statsMap.get(flowDirKey(a.path));
       const sb = statsMap.get(flowDirKey(b.path));
       if (sortBy === "most-used") {
         const diff = (sb?.job_count ?? 0) - (sa?.job_count ?? 0);
         return diff !== 0 ? diff : a.name.localeCompare(b.name);
       }
-      // "recent"
       const ta = sa?.last_run_at ?? "";
       const tb = sb?.last_run_at ?? "";
       if (ta === tb) return a.name.localeCompare(b.name);
@@ -177,14 +173,6 @@ export function FlowsPage() {
   }, [flows, filter, sortBy, visibilityFilter, statsMap]);
 
   const handleSelectLocalFlow = useCallback(
-    (flow: LocalFlow) => {
-      setSelectedLocalFlow(flow);
-      navigate({ to: "/flows", search: { selected: flow.name }, replace: true });
-    },
-    [navigate]
-  );
-
-  const handleEdit = useCallback(
     (flow: LocalFlow) => {
       navigate({ to: "/flows/$flowName", params: { flowName: flow.name } });
     },
@@ -212,19 +200,23 @@ export function FlowsPage() {
     [navigate]
   );
 
-  const handleInstall = useCallback(() => {
-    if (!selectedRegistryFlow) return;
-    installMutation.mutate(selectedRegistryFlow.slug, {
+  const handleRegistryFlowClick = useCallback((flow: RegistryFlow) => {
+    // If already installed locally, navigate directly to editor
+    const localName = localRegistryMap.get(flow.slug) ?? installedSlugs.get(flow.slug);
+    if (localName) {
+      navigate({ to: "/flows/$flowName", params: { flowName: localName } });
+      return;
+    }
+    // Otherwise install, then navigate
+    installMutation.mutate(flow.slug, {
       onSuccess: (result) => {
-        setInstalledSlugs((prev) => new Set([...prev, selectedRegistryFlow.slug]));
-        setSelectedRegistryFlow(null);
-        setTab("local");
+        setInstalledSlugs((prev) => new Map([...prev, [flow.slug, result.name]]));
         navigate({ to: "/flows/$flowName", params: { flowName: result.name } });
       },
     });
-  }, [selectedRegistryFlow, installMutation, navigate]);
+  }, [installMutation, navigate, localRegistryMap, installedSlugs]);
 
-  // Fork flow
+  // Fork
   const [showForkDialog, setShowForkDialog] = useState(false);
   const [forkName, setForkName] = useState("");
   const [forkSource, setForkSource] = useState<LocalFlow | null>(null);
@@ -253,50 +245,97 @@ export function FlowsPage() {
     );
   }, [forkSource, forkName, forkFlowMutation, navigate]);
 
-  const registryDagWorkflow = registryFlowDetail?.flow ?? { steps: {} };
-  const localDagWorkflow = localFlowDetail?.flow ?? { steps: {} };
-  const localMetadata = localFlowDetail?.flow.metadata;
-  const localDescription =
-    localMetadata?.description?.trim() || selectedLocalFlow?.description || "No description provided.";
-  const localHasSteps = !!localFlowDetail && Object.keys(localFlowDetail.flow.steps).length > 0;
-
   return (
     <>
       <TooltipProvider>
         <div className="h-full flex flex-col">
           {/* Header */}
-          <div className="flex items-center gap-2 sm:gap-4 px-3 sm:px-6 py-3 sm:py-4 border-b border-border shrink-0">
-            <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 sm:gap-4 px-4 sm:px-6 py-3 border-b border-border shrink-0">
+            <div className="flex items-center gap-1 rounded-lg border border-border p-0.5 bg-zinc-100/50 dark:bg-zinc-900/50">
               <button
-                onClick={() => { setTab("local"); setSelectedRegistryFlow(null); }}
+                onClick={() => setTab("local")}
                 className={cn(
-                  "px-3 py-1.5 text-sm rounded-md transition-colors",
+                  "flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors",
                   tab === "local"
-                    ? "bg-zinc-200 dark:bg-zinc-800 text-foreground"
-                    : "text-zinc-500 hover:text-foreground hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
+                    ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
+                    : "text-zinc-500 hover:text-foreground"
                 )}
               >
-                <FolderOpen className="w-3.5 h-3.5 inline mr-1.5" />
+                <FolderOpen className="w-3.5 h-3.5" />
                 Local
               </button>
               <button
                 onClick={() => setTab("registry")}
                 className={cn(
-                  "px-3 py-1.5 text-sm rounded-md transition-colors",
+                  "flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors",
                   tab === "registry"
-                    ? "bg-zinc-200 dark:bg-zinc-800 text-foreground"
-                    : "text-zinc-500 hover:text-foreground hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
+                    ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
+                    : "text-zinc-500 hover:text-foreground"
                 )}
               >
-                <Globe className="w-3.5 h-3.5 inline mr-1.5" />
+                <Globe className="w-3.5 h-3.5" />
                 Registry
               </button>
             </div>
 
-            <div className="flex-1" />
-
             {tab === "local" && (
               <>
+                <div className="relative flex-1 max-w-sm">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" />
+                  <Input
+                    value={filter}
+                    onChange={(e) => setFilter(e.target.value)}
+                    placeholder="Search flows..."
+                    className="pl-8 h-8 text-sm bg-zinc-50 dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700"
+                  />
+                </div>
+                <Select value={visibilityFilter} onValueChange={(v) => setVisibilityFilter(v as VisibilityFilter)}>
+                  <SelectTrigger className="w-28 h-8 text-xs bg-zinc-50 dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700">
+                    <Eye className="w-3 h-3 mr-1 shrink-0" />
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="interactive">Interactive</SelectItem>
+                    <SelectItem value="background">Background</SelectItem>
+                    <SelectItem value="internal">Internal</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortBy)}>
+                  <SelectTrigger className="w-28 h-8 text-xs bg-zinc-50 dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="name">Name</SelectItem>
+                    <SelectItem value="most-used">Most Used</SelectItem>
+                    <SelectItem value="recent">Recent</SelectItem>
+                  </SelectContent>
+                </Select>
+                <div className="flex items-center gap-1 rounded-lg border border-border p-0.5 bg-zinc-100/50 dark:bg-zinc-900/50">
+                  <button
+                    onClick={() => setViewMode("cards")}
+                    className={cn(
+                      "flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors",
+                      viewMode === "cards"
+                        ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
+                        : "text-zinc-500 hover:text-foreground"
+                    )}
+                  >
+                    <LayoutGrid className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setViewMode("list")}
+                    className={cn(
+                      "flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors",
+                      viewMode === "list"
+                        ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
+                        : "text-zinc-500 hover:text-foreground"
+                    )}
+                  >
+                    <List className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <div className="flex-1" />
                 <Button
                   variant="outline"
                   size="sm"
@@ -329,432 +368,338 @@ export function FlowsPage() {
               }}
               extraMutations={{ deleteFlow: deleteFlowMutation }}
             >
-            <div className="flex-1 flex min-h-0">
-              {/* Flow list */}
-              <div className="w-full md:w-72 md:border-r border-border md:shrink-0 flex flex-col">
-                <div className="p-3 border-b border-border flex gap-2">
-                  <div className="relative flex-1">
-                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" />
-                    <Input
-                      value={filter}
-                      onChange={(e) => setFilter(e.target.value)}
-                      placeholder="Filter flows..."
-                      className="pl-8 h-8 text-sm bg-zinc-50 dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700"
-                    />
+              <div className="flex-1 overflow-y-auto">
+                {filtered.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-full px-4 max-w-sm mx-auto text-center">
+                    {flows.length === 0 ? (
+                      <>
+                        <img src="/stepwise-icon-64.png" alt="Stepwise" className="w-12 h-12 opacity-40 mb-3" />
+                        <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400 mb-1">Create your first flow</p>
+                        <p className="text-xs text-zinc-500 dark:text-zinc-600 mb-4">
+                          Flows define multi-step workflows for agents and humans.
+                        </p>
+                        <div className="flex gap-2">
+                          <Button size="sm" className="text-xs" onClick={() => setShowCreateDialog(true)}>
+                            <Plus className="w-3 h-3 mr-1" /> Create Flow
+                          </Button>
+                          <Button variant="outline" size="sm" className="text-xs" onClick={() => setTab("registry")}>
+                            <Globe className="w-3 h-3 mr-1" /> Browse Registry
+                          </Button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <FileText className="w-8 h-8 mb-2 opacity-40 text-zinc-500 dark:text-zinc-600" />
+                        <p className="text-xs text-zinc-500 dark:text-zinc-600">No matching flows</p>
+                      </>
+                    )}
                   </div>
-                  <Select value={visibilityFilter} onValueChange={(v) => setVisibilityFilter(v as VisibilityFilter)}>
-                    <SelectTrigger className="w-28 h-8 text-xs bg-zinc-50 dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700">
-                      <Eye className="w-3 h-3 mr-1 shrink-0" />
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All</SelectItem>
-                      <SelectItem value="interactive">Interactive</SelectItem>
-                      <SelectItem value="background">Background</SelectItem>
-                      <SelectItem value="internal">Internal</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortBy)}>
-                    <SelectTrigger className="w-28 h-8 text-xs bg-zinc-50 dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="name">Name</SelectItem>
-                      <SelectItem value="most-used">Most Used</SelectItem>
-                      <SelectItem value="recent">Recent</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex-1 overflow-y-auto py-1">
-                  {filtered.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-full px-3 max-w-sm mx-auto text-center">
-                      {flows.length === 0 ? (
-                        <>
-                          <img src="/stepwise-icon-64.png" alt="Stepwise" className="w-12 h-12 opacity-40 mb-3" />
-                          <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400 mb-1">Create your first flow</p>
-                          <p className="text-xs text-zinc-500 dark:text-zinc-600 mb-4">
-                            Flows define multi-step workflows for agents and humans.
-                          </p>
-                          <div className="flex flex-col gap-2">
-                            <Button
-                              size="sm"
-                              className="text-xs"
-                              onClick={() => setShowCreateDialog(true)}
-                            >
-                              <Plus className="w-3 h-3 mr-1" />
-                              Create Flow
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="text-xs"
-                              onClick={() => setTab("registry")}
-                            >
-                              <Globe className="w-3 h-3 mr-1" />
-                              Browse Registry
-                            </Button>
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <FileText className="w-8 h-8 mb-2 opacity-40 text-zinc-500 dark:text-zinc-600" />
-                          <p className="text-xs text-zinc-500 dark:text-zinc-600">No matching flows</p>
-                        </>
-                      )}
-                    </div>
-                  ) : (
-                    filtered.map((flow) => (
-                      <EntityContextMenu key={flow.path} type="flow" data={flow}>
-                      <button
-                        onClick={() => handleSelectLocalFlow(flow)}
-                        onDoubleClick={() => handleEdit(flow)}
-                        className={cn(
-                          "w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors",
-                          selectedLocalFlow?.path === flow.path
-                            ? "bg-zinc-100 dark:bg-zinc-800 text-foreground"
-                            : "text-zinc-600 dark:text-zinc-400 hover:text-foreground hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
-                        )}
-                      >
-                        {flow.source === "registry" ? (
-                          <Globe className="w-3.5 h-3.5 shrink-0 text-violet-400" />
-                        ) : flow.is_directory ? (
-                          <FolderOpen className="w-3.5 h-3.5 shrink-0 text-blue-400" />
-                        ) : (
-                          <FileText className="w-3.5 h-3.5 shrink-0 text-zinc-500" />
-                        )}
-                        <div className="flex flex-col min-w-0 flex-1">
-                          <span className="truncate inline-flex items-center gap-1.5">
-                            <span className="truncate">{flow.name}</span>
-                            {flow.source === "registry" && (
-                              <span className="text-[9px] px-1 py-0.5 rounded bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-400 uppercase tracking-wider">
-                                Registry
-                              </span>
-                            )}
-                            {flow.visibility && flow.visibility !== "interactive" && (
-                              <span className="text-[9px] px-1 py-0.5 rounded bg-zinc-200 dark:bg-zinc-700 text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
-                                {flow.visibility}
-                              </span>
-                            )}
-                            {flow.executor_types?.includes("external") && (
-                              <Tooltip>
-                                <TooltipTrigger
-                                  render={<span />}
-                                  className="inline-flex items-center shrink-0"
-                                  aria-label="Requires human input"
-                                >
-                                  <Hand className="w-3 h-3 text-amber-400" />
-                                </TooltipTrigger>
-                                <TooltipContent>Requires human input</TooltipContent>
-                              </Tooltip>
-                            )}
-                          </span>
-                          {flow.registry_ref && (
-                            <span className="text-[10px] text-violet-500 dark:text-violet-400 truncate leading-tight">
-                              {flow.registry_ref}
-                            </span>
-                          )}
-                          {flow.description && !flow.registry_ref && (
-                            <span className="text-[10px] text-zinc-500 dark:text-zinc-600 truncate leading-tight">
-                              {flow.description}
-                            </span>
-                          )}
-                        </div>
-                        <div className="ml-auto flex items-center gap-2 shrink-0">
-                          {(statsMap.get(flowDirKey(flow.path))?.job_count ?? 0) > 0 && (
-                            <span className="text-[10px] text-zinc-500 dark:text-zinc-600">
-                              {statsMap.get(flowDirKey(flow.path))!.job_count} jobs
-                            </span>
-                          )}
-                          <span className="text-xs text-zinc-500 dark:text-zinc-600">
-                            {sortBy === "recent"
-                              ? statsMap.get(flowDirKey(flow.path))?.last_run_at
-                                ? formatRelativeTime(statsMap.get(flowDirKey(flow.path))!.last_run_at!)
-                                : "never"
-                              : flow.steps_count}
-                          </span>
-                        </div>
-                      </button>
-                      </EntityContextMenu>
-                    ))
-                  )}
-                </div>
-              </div>
+                ) : viewMode === "cards" ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 p-4 sm:p-6">
+                    {filtered.map((flow) => {
+                      const stats = statsMap.get(flowDirKey(flow.path));
+                      const jobCount = stats?.job_count ?? 0;
+                      const lastRun = stats?.last_run_at;
 
-              {/* Local flow preview — desktop: inline panel, mobile: full-screen takeover */}
-              {!isMobile && (
-                selectedLocalFlow ? (
-                  <div className="flex-1 min-w-0 overflow-y-auto p-4 sm:p-6">
-                    <div className="flex h-full min-h-0 flex-col gap-4">
-                      <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 p-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 break-words">
-                                {selectedLocalFlow.name}
-                              </h2>
-                              {selectedLocalFlow.source === "registry" && (
-                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-400 uppercase tracking-wider font-medium">
+                      return (
+                        <EntityContextMenu key={flow.path} type="flow" data={flow}>
+                          <button
+                            onClick={() => handleSelectLocalFlow(flow)}
+                            className="w-full text-left rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/80 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-white dark:hover:bg-zinc-900 transition-all p-4 flex flex-col gap-2.5 group"
+                          >
+                            {/* Header: icon + name + badges */}
+                            <div className="flex items-center gap-2 min-w-0">
+                              {flow.source === "registry" ? (
+                                <Globe className="w-4 h-4 text-violet-400 shrink-0" />
+                              ) : flow.is_directory ? (
+                                <FolderOpen className="w-4 h-4 text-blue-400 shrink-0" />
+                              ) : (
+                                <FileText className="w-4 h-4 text-zinc-500 shrink-0" />
+                              )}
+                              <span className="text-sm font-medium text-foreground group-hover:text-blue-500 dark:group-hover:text-blue-400 truncate transition-colors">
+                                {flow.name}
+                              </span>
+                              {flow.executor_types?.includes("external") && (
+                                <Hand className="w-3 h-3 text-amber-400 shrink-0" />
+                              )}
+                            </div>
+
+                            {/* Description */}
+                            <p className="text-xs text-zinc-500 dark:text-zinc-500 line-clamp-2 min-h-[2lh]">
+                              {flow.description || flow.registry_ref || "No description"}
+                            </p>
+
+                            {/* Badges row */}
+                            <div className="flex flex-wrap gap-1">
+                              {flow.source === "registry" && (
+                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-400 uppercase tracking-wider">
                                   Registry
                                 </span>
                               )}
+                              {flow.visibility && flow.visibility !== "interactive" && (
+                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-700 text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
+                                  {flow.visibility}
+                                </span>
+                              )}
+                              {(flow.executor_types ?? []).map((t) => (
+                                <span
+                                  key={t}
+                                  className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 font-mono"
+                                >
+                                  {t}
+                                </span>
+                              ))}
                             </div>
-                            {selectedLocalFlow.registry_ref && (
-                              <p className="mt-0.5 text-xs text-violet-500 dark:text-violet-400 font-mono">
-                                {selectedLocalFlow.registry_ref}
-                              </p>
-                            )}
-                            <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-                              {localDescription}
-                            </p>
-                          </div>
-                          {selectedLocalFlow.source !== "registry" && (
-                            <Button
-                              onClick={() => {
-                                deleteFlowMutation.mutate(selectedLocalFlow.path, {
-                                  onSuccess: () => {
-                                    setSelectedLocalFlow(null);
-                                    navigate({ to: "/flows", search: {}, replace: true });
-                                  },
-                                });
-                              }}
-                              variant="ghost"
-                              size="icon-sm"
-                              className="shrink-0 text-red-400 hover:text-red-300"
-                              aria-label={`Delete ${selectedLocalFlow.name}`}
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </Button>
-                          )}
-                        </div>
-                        <div className="mt-4 flex flex-wrap items-center gap-2">
-                          {localMetadata?.author && (
-                            <span className="inline-flex items-center gap-1 rounded-md border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-950/70 px-2 py-1 text-xs text-zinc-700 dark:text-zinc-300">
-                              <User className="w-3 h-3" />
-                              {localMetadata.author}
-                            </span>
-                          )}
-                          {localMetadata?.version && (
-                            <span className="inline-flex items-center rounded-md border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-950/70 px-2 py-1 text-xs text-zinc-700 dark:text-zinc-300">
-                              v{localMetadata.version}
-                            </span>
-                          )}
-                          <div className="flex-1" />
-                          <Button onClick={() => handleRun(selectedLocalFlow)} size="sm">
-                            <Play className="w-3.5 h-3.5 mr-1.5" />
-                            Run
-                          </Button>
-                          {selectedLocalFlow.source === "registry" ? (
-                            <Button
-                              onClick={() => handleFork(selectedLocalFlow)}
-                              variant="outline"
-                              size="sm"
-                            >
-                              <GitFork className="w-3.5 h-3.5 mr-1.5" />
-                              Fork
-                            </Button>
-                          ) : (
-                            <Button
-                              onClick={() => handleEdit(selectedLocalFlow)}
-                              variant="outline"
-                              size="sm"
-                            >
-                              <Pencil className="w-3.5 h-3.5 mr-1.5" />
-                              Edit
-                            </Button>
-                          )}
-                        </div>
-                      </div>
 
-                      {selectedLocalFlow && selectedLocalFlow.source !== "registry" && (
-                        <FlowConfigPanel flowPath={selectedLocalFlow.path} />
-                      )}
-
-                      <div className="flex-1 min-h-0 overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-950/30">
-                        {localHasSteps ? (
-                          <FlowDagView
-                            workflow={localDagWorkflow}
-                            runs={EMPTY_RUNS}
-                            jobTree={null}
-                            expandedSteps={localExpandedSteps}
-                            onToggleExpand={toggleLocalExpand}
-                            selectedStep={null}
-                            onSelectStep={() => {}}
-                          />
-                        ) : (
-                          <div className="flex items-center justify-center h-full text-zinc-500 dark:text-zinc-600 text-sm">
-                            {localFlowDetail ? "No steps defined" : "Loading preview..."}
-                          </div>
-                        )}
-                      </div>
-                    </div>
+                            {/* Stats footer */}
+                            <div className="flex items-center gap-3 text-[11px] text-zinc-400 dark:text-zinc-500 pt-1 border-t border-zinc-100 dark:border-zinc-800">
+                              <span>{flow.steps_count} step{flow.steps_count !== 1 ? "s" : ""}</span>
+                              <span>{jobCount > 0 ? `${jobCount} job${jobCount !== 1 ? "s" : ""}` : "no jobs"}</span>
+                              <span className="ml-auto">{lastRun ? formatRelativeTime(lastRun) : "never run"}</span>
+                            </div>
+                          </button>
+                        </EntityContextMenu>
+                      );
+                    })}
                   </div>
                 ) : (
-                  <div className="flex-1 flex items-center justify-center text-zinc-500 dark:text-zinc-600 text-sm">
-                    Select a flow to preview
+                  <div className="divide-y divide-border">
+                    {filtered.map((flow) => {
+                      const stats = statsMap.get(flowDirKey(flow.path));
+                      const jobCount = stats?.job_count ?? 0;
+                      const lastRun = stats?.last_run_at;
+
+                      return (
+                        <EntityContextMenu key={flow.path} type="flow" data={flow}>
+                          <button
+                            onClick={() => handleSelectLocalFlow(flow)}
+                            className="w-full text-left px-4 sm:px-6 py-3 flex items-start gap-3 transition-colors hover:bg-zinc-50/80 dark:hover:bg-zinc-800/40 group"
+                          >
+                            <div className="mt-0.5 shrink-0">
+                              {flow.source === "registry" ? (
+                                <Globe className="w-4 h-4 text-violet-400" />
+                              ) : flow.is_directory ? (
+                                <FolderOpen className="w-4 h-4 text-blue-400" />
+                              ) : (
+                                <FileText className="w-4 h-4 text-zinc-500" />
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-medium text-foreground group-hover:text-blue-500 dark:group-hover:text-blue-400 truncate transition-colors">
+                                  {flow.name}
+                                </span>
+                                {flow.source === "registry" && (
+                                  <span className="text-[9px] px-1 py-0.5 rounded bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-400 uppercase tracking-wider shrink-0">
+                                    Registry
+                                  </span>
+                                )}
+                                {flow.visibility && flow.visibility !== "interactive" && (
+                                  <span className="text-[9px] px-1 py-0.5 rounded bg-zinc-200 dark:bg-zinc-700 text-zinc-500 dark:text-zinc-400 uppercase tracking-wider shrink-0">
+                                    {flow.visibility}
+                                  </span>
+                                )}
+                                {flow.executor_types?.includes("external") && (
+                                  <Hand className="w-3 h-3 text-amber-400 shrink-0" />
+                                )}
+                              </div>
+                              {(flow.description || flow.registry_ref) && (
+                                <p className="text-xs text-zinc-500 dark:text-zinc-500 truncate mt-0.5">
+                                  {flow.registry_ref ?? flow.description}
+                                </p>
+                              )}
+                            </div>
+                            <div className="hidden sm:flex items-center gap-6 shrink-0 text-[11px] text-zinc-500 dark:text-zinc-500 tabular-nums">
+                              {(flow.executor_types?.length ?? 0) > 0 && (
+                                <div className="flex gap-1 w-28 justify-end">
+                                  {(flow.executor_types ?? []).slice(0, 3).map((t) => (
+                                    <span key={t} className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 text-[10px] font-mono">
+                                      {t}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                              <span className="w-12 text-right">{flow.steps_count} step{flow.steps_count !== 1 ? "s" : ""}</span>
+                              <span className="w-14 text-right">{jobCount > 0 ? `${jobCount} job${jobCount !== 1 ? "s" : ""}` : "—"}</span>
+                              <span className="w-16 text-right">{lastRun ? formatRelativeTime(lastRun) : "never"}</span>
+                            </div>
+                          </button>
+                        </EntityContextMenu>
+                      );
+                    })}
                   </div>
-                )
-              )}
-              {isMobile && (
-                <MobileFullScreen
-                  open={!!selectedLocalFlow}
-                  onClose={() => {
-                    setSelectedLocalFlow(null);
-                    navigate({ to: "/flows", search: {}, replace: true });
-                  }}
-                  title={selectedLocalFlow?.name ?? "Flow Preview"}
-                >
-                  {selectedLocalFlow && (
-                    <div className="flex flex-col h-full">
-                      <div className="p-4 space-y-3">
-                        {selectedLocalFlow.registry_ref && (
-                          <p className="text-xs text-violet-500 dark:text-violet-400 font-mono">
-                            {selectedLocalFlow.registry_ref}
-                          </p>
-                        )}
-                        <p className="text-sm text-zinc-500 dark:text-zinc-400">{localDescription}</p>
-                        <div className="flex flex-wrap items-center gap-2">
-                          {selectedLocalFlow.source === "registry" && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-400 uppercase tracking-wider font-medium">
-                              Registry
-                            </span>
-                          )}
-                          {localMetadata?.author && (
-                            <span className="inline-flex items-center gap-1 rounded-md border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-950/70 px-2 py-1 text-xs text-zinc-700 dark:text-zinc-300">
-                              <User className="w-3 h-3" />
-                              {localMetadata.author}
-                            </span>
-                          )}
-                          {localMetadata?.version && (
-                            <span className="inline-flex items-center rounded-md border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-950/70 px-2 py-1 text-xs text-zinc-700 dark:text-zinc-300">
-                              v{localMetadata.version}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex gap-2">
-                          <Button onClick={() => handleRun(selectedLocalFlow)} size="sm" className="flex-1">
-                            <Play className="w-3.5 h-3.5 mr-1.5" />
-                            Run
-                          </Button>
-                          {selectedLocalFlow.source === "registry" ? (
-                            <Button onClick={() => handleFork(selectedLocalFlow)} variant="outline" size="sm" className="flex-1">
-                              <GitFork className="w-3.5 h-3.5 mr-1.5" />
-                              Fork
-                            </Button>
-                          ) : (
-                            <>
-                              <Button onClick={() => handleEdit(selectedLocalFlow)} variant="outline" size="sm" className="flex-1">
-                                <Pencil className="w-3.5 h-3.5 mr-1.5" />
-                                Edit
-                              </Button>
-                              <Button
-                                onClick={() => {
-                                  deleteFlowMutation.mutate(selectedLocalFlow.path, {
-                                    onSuccess: () => {
-                                      setSelectedLocalFlow(null);
-                                      navigate({ to: "/flows", search: {}, replace: true });
-                                    },
-                                  });
-                                }}
-                                variant="ghost"
-                                size="icon-sm"
-                                className="shrink-0 text-red-400 hover:text-red-300"
-                                aria-label={`Delete ${selectedLocalFlow.name}`}
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </Button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                      {selectedLocalFlow && selectedLocalFlow.source !== "registry" && (
-                        <div className="px-4">
-                          <FlowConfigPanel flowPath={selectedLocalFlow.path} />
-                        </div>
-                      )}
-                      <div className="flex-1 min-h-0 border-t border-border">
-                        {localHasSteps ? (
-                          <FlowDagView
-                            workflow={localDagWorkflow}
-                            runs={EMPTY_RUNS}
-                            jobTree={null}
-                            expandedSteps={localExpandedSteps}
-                            onToggleExpand={toggleLocalExpand}
-                            selectedStep={null}
-                            onSelectStep={() => {}}
-                          />
-                        ) : (
-                          <div className="flex items-center justify-center h-full text-zinc-500 dark:text-zinc-600 text-sm">
-                            {localFlowDetail ? "No steps defined" : "Loading preview..."}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </MobileFullScreen>
-              )}
-            </div>
+                )}
+              </div>
             </ActionContextProvider>
           ) : (
-            <div className="flex-1 flex min-h-0">
-              <div className="w-full md:w-72 md:border-r border-border md:shrink-0">
-                <RegistryBrowser
-                  selectedSlug={selectedRegistryFlow?.slug}
-                  onSelect={(flow) => {
-                    setSelectedRegistryFlow(flow);
-                  }}
-                />
+            /* Registry tab */
+            <div className="flex-1 overflow-y-auto">
+              {/* Registry toolbar */}
+              <div className="flex items-center gap-3 px-4 sm:px-6 py-3 border-b border-border">
+                <div className="relative flex-1 max-w-sm">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" />
+                  <Input
+                    value={registryQuery}
+                    onChange={(e) => setRegistryQuery(e.target.value)}
+                    placeholder="Search registry..."
+                    className="pl-8 h-8 text-sm bg-zinc-50 dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700"
+                  />
+                </div>
+                <div className="flex items-center gap-1 rounded-lg border border-border p-0.5 bg-zinc-100/50 dark:bg-zinc-900/50">
+                  <button
+                    onClick={() => setRegistrySort("downloads")}
+                    className={cn(
+                      "px-2.5 py-1 text-xs rounded-md transition-colors",
+                      registrySort === "downloads"
+                        ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
+                        : "text-zinc-500 hover:text-foreground"
+                    )}
+                  >
+                    Popular
+                  </button>
+                  <button
+                    onClick={() => setRegistrySort("newest")}
+                    className={cn(
+                      "px-2.5 py-1 text-xs rounded-md transition-colors",
+                      registrySort === "newest"
+                        ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
+                        : "text-zinc-500 hover:text-foreground"
+                    )}
+                  >
+                    Newest
+                  </button>
+                </div>
+                <div className="flex items-center gap-1 rounded-lg border border-border p-0.5 bg-zinc-100/50 dark:bg-zinc-900/50">
+                  <button
+                    onClick={() => setViewMode("cards")}
+                    className={cn(
+                      "flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors",
+                      viewMode === "cards"
+                        ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
+                        : "text-zinc-500 hover:text-foreground"
+                    )}
+                  >
+                    <LayoutGrid className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setViewMode("list")}
+                    className={cn(
+                      "flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors",
+                      viewMode === "list"
+                        ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
+                        : "text-zinc-500 hover:text-foreground"
+                    )}
+                  >
+                    <List className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
-              {!isMobile && (
-                selectedRegistryFlow ? (
-                  <>
-                    <div className="flex-1 min-w-0">
-                      {registryFlowDetail?.flow ? (
-                        <FlowDagView
-                          workflow={registryDagWorkflow}
-                          runs={EMPTY_RUNS}
-                          jobTree={null}
-                          expandedSteps={expandedSteps}
-                          onToggleExpand={toggleExpand}
-                          selectedStep={null}
-                          onSelectStep={() => {}}
-                        />
-                      ) : (
-                        <div className="flex items-center justify-center h-full text-zinc-500 dark:text-zinc-600 text-sm">
-                          Loading preview...
+
+              {registryError ? (
+                <div className="flex flex-col items-center justify-center h-64 text-zinc-500">
+                  <WifiOff className="w-8 h-8 mb-3 opacity-40" />
+                  <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">Registry not configured</p>
+                  <p className="text-xs text-zinc-600 mt-1 text-center max-w-xs">
+                    The flow registry provides shared, reusable workflows.
+                  </p>
+                </div>
+              ) : registryLoading ? (
+                <div className="flex items-center justify-center h-64">
+                  <Loader2 className="w-5 h-5 animate-spin text-zinc-500" />
+                </div>
+              ) : registryFlows.length === 0 ? (
+                <div className="flex items-center justify-center h-64 text-xs text-zinc-500">
+                  {registryQuery ? "No flows found" : "No flows in registry"}
+                </div>
+              ) : (
+                <div className={cn(
+                  viewMode === "cards"
+                    ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 p-4 sm:p-6"
+                    : "divide-y divide-border"
+                )}>
+                  {registryFlows.map((flow) => {
+                    const isInstalled = localRegistryMap.has(flow.slug) || installedSlugs.has(flow.slug);
+
+                    return viewMode === "cards" ? (
+                      <button
+                        key={flow.slug}
+                        onClick={() => handleRegistryFlowClick(flow)}
+                        disabled={installMutation.isPending && !isInstalled}
+                        className="w-full text-left rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/80 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-white dark:hover:bg-zinc-900 transition-all p-4 flex flex-col gap-2.5 group"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Globe className="w-4 h-4 text-violet-400 shrink-0" />
+                          <span className="text-sm font-medium text-foreground group-hover:text-blue-500 dark:group-hover:text-blue-400 truncate transition-colors">{flow.name}</span>
+                          {flow.featured && (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 uppercase tracking-wider shrink-0">
+                              Featured
+                            </span>
+                          )}
+                          {isInstalled && (
+                            <span className="flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-900/40 text-green-600 dark:text-green-400 uppercase tracking-wider shrink-0">
+                              <Check className="w-2.5 h-2.5" />Installed
+                            </span>
+                          )}
                         </div>
-                      )}
-                    </div>
-                    <div className="w-80 border-l border-border shrink-0">
-                      <FlowInfoPanel
-                        flow={selectedRegistryFlow}
-                        onInstall={handleInstall}
-                        isInstalling={installMutation.isPending}
-                        isInstalled={installedSlugs.has(selectedRegistryFlow.slug)}
-                      />
-                    </div>
-                  </>
-                ) : (
-                  <div className="flex-1 flex items-center justify-center text-zinc-500 dark:text-zinc-600 text-sm">
-                    Select a flow from the registry
-                  </div>
-                )
-              )}
-              {/* Registry detail as full-screen on mobile */}
-              {isMobile && (
-                <MobileFullScreen
-                  open={!!selectedRegistryFlow}
-                  onClose={() => setSelectedRegistryFlow(null)}
-                  title={selectedRegistryFlow?.name ?? "Flow Details"}
-                >
-                  {selectedRegistryFlow && (
-                    <FlowInfoPanel
-                      flow={selectedRegistryFlow}
-                      onInstall={handleInstall}
-                      isInstalling={installMutation.isPending}
-                      isInstalled={installedSlugs.has(selectedRegistryFlow.slug)}
-                    />
-                  )}
-                </MobileFullScreen>
+                        <p className="text-xs text-zinc-500 line-clamp-2 min-h-[2lh]">
+                          {flow.description || "No description"}
+                        </p>
+                        <div className="flex flex-wrap gap-1">
+                          {flow.executor_types.map((t) => (
+                            <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 font-mono">
+                              {t}
+                            </span>
+                          ))}
+                        </div>
+                        <div className="flex items-center gap-3 text-[11px] text-zinc-400 dark:text-zinc-500 pt-1 border-t border-zinc-100 dark:border-zinc-800">
+                          <span className="flex items-center gap-1"><User className="w-3 h-3" />{flow.author}</span>
+                          <span>{flow.steps} step{flow.steps !== 1 ? "s" : ""}</span>
+                          <span>{flow.downloads} dl{flow.downloads !== 1 ? "s" : ""}</span>
+                          {!isInstalled && (
+                            <span className="ml-auto flex items-center gap-1 text-blue-500 dark:text-blue-400 font-medium">
+                              <Download className="w-3 h-3" />Install
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    ) : (
+                      <button
+                        key={flow.slug}
+                        onClick={() => handleRegistryFlowClick(flow)}
+                        disabled={installMutation.isPending && !isInstalled}
+                        className="w-full text-left px-4 sm:px-6 py-3 flex items-start gap-3 transition-colors hover:bg-zinc-50/80 dark:hover:bg-zinc-800/40 group"
+                      >
+                        <Globe className="w-4 h-4 text-violet-400 shrink-0 mt-0.5" />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-foreground group-hover:text-blue-500 dark:group-hover:text-blue-400 truncate transition-colors">{flow.name}</span>
+                            {flow.featured && (
+                              <span className="text-[9px] px-1 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 uppercase tracking-wider shrink-0">
+                                Featured
+                              </span>
+                            )}
+                            {isInstalled && (
+                              <span className="flex items-center gap-0.5 text-[9px] px-1 py-0.5 rounded bg-green-100 dark:bg-green-900/40 text-green-600 dark:text-green-400 uppercase tracking-wider shrink-0">
+                                <Check className="w-2.5 h-2.5" />Installed
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-zinc-500 truncate mt-0.5">{flow.description}</p>
+                        </div>
+                        <div className="hidden sm:flex items-center gap-6 shrink-0 text-[11px] text-zinc-500 tabular-nums">
+                          <span className="flex items-center gap-1"><User className="w-3 h-3" />{flow.author}</span>
+                          <span className="w-12 text-right">{flow.steps} step{flow.steps !== 1 ? "s" : ""}</span>
+                          <span className="w-12 text-right">{flow.downloads} dls</span>
+                          {!isInstalled && (
+                            <span className="flex items-center gap-1 text-blue-500 dark:text-blue-400 font-medium">
+                              <Download className="w-3 h-3" />Install
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
               )}
             </div>
           )}

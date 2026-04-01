@@ -1,7 +1,6 @@
 name: quality-loop
 description: Step that loops until quality threshold met (tests exit rules in report)
 author: zack
-tags: [test, loop, exit-rules]
 
 steps:
   generate:

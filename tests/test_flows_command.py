@@ -55,7 +55,7 @@ class TestFlowsCommand:
         assert "NAME" in combined
         assert "DESCRIPTION" in combined
         assert "STEPS" in combined
-        assert "TAGS" in combined
+        assert "VISIBILITY" in combined
 
     def test_flow_name_appears_in_output(self, tmp_path, capsys, monkeypatch):
         project = _make_project(tmp_path)
@@ -96,17 +96,6 @@ class TestFlowsScanning:
         rc, combined = _run_flows(monkeypatch, tmp_path, capsys)
         assert rc == EXIT_SUCCESS
         assert "Does important things" in combined
-
-    def test_tags_shown(self, tmp_path, capsys, monkeypatch):
-        project = _make_project(tmp_path)
-        _make_flow_dir(
-            project, "tagged",
-            "name: tagged\ntags: [research, llm]\nsteps:\n  s1:\n    run: echo '{}'\n"
-        )
-        rc, combined = _run_flows(monkeypatch, tmp_path, capsys)
-        assert rc == EXIT_SUCCESS
-        assert "research" in combined
-        assert "llm" in combined
 
     def test_step_count_correct(self, tmp_path, capsys, monkeypatch):
         project = _make_project(tmp_path)
