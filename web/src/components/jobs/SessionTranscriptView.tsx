@@ -91,7 +91,7 @@ export function SessionTranscriptView({
     for (const b of boundaries) {
       // Walk segments until we reach the event index
       while (segIdx < segments.length && evtCount < b.event_index) {
-        evtCount += segments[segIdx].type === "text" ? 1 : 1;
+        evtCount++;
         segIdx++;
       }
       boundaryAtSegment.set(segIdx, b);
