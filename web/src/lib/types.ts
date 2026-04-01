@@ -455,3 +455,28 @@ export const EVENT_TYPES = {
   LOOP_MAX_REACHED: "loop.max_reached",
   CONTEXT_INJECTED: "context.injected",
 } as const;
+
+// ── Sessions ────────────────────────────────────────────────────────────
+
+export interface SessionInfo {
+  session_name: string;
+  run_ids: string[];
+  step_names: string[];
+  is_active: boolean;
+  started_at: string | null;
+  latest_at: string | null;
+}
+
+export interface SessionBoundary {
+  event_index: number;
+  step_name: string;
+  attempt: number;
+  run_id: string;
+  started_at: string | null;
+  status: string;
+}
+
+export interface SessionTranscript {
+  events: AgentStreamEvent[];
+  boundaries: SessionBoundary[];
+}

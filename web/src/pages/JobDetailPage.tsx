@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useParams, useNavigate, useSearch, Link } from "@tanstack/react-router";
 import type { JobDetailSearch } from "@/router";
-import { useJob, useRuns, useJobTree, useJobOutput, useJobCost, useStepwiseMutations } from "@/hooks/useStepwise";
+import { useJob, useRuns, useJobTree, useJobOutput, useJobCost, useStepwiseMutations, useJobSessions } from "@/hooks/useStepwise";
+import { SessionTab } from "@/components/jobs/SessionTab";
 import { JobList } from "@/components/jobs/JobList";
 import { ActionContextProvider } from "@/components/menus/ActionContextProvider";
 import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
@@ -74,7 +75,7 @@ function resolveStep(
   return null;
 }
 
-type RightPanelTab = "run" | "step";
+type RightPanelTab = "run" | "step" | "session";
 
 export function JobDetailPage() {
   const { jobId } = useParams({ from: "/jobs/$jobId" });
@@ -85,6 +86,8 @@ export function JobDetailPage() {
   const { data: jobTree } = useJobTree(jobId);
   const { data: runs = [] } = useRuns(jobId);
   const { data: costData } = useJobCost(jobId);
+  const { data: sessionData } = useJobSessions(jobId);
+  const hasSessions = (sessionData?.sessions?.length ?? 0) > 0;
   const searchParams = useSearch({ from: "/jobs/$jobId" }) as JobDetailSearch;
   const [dataFlowSelection, setDataFlowSelection] = useState<DagSelection>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -682,13 +685,37 @@ export function JobDetailPage() {
           );
         }
 
-        // No step selected: show JobOverview (no tabs)
+        // No step selected: show JobOverview or Session tab
         let panelContent: React.ReactNode = null;
         if (showRightPanel && !resolvedStep) {
+          const showSessionInOverview = hasSessions && activeTab === "session";
           panelContent = (
             <div className="flex flex-col flex-1 min-h-0">
               <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-zinc-50/50 dark:bg-zinc-950/50 shrink-0">
-                <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">Job Details</span>
+                {hasSessions ? (
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => navigate({ search: (prev: JobDetailSearch) => ({ ...prev, tab: undefined }), replace: true })}
+                      className={cn(
+                        "text-xs font-medium px-2 py-0.5 rounded transition-colors",
+                        !showSessionInOverview ? "text-zinc-700 dark:text-zinc-300 bg-zinc-200/60 dark:bg-zinc-800/60" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300",
+                      )}
+                    >
+                      Overview
+                    </button>
+                    <button
+                      onClick={() => navigate({ search: (prev: JobDetailSearch) => ({ ...prev, tab: "session" as const }), replace: true })}
+                      className={cn(
+                        "text-xs font-medium px-2 py-0.5 rounded transition-colors",
+                        showSessionInOverview ? "text-zinc-700 dark:text-zinc-300 bg-zinc-200/60 dark:bg-zinc-800/60" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300",
+                      )}
+                    >
+                      Session
+                    </button>
+                  </div>
+                ) : (
+                  <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">Job Details</span>
+                )}
                 <button
                   onClick={closePanel}
                   className="text-zinc-500 dark:text-zinc-600 hover:text-zinc-700 dark:hover:text-zinc-300 p-0.5"
@@ -696,9 +723,28 @@ export function JobDetailPage() {
                   <PanelRightOpen className="w-3.5 h-3.5" />
                 </button>
               </div>
-              <ScrollArea className="flex-1 min-h-0">
-                <JobOverview job={job} />
-              </ScrollArea>
+              {showSessionInOverview ? (
+                <div className="flex-1 min-h-0 overflow-y-auto">
+                  <SessionTab
+                    jobId={jobId}
+                    onNavigateToStep={(stepName) =>
+                      navigate({
+                        search: (prev: JobDetailSearch) => ({
+                          ...prev,
+                          step: stepName,
+                          tab: "run" as const,
+                          panel: "open" as const,
+                        }),
+                        replace: true,
+                      })
+                    }
+                  />
+                </div>
+              ) : (
+                <ScrollArea className="flex-1 min-h-0">
+                  <JobOverview job={job} />
+                </ScrollArea>
+              )}
             </div>
           );
         }
@@ -721,6 +767,11 @@ export function JobDetailPage() {
                   <TabsTrigger value="step" className="text-xs gap-1 px-2.5">
                     Step
                   </TabsTrigger>
+                  {hasSessions && (
+                    <TabsTrigger value="session" className="text-xs gap-1 px-2.5">
+                      Session
+                    </TabsTrigger>
+                  )}
                 </TabsList>
                 <button
                   onClick={deselectStep}
@@ -758,6 +809,32 @@ export function JobDetailPage() {
                   <StepConfigView stepDef={resolvedStep.stepDef} />
                 </div>
               </TabsContent>
+
+              {hasSessions && (
+                <TabsContent
+                  value="session"
+                  className={cn(
+                    "flex-1 min-h-0 overflow-y-auto",
+                    activeTab !== "session" && "hidden"
+                  )}
+                >
+                  <SessionTab
+                    jobId={jobId}
+                    highlightStep={selectedStep}
+                    onNavigateToStep={(stepName) =>
+                      navigate({
+                        search: (prev: JobDetailSearch) => ({
+                          ...prev,
+                          step: stepName,
+                          tab: "run" as const,
+                          panel: "open" as const,
+                        }),
+                        replace: true,
+                      })
+                    }
+                  />
+                </TabsContent>
+              )}
             </Tabs>
           );
         }
