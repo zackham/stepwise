@@ -18,6 +18,8 @@ import type {
   QuickLaunchItem,
   StepDefinition,
   GroupInfo,
+  SessionInfo,
+  SessionTranscript,
 } from "./types";
 
 const BASE_URL = "/api";
@@ -234,6 +236,21 @@ export function fetchAgentOutput(
   runId: string
 ): Promise<{ events: AgentStreamEvent[] }> {
   return request<{ events: AgentStreamEvent[] }>(`/runs/${runId}/agent-output`);
+}
+
+export function fetchJobSessions(
+  jobId: string
+): Promise<{ sessions: SessionInfo[] }> {
+  return request<{ sessions: SessionInfo[] }>(`/jobs/${jobId}/sessions`);
+}
+
+export function fetchSessionTranscript(
+  jobId: string,
+  sessionName: string
+): Promise<SessionTranscript> {
+  return request<SessionTranscript>(
+    `/jobs/${jobId}/sessions/${encodeURIComponent(sessionName)}/transcript`
+  );
 }
 
 export function fetchScriptOutput(

@@ -116,6 +116,26 @@ export function useAgentOutput(runId: string | undefined, options?: { staleTime?
   });
 }
 
+export function useJobSessions(jobId: string | undefined) {
+  return useQuery({
+    queryKey: ["sessions", jobId],
+    queryFn: () => api.fetchJobSessions(jobId!),
+    enabled: !!jobId,
+  });
+}
+
+export function useSessionTranscript(
+  jobId: string | undefined,
+  sessionName: string | undefined,
+) {
+  return useQuery({
+    queryKey: ["sessionTranscript", jobId, sessionName],
+    queryFn: () => api.fetchSessionTranscript(jobId!, sessionName!),
+    enabled: !!jobId && !!sessionName,
+    staleTime: Infinity,
+  });
+}
+
 export function useSimilarErrors(
   errorCategory: string | null | undefined,
   excludeRunId?: string,

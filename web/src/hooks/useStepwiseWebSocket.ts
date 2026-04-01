@@ -101,6 +101,8 @@ export function useStepwiseWebSocket(): StepwiseWebSocketState {
             queryClient.invalidateQueries({ queryKey: ["runs", jobId] });
             queryClient.invalidateQueries({ queryKey: ["events", jobId] });
             queryClient.invalidateQueries({ queryKey: ["jobTree", jobId] });
+            queryClient.invalidateQueries({ queryKey: ["sessions", jobId] });
+            queryClient.invalidateQueries({ queryKey: ["sessionTranscript", jobId] });
           }
           for (const fn of tickListeners) fn(msg as TickMessage);
         } else if (msg.type === "stale_jobs") {
