@@ -9,6 +9,7 @@ import {
   Layers,
   RefreshCw,
   XCircle,
+  Link2,
 } from "lucide-react";
 import { StepStatusBadge } from "@/components/StatusBadge";
 import { STEP_STATUS_COLORS, STEP_PENDING_COLORS } from "@/lib/status-colors";
@@ -344,6 +345,11 @@ export function StepNode({
   const attempt = latestRun?.attempt ?? 0;
   const showAttemptBadge = attempt > 1 || (maxAttempts != null && attempt >= 1);
 
+  const hasSession =
+    stepDef.executor?.config?.continue_session === true ||
+    stepDef.inputs?.some((i) => i.field === "_session_id");
+  const sessionName = (latestRun?.executor_state as Record<string, unknown> | undefined)?.session_name as string | undefined;
+
   const hasTooltipContent =
     stepDef.exit_rules.length > 0 ||
     stepDef.inputs.length > 0 ||
@@ -409,6 +415,11 @@ export function StepNode({
           <span className="text-sm font-medium truncate text-foreground">
             {stepDef.name}
           </span>
+          {hasSession && (
+            <span className="text-violet-400/60 shrink-0" title={sessionName ? `Session: ${sessionName}` : "Session step"}>
+              <Link2 className="w-2.5 h-2.5 inline" />
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {showAttemptBadge && (
