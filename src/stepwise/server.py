@@ -1993,6 +1993,84 @@ def get_job_outputs_alias(
     return get_job_output(job_id, step=step, inputs=inputs)
 
 
+@app.get("/api/jobs/{job_id}/sessions")
+def get_job_sessions(job_id: str):
+    """List agent sessions for a job, grouped by executor_state.session_name."""
+    engine = _get_engine()
+    try:
+        engine.store.load_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    runs = engine.store.runs_for_job(job_id)
+    sessions: dict[str, dict] = {}
+    for run in runs:
+        sname = (run.executor_state or {}).get("session_name")
+        if not sname:
+            continue
+        if sname not in sessions:
+            sessions[sname] = {
+                "session_name": sname,
+                "run_ids": [],
+                "step_names": [],
+                "is_active": False,
+                "started_at": None,
+                "latest_at": None,
+            }
+        s = sessions[sname]
+        s["run_ids"].append(run.id)
+        if run.step_name not in s["step_names"]:
+            s["step_names"].append(run.step_name)
+        if run.status == StepRunStatus.RUNNING:
+            s["is_active"] = True
+        ts = run.started_at.isoformat() if run.started_at else None
+        if ts and (not s["started_at"] or ts < s["started_at"]):
+            s["started_at"] = ts
+        end_ts = run.completed_at or run.started_at
+        end_iso = end_ts.isoformat() if end_ts else None
+        if end_iso and (not s["latest_at"] or end_iso > s["latest_at"]):
+            s["latest_at"] = end_iso
+    return {"sessions": sorted(sessions.values(), key=lambda x: x["started_at"] or "")}
+
+
+@app.get("/api/jobs/{job_id}/sessions/{session_name:path}/transcript")
+def get_session_transcript(job_id: str, session_name: str):
+    """Get concatenated agent output events for a session with step boundary markers."""
+    engine = _get_engine()
+    try:
+        engine.store.load_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    runs = engine.store.runs_for_job(job_id)
+    session_runs = [
+        r for r in runs
+        if (r.executor_state or {}).get("session_name") == session_name
+    ]
+    if not session_runs:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_name}")
+    session_runs.sort(key=lambda r: r.started_at or datetime.min)
+
+    all_events: list[dict] = []
+    boundaries: list[dict] = []
+    for run in session_runs:
+        boundaries.append({
+            "event_index": len(all_events),
+            "step_name": run.step_name,
+            "attempt": run.attempt,
+            "run_id": run.id,
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "status": run.status.value,
+        })
+        output_path = (run.executor_state or {}).get("output_path")
+        if output_path:
+            try:
+                with open(output_path) as f:
+                    raw = f.read()
+                all_events.extend(_parse_ndjson_events(raw))
+            except FileNotFoundError:
+                pass
+    return {"events": all_events, "boundaries": boundaries}
+
+
 @app.get("/api/errors/similar")
 def similar_errors(
     error_category: str,
