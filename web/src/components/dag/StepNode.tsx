@@ -583,7 +583,7 @@ export function StepNode({
 
   const hasSession =
     stepDef.executor?.config?.continue_session === true ||
-    stepDef.inputs?.some((i) => i.field === "_session_id");
+    stepDef.inputs?.some((i) => i.source_field === "_session_id");
   const sessionName = (latestRun?.executor_state as Record<string, unknown> | undefined)?.session_name as string | undefined;
 
   const hasTooltipContent =

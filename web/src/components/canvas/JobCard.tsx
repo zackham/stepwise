@@ -8,6 +8,14 @@ import { LiveDuration } from "@/components/LiveDuration";
 import { EntityContextMenu } from "@/components/menus/EntityContextMenu";
 import type { Job, StepRun } from "@/lib/types";
 
+function timeAgo(ts: string): string {
+  const diff = Date.now() - new Date(ts).getTime();
+  if (diff < 60000) return "just now";
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  return `${Math.floor(diff / 86400000)}d ago`;
+}
+
 export interface JobCardProps {
   job: Job;
   runs: StepRun[];
@@ -62,7 +70,7 @@ export const JobCard = memo(function JobCard({ job, runs, dependencyNames, isGro
     <Link
       to="/jobs/$jobId"
       params={{ jobId: job.id }}
-      search={(prev: Record<string, unknown>) => ({ ...prev, sidebar: "0" })}
+      search={((prev: Record<string, unknown>) => ({ ...prev, sidebar: "0" })) as never}
       className={cn(
         "block w-full rounded-lg border transition-all duration-200 overflow-hidden",
         "bg-white/80 hover:bg-white dark:bg-zinc-900/80 dark:hover:bg-zinc-900",
@@ -76,7 +84,7 @@ export const JobCard = memo(function JobCard({ job, runs, dependencyNames, isGro
       {/* Header */}
       <div className="px-3 pt-2.5 pb-1 flex items-start gap-2">
         <div className="flex-1 min-w-0">
-          <p className="text-[13px] font-medium text-zinc-900 dark:text-zinc-100 truncate leading-tight">
+          <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100 truncate leading-tight">
             {displayName}
           </p>
           {flowName && (
@@ -92,7 +100,12 @@ export const JobCard = memo(function JobCard({ job, runs, dependencyNames, isGro
               queued
             </span>
           )}
-          <JobStatusBadge status={job.status} />
+          <div className="flex flex-col items-end">
+            <JobStatusBadge status={job.status} />
+            {(isCompleted || isFailed || job.status === "cancelled") && (
+              <span className="text-[11px] text-zinc-500 mt-0.5">{timeAgo(job.updated_at)}</span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -110,10 +123,10 @@ export const JobCard = memo(function JobCard({ job, runs, dependencyNames, isGro
 
       {/* Footer */}
       <div className="px-3 pb-2 pt-0.5 space-y-0.5">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center text-[11px]">
           <div className="flex-1 min-w-0">
             {currentStep ? (
-              <p className="text-[11px] text-zinc-400 truncate">
+              <p className="text-zinc-400 truncate">
                 <span className="text-zinc-500">{currentStep.name}</span>
                 {currentStep.started_at && (
                   <span className="text-zinc-600 ml-1.5">
@@ -125,17 +138,20 @@ export const JobCard = memo(function JobCard({ job, runs, dependencyNames, isGro
                 )}
               </p>
             ) : (
-              <span className="text-[11px] text-zinc-600">
+              <span className="text-zinc-600">
                 {Object.keys(job.workflow?.steps ?? {}).length} steps
               </span>
             )}
           </div>
-          <span className="text-[11px] text-zinc-600 shrink-0 ml-2">
+          <span className="text-zinc-500 shrink-0 mx-2">
             <LiveDuration
               startTime={isActive || isCompleted || isFailed || job.status === "cancelled" ? job.created_at : null}
               endTime={isCompleted || isFailed || job.status === "cancelled" ? job.updated_at : null}
             />
           </span>
+          <div className="flex-1 min-w-0 text-right">
+            <span className="text-zinc-600 text-[10px]">started {timeAgo(job.created_at)}</span>
+          </div>
         </div>
         {dependencyNames && dependencyNames.length > 0 && (
           <p className="text-[10px] text-zinc-600 truncate">
