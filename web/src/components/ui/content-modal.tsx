@@ -26,9 +26,9 @@ export function ContentModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col bg-zinc-900 border-zinc-700 text-zinc-100">
+      <DialogContent showCloseButton={false} className="max-h-[80vh] flex flex-col bg-zinc-900 border-zinc-700 text-zinc-100 sm:max-w-[900px] max-w-[90vw]">
         <DialogHeader>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between">
             <DialogTitle className="text-zinc-100">{title}</DialogTitle>
             {copyContent !== undefined && (
               <button

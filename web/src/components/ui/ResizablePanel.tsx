@@ -54,7 +54,7 @@ export function ResizablePanel({
     <>
       {side === "right" && <DragHandle onMouseDown={onMouseDown} />}
       <div
-        className={`shrink-0 flex flex-col overflow-y-auto ${className}`}
+        className={`shrink-0 flex flex-col ${className}`}
         style={{ width, maxHeight: "calc(100vh - 3rem)" }}
       >
         {children}

@@ -1107,7 +1107,7 @@ async def _log_unhandled_error(request, exc):
 
 
 @app.get("/api/jobs")
-def list_jobs(request: Request, status: str | None = None, top_level: bool = False, limit: int = 50, include_archived: bool = False):
+def list_jobs(request: Request, status: str | None = None, top_level: bool = False, limit: int = 50, include_archived: bool = False, include_total: bool = False):
     engine = _get_engine()
     if status:
         try:
@@ -1125,7 +1125,15 @@ def list_jobs(request: Request, status: str | None = None, top_level: bool = Fal
         meta_filters=meta_filters or None,
         include_archived=include_archived,
     )
-    return [_serialize_job(j, summary=True) for j in jobs]
+    serialized = [_serialize_job(j, summary=True) for j in jobs]
+    if include_total:
+        total = len(engine.store.all_jobs(
+            job_status, top_level_only=top_level, limit=0,
+            meta_filters=meta_filters or None,
+            include_archived=include_archived,
+        ))
+        return {"jobs": serialized, "total": total}
+    return serialized
 
 
 @app.post("/api/jobs")
@@ -2759,11 +2767,12 @@ def list_local_flows():
         except OSError:
             modified_at = ""
 
-        # Parse lightly to get step count, description, and executor types
+        # Parse lightly to get step count, description, executor types, and graph
         steps_count = 0
         description = ""
         executor_types: list[str] = []
         visibility = "interactive"
+        graph = None
         try:
             wf = load_workflow_yaml(flow_info.path)
             steps_count = len(wf.steps)
@@ -2772,6 +2781,8 @@ def list_local_flows():
                 {s.executor.type for s in wf.steps.values() if s.executor}
             )
             visibility = wf.metadata.visibility or "interactive"
+            raw = flow_info.path.read_text()
+            graph = _build_flow_graph(raw)
         except (YAMLLoadError, Exception):
             pass
 
@@ -2791,6 +2802,7 @@ def list_local_flows():
             "executor_types": executor_types,
             "visibility": visibility,
             "source": "local",
+            "graph": graph,
         })
 
     # Also include cached registry flows
@@ -2805,6 +2817,7 @@ def list_local_flows():
         description = ""
         executor_types_reg: list[str] = []
         visibility_reg = "interactive"
+        graph_reg = None
         try:
             wf = load_workflow_yaml(reg_flow.path)
             steps_count = len(wf.steps)
@@ -2813,6 +2826,8 @@ def list_local_flows():
                 {s.executor.type for s in wf.steps.values() if s.executor}
             )
             visibility_reg = wf.metadata.visibility or "interactive"
+            raw = reg_flow.path.read_text()
+            graph_reg = _build_flow_graph(raw)
         except (YAMLLoadError, Exception):
             pass
 
@@ -2838,6 +2853,7 @@ def list_local_flows():
             "visibility": visibility_reg,
             "source": "registry",
             "registry_ref": reg_flow.ref,
+            "graph": graph_reg,
         })
 
     return result

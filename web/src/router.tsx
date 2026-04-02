@@ -27,18 +27,22 @@ const JOB_VIEW_MODE_VALUES = new Set(["list", "grid"]);
 
 type JobsRouteSearch = {
   q?: string;
-  status?: "running" | "awaiting_input" | "paused" | "completed" | "failed" | "pending" | "cancelled";
+  status?: string; // comma-separated statuses e.g. "running,failed"
   range?: "today" | "7d" | "30d";
   view_mode?: "list" | "grid";
+  hide_done?: "1";
 };
 
 function validateJobsSearch(search: Record<string, unknown>): JobsRouteSearch {
+  // Validate comma-separated status values
+  let status: string | undefined;
+  if (typeof search.status === "string" && search.status.trim()) {
+    const parts = search.status.split(",").filter((s) => JOB_ROUTE_STATUS_VALUES.has(s));
+    status = parts.length > 0 ? parts.join(",") : undefined;
+  }
   return {
     q: typeof search.q === "string" && search.q.trim() ? search.q : undefined,
-    status:
-      typeof search.status === "string" && JOB_ROUTE_STATUS_VALUES.has(search.status)
-        ? search.status as JobsRouteSearch["status"]
-        : undefined,
+    status,
     range:
       typeof search.range === "string"
       && JOB_ROUTE_RANGE_VALUES.has(search.range)
@@ -49,6 +53,7 @@ function validateJobsSearch(search: Record<string, unknown>): JobsRouteSearch {
       typeof search.view_mode === "string" && JOB_VIEW_MODE_VALUES.has(search.view_mode)
         ? (search.view_mode as "list" | "grid")
         : undefined,
+    hide_done: search.hide_done === "1" ? "1" : undefined,
   };
 }
 

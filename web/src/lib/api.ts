@@ -44,13 +44,20 @@ async function request<T>(
 
 // ── Jobs ──────────────────────────────────────────────────────────────
 
-export function fetchJobs(status?: string, topLevel?: boolean, includeArchived?: boolean): Promise<Job[]> {
+export interface JobsResponse {
+  jobs: Job[];
+  total: number;
+}
+
+export function fetchJobs(status?: string, topLevel?: boolean, includeArchived?: boolean): Promise<JobsResponse> {
   const searchParams = new URLSearchParams();
   if (status) searchParams.set("status", status);
   if (topLevel) searchParams.set("top_level", "true");
   if (includeArchived) searchParams.set("include_archived", "true");
+  searchParams.set("limit", "500");
+  searchParams.set("include_total", "true");
   const qs = searchParams.toString();
-  return request<Job[]>(`/jobs${qs ? `?${qs}` : ""}`);
+  return request<JobsResponse>(`/jobs${qs ? `?${qs}` : ""}`);
 }
 
 export function fetchJob(jobId: string): Promise<Job> {

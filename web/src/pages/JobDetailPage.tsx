@@ -799,7 +799,7 @@ export function JobDetailPage() {
               <TabsContent
                 value="run"
                 className={cn(
-                  "flex-1 min-h-0 overflow-y-auto",
+                  "flex-1 min-h-0",
                   activeTab !== "run" && "hidden"
                 )}
               >
@@ -808,6 +808,7 @@ export function JobDetailPage() {
                     jobId={resolvedStep.jobId}
                     stepDef={resolvedStep.stepDef}
                     hasLiveSource={!!job?.flow_source_path}
+                    onSelectStep={handleSelectStep}
                   />
                 </div>
               </TabsContent>
@@ -835,6 +836,7 @@ export function JobDetailPage() {
                   <SessionTab
                     jobId={jobId}
                     highlightStep={selectedStep}
+                    focusStep={resolvedStep.stepDef.name}
                     onNavigateToStep={(stepName) =>
                       navigate({
                         search: (prev: JobDetailSearch) => ({
@@ -886,6 +888,7 @@ export function JobDetailPage() {
               jobId={resolvedStep.jobId}
               stepDef={resolvedStep.stepDef}
               hasLiveSource={!!job?.flow_source_path}
+              onSelectStep={handleSelectStep}
             />
           )}
         </MobileFullScreen>
@@ -897,6 +900,7 @@ export function JobDetailPage() {
                 jobId={resolvedStep.jobId}
                 stepDef={resolvedStep.stepDef}
                 hasLiveSource={!!job?.flow_source_path}
+                onSelectStep={handleSelectStep}
               />
             )}
           </SheetContent>

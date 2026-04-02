@@ -1,13 +1,9 @@
-import { useState, useMemo, useCallback, useRef, useEffect } from "react";
+import { useMemo, useCallback, useState } from "react";
 import { useQueries } from "@tanstack/react-query";
-import { useJobs, useGroups, useStepwiseMutations } from "@/hooks/useStepwise";
+import { useGroups, useStepwiseMutations } from "@/hooks/useStepwise";
 import { JobCard } from "@/components/canvas/JobCard";
-import { DependencyArrows } from "@/components/canvas/DependencyArrows";
-import { BulkActionBar } from "@/components/canvas/BulkActionBar";
-import { computeCanvasLayout } from "@/components/canvas/CanvasLayout";
-import { ActionContextProvider } from "@/components/menus/ActionContextProvider";
 import { fetchRuns } from "@/lib/api";
-import { CheckSquare, Eye, EyeOff, Minus, Plus, XSquare } from "lucide-react";
+import { Archive, ChevronRight, Minus, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Job, StepRun } from "@/lib/types";
 
@@ -22,24 +18,29 @@ const STATUS_PRIORITY: Record<string, number> = {
   archived: 7,
 };
 
-export function CanvasPage() {
-  const { data: jobs = [], isLoading } = useJobs(undefined, true);
+const ACTIVE_STATUSES = new Set(["running", "paused", "pending", "staged", "awaiting_input", "awaiting_approval"]);
+
+export interface CanvasPageProps {
+  jobs: Job[];
+}
+
+export function CanvasPage({ jobs: visibleJobs }: CanvasPageProps) {
   const { data: groups = [] } = useGroups();
-  const { updateGroupLimit } = useStepwiseMutations();
-  const [hideCompleted, setHideCompleted] = useState(false);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const lastSelectedRef = useRef<string | null>(null);
+  const { updateGroupLimit, archiveJobs } = useStepwiseMutations();
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [hoveredJobId, setHoveredJobId] = useState<string | null>(null);
 
-  const isSelectionActive = selectedIds.size > 0;
-
-  // Build group_name -> max_concurrent map for layout
-  const groupSettings = useMemo(() => {
-    const map: Record<string, number> = {};
-    for (const g of groups) {
-      map[g.group] = g.max_concurrent;
-    }
-    return map;
-  }, [groups]);
+  const toggleGroup = useCallback((group: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(group)) {
+        next.delete(group);
+      } else {
+        next.add(group);
+      }
+      return next;
+    });
+  }, []);
 
   // Build group_name -> GroupInfo lookup for rendering
   const groupInfoMap = useMemo(() => {
@@ -53,53 +54,6 @@ export function CanvasPage() {
   const handleUpdateLimit = useCallback((group: string, newLimit: number) => {
     updateGroupLimit.mutate({ group, maxConcurrent: Math.max(0, newLimit) });
   }, [updateGroupLimit]);
-
-  // Build a flat ordered list of all visible job IDs for shift+click range selection
-  // (order: dependent jobs by layout, then grouped, then ungrouped — filled lazily after computed)
-  const orderedJobIdsRef = useRef<string[]>([]);
-
-  const handleToggleSelect = useCallback((jobId: string, shiftKey: boolean) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (shiftKey && lastSelectedRef.current) {
-        // Range selection
-        const ordered = orderedJobIdsRef.current;
-        const startIdx = ordered.indexOf(lastSelectedRef.current);
-        const endIdx = ordered.indexOf(jobId);
-        if (startIdx !== -1 && endIdx !== -1) {
-          const [lo, hi] = startIdx < endIdx ? [startIdx, endIdx] : [endIdx, startIdx];
-          for (let i = lo; i <= hi; i++) {
-            next.add(ordered[i]);
-          }
-        } else {
-          next.has(jobId) ? next.delete(jobId) : next.add(jobId);
-        }
-      } else {
-        if (next.has(jobId)) {
-          next.delete(jobId);
-        } else {
-          next.add(jobId);
-        }
-      }
-      lastSelectedRef.current = jobId;
-      return next;
-    });
-  }, []);
-
-  const handleClearSelection = useCallback(() => {
-    setSelectedIds(new Set());
-    lastSelectedRef.current = null;
-  }, []);
-
-  // Filter jobs
-  const visibleJobs = useMemo(() => {
-    if (hideCompleted) return jobs.filter((j) => j.status !== "completed");
-    return jobs;
-  }, [jobs, hideCompleted]);
-
-  const handleSelectAll = useCallback(() => {
-    setSelectedIds(new Set(visibleJobs.map((j) => j.id)));
-  }, [visibleJobs]);
 
   // Fetch runs for all visible jobs
   const runsQueries = useQueries({
@@ -137,63 +91,91 @@ export function CanvasPage() {
   // Build job name lookup for dependency text
   const jobNameMap = useMemo(() => {
     const map = new Map<string, string>();
-    for (const job of jobs) {
+    for (const job of visibleJobs) {
       map.set(job.id, job.name || job.objective);
     }
     return map;
-  }, [jobs]);
-
-  // Partition visibleJobs into dependent (edges) and independent (no edges)
-  const { dependentJobs, independentJobs } = useMemo(() => {
-    const visibleIds = new Set(visibleJobs.map((j) => j.id));
-    const edgeParticipants = new Set<string>();
-
-    for (const job of visibleJobs) {
-      // depends_on edges
-      for (const depId of job.depends_on ?? []) {
-        if (visibleIds.has(depId)) {
-          edgeParticipants.add(job.id);
-          edgeParticipants.add(depId);
-        }
-      }
-      // parent_job_id as fallback edge
-      if (job.parent_job_id && visibleIds.has(job.parent_job_id)) {
-        edgeParticipants.add(job.id);
-        edgeParticipants.add(job.parent_job_id);
-      }
-    }
-
-    const dependent: Job[] = [];
-    const independent: Job[] = [];
-    for (const job of visibleJobs) {
-      if (edgeParticipants.has(job.id)) {
-        dependent.push(job);
-      } else {
-        independent.push(job);
-      }
-    }
-    return { dependentJobs: dependent, independentJobs: independent };
   }, [visibleJobs]);
 
-  // Compute dagre layout for dependent jobs only
-  const layout = useMemo(() => computeCanvasLayout(dependentJobs, groupSettings), [dependentJobs, groupSettings]);
+  // Build dependency maps: dependsOn[jobId] = set of job IDs it depends on,
+  // dependedBy[jobId] = set of job IDs that depend on it
+  const { dependsOnMap, dependedByMap } = useMemo(() => {
+    const dependsOn = new Map<string, Set<string>>();
+    const dependedBy = new Map<string, Set<string>>();
+    for (const job of visibleJobs) {
+      if (job.depends_on && job.depends_on.length > 0) {
+        dependsOn.set(job.id, new Set(job.depends_on));
+        for (const depId of job.depends_on) {
+          if (!dependedBy.has(depId)) dependedBy.set(depId, new Set());
+          dependedBy.get(depId)!.add(job.id);
+        }
+      }
+    }
+    return { dependsOnMap: dependsOn, dependedByMap: dependedBy };
+  }, [visibleJobs]);
 
-  // Sort independent jobs by status priority then recency
-  const sortedIndependentJobs = useMemo(() => {
-    return [...independentJobs].sort((a, b) => {
-      const pa = STATUS_PRIORITY[a.status] ?? 99;
-      const pb = STATUS_PRIORITY[b.status] ?? 99;
-      if (pa !== pb) return pa - pb;
-      // Recency tiebreaker: newer first
-      return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
-    });
-  }, [independentJobs]);
+  // Compute highlight state: only highlight upstream dependencies (parents)
+  const highlightMap = useMemo(() => {
+    const map = new Map<string, "dependency">();
+    if (!hoveredJobId) return map;
+    const deps = dependsOnMap.get(hoveredJobId);
+    if (deps) {
+      for (const id of deps) map.set(id, "dependency");
+    }
+    return map;
+  }, [hoveredJobId, dependsOnMap, dependedByMap]);
 
-  // Group independent jobs by job_group
+  // Sort all jobs by status priority then recency
+  const sortedJobs = useMemo(() => {
+    // Topological sort: parents before children, then by status priority + recency
+    const jobIds = new Set(visibleJobs.map((j) => j.id));
+    const depCount = new Map<string, number>();
+    const children = new Map<string, string[]>();
+    for (const job of visibleJobs) {
+      depCount.set(job.id, 0);
+    }
+    for (const job of visibleJobs) {
+      for (const depId of job.depends_on ?? []) {
+        if (jobIds.has(depId)) {
+          depCount.set(job.id, (depCount.get(job.id) ?? 0) + 1);
+          if (!children.has(depId)) children.set(depId, []);
+          children.get(depId)!.push(job.id);
+        }
+      }
+    }
+    // BFS topological order
+    const queue = visibleJobs.filter((j) => (depCount.get(j.id) ?? 0) === 0);
+    queue.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+    const result: Job[] = [];
+    const jobMap = new Map(visibleJobs.map((j) => [j.id, j]));
+    const visited = new Set<string>();
+    let i = 0;
+    while (i < queue.length) {
+      const job = queue[i++];
+      if (visited.has(job.id)) continue;
+      visited.add(job.id);
+      result.push(job);
+      for (const childId of children.get(job.id) ?? []) {
+        const count = (depCount.get(childId) ?? 1) - 1;
+        depCount.set(childId, count);
+        if (count === 0) {
+          const child = jobMap.get(childId);
+          if (child) queue.push(child);
+        }
+      }
+    }
+    // Add any remaining (cycles) at the end
+    for (const job of visibleJobs) {
+      if (!visited.has(job.id)) result.push(job);
+    }
+    return result;
+  }, [visibleJobs]);
+
+  // Group ALL jobs by job_group
   const { grouped, ungrouped } = useMemo(() => {
     const groupMap = new Map<string, Job[]>();
     const ungrouped: Job[] = [];
-    for (const job of sortedIndependentJobs) {
+    for (const job of sortedJobs) {
       if (job.job_group) {
         if (!groupMap.has(job.job_group)) groupMap.set(job.job_group, []);
         groupMap.get(job.job_group)!.push(job);
@@ -205,47 +187,37 @@ export function CanvasPage() {
       grouped: Array.from(groupMap.entries()),
       ungrouped,
     };
-  }, [sortedIndependentJobs]);
+  }, [sortedJobs]);
 
-  // Build ordered job ID list for shift+click range selection
-  useMemo(() => {
-    const ids: string[] = [];
-    for (const card of layout.cards) ids.push(card.jobId);
-    for (const [, groupJobs] of grouped) {
-      for (const job of groupJobs) ids.push(job.id);
+  // Separate ungrouped into active and terminal for visual separator
+  const { ungroupedActive, ungroupedTerminal } = useMemo(() => {
+    const active: Job[] = [];
+    const terminal: Job[] = [];
+    for (const job of ungrouped) {
+      if (ACTIVE_STATUSES.has(job.status)) {
+        active.push(job);
+      } else {
+        terminal.push(job);
+      }
     }
-    for (const job of ungrouped) ids.push(job.id);
-    orderedJobIdsRef.current = ids;
-  }, [layout.cards, grouped, ungrouped]);
+    return { ungroupedActive: active, ungroupedTerminal: terminal };
+  }, [ungrouped]);
 
-  // Clean up selection when jobs disappear (e.g. filtered out)
-  useEffect(() => {
-    const visibleIds = new Set(visibleJobs.map((j) => j.id));
-    setSelectedIds((prev) => {
-      const filtered = new Set([...prev].filter((id) => visibleIds.has(id)));
-      if (filtered.size !== prev.size) return filtered;
-      return prev;
-    });
-  }, [visibleJobs]);
-
-  if (isLoading) {
+  if (visibleJobs.length === 0) {
     return (
       <div className="flex items-center justify-center h-full text-zinc-500 text-sm">
-        Loading jobs...
-      </div>
-    );
-  }
-
-  if (jobs.length === 0) {
-    return (
-      <div className="flex items-center justify-center h-full text-zinc-500 text-sm">
-        No jobs yet. Create one from the Jobs page.
+        No matching jobs
       </div>
     );
   }
 
   const renderCard = (job: Job) => (
-    <div key={job.id} className="min-w-0">
+    <div
+      key={job.id}
+      className={cn(
+        "min-w-0",
+      )}
+    >
       <JobCard
         job={job}
         runs={runsMap.get(job.id) ?? []}
@@ -255,155 +227,33 @@ export function CanvasPage() {
             .filter(Boolean) as string[] | undefined
         }
         isGroupQueued={groupQueuedSet.has(job.id)}
-        isSelected={selectedIds.has(job.id)}
-        isSelectionActive={isSelectionActive}
-        onToggleSelect={handleToggleSelect}
+        highlightAs={highlightMap.get(job.id) ?? null}
+        onMouseEnter={() => setHoveredJobId(job.id)}
+        onMouseLeave={() => setHoveredJobId(null)}
       />
     </div>
   );
 
   return (
-    <ActionContextProvider>
     <div className="h-full overflow-y-auto">
-      {/* Toolbar */}
-      <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-3 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-sm border-b border-zinc-200 dark:border-zinc-800/50">
-        <div className="flex items-center gap-2">
-          {isSelectionActive ? (
-            <button
-              onClick={handleClearSelection}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border border-zinc-300 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/80 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors"
-              title="Deselect all"
-            >
-              <XSquare className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Deselect</span>
-            </button>
-          ) : (
-            <button
-              onClick={handleSelectAll}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border border-zinc-300 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/80 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors"
-              title="Select all"
-            >
-              <CheckSquare className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Select all</span>
-            </button>
-          )}
-        </div>
-        <button
-          onClick={() => setHideCompleted(!hideCompleted)}
-          className={cn(
-            "flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border transition-colors",
-            hideCompleted
-              ? "bg-zinc-200 dark:bg-zinc-800 border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300"
-              : "bg-white/80 dark:bg-zinc-900/80 border-zinc-300 dark:border-zinc-800 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300",
-          )}
-          title={hideCompleted ? "Show completed jobs" : "Hide completed jobs"}
-        >
-          {hideCompleted ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-          <span className="hidden sm:inline">{hideCompleted ? "Show done" : "Hide done"}</span>
-        </button>
-      </div>
-
-      {/* Content */}
-      <div className="p-6 space-y-8">
-        {/* Zone A: DAG layout for jobs with dependency edges */}
-        {dependentJobs.length > 0 && (
-          <section>
-            <div
-              className="relative"
-              style={{ width: layout.width, height: layout.height }}
-            >
-              <DependencyArrows
-                edges={layout.edges}
-                width={layout.width}
-                height={layout.height}
-              />
-              {/* Group clusters */}
-              {layout.groups.map((group) => (
-                <div
-                  key={group.label}
-                  className="absolute rounded-xl border border-dashed border-zinc-300/40 dark:border-zinc-800/40 bg-zinc-100/10 dark:bg-zinc-900/10"
-                  style={{
-                    left: group.x,
-                    top: group.y,
-                    width: group.width,
-                    height: group.height,
-                  }}
-                >
-                  <div className="px-3 pt-1.5 flex items-center gap-2">
-                    <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                      {group.label}
-                    </span>
-                    <span className="text-[10px] text-zinc-500 dark:text-zinc-600">
-                      {group.completedCount}/{group.totalCount}
-                    </span>
-                    {group.maxConcurrent > 0 && (
-                      <span className="text-[10px] text-zinc-400 dark:text-zinc-600">
-                        · {group.activeCount}/{group.maxConcurrent} running
-                      </span>
-                    )}
-                    <div className="flex items-center gap-0.5 ml-auto">
-                      <button
-                        onClick={() => handleUpdateLimit(group.label, group.maxConcurrent - 1)}
-                        className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors"
-                        title="Decrease concurrency limit"
-                      >
-                        <Minus className="w-3 h-3" />
-                      </button>
-                      <span className="text-[10px] text-zinc-500 dark:text-zinc-400 min-w-[20px] text-center">
-                        {group.maxConcurrent || "∞"}
-                      </span>
-                      <button
-                        onClick={() => handleUpdateLimit(group.label, group.maxConcurrent + 1)}
-                        className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors"
-                        title="Increase concurrency limit"
-                      >
-                        <Plus className="w-3 h-3" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-              {/* Job cards */}
-              {layout.cards.map((card) => {
-                const job = dependentJobs.find((j) => j.id === card.jobId);
-                if (!job) return null;
-                return (
-                  <div
-                    key={card.jobId}
-                    className="absolute"
-                    style={{
-                      left: card.x,
-                      top: card.y,
-                      width: card.width,
-                    }}
-                  >
-                    <JobCard
-                      job={job}
-                      runs={runsMap.get(job.id) ?? []}
-                      dependencyNames={
-                        job.depends_on
-                          ?.map((id) => jobNameMap.get(id))
-                          .filter(Boolean) as string[] | undefined
-                      }
-                      isGroupQueued={groupQueuedSet.has(job.id)}
-                      isSelected={selectedIds.has(job.id)}
-                      isSelectionActive={isSelectionActive}
-                      onToggleSelect={handleToggleSelect}
-                    />
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        )}
-
-        {/* Zone B: CSS grid for independent jobs (no dependency edges) */}
+      <div className="p-6 space-y-6">
+        {/* Grouped job sections */}
         {grouped.map(([groupLabel, groupJobs]) => {
           const completedCount = groupJobs.filter((j) => j.status === "completed").length;
           const gInfo = groupInfoMap.get(groupLabel);
+          const isCollapsed = collapsedGroups.has(groupLabel);
           return (
             <section key={groupLabel}>
-              <div className="mb-3 flex items-center gap-2">
+              <button
+                onClick={() => toggleGroup(groupLabel)}
+                className="w-full mb-3 flex items-center gap-2 text-left group"
+              >
+                <ChevronRight
+                  className={cn(
+                    "w-4 h-4 text-zinc-400 transition-transform",
+                    !isCollapsed && "rotate-90",
+                  )}
+                />
                 <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{groupLabel}</h2>
                 <span className="text-xs text-zinc-400 dark:text-zinc-600">
                   {completedCount}/{groupJobs.length} complete
@@ -413,56 +263,118 @@ export function CanvasPage() {
                     · {gInfo.active_count}/{gInfo.max_concurrent} running
                   </span>
                 )}
-                <div className="flex items-center gap-0.5 ml-auto">
+                <div
+                  className="flex items-center gap-1.5 ml-auto"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {gInfo && gInfo.max_concurrent > 0 ? (
+                    <span className="flex items-center gap-0.5 text-[10px] text-zinc-500 dark:text-zinc-400">
+                      <span className="mr-0.5">Limit: {gInfo.max_concurrent}</span>
+                      <button
+                        onClick={() => handleUpdateLimit(groupLabel, gInfo.max_concurrent - 1)}
+                        className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors"
+                        title="Decrease concurrency limit"
+                      >
+                        <Minus className="w-3 h-3" />
+                      </button>
+                      <button
+                        onClick={() => handleUpdateLimit(groupLabel, gInfo.max_concurrent + 1)}
+                        className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors"
+                        title="Increase concurrency limit"
+                      >
+                        <Plus className="w-3 h-3" />
+                      </button>
+                      <button
+                        onClick={() => handleUpdateLimit(groupLabel, 0)}
+                        className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors"
+                        title="Remove concurrency limit"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => handleUpdateLimit(groupLabel, 1)}
+                      className="text-[10px] text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors"
+                    >
+                      Set concurrency limit
+                    </button>
+                  )}
                   <button
-                    onClick={() => handleUpdateLimit(groupLabel, (gInfo?.max_concurrent ?? 0) - 1)}
-                    className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors"
-                    title="Decrease concurrency limit"
+                    onClick={() => {
+                      const ids = groupJobs
+                        .filter((j) => j.status === "completed" || j.status === "failed" || j.status === "cancelled")
+                        .map((j) => j.id);
+                      if (ids.length > 0) archiveJobs.mutate(ids);
+                    }}
+                    className="flex items-center gap-1 p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors text-[10px] ml-1"
+                    title="Archive completed jobs in this group"
                   >
-                    <Minus className="w-3 h-3" />
-                  </button>
-                  <span className="text-[10px] text-zinc-500 dark:text-zinc-400 min-w-[20px] text-center">
-                    {gInfo?.max_concurrent || "∞"}
-                  </span>
-                  <button
-                    onClick={() => handleUpdateLimit(groupLabel, (gInfo?.max_concurrent ?? 0) + 1)}
-                    className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors"
-                    title="Increase concurrency limit"
-                  >
-                    <Plus className="w-3 h-3" />
+                    <Archive className="w-3 h-3" />
+                    <span>Archive</span>
                   </button>
                 </div>
-              </div>
-              <div className="rounded-xl border border-dashed border-zinc-300/60 dark:border-zinc-800/60 bg-zinc-100/20 dark:bg-zinc-900/20 p-4">
+              </button>
+              {!isCollapsed && (
                 <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
                   {groupJobs.map(renderCard)}
                 </div>
-              </div>
+              )}
             </section>
           );
         })}
 
+        {/* Ungrouped jobs: "Other jobs" section */}
         {ungrouped.length > 0 && (
           <section>
-            {(grouped.length > 0 || dependentJobs.length > 0) && (
-              <h2 className="mb-3 text-sm font-medium text-zinc-500 dark:text-zinc-400">
-                {dependentJobs.length > 0 ? "Independent jobs" : "Other jobs"}
-              </h2>
+            {grouped.length > 0 && (
+              <button
+                onClick={() => toggleGroup("__ungrouped__")}
+                className="w-full mb-3 flex items-center gap-2 text-left group"
+              >
+                <ChevronRight
+                  className={cn(
+                    "w-4 h-4 text-zinc-400 transition-transform",
+                    !collapsedGroups.has("__ungrouped__") && "rotate-90",
+                  )}
+                />
+                <h2 className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
+                  Other jobs
+                </h2>
+                <span className="text-xs text-zinc-400 dark:text-zinc-600">
+                  {ungroupedTerminal.length}/{ungrouped.length} complete
+                </span>
+              </button>
             )}
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
-              {ungrouped.map(renderCard)}
-            </div>
+            {!collapsedGroups.has("__ungrouped__") && (
+              <>
+                {/* Active ungrouped */}
+                {ungroupedActive.length > 0 && (
+                  <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
+                    {ungroupedActive.map(renderCard)}
+                  </div>
+                )}
+                {/* Separator between active and terminal */}
+                {ungroupedActive.length > 0 && ungroupedTerminal.length > 0 && (
+                  <div className="flex items-center gap-3 my-4">
+                    <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
+                    <span className="text-[10px] uppercase tracking-wider text-zinc-400 dark:text-zinc-600 font-medium">
+                      Completed
+                    </span>
+                    <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
+                  </div>
+                )}
+                {/* Terminal ungrouped */}
+                {ungroupedTerminal.length > 0 && (
+                  <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
+                    {ungroupedTerminal.map(renderCard)}
+                  </div>
+                )}
+              </>
+            )}
           </section>
         )}
       </div>
-
-      {/* Bulk action bar */}
-      <BulkActionBar
-        selectedIds={selectedIds}
-        jobs={visibleJobs}
-        onClearSelection={handleClearSelection}
-      />
     </div>
-    </ActionContextProvider>
   );
 }

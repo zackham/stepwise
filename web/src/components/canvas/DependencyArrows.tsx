@@ -15,7 +15,7 @@ export const DependencyArrows = memo(function DependencyArrows({
 }: DependencyArrowsProps) {
   const theme = useTheme();
   const isDark = theme === "dark";
-  const satisfiedColor = isDark ? "#3f3f46" : "#a1a1aa";
+  const satisfiedColor = isDark ? "#34d399" : "#10b981"; // emerald-400 / emerald-500
 
   if (edges.length === 0) return null;
 
@@ -36,7 +36,7 @@ export const DependencyArrows = memo(function DependencyArrows({
           markerHeight="6"
           orient="auto"
         >
-          <path d="M 0 0 L 10 3 L 0 6 z" fill={satisfiedColor} fillOpacity={0.5} />
+          <path d="M 0 0 L 10 3 L 0 6 z" fill={satisfiedColor} fillOpacity={0.7} />
         </marker>
         <marker
           id="canvas-arrow-blocking"
@@ -61,10 +61,10 @@ export const DependencyArrows = memo(function DependencyArrows({
             d={path}
             fill="none"
             stroke={isSatisfied ? satisfiedColor : "#f59e0b"}
-            strokeWidth={isSatisfied ? 1.5 : 2}
-            strokeDasharray={isSatisfied ? "6 4" : undefined}
+            strokeWidth={2}
+            strokeDasharray={isSatisfied ? undefined : "6 4"}
             markerEnd={`url(#canvas-arrow-${isSatisfied ? "satisfied" : "blocking"})`}
-            opacity={isSatisfied ? 0.4 : 0.6}
+            opacity={isSatisfied ? 0.6 : 0.6}
           />
         );
       })}

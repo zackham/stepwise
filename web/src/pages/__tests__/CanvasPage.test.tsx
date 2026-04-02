@@ -95,7 +95,7 @@ describe("CanvasPage partition logic", () => {
     const j2 = makeJob({ name: "Job B" });
     mockJobs = [j1, j2];
 
-    render(<CanvasPage />, { wrapper: createWrapper() });
+    render(<CanvasPage jobs={mockJobs} />, { wrapper: createWrapper() });
 
     expect(screen.getByTestId(`job-card-${j1.id}`)).toBeInTheDocument();
     expect(screen.getByTestId(`job-card-${j2.id}`)).toBeInTheDocument();
@@ -109,7 +109,7 @@ describe("CanvasPage partition logic", () => {
     const independent = makeJob({ name: "Independent" });
     mockJobs = [parent, child, independent];
 
-    render(<CanvasPage />, { wrapper: createWrapper() });
+    render(<CanvasPage jobs={mockJobs} />, { wrapper: createWrapper() });
 
     // All three should render
     expect(screen.getByTestId(`job-card-${parent.id}`)).toBeInTheDocument();
@@ -125,7 +125,7 @@ describe("CanvasPage partition logic", () => {
     const solo = makeJob({ name: "Solo" });
     mockJobs = [parent, sub, solo];
 
-    render(<CanvasPage />, { wrapper: createWrapper() });
+    render(<CanvasPage jobs={mockJobs} />, { wrapper: createWrapper() });
 
     expect(screen.getByTestId(`job-card-${parent.id}`)).toBeInTheDocument();
     expect(screen.getByTestId(`job-card-${sub.id}`)).toBeInTheDocument();
@@ -139,7 +139,7 @@ describe("CanvasPage partition logic", () => {
     const pending = makeJob({ name: "Waiting", status: "pending", updated_at: "2026-01-01T00:00:00Z" });
     mockJobs = [completed, running, pending];
 
-    render(<CanvasPage />, { wrapper: createWrapper() });
+    render(<CanvasPage jobs={mockJobs} />, { wrapper: createWrapper() });
 
     const cards = screen.getAllByTestId(/^job-card-/);
     expect(cards[0]).toHaveAttribute("data-status", "running");
@@ -152,17 +152,16 @@ describe("CanvasPage partition logic", () => {
     const newer = makeJob({ name: "Newer", status: "running", updated_at: "2026-01-02T00:00:00Z" });
     mockJobs = [older, newer];
 
-    render(<CanvasPage />, { wrapper: createWrapper() });
+    render(<CanvasPage jobs={mockJobs} />, { wrapper: createWrapper() });
 
     const cards = screen.getAllByTestId(/^job-card-/);
     expect(cards[0]).toHaveTextContent("Newer");
     expect(cards[1]).toHaveTextContent("Older");
   });
 
-  it("shows empty state when no jobs exist", () => {
-    mockJobs = [];
-    render(<CanvasPage />, { wrapper: createWrapper() });
-    expect(screen.getByText("No jobs yet. Create one from the Jobs page.")).toBeInTheDocument();
+  it("shows empty state when no jobs passed", () => {
+    render(<CanvasPage jobs={[]} />, { wrapper: createWrapper() });
+    expect(screen.getByText("No matching jobs")).toBeInTheDocument();
   });
 
   it("ignores depends_on referencing non-visible (hidden) jobs", () => {
@@ -171,7 +170,7 @@ describe("CanvasPage partition logic", () => {
     const solo = makeJob({ name: "Solo" });
     mockJobs = [child, solo];
 
-    render(<CanvasPage />, { wrapper: createWrapper() });
+    render(<CanvasPage jobs={mockJobs} />, { wrapper: createWrapper() });
 
     // Both should be in grid (no valid edge = both independent)
     expect(screen.queryByTestId("dependency-arrows")).not.toBeInTheDocument();
@@ -185,7 +184,7 @@ describe("CanvasPage partition logic", () => {
     const solo = makeJob({ name: "Solo" });
     mockJobs = [parent, child, solo];
 
-    render(<CanvasPage />, { wrapper: createWrapper() });
+    render(<CanvasPage jobs={mockJobs} />, { wrapper: createWrapper() });
 
     expect(screen.getByText("Independent jobs")).toBeInTheDocument();
   });

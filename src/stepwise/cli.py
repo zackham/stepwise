@@ -3370,7 +3370,7 @@ def cmd_search(args: argparse.Namespace) -> int:
 
     io = _io(args)
     try:
-        result = search_flows(query=query, tag=tag, sort=sort)
+        result = search_flows(query=query, sort=sort)
     except RegistryError as e:
         io.log("error", str(e))
         return EXIT_USAGE_ERROR

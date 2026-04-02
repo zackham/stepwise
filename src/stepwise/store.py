@@ -292,6 +292,22 @@ class SQLiteStore:
                 (restore_status.value, _now().isoformat(), job_id),
             )
 
+    def atomic_status_transition(
+        self, job_id: str, from_status: "JobStatus", to_status: "JobStatus"
+    ) -> bool:
+        """Atomically transition job status. Returns True if the transition happened.
+
+        Uses UPDATE ... WHERE status = from_status to prevent race conditions
+        between concurrent start_job and cancel_job calls.
+        """
+        from stepwise.models import _now
+        with self._conn:
+            cursor = self._conn.execute(
+                "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ? AND status = ?",
+                (to_status.value, _now().isoformat(), job_id, from_status.value),
+            )
+            return cursor.rowcount > 0
+
     def delete_job(self, job_id: str) -> None:
         """Delete a job and all associated runs, events, and dependency edges."""
         with self._conn:

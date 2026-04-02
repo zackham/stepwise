@@ -42,7 +42,8 @@ export function CommandPalette({
   const open = controlledOpen ?? internalOpen;
   const setOpen = onOpenChange ?? setInternalOpen;
   const navigate = useNavigate();
-  const { data: jobs } = useJobs();
+  const { data: jobsResponse } = useJobs();
+  const jobs = jobsResponse?.jobs;
   const { data: flows } = useLocalFlows();
 
   // Cmd+K / Ctrl+K to toggle

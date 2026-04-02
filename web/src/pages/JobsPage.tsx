@@ -214,7 +214,7 @@ type SortCol = "name" | "steps" | "cost" | "duration" | "status" | "time";
 function SortHeader({ col, label, current, asc, onSort, className }: {
   col: SortCol;
   label: string;
-  current: SortCol;
+  current: SortCol | null;
   asc: boolean;
   onSort: (col: SortCol) => void;
   className?: string;
@@ -243,7 +243,7 @@ function JobListView({ jobs }: { jobs: Job[] }) {
   const navigate = useNavigate();
 
   // Sort state
-  const [sortCol, setSortCol] = useState<SortCol>("time");
+  const [sortCol, setSortCol] = useState<SortCol | null>(null);
   const [sortAsc, setSortAsc] = useState(false);
 
   const handleSort = useCallback((col: SortCol) => {
@@ -302,6 +302,26 @@ function JobListView({ jobs }: { jobs: Job[] }) {
     [orderedJobIds],
   );
 
+  // Dependency maps + hover highlighting
+  const [hoveredJobId, setHoveredJobId] = useState<string | null>(null);
+
+  const { dependsOnMap, jobNameMap } = useMemo(() => {
+    const depsOn = new Map<string, Set<string>>();
+    const names = new Map<string, string>();
+    for (const job of jobs) {
+      names.set(job.id, job.name || job.objective || job.id.slice(0, 8));
+      if (job.depends_on && job.depends_on.length > 0) {
+        depsOn.set(job.id, new Set(job.depends_on));
+      }
+    }
+    return { dependsOnMap: depsOn, jobNameMap: names };
+  }, [jobs]);
+
+  const highlightedDeps = useMemo(() => {
+    if (!hoveredJobId) return new Set<string>();
+    return dependsOnMap.get(hoveredJobId) ?? new Set<string>();
+  }, [hoveredJobId, dependsOnMap]);
+
   // Fetch costs for all visible jobs
   const costQueries = useQueries({
     queries: jobs.map((job) => ({
@@ -323,22 +343,69 @@ function JobListView({ jobs }: { jobs: Job[] }) {
 
   // Sort and separate active from terminal jobs
   const { activeJobs, terminalJobs } = useMemo(() => {
-    const sorted = [...jobs].sort((a, b) => {
-      const dir = sortAsc ? 1 : -1;
-      switch (sortCol) {
-        case "name": return dir * (a.name || a.objective || "").localeCompare(b.name || b.objective || "");
-        case "steps": return dir * (Object.keys(a.workflow?.steps ?? {}).length - Object.keys(b.workflow?.steps ?? {}).length);
-        case "cost": return dir * ((costMap.get(a.id) ?? 0) - (costMap.get(b.id) ?? 0));
-        case "duration": {
-          const da = new Date(a.updated_at).getTime() - new Date(a.created_at).getTime();
-          const db = new Date(b.updated_at).getTime() - new Date(b.created_at).getTime();
-          return dir * (da - db);
+    let sorted: Job[];
+
+    if (sortCol) {
+      // Column sort
+      sorted = [...jobs].sort((a, b) => {
+        const dir = sortAsc ? 1 : -1;
+        switch (sortCol) {
+          case "name": return dir * (a.name || a.objective || "").localeCompare(b.name || b.objective || "");
+          case "steps": return dir * (Object.keys(a.workflow?.steps ?? {}).length - Object.keys(b.workflow?.steps ?? {}).length);
+          case "cost": return dir * ((costMap.get(a.id) ?? 0) - (costMap.get(b.id) ?? 0));
+          case "duration": {
+            const da = new Date(a.updated_at).getTime() - new Date(a.created_at).getTime();
+            const db = new Date(b.updated_at).getTime() - new Date(b.created_at).getTime();
+            return dir * (da - db);
+          }
+          case "status": return dir * (a.status.localeCompare(b.status));
+          case "time": return dir * (new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime());
+          default: return 0;
         }
-        case "status": return dir * (a.status.localeCompare(b.status));
-        case "time": return dir * (new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime());
-        default: return 0;
+      });
+    } else {
+      // Default: topological sort (parents before children), then by updated_at desc
+      const jobIds = new Set(jobs.map((j) => j.id));
+      const depCount = new Map<string, number>();
+      const children = new Map<string, string[]>();
+      for (const job of jobs) depCount.set(job.id, 0);
+      for (const job of jobs) {
+        for (const depId of job.depends_on ?? []) {
+          if (jobIds.has(depId)) {
+            depCount.set(job.id, (depCount.get(job.id) ?? 0) + 1);
+            if (!children.has(depId)) children.set(depId, []);
+            children.get(depId)!.push(job.id);
+          }
+        }
       }
-    });
+      const queue = jobs.filter((j) => (depCount.get(j.id) ?? 0) === 0);
+      queue.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+      sorted = [];
+      const jobMap = new Map(jobs.map((j) => [j.id, j]));
+      const visited = new Set<string>();
+      let i = 0;
+      while (i < queue.length) {
+        const job = queue[i++];
+        if (visited.has(job.id)) continue;
+        visited.add(job.id);
+        sorted.push(job);
+        const childIds = children.get(job.id) ?? [];
+        const readyChildren: Job[] = [];
+        for (const childId of childIds) {
+          const c = (depCount.get(childId) ?? 1) - 1;
+          depCount.set(childId, c);
+          if (c === 0) {
+            const child = jobMap.get(childId);
+            if (child) readyChildren.push(child);
+          }
+        }
+        readyChildren.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+        queue.push(...readyChildren);
+      }
+      for (const job of jobs) {
+        if (!visited.has(job.id)) sorted.push(job);
+      }
+    }
     const active: Job[] = [];
     const terminal: Job[] = [];
     for (const job of sorted) {
@@ -367,21 +434,33 @@ function JobListView({ jobs }: { jobs: Job[] }) {
     const cost = costMap.get(job.id);
     const flowName = job.workflow?.metadata?.name ?? null;
     const selected = selectedIds.has(job.id);
+    const isHighlighted = highlightedDeps.has(job.id);
+    const hasDeps = (job.depends_on?.length ?? 0) > 0;
+    const depNames = job.depends_on?.map((id) => jobNameMap.get(id)).filter(Boolean) as string[] | undefined;
 
     return (
       <EntityContextMenu key={job.id} type="job" data={job}>
         <div
+          data-job-row={job.id}
           onClick={(e) => {
-            // Don't select if clicking the name link
             if ((e.target as HTMLElement).closest("[data-job-link]")) return;
             handleToggleSelect(job.id, e.shiftKey);
           }}
+          onMouseEnter={() => setHoveredJobId(job.id)}
+          onMouseLeave={() => setHoveredJobId(null)}
           className={cn(
-            "w-full text-left px-4 sm:px-6 py-3 flex items-center gap-3 transition-colors hover:bg-zinc-50/80 dark:hover:bg-zinc-800/40 group cursor-default",
-            isTerminal && isOlderThan24h(job) && "opacity-40",
+            "w-full text-left px-4 sm:px-6 py-3 flex items-center gap-3 transition-all hover:bg-zinc-50/80 dark:hover:bg-zinc-800/40 group cursor-default",
             selected && "bg-blue-50/50 dark:bg-blue-950/20",
+            isHighlighted && "bg-blue-950/20 border-l-2 border-l-blue-500",
           )}
         >
+          {/* Dependency label */}
+          {isHighlighted && (
+            <span className="shrink-0 px-1.5 py-0.5 rounded-full bg-blue-500 text-white text-[9px] font-medium">
+              dependency
+            </span>
+          )}
+
           {/* Checkbox — only visible when selection active */}
           {isSelectionActive && (
             <button
@@ -416,9 +495,14 @@ function JobListView({ jobs }: { jobs: Job[] }) {
               {isStale(job) && (
                 <AlertTriangle className="w-3 h-3 text-amber-500 shrink-0" />
               )}
-              {job.has_suspended_steps && (
+              {job.has_suspended_steps && job.status !== "cancelled" && job.status !== "completed" && job.status !== "failed" && (
                 <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 ring-1 ring-amber-500/30 shrink-0">
                   <CirclePause className="w-2.5 h-2.5" />
+                </span>
+              )}
+              {hasDeps && depNames && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-medium text-blue-400 bg-blue-500/10 rounded-full px-2 py-0.5 shrink-0">
+                  depends on {depNames.join(", ")}
                 </span>
               )}
             </div>
@@ -549,7 +633,9 @@ export function JobsPage() {
     return new Set(searchParams.status.split(","));
   }, [searchParams.status]);
 
-  const { data: allJobs = [], isLoading } = useJobs(undefined, true);
+  const { data: jobsResponse, isLoading } = useJobs(undefined, true);
+  const allJobs = jobsResponse?.jobs ?? [];
+  const totalJobCount = jobsResponse?.total ?? allJobs.length;
   const { data: flows = [] } = useLocalFlows();
   const [flowFilter, setFlowFilter] = useState("all");
 
@@ -745,7 +831,11 @@ export function JobsPage() {
               activeStatuses={activeStatuses}
               onToggle={toggleStatus}
             />
-            <span className="text-xs text-zinc-500">{allJobs.length} total</span>
+            <span className="text-xs text-zinc-500">
+              {totalJobCount > allJobs.length
+                ? `${allJobs.length} most recent (of ${totalJobCount})`
+                : `${allJobs.length} total`}
+            </span>
           </div>
 
           <div className="flex-1 min-w-0" />

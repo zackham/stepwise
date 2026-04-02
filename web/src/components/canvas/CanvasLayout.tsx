@@ -174,13 +174,14 @@ export function computeCanvasLayout(jobs: Job[], groupSettings?: Record<string, 
       maxY = Math.max(maxY, card.y + card.height);
     }
     if (minX < Infinity) {
-      const pad = 16;
+      const pad = 12;
+      const labelH = 24;
       groups.push({
         label,
         x: minX - pad,
-        y: minY - pad - 24, // extra space for label
+        y: minY - pad - labelH,
         width: maxX - minX + pad * 2,
-        height: maxY - minY + pad * 2 + 24,
+        height: maxY - minY + pad * 2 + labelH,
         completedCount: groupJobs.filter((j) => j.status === "completed").length,
         totalCount: groupJobs.length,
         maxConcurrent: groupSettings?.[label] ?? 0,
@@ -190,12 +191,55 @@ export function computeCanvasLayout(jobs: Job[], groupSettings?: Record<string, 
     }
   }
 
+  // Post-layout: push overlapping groups apart vertically
+  const gap = 24;
+  groups.sort((a, b) => a.y - b.y);
+  for (let i = 1; i < groups.length; i++) {
+    const prev = groups[i - 1];
+    const prevBottom = prev.y + prev.height + gap;
+    if (groups[i].y < prevBottom) {
+      const shift = prevBottom - groups[i].y;
+      groups[i].y += shift;
+      // Shift all cards belonging to this group
+      const groupJobIds = new Set(
+        groupMap.get(groups[i].label)?.map((j) => j.id) ?? []
+      );
+      for (const card of cards) {
+        if (groupJobIds.has(card.jobId)) {
+          card.y += shift;
+        }
+      }
+      // Update edges for shifted cards
+      for (const edge of edges) {
+        const fromCard = cardMap.get(edge.from);
+        const toCard = cardMap.get(edge.to);
+        if (fromCard) {
+          edge.fromPos = { x: fromCard.x + fromCard.width, y: fromCard.y + fromCard.height / 2 };
+        }
+        if (toCard) {
+          edge.toPos = { x: toCard.x, y: toCard.y + toCard.height / 2 };
+        }
+      }
+    }
+  }
+
+  // Recompute total dimensions after shifts
+  let totalW = 0, totalH = 0;
+  for (const card of cards) {
+    totalW = Math.max(totalW, card.x + card.width);
+    totalH = Math.max(totalH, card.y + card.height);
+  }
+  for (const group of groups) {
+    totalW = Math.max(totalW, group.x + group.width);
+    totalH = Math.max(totalH, group.y + group.height);
+  }
+
   const graphMeta = g.graph();
   return {
     cards,
     edges,
     groups,
-    width: (graphMeta?.width as number) || 800,
-    height: (graphMeta?.height as number) || 600,
+    width: Math.max(totalW + 60, (graphMeta?.width as number) || 800),
+    height: Math.max(totalH + 60, (graphMeta?.height as number) || 600),
   };
 }

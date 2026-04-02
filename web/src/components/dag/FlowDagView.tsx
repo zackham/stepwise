@@ -392,6 +392,16 @@ export function FlowDagView({
     selectedStep,
   });
 
+  // Disable follow flow and fit to view for flows (no job) and non-running jobs
+  const isActiveJob = jobStatus === "running" || jobStatus === "paused" || jobStatus === "pending" || jobStatus === "staged";
+  useEffect(() => {
+    if (!jobId || !isActiveJob) {
+      setFollowFlow(false);
+      const timer = setTimeout(() => fitToView(), 100);
+      return () => clearTimeout(timer);
+    }
+  }, [jobId, isActiveJob, setFollowFlow, fitToView]);
+
   // Build a map of step_name -> latest run
   const latestRuns = useMemo(() => {
     const map: Record<string, StepRun> = {};
@@ -797,17 +807,19 @@ export function FlowDagView({
 
       {/* Zoom controls + follow flow */}
       <div className="absolute bottom-3 left-3 flex items-center gap-3 z-10">
-        <label className="flex items-center gap-1.5 bg-white/80 dark:bg-zinc-900/80 rounded-md border border-zinc-300/50 dark:border-zinc-700/50 px-2 py-1 cursor-pointer select-none min-h-[44px] md:min-h-0">
-          <input
-            type="checkbox"
-            checked={followFlow}
-            onChange={(e) => {
-              setFollowFlow(e.target.checked);
-            }}
-            className="accent-blue-500 w-3 h-3"
-          />
-          <span className="text-zinc-400 text-xs">Follow flow</span>
-        </label>
+        {jobId && (
+          <label className="flex items-center gap-1.5 bg-white/80 dark:bg-zinc-900/80 rounded-md border border-zinc-300/50 dark:border-zinc-700/50 px-2 py-1 cursor-pointer select-none min-h-[44px] md:min-h-0">
+            <input
+              type="checkbox"
+              checked={followFlow}
+              onChange={(e) => {
+                setFollowFlow(e.target.checked);
+              }}
+              className="accent-blue-500 w-3 h-3"
+            />
+            <span className="text-zinc-400 text-xs">Follow flow</span>
+          </label>
+        )}
         {(jobStatus === "completed" || jobStatus === "failed") && (
           <label className="flex items-center gap-1.5 bg-white/80 dark:bg-zinc-900/80 rounded-md border border-zinc-300/50 dark:border-zinc-700/50 px-2 py-1 cursor-pointer select-none min-h-[44px] md:min-h-0">
             <input

@@ -1,22 +1,21 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Outlet, Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { ErrorBoundary, type FallbackProps } from "react-error-boundary";
 import { Toaster } from "sonner";
 import { useStepwiseWebSocket, WsStatusProvider } from "@/hooks/useStepwiseWebSocket";
 import { useNotifySuspended } from "@/hooks/useNotifySuspended";
+import { useRecentEvents, type RecentEvent } from "@/hooks/useRecentEvents";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useEngineStatus, useJobs, useJob, useServers } from "@/hooks/useStepwise";
 import {
   LayoutGrid,
   FileCode,
   Settings2,
-  Zap,
   FolderOpen,
   AlertTriangle,
   Sun,
   Moon,
   Bell,
-  BellOff,
   ChevronDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -34,7 +33,9 @@ import {
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 function timeAgo(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -191,9 +192,47 @@ function ShortcutsDialog({
   );
 }
 
+const EVENT_DOT_COLOR: Record<RecentEvent["kind"], string> = {
+  "job.completed": "bg-emerald-500",
+  "job.failed": "bg-red-500",
+  "job.started": "bg-blue-500",
+  "step.failed": "bg-red-500",
+  "step.suspended": "bg-amber-500",
+};
+
+function NotificationEventItem({
+  event,
+  onClick,
+}: {
+  event: RecentEvent;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex w-full items-start gap-2.5 rounded-md px-3 py-2 text-left transition-colors hover:bg-accent"
+    >
+      <span
+        className={cn(
+          "mt-1.5 h-2 w-2 shrink-0 rounded-full",
+          EVENT_DOT_COLOR[event.kind] || "bg-zinc-500"
+        )}
+      />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-xs font-medium text-foreground">{event.jobName}</div>
+        <div className="flex items-center gap-2">
+          <span className="truncate text-[11px] text-muted-foreground">{event.description}</span>
+          <span className="shrink-0 text-[10px] text-muted-foreground/60">{timeAgo(event.timestamp)}</span>
+        </div>
+      </div>
+    </button>
+  );
+}
+
 export function AppLayout() {
   const { wsState } = useStepwiseWebSocket();
   const { enabled: notificationsEnabled, toggle: toggleNotifications } = useNotifySuspended();
+  const { events: recentEvents } = useRecentEvents();
   const location = useLocation();
   const navigate = useNavigate();
   const { data: status } = useEngineStatus();
@@ -202,6 +241,12 @@ export function AppLayout() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [changelogOpen, setChangelogOpen] = useState(false);
+  const [seenEventCount, setSeenEventCount] = useState(0);
+
+  const unreadCount = useMemo(
+    () => Math.max(0, recentEvents.length - seenEventCount),
+    [recentEvents.length, seenEventCount],
+  );
 
   useEffect(() => {
     applyTheme(theme);
@@ -222,8 +267,8 @@ export function AppLayout() {
         : currentPath;
 
   // Dynamic tab title
-  const { data: allJobs } = useJobs(undefined, true);
-  const pendingCount = allJobs?.filter((j) => j.has_suspended_steps).length ?? 0;
+  const { data: jobsResponse } = useJobs(undefined, true);
+  const pendingCount = jobsResponse?.jobs?.filter((j) => j.has_suspended_steps).length ?? 0;
   const jobIdMatch = currentPath.match(/^\/jobs\/([^/]+)/);
   const detailJobId = jobIdMatch?.[1] ?? undefined;
   const { data: detailJob } = useJob(detailJobId);
@@ -394,11 +439,6 @@ export function AppLayout() {
             <Link to="/jobs" className={navItemClass(isJobsActive)}>
               <LayoutGrid className="h-4 w-4 md:mr-1.5 md:h-3.5 md:w-3.5" />
               <span className="hidden md:inline">Jobs</span>
-              {pendingCount > 0 && (
-                <span className="ml-1 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-amber-500 px-1 text-[11px] leading-none font-semibold text-white">
-                  {pendingCount}
-                </span>
-              )}
             </Link>
             <Link to="/flows" className={navItemClass(isFlowsActive)}>
               <FileCode className="h-4 w-4 md:mr-1.5 md:h-3.5 md:w-3.5" />
@@ -429,19 +469,67 @@ export function AppLayout() {
             )}
           </div>
 
-          {/* Notification toggle */}
-          <button
-            onClick={toggleNotifications}
-            className={cn(
-              "flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md p-1.5 transition-colors md:min-h-0 md:min-w-0",
-              notificationsEnabled
-                ? "text-blue-400 hover:bg-zinc-200/50 hover:text-blue-300 dark:hover:bg-zinc-800/50"
-                : "text-zinc-500 hover:bg-zinc-200/50 hover:text-foreground dark:hover:bg-zinc-800/50"
-            )}
-            title={notificationsEnabled ? "Notifications on — click to disable" : "Notifications off — click to enable"}
+          {/* Notification dropdown */}
+          <DropdownMenu
+            onOpenChange={(open) => {
+              if (open) setSeenEventCount(recentEvents.length);
+            }}
           >
-            {notificationsEnabled ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4" />}
-          </button>
+            <DropdownMenuTrigger
+              className={cn(
+                "relative flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md p-1.5 transition-colors md:min-h-0 md:min-w-0",
+                notificationsEnabled
+                  ? "text-blue-400 hover:bg-zinc-200/50 hover:text-blue-300 dark:hover:bg-zinc-800/50"
+                  : "text-zinc-500 hover:bg-zinc-200/50 hover:text-foreground dark:hover:bg-zinc-800/50"
+              )}
+              title="Notifications"
+            >
+              <Bell className="h-4 w-4" />
+              {unreadCount > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 inline-flex h-[16px] min-w-[16px] items-center justify-center rounded-full bg-blue-500 px-1 text-[10px] leading-none font-semibold text-white">
+                  {unreadCount > 9 ? "9+" : unreadCount}
+                </span>
+              )}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" sideOffset={6} className="w-80">
+              {/* Header */}
+              <div className="flex items-center justify-between px-3 py-2">
+                <span className="text-xs font-medium text-foreground">Notifications</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleNotifications();
+                  }}
+                  className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <span className={cn(notificationsEnabled ? "text-foreground" : "text-muted-foreground/50")}>On</span>
+                  <span className="text-muted-foreground/30">/</span>
+                  <span className={cn(!notificationsEnabled ? "text-foreground" : "text-muted-foreground/50")}>Off</span>
+                </button>
+              </div>
+              <DropdownMenuSeparator />
+              {/* Event list */}
+              <ScrollArea className="max-h-[400px] overflow-y-auto">
+                {recentEvents.length === 0 ? (
+                  <div className="px-3 py-8 text-center text-xs text-muted-foreground">
+                    No recent events
+                  </div>
+                ) : (
+                  <div className="py-1">
+                    {recentEvents.map((event) => (
+                      <NotificationEventItem
+                        key={event.id}
+                        event={event}
+                        onClick={() => {
+                          navigate({ to: "/jobs/$jobId", params: { jobId: event.jobId } });
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
+              </ScrollArea>
+            </DropdownMenuContent>
+          </DropdownMenu>
 
           {/* Theme toggle */}
           <button
@@ -455,6 +543,12 @@ export function AppLayout() {
           {/* Engine status */}
           {status && (
             <div className="flex items-center gap-3 text-xs text-zinc-500">
+              {status.active_jobs > 0 && (
+                <span className="relative flex h-2 w-2">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-blue-500" />
+                </span>
+              )}
               {status.version && (
                 <button
                   onClick={() => setChangelogOpen(true)}
@@ -464,20 +558,6 @@ export function AppLayout() {
                   v{status.version}
                 </button>
               )}
-              <div className="hidden items-center gap-1.5 md:flex">
-                <Zap className="h-3 w-3" />
-                <span>
-                  {status.active_jobs} active / {status.total_jobs} total
-                </span>
-              </div>
-              <div className="flex items-center gap-1">
-                {status.active_jobs > 0 && (
-                  <span className="relative flex h-2 w-2">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75" />
-                    <span className="relative inline-flex h-2 w-2 rounded-full bg-blue-500" />
-                  </span>
-                )}
-              </div>
             </div>
           )}
         </header>

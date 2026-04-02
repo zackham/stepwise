@@ -24,12 +24,15 @@ export interface JobCardProps {
   isSelected?: boolean;
   isSelectionActive?: boolean;
   onToggleSelect?: (jobId: string, shiftKey: boolean) => void;
+  highlightAs?: "dependency" | "dependent" | null;
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
 }
 
 const DAG_W = 268;
 const DAG_H = 90;
 
-export const JobCard = memo(function JobCard({ job, runs, dependencyNames, isGroupQueued, isSelected, isSelectionActive, onToggleSelect }: JobCardProps) {
+export const JobCard = memo(function JobCard({ job, runs, dependencyNames, isGroupQueued, isSelected, isSelectionActive, onToggleSelect, highlightAs, onMouseEnter, onMouseLeave }: JobCardProps) {
   const isCompleted = job.status === "completed";
   const isFailed = job.status === "failed";
   const isActive = job.status === "running" || job.status === "paused";
@@ -49,7 +52,20 @@ export const JobCard = memo(function JobCard({ job, runs, dependencyNames, isGro
 
   return (
     <EntityContextMenu type="job" data={job}>
-    <div className="relative group/card">
+    <div
+      className={cn(
+        "relative group/card rounded-lg transition-all duration-200",
+        highlightAs === "dependency" && "ring-2 ring-blue-500/50 shadow-lg shadow-blue-500/10",
+      )}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+    >
+      {/* Dependency highlight label */}
+      {highlightAs === "dependency" && (
+        <div className="absolute -top-6 left-1/2 -translate-x-1/2 z-10 px-2 py-0.5 rounded-full bg-blue-500 text-white text-[10px] font-medium whitespace-nowrap shadow-md">
+          dependency
+        </div>
+      )}
       {/* Selection checkbox */}
       {onToggleSelect && (
         <button
@@ -73,9 +89,8 @@ export const JobCard = memo(function JobCard({ job, runs, dependencyNames, isGro
       search={((prev: Record<string, unknown>) => ({ ...prev, sidebar: "0" })) as never}
       className={cn(
         "block w-full rounded-lg border transition-all duration-200 overflow-hidden",
-        "bg-white/80 hover:bg-white dark:bg-zinc-900/80 dark:hover:bg-zinc-900",
+        "bg-white/80 hover:bg-blue-50 dark:bg-zinc-900/80 dark:hover:bg-blue-950/40",
         "border-zinc-300 hover:border-zinc-400 dark:border-zinc-800 dark:hover:border-zinc-700",
-        isCompleted && "opacity-45 hover:opacity-70",
         isFailed && "border-red-900/60 shadow-[0_0_12px_rgba(239,68,68,0.15)]",
         isActive && "border-blue-900/40",
         isSelected && "ring-2 ring-blue-500",
@@ -154,9 +169,11 @@ export const JobCard = memo(function JobCard({ job, runs, dependencyNames, isGro
           </div>
         </div>
         {dependencyNames && dependencyNames.length > 0 && (
-          <p className="text-[10px] text-zinc-600 truncate">
-            depends on {dependencyNames.join(", ")}
-          </p>
+          <div className="flex items-center gap-1 flex-wrap">
+            <span className="inline-flex items-center gap-1 text-[10px] font-medium text-blue-400 bg-blue-500/10 rounded-full px-2 py-0.5">
+              depends on {dependencyNames.join(", ")}
+            </span>
+          </div>
         )}
       </div>
     </Link>

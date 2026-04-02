@@ -364,6 +364,7 @@ export interface LocalFlow {
   visibility: "interactive" | "background" | "internal";
   source?: "local" | "registry";
   registry_ref?: string;
+  graph?: FlowGraph | null;
 }
 
 export interface FlowGraphNode {
@@ -418,6 +419,7 @@ export interface RegistryFlow {
   executor_types: string[];
   downloads: number;
   featured: boolean;
+  updated_at?: string;
   graph?: FlowGraph;
   flow?: FlowDefinition | null;
 }

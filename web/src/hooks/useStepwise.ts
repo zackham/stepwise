@@ -8,6 +8,7 @@ export function useJobs(status?: string, topLevel: boolean = true, includeArchiv
   return useQuery({
     queryKey: ["jobs", status, topLevel, includeArchived],
     queryFn: () => api.fetchJobs(status, topLevel, includeArchived),
+    select: (data) => data,
   });
 }
 

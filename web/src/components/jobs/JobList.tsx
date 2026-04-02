@@ -363,7 +363,8 @@ export function JobList({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkMode, setBulkMode] = useState(false);
   const showArchived = statusFilter === "archived";
-  const { data: jobs = [], isLoading, isFetching, dataUpdatedAt } = useJobs(undefined, true, showArchived);
+  const { data: jobsResponse, isLoading, isFetching, dataUpdatedAt } = useJobs(undefined, true, showArchived);
+  const jobs = jobsResponse?.jobs ?? [];
   const mutations = useStepwiseMutations();
   const wsStatus = useWsStatus();
   const queryClient = useQueryClient();

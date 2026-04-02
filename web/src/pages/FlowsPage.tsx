@@ -1,6 +1,7 @@
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { CreateFlowDialog } from "@/components/editor/CreateFlowDialog";
+import { MiniFlowDag } from "@/components/canvas/MiniFlowDag";
 import {
   useLocalFlows,
   useDeleteFlow,
@@ -15,7 +16,6 @@ import {
   Download,
   Eye,
   GitFork,
-  Hand,
   FileText,
   FolderOpen,
   Globe,
@@ -24,14 +24,17 @@ import {
   Loader2,
   Plus,
   Search,
+  Trash2,
   User,
   WifiOff,
+  X,
 } from "lucide-react";
 import { ActionContextProvider } from "@/components/menus/ActionContextProvider";
 import { EntityContextMenu } from "@/components/menus/EntityContextMenu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { ComboBox } from "@/components/ui/ComboBox";
 import {
   Dialog,
   DialogContent,
@@ -40,21 +43,32 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { ConfirmDialog } from "@/components/menus/ConfirmDialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useIsMobile } from "@/hooks/useMediaQuery";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { LocalFlow, RegistryFlow } from "@/lib/types";
 
 type Tab = "local" | "registry";
-type SortBy = "name" | "most-used" | "recent";
 type VisibilityFilter = "all" | "interactive" | "background" | "internal";
+type TimeRange = "today" | "7d" | "30d" | undefined;
+type FlowSortCol = "name" | "steps" | "jobs" | "last_run";
+type RegistrySortCol = "name" | "author" | "steps" | "downloads" | "updated";
+
+const VISIBILITY_OPTIONS = [
+  { value: "all", label: "All" },
+  { value: "interactive", label: "Interactive" },
+  { value: "background", label: "Background" },
+  { value: "internal", label: "Internal" },
+];
+
+const TIME_RANGE_OPTIONS = [
+  { value: "all", label: "All time" },
+  { value: "today", label: "Today" },
+  { value: "7d", label: "7 days" },
+  { value: "30d", label: "30 days" },
+];
 
 function flowDirKey(flowPath: string): string {
   const lastSlash = flowPath.lastIndexOf("/");
@@ -72,15 +86,76 @@ function formatRelativeTime(iso: string): string {
   return `${days}d ago`;
 }
 
+function filterByTimeRange(flows: LocalFlow[], range: TimeRange): LocalFlow[] {
+  if (!range) return flows;
+  const now = Date.now();
+  const cutoff =
+    range === "today"
+      ? now - 86400000
+      : range === "7d"
+        ? now - 7 * 86400000
+        : now - 30 * 86400000;
+  return flows.filter((f) => new Date(f.modified_at).getTime() >= cutoff);
+}
+
+function SortHeader<T extends string>({ col, label, current, asc, onSort, className }: {
+  col: T;
+  label: string;
+  current: T;
+  asc: boolean;
+  onSort: (col: T) => void;
+  className?: string;
+}) {
+  const active = current === col;
+  return (
+    <button
+      onClick={() => onSort(col)}
+      className={cn(
+        "flex items-center gap-0.5 hover:text-foreground transition-colors cursor-pointer",
+        active ? "text-foreground" : "text-zinc-500",
+        className,
+      )}
+    >
+      <span className={cn(className?.includes("text-right") && "ml-auto")}>{label}</span>
+      {active && (
+        <span className="text-[8px]">{asc ? "▲" : "▼"}</span>
+      )}
+    </button>
+  );
+}
+
 export function FlowsPage() {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const [tab, setTab] = useState<Tab>("local");
   const [filter, setFilter] = useState("");
-  const [sortBy, setSortBy] = useState<SortBy>("name");
   const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>("all");
+  const [timeRange, setTimeRange] = useState<TimeRange>(undefined);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const [viewMode, setViewMode] = useState<"cards" | "list">("cards");
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+
+  // Sort state for list view header
+  const [sortCol, setSortCol] = useState<FlowSortCol>("last_run");
+  const [sortAsc, setSortAsc] = useState(false);
+
+  const handleSort = useCallback((col: FlowSortCol) => {
+    if (sortCol === col) {
+      setSortAsc((a) => !a);
+    } else {
+      setSortCol(col);
+      setSortAsc(col === "name"); // name defaults asc, everything else desc
+    }
+  }, [sortCol]);
+
+  // Selection state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const lastSelectedRef = useRef<string | null>(null);
+  const isSelectionActive = selectedIds.size > 0;
+
+  const handleClearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+    lastSelectedRef.current = null;
+  }, []);
 
   // Data
   const { data: flows = [] } = useLocalFlows();
@@ -104,33 +179,52 @@ export function FlowsPage() {
 
   // Registry
   const [registryQuery, setRegistryQuery] = useState("");
-  const [registrySort, setRegistrySort] = useState<"downloads" | "newest">("downloads");
-  const { data: registryData, isLoading: registryLoading, isError: registryError } = useRegistrySearch(registryQuery, registrySort);
+  const [regSortCol, setRegSortCol] = useState<RegistrySortCol>("downloads");
+  const [regSortAsc, setRegSortAsc] = useState(false);
+  const [registryFilter, setRegistryFilter] = useState<"popular" | "featured" | "newest">("popular");
+  const handleRegSort = useCallback((col: RegistrySortCol) => {
+    if (regSortCol === col) {
+      setRegSortAsc((a) => !a);
+    } else {
+      setRegSortCol(col);
+      setRegSortAsc(col === "name" || col === "author");
+    }
+  }, [regSortCol]);
+
+  const { data: registryData, isLoading: registryLoading, isError: registryError } = useRegistrySearch(registryQuery);
   const registryFlows = registryData?.flows ?? [];
+
+  const sortedRegistryFlows = useMemo(() => {
+    let result = registryFilter === "featured"
+      ? registryFlows.filter((f) => f.featured)
+      : [...registryFlows];
+    result.sort((a, b) => {
+      const dir = regSortAsc ? 1 : -1;
+      switch (regSortCol) {
+        case "name": return dir * a.name.localeCompare(b.name);
+        case "author": return dir * a.author.localeCompare(b.author);
+        case "steps": return dir * (a.steps - b.steps);
+        case "downloads": return dir * (a.downloads - b.downloads);
+        case "updated": return dir * ((a.updated_at ?? "").localeCompare(b.updated_at ?? ""));
+        default: return 0;
+      }
+    });
+    return result;
+  }, [registryFlows, regSortCol, regSortAsc, registryFilter]);
   const installMutation = useInstallFlow();
   const [installedSlugs, setInstalledSlugs] = useState<Map<string, string>>(new Map());
 
-  // Map registry slugs to their local flow names so we can detect already-installed flows.
-  // Keys are bare slugs (e.g. "my-flow") so lookups match RegistryFlow.slug directly.
-  // We check two sources:
-  //   1. Cached registry flows (source=registry) whose registry_ref is "@author:slug"
-  //   2. Locally installed flows whose name matches a slug (installed via /registry/install)
   const localRegistryMap = useMemo(() => {
     const map = new Map<string, string>();
     for (const f of flows) {
       if (f.source === "registry" && f.registry_ref) {
-        // Extract bare slug from "@author:slug" format
         const colonIdx = f.registry_ref.indexOf(":");
         const slug = colonIdx >= 0 ? f.registry_ref.substring(colonIdx + 1) : f.registry_ref;
         map.set(slug, f.name);
       }
     }
-    // Also detect flows installed via /registry/install — they live in flows/<slug>/
-    // and appear as source=local with name equal to the slug.
-    // We add them only if not already covered by registry_ref mapping above.
     for (const f of flows) {
       if (f.source === "local" && !map.has(f.name)) {
-        // Will be matched when a registry flow's slug equals this local flow's name
         map.set(f.name, f.name);
       }
     }
@@ -153,24 +247,91 @@ export function FlowsPage() {
       result = result.filter((f) => (f.visibility ?? "interactive") === visibilityFilter);
     }
 
+    result = filterByTimeRange(result, timeRange);
+
+    // Sort by header column
     result.sort((a, b) => {
-      if (sortBy === "name") return a.name.localeCompare(b.name);
+      const dir = sortAsc ? 1 : -1;
       const sa = statsMap.get(flowDirKey(a.path));
       const sb = statsMap.get(flowDirKey(b.path));
-      if (sortBy === "most-used") {
-        const diff = (sb?.job_count ?? 0) - (sa?.job_count ?? 0);
-        return diff !== 0 ? diff : a.name.localeCompare(b.name);
+      switch (sortCol) {
+        case "name":
+          return dir * a.name.localeCompare(b.name);
+        case "steps":
+          return dir * (a.steps_count - b.steps_count);
+        case "jobs": {
+          const diff = (sa?.job_count ?? 0) - (sb?.job_count ?? 0);
+          return diff !== 0 ? dir * diff : a.name.localeCompare(b.name);
+        }
+        case "last_run": {
+          const ta = sa?.last_run_at ?? "";
+          const tb = sb?.last_run_at ?? "";
+          if (ta === tb) return a.name.localeCompare(b.name);
+          if (!ta) return 1;
+          if (!tb) return -1;
+          return dir * ta.localeCompare(tb);
+        }
+        default:
+          return 0;
       }
-      const ta = sa?.last_run_at ?? "";
-      const tb = sb?.last_run_at ?? "";
-      if (ta === tb) return a.name.localeCompare(b.name);
-      if (!ta) return 1;
-      if (!tb) return -1;
-      return tb.localeCompare(ta);
     });
 
     return result;
-  }, [flows, filter, sortBy, visibilityFilter, statsMap]);
+  }, [flows, filter, sortCol, sortAsc, visibilityFilter, timeRange, statsMap]);
+
+  // Ordered flow IDs for shift+click range selection
+  const orderedFlowPaths = useMemo(() => filtered.map((f) => f.path), [filtered]);
+
+  const handleSelectAll = useCallback(() => {
+    setSelectedIds(new Set(filtered.map((f) => f.path)));
+  }, [filtered]);
+
+  const handleToggleSelect = useCallback(
+    (flowPath: string, shiftKey: boolean) => {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (shiftKey && lastSelectedRef.current) {
+          const startIdx = orderedFlowPaths.indexOf(lastSelectedRef.current);
+          const endIdx = orderedFlowPaths.indexOf(flowPath);
+          if (startIdx !== -1 && endIdx !== -1) {
+            const [lo, hi] = startIdx < endIdx ? [startIdx, endIdx] : [endIdx, startIdx];
+            for (let i = lo; i <= hi; i++) {
+              next.add(orderedFlowPaths[i]);
+            }
+          } else {
+            next.has(flowPath) ? next.delete(flowPath) : next.add(flowPath);
+          }
+        } else {
+          if (next.has(flowPath)) {
+            next.delete(flowPath);
+          } else {
+            next.add(flowPath);
+          }
+        }
+        lastSelectedRef.current = flowPath;
+        return next;
+      });
+    },
+    [orderedFlowPaths],
+  );
+
+  // Bulk delete
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+
+  const handleBulkDelete = useCallback(async () => {
+    setIsBulkDeleting(true);
+    const paths = Array.from(selectedIds);
+    try {
+      for (const path of paths) {
+        await deleteFlowMutation.mutateAsync(path);
+      }
+      handleClearSelection();
+    } finally {
+      setIsBulkDeleting(false);
+      setShowBulkDeleteConfirm(false);
+    }
+  }, [selectedIds, deleteFlowMutation, handleClearSelection]);
 
   const handleSelectLocalFlow = useCallback(
     (flow: LocalFlow) => {
@@ -201,13 +362,11 @@ export function FlowsPage() {
   );
 
   const handleRegistryFlowClick = useCallback((flow: RegistryFlow) => {
-    // If already installed locally, navigate directly to editor
     const localName = localRegistryMap.get(flow.slug) ?? installedSlugs.get(flow.slug);
     if (localName) {
       navigate({ to: "/flows/$flowName", params: { flowName: localName } });
       return;
     }
-    // Otherwise install, then navigate
     installMutation.mutate(flow.slug, {
       onSuccess: (result) => {
         setInstalledSlugs((prev) => new Map([...prev, [flow.slug, result.name]]));
@@ -251,34 +410,61 @@ export function FlowsPage() {
         <div className="h-full flex flex-col">
           {/* Header */}
           <div className="flex items-center gap-2 sm:gap-4 px-4 sm:px-6 py-3 border-b border-border shrink-0">
-            <div className="flex items-center gap-1 rounded-lg border border-border p-0.5 bg-zinc-100/50 dark:bg-zinc-900/50">
-              <button
-                onClick={() => setTab("local")}
-                className={cn(
-                  "flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors",
-                  tab === "local"
-                    ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
-                    : "text-zinc-500 hover:text-foreground"
-                )}
-              >
-                <FolderOpen className="w-3.5 h-3.5" />
-                Local
-              </button>
-              <button
-                onClick={() => setTab("registry")}
-                className={cn(
-                  "flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors",
-                  tab === "registry"
-                    ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
-                    : "text-zinc-500 hover:text-foreground"
-                )}
-              >
-                <Globe className="w-3.5 h-3.5" />
-                Registry
-              </button>
-            </div>
+            {/* Grid/List toggle */}
+            <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5 bg-zinc-100/50 dark:bg-zinc-900/50">
+                  <button
+                    onClick={() => setViewMode("list")}
+                    className={cn(
+                      "flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors",
+                      viewMode === "list"
+                        ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
+                        : "text-zinc-500 hover:text-foreground",
+                    )}
+                  >
+                    <List className="w-3.5 h-3.5" />
+                    List
+                  </button>
+                  <button
+                    onClick={() => setViewMode("grid")}
+                    className={cn(
+                      "flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors",
+                      viewMode === "grid"
+                        ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
+                        : "text-zinc-500 hover:text-foreground",
+                    )}
+                  >
+                    <LayoutGrid className="w-3.5 h-3.5" />
+                    Grid
+                  </button>
+                </div>
 
-            {tab === "local" && (
+                {/* Local/Registry toggle */}
+                <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5 bg-zinc-100/50 dark:bg-zinc-900/50">
+                  <button
+                    onClick={() => setTab("local")}
+                    className={cn(
+                      "flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors",
+                      tab === "local"
+                        ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
+                        : "text-zinc-500 hover:text-foreground",
+                    )}
+                  >
+                    Local
+                  </button>
+                  <button
+                    onClick={() => setTab("registry")}
+                    className={cn(
+                      "flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors",
+                      tab === "registry"
+                        ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
+                        : "text-zinc-500 hover:text-foreground",
+                    )}
+                  >
+                    Registry
+                  </button>
+                </div>
+
+            {tab === "local" ? (
               <>
                 <div className="relative flex-1 max-w-sm">
                   <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" />
@@ -286,55 +472,24 @@ export function FlowsPage() {
                     value={filter}
                     onChange={(e) => setFilter(e.target.value)}
                     placeholder="Search flows..."
-                    className="pl-8 h-8 text-sm bg-zinc-50 dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700"
+                    className="pl-8 h-8 text-xs bg-background border-border dark:border-input dark:bg-input/30"
                   />
                 </div>
-                <Select value={visibilityFilter} onValueChange={(v) => setVisibilityFilter(v as VisibilityFilter)}>
-                  <SelectTrigger className="w-28 h-8 text-xs bg-zinc-50 dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700">
-                    <Eye className="w-3 h-3 mr-1 shrink-0" />
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All</SelectItem>
-                    <SelectItem value="interactive">Interactive</SelectItem>
-                    <SelectItem value="background">Background</SelectItem>
-                    <SelectItem value="internal">Internal</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortBy)}>
-                  <SelectTrigger className="w-28 h-8 text-xs bg-zinc-50 dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="name">Name</SelectItem>
-                    <SelectItem value="most-used">Most Used</SelectItem>
-                    <SelectItem value="recent">Recent</SelectItem>
-                  </SelectContent>
-                </Select>
-                <div className="flex items-center gap-1 rounded-lg border border-border p-0.5 bg-zinc-100/50 dark:bg-zinc-900/50">
-                  <button
-                    onClick={() => setViewMode("cards")}
-                    className={cn(
-                      "flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors",
-                      viewMode === "cards"
-                        ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
-                        : "text-zinc-500 hover:text-foreground"
-                    )}
-                  >
-                    <LayoutGrid className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    onClick={() => setViewMode("list")}
-                    className={cn(
-                      "flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors",
-                      viewMode === "list"
-                        ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
-                        : "text-zinc-500 hover:text-foreground"
-                    )}
-                  >
-                    <List className="w-3.5 h-3.5" />
-                  </button>
-                </div>
+                <ComboBox
+                  value={visibilityFilter}
+                  onChange={(v) => setVisibilityFilter(v as VisibilityFilter)}
+                  options={VISIBILITY_OPTIONS}
+                  placeholder="All"
+                  searchPlaceholder="Visibility..."
+                />
+                <ComboBox
+                  value={timeRange ?? "all"}
+                  onChange={(v) => setTimeRange(v === "all" ? undefined : v as TimeRange)}
+                  options={TIME_RANGE_OPTIONS}
+                  placeholder="All time"
+                  searchPlaceholder="Time range..."
+                />
+                <span className="text-xs text-zinc-500">{filtered.length} total</span>
                 <div className="flex-1" />
                 <Button
                   variant="outline"
@@ -350,6 +505,55 @@ export function FlowsPage() {
                   onOpenChange={setShowCreateDialog}
                   onCreated={handleFlowCreated}
                 />
+              </>
+            ) : (
+              <>
+                <div className="relative flex-1 max-w-sm">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" />
+                  <Input
+                    value={registryQuery}
+                    onChange={(e) => setRegistryQuery(e.target.value)}
+                    placeholder="Search registry..."
+                    className="pl-8 h-8 text-xs bg-background border-border dark:border-input dark:bg-input/30"
+                  />
+                </div>
+                <div className="flex items-center gap-1 rounded-lg border border-border p-0.5 bg-zinc-100/50 dark:bg-zinc-900/50">
+                  <button
+                    onClick={() => { setRegSortCol("downloads"); setRegSortAsc(false); setRegistryFilter("popular"); }}
+                    className={cn(
+                      "px-2.5 py-1 text-xs rounded-md transition-colors",
+                      registryFilter === "popular"
+                        ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
+                        : "text-zinc-500 hover:text-foreground",
+                    )}
+                  >
+                    Popular
+                  </button>
+                  <button
+                    onClick={() => { setRegSortCol("downloads"); setRegSortAsc(false); setRegistryFilter("featured"); }}
+                    className={cn(
+                      "px-2.5 py-1 text-xs rounded-md transition-colors",
+                      registryFilter === "featured"
+                        ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
+                        : "text-zinc-500 hover:text-foreground",
+                    )}
+                  >
+                    Featured
+                  </button>
+                  <button
+                    onClick={() => { setRegSortCol("updated"); setRegSortAsc(false); setRegistryFilter("newest"); }}
+                    className={cn(
+                      "px-2.5 py-1 text-xs rounded-md transition-colors",
+                      registryFilter === "newest"
+                        ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
+                        : "text-zinc-500 hover:text-foreground",
+                    )}
+                  >
+                    Newest
+                  </button>
+                </div>
+                <span className="text-xs text-zinc-500">{sortedRegistryFlows.length} total</span>
+                <div className="flex-1" />
               </>
             )}
           </div>
@@ -394,7 +598,7 @@ export function FlowsPage() {
                       </>
                     )}
                   </div>
-                ) : viewMode === "cards" ? (
+                ) : viewMode === "grid" ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 p-4 sm:p-6">
                     {filtered.map((flow) => {
                       const stats = statsMap.get(flowDirKey(flow.path));
@@ -405,57 +609,48 @@ export function FlowsPage() {
                         <EntityContextMenu key={flow.path} type="flow" data={flow}>
                           <button
                             onClick={() => handleSelectLocalFlow(flow)}
-                            className="w-full text-left rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/80 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-white dark:hover:bg-zinc-900 transition-all p-4 flex flex-col gap-2.5 group"
+                            className="w-full h-full text-left rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/80 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-white dark:hover:bg-zinc-900 transition-all overflow-hidden flex flex-col group"
                           >
-                            {/* Header: icon + name + badges */}
-                            <div className="flex items-center gap-2 min-w-0">
-                              {flow.source === "registry" ? (
-                                <Globe className="w-4 h-4 text-violet-400 shrink-0" />
-                              ) : flow.is_directory ? (
-                                <FolderOpen className="w-4 h-4 text-blue-400 shrink-0" />
-                              ) : (
-                                <FileText className="w-4 h-4 text-zinc-500 shrink-0" />
-                              )}
-                              <span className="text-sm font-medium text-foreground group-hover:text-blue-500 dark:group-hover:text-blue-400 truncate transition-colors">
-                                {flow.name}
-                              </span>
-                              {flow.executor_types?.includes("external") && (
-                                <Hand className="w-3 h-3 text-amber-400 shrink-0" />
-                              )}
-                            </div>
-
-                            {/* Description */}
-                            <p className="text-xs text-zinc-500 dark:text-zinc-500 line-clamp-2 min-h-[2lh]">
-                              {flow.description || flow.registry_ref || "No description"}
-                            </p>
-
-                            {/* Badges row */}
-                            <div className="flex flex-wrap gap-1">
+                            {/* Header */}
+                            <div className="px-3 pt-2.5 pb-1 flex items-start gap-2">
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100 truncate leading-tight">
+                                  {flow.name}
+                                </p>
+                                {flow.visibility && flow.visibility !== "interactive" && (
+                                  <p className="text-[11px] text-zinc-500 truncate leading-tight mt-0.5">
+                                    {flow.visibility}
+                                  </p>
+                                )}
+                              </div>
                               {flow.source === "registry" && (
-                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-400 uppercase tracking-wider">
+                                <Badge variant="outline" className="text-xs font-mono uppercase tracking-wide bg-violet-500/10 text-violet-400 ring-1 ring-violet-500/30 border-transparent">
                                   Registry
-                                </span>
+                                </Badge>
                               )}
-                              {flow.visibility && flow.visibility !== "interactive" && (
-                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-700 text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
-                                  {flow.visibility}
-                                </span>
-                              )}
-                              {(flow.executor_types ?? []).map((t) => (
-                                <span
-                                  key={t}
-                                  className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 font-mono"
-                                >
-                                  {t}
-                                </span>
-                              ))}
                             </div>
 
-                            {/* Stats footer */}
-                            <div className="flex items-center gap-3 text-[11px] text-zinc-400 dark:text-zinc-500 pt-1 border-t border-zinc-100 dark:border-zinc-800">
-                              <span>{flow.steps_count} step{flow.steps_count !== 1 ? "s" : ""}</span>
-                              <span>{jobCount > 0 ? `${jobCount} job${jobCount !== 1 ? "s" : ""}` : "no jobs"}</span>
-                              <span className="ml-auto">{lastRun ? formatRelativeTime(lastRun) : "never run"}</span>
+                            {/* Mini DAG */}
+                            {flow.graph && flow.graph.nodes.length > 0 && (
+                              <div className="flex justify-center px-2">
+                                <MiniFlowDag graph={flow.graph} width={268} height={90} />
+                              </div>
+                            )}
+
+                            {/* Spacer */}
+                            <div className="flex-1" />
+
+                            {/* Footer */}
+                            <div className="px-3 pb-2 pt-0.5 space-y-1">
+                              <p className="text-[11px] text-zinc-500 line-clamp-2">
+                                {flow.description || flow.registry_ref || "No description"}
+                              </p>
+                              <div className="flex items-center text-[11px] text-zinc-600 pt-1 border-t border-zinc-100 dark:border-zinc-800">
+                                <span>{flow.steps_count} step{flow.steps_count !== 1 ? "s" : ""}</span>
+                                <span className="mx-2 text-zinc-700">·</span>
+                                <span>{jobCount > 0 ? `${jobCount} job${jobCount !== 1 ? "s" : ""}` : "no jobs"}</span>
+                                <span className="ml-auto">{lastRun ? formatRelativeTime(lastRun) : "never run"}</span>
+                              </div>
                             </div>
                           </button>
                         </EntityContextMenu>
@@ -463,70 +658,157 @@ export function FlowsPage() {
                     })}
                   </div>
                 ) : (
-                  <div className="divide-y divide-border">
-                    {filtered.map((flow) => {
-                      const stats = statsMap.get(flowDirKey(flow.path));
-                      const jobCount = stats?.job_count ?? 0;
-                      const lastRun = stats?.last_run_at;
+                  <div className="flex-1 overflow-y-auto">
+                    {/* Selection bar */}
+                    {isSelectionActive && (
+                      <div className="sticky top-0 z-10 flex items-center gap-3 px-4 sm:px-6 py-2 bg-blue-50/90 dark:bg-blue-950/60 border-b border-blue-200 dark:border-blue-900 backdrop-blur-sm">
+                        <span className="text-xs font-medium text-blue-700 dark:text-blue-300">
+                          {selectedIds.size} selected
+                        </span>
+                        <button
+                          onClick={handleSelectAll}
+                          className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                        >
+                          Select all
+                        </button>
+                        <button
+                          onClick={handleClearSelection}
+                          className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    )}
+                    <div className="divide-y divide-border">
+                      {/* Header row */}
+                      <div className="hidden sm:flex items-center px-4 sm:px-6 py-2 gap-3 text-[10px] uppercase tracking-wider text-zinc-500 font-medium select-none">
+                        {isSelectionActive && <span className="w-5 shrink-0" />}
+                        <SortHeader col="name" label="Name" current={sortCol} asc={sortAsc} onSort={handleSort} className="flex-1" />
+                        <SortHeader col="steps" label="Steps" current={sortCol} asc={sortAsc} onSort={handleSort} className="w-12 text-right" />
+                        <SortHeader col="jobs" label="Jobs" current={sortCol} asc={sortAsc} onSort={handleSort} className="w-14 text-right" />
+                        <SortHeader col="last_run" label="Last Run" current={sortCol} asc={sortAsc} onSort={handleSort} className="w-16 text-right" />
+                      </div>
+                      {filtered.map((flow) => {
+                        const stats = statsMap.get(flowDirKey(flow.path));
+                        const jobCount = stats?.job_count ?? 0;
+                        const lastRun = stats?.last_run_at;
+                        const selected = selectedIds.has(flow.path);
 
-                      return (
-                        <EntityContextMenu key={flow.path} type="flow" data={flow}>
-                          <button
-                            onClick={() => handleSelectLocalFlow(flow)}
-                            className="w-full text-left px-4 sm:px-6 py-3 flex items-start gap-3 transition-colors hover:bg-zinc-50/80 dark:hover:bg-zinc-800/40 group"
-                          >
-                            <div className="mt-0.5 shrink-0">
-                              {flow.source === "registry" ? (
-                                <Globe className="w-4 h-4 text-violet-400" />
-                              ) : flow.is_directory ? (
-                                <FolderOpen className="w-4 h-4 text-blue-400" />
-                              ) : (
-                                <FileText className="w-4 h-4 text-zinc-500" />
+                        return (
+                          <EntityContextMenu key={flow.path} type="flow" data={flow}>
+                            <div
+                              onClick={(e) => {
+                                if ((e.target as HTMLElement).closest("[data-flow-link]")) return;
+                                handleToggleSelect(flow.path, e.shiftKey);
+                              }}
+                              className={cn(
+                                "w-full text-left px-4 sm:px-6 py-3 flex items-center gap-3 transition-colors hover:bg-zinc-50/80 dark:hover:bg-zinc-800/40 group cursor-default",
+                                selected && "bg-blue-50/50 dark:bg-blue-950/20",
                               )}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm font-medium text-foreground group-hover:text-blue-500 dark:group-hover:text-blue-400 truncate transition-colors">
-                                  {flow.name}
-                                </span>
-                                {flow.source === "registry" && (
-                                  <span className="text-[9px] px-1 py-0.5 rounded bg-violet-100 dark:bg-violet-900/40 text-violet-600 dark:text-violet-400 uppercase tracking-wider shrink-0">
-                                    Registry
-                                  </span>
-                                )}
-                                {flow.visibility && flow.visibility !== "interactive" && (
-                                  <span className="text-[9px] px-1 py-0.5 rounded bg-zinc-200 dark:bg-zinc-700 text-zinc-500 dark:text-zinc-400 uppercase tracking-wider shrink-0">
-                                    {flow.visibility}
-                                  </span>
-                                )}
-                                {flow.executor_types?.includes("external") && (
-                                  <Hand className="w-3 h-3 text-amber-400 shrink-0" />
+                            >
+                              {/* Checkbox — only visible when selection active */}
+                              {isSelectionActive && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleToggleSelect(flow.path, e.shiftKey);
+                                  }}
+                                  className={cn(
+                                    "w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-all duration-150",
+                                    selected
+                                      ? "bg-blue-500 border-blue-500 text-white"
+                                      : "border-zinc-400 dark:border-zinc-600 bg-white/90 dark:bg-zinc-800/90 hover:border-blue-400",
+                                  )}
+                                >
+                                  {selected && <Check className="w-3 h-3" />}
+                                </button>
+                              )}
+
+                              {/* Name + details */}
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <a
+                                    data-flow-link
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleSelectLocalFlow(flow);
+                                    }}
+                                    className="text-sm font-medium text-foreground hover:text-blue-500 dark:hover:text-blue-400 truncate transition-colors cursor-pointer"
+                                  >
+                                    {flow.name}
+                                  </a>
+                                  {flow.source === "registry" && (
+                                    <Badge variant="outline" className="text-xs font-mono uppercase tracking-wide bg-violet-500/10 text-violet-400 ring-1 ring-violet-500/30 border-transparent">
+                                      Registry
+                                    </Badge>
+                                  )}
+                                  {flow.visibility && flow.visibility !== "interactive" && (
+                                    <span className="text-[9px] px-1 py-0.5 rounded bg-zinc-200 dark:bg-zinc-700 text-zinc-500 dark:text-zinc-400 uppercase tracking-wider shrink-0">
+                                      {flow.visibility}
+                                    </span>
+                                  )}
+                                </div>
+                                {(flow.description || flow.registry_ref) && (
+                                  <p className="text-xs text-zinc-500 dark:text-zinc-500 truncate mt-0.5">
+                                    {flow.description ?? flow.registry_ref}
+                                  </p>
                                 )}
                               </div>
-                              {(flow.description || flow.registry_ref) && (
-                                <p className="text-xs text-zinc-500 dark:text-zinc-500 truncate mt-0.5">
-                                  {flow.registry_ref ?? flow.description}
-                                </p>
-                              )}
+
+                              {/* Right columns */}
+                              <div className="hidden sm:flex items-center gap-4 shrink-0 text-[11px] text-zinc-500 dark:text-zinc-500 tabular-nums">
+                                <span className="w-12 text-right">{flow.steps_count} step{flow.steps_count !== 1 ? "s" : ""}</span>
+                                <span className="w-14 text-right">{jobCount > 0 ? `${jobCount} job${jobCount !== 1 ? "s" : ""}` : "—"}</span>
+                                <span className="w-16 text-right">{lastRun ? formatRelativeTime(lastRun) : "never"}</span>
+                              </div>
                             </div>
-                            <div className="hidden sm:flex items-center gap-6 shrink-0 text-[11px] text-zinc-500 dark:text-zinc-500 tabular-nums">
-                              {(flow.executor_types?.length ?? 0) > 0 && (
-                                <div className="flex gap-1 w-28 justify-end">
-                                  {(flow.executor_types ?? []).slice(0, 3).map((t) => (
-                                    <span key={t} className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 text-[10px] font-mono">
-                                      {t}
-                                    </span>
-                                  ))}
-                                </div>
+                          </EntityContextMenu>
+                        );
+                      })}
+                    </div>
+
+                    {/* Bulk action bar for flows */}
+                    {isSelectionActive && (
+                      <>
+                        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50">
+                          <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-zinc-900/95 backdrop-blur border border-zinc-700 shadow-2xl">
+                            <span className="text-sm font-medium text-zinc-200 whitespace-nowrap">
+                              {selectedIds.size} selected
+                            </span>
+                            <div className="w-px h-5 bg-zinc-700" />
+                            <button
+                              onClick={() => setShowBulkDeleteConfirm(true)}
+                              disabled={isBulkDeleting}
+                              className={cn(
+                                "flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors",
+                                "text-red-400 hover:text-red-300 hover:bg-red-950/50",
+                                isBulkDeleting && "opacity-50 pointer-events-none",
                               )}
-                              <span className="w-12 text-right">{flow.steps_count} step{flow.steps_count !== 1 ? "s" : ""}</span>
-                              <span className="w-14 text-right">{jobCount > 0 ? `${jobCount} job${jobCount !== 1 ? "s" : ""}` : "—"}</span>
-                              <span className="w-16 text-right">{lastRun ? formatRelativeTime(lastRun) : "never"}</span>
-                            </div>
-                          </button>
-                        </EntityContextMenu>
-                      );
-                    })}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              Delete
+                            </button>
+                            <div className="w-px h-5 bg-zinc-700" />
+                            <button
+                              onClick={handleClearSelection}
+                              className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+                              title="Deselect all"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                        <ConfirmDialog
+                          open={showBulkDeleteConfirm}
+                          title="Delete flows?"
+                          description={`This will permanently delete ${selectedIds.size} flow(s). This cannot be undone.`}
+                          confirmLabel="Delete"
+                          variant="destructive"
+                          onConfirm={handleBulkDelete}
+                          onCancel={() => setShowBulkDeleteConfirm(false)}
+                        />
+                      </>
+                    )}
                   </div>
                 )}
               </div>
@@ -534,67 +816,6 @@ export function FlowsPage() {
           ) : (
             /* Registry tab */
             <div className="flex-1 overflow-y-auto">
-              {/* Registry toolbar */}
-              <div className="flex items-center gap-3 px-4 sm:px-6 py-3 border-b border-border">
-                <div className="relative flex-1 max-w-sm">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" />
-                  <Input
-                    value={registryQuery}
-                    onChange={(e) => setRegistryQuery(e.target.value)}
-                    placeholder="Search registry..."
-                    className="pl-8 h-8 text-sm bg-zinc-50 dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700"
-                  />
-                </div>
-                <div className="flex items-center gap-1 rounded-lg border border-border p-0.5 bg-zinc-100/50 dark:bg-zinc-900/50">
-                  <button
-                    onClick={() => setRegistrySort("downloads")}
-                    className={cn(
-                      "px-2.5 py-1 text-xs rounded-md transition-colors",
-                      registrySort === "downloads"
-                        ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
-                        : "text-zinc-500 hover:text-foreground"
-                    )}
-                  >
-                    Popular
-                  </button>
-                  <button
-                    onClick={() => setRegistrySort("newest")}
-                    className={cn(
-                      "px-2.5 py-1 text-xs rounded-md transition-colors",
-                      registrySort === "newest"
-                        ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
-                        : "text-zinc-500 hover:text-foreground"
-                    )}
-                  >
-                    Newest
-                  </button>
-                </div>
-                <div className="flex items-center gap-1 rounded-lg border border-border p-0.5 bg-zinc-100/50 dark:bg-zinc-900/50">
-                  <button
-                    onClick={() => setViewMode("cards")}
-                    className={cn(
-                      "flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors",
-                      viewMode === "cards"
-                        ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
-                        : "text-zinc-500 hover:text-foreground"
-                    )}
-                  >
-                    <LayoutGrid className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    onClick={() => setViewMode("list")}
-                    className={cn(
-                      "flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors",
-                      viewMode === "list"
-                        ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
-                        : "text-zinc-500 hover:text-foreground"
-                    )}
-                  >
-                    <List className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-
               {registryError ? (
                 <div className="flex flex-col items-center justify-center h-64 text-zinc-500">
                   <WifiOff className="w-8 h-8 mb-3 opacity-40" />
@@ -613,22 +834,31 @@ export function FlowsPage() {
                 </div>
               ) : (
                 <div className={cn(
-                  viewMode === "cards"
+                  viewMode === "grid"
                     ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 p-4 sm:p-6"
                     : "divide-y divide-border"
                 )}>
-                  {registryFlows.map((flow) => {
+                  {viewMode === "list" && (
+                    <div className="hidden sm:flex items-center px-4 sm:px-6 py-2 gap-3 text-[10px] uppercase tracking-wider text-zinc-500 font-medium select-none">
+                      <SortHeader col="name" label="Name" current={regSortCol} asc={regSortAsc} onSort={handleRegSort} className="flex-1" />
+                      <SortHeader col="author" label="Author" current={regSortCol} asc={regSortAsc} onSort={handleRegSort} className="w-20 text-right" />
+                      <SortHeader col="steps" label="Steps" current={regSortCol} asc={regSortAsc} onSort={handleRegSort} className="w-12 text-right" />
+                      <SortHeader col="downloads" label="Downloads" current={regSortCol} asc={regSortAsc} onSort={handleRegSort} className="w-16 text-right" />
+                      <SortHeader col="updated" label="Updated" current={regSortCol} asc={regSortAsc} onSort={handleRegSort} className="w-16 text-right" />
+                      <span className="w-[4.5rem] text-right">Status</span>
+                    </div>
+                  )}
+                  {sortedRegistryFlows.map((flow) => {
                     const isInstalled = localRegistryMap.has(flow.slug) || installedSlugs.has(flow.slug);
 
-                    return viewMode === "cards" ? (
+                    return viewMode === "grid" ? (
                       <button
                         key={flow.slug}
                         onClick={() => handleRegistryFlowClick(flow)}
                         disabled={installMutation.isPending && !isInstalled}
-                        className="w-full text-left rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/80 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-white dark:hover:bg-zinc-900 transition-all p-4 flex flex-col gap-2.5 group"
+                        className="w-full h-full text-left rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/80 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-white dark:hover:bg-zinc-900 transition-all overflow-hidden flex flex-col group"
                       >
-                        <div className="flex items-center gap-2 min-w-0">
-                          <Globe className="w-4 h-4 text-violet-400 shrink-0" />
+                        <div className="px-3 pt-2.5 pb-1 flex items-center gap-2 min-w-0">
                           <span className="text-sm font-medium text-foreground group-hover:text-blue-500 dark:group-hover:text-blue-400 truncate transition-colors">{flow.name}</span>
                           {flow.featured && (
                             <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 uppercase tracking-wider shrink-0">
@@ -641,17 +871,21 @@ export function FlowsPage() {
                             </span>
                           )}
                         </div>
-                        <p className="text-xs text-zinc-500 line-clamp-2 min-h-[2lh]">
+                        {/* Mini DAG */}
+                        {flow.graph && flow.graph.nodes.length > 0 && (
+                          <div className="flex justify-center px-2">
+                            <MiniFlowDag graph={flow.graph} width={268} height={90} />
+                          </div>
+                        )}
+
+                        {/* Spacer */}
+                        <div className="flex-1" />
+
+                        <div className="px-3 pb-2 pt-0.5 space-y-1">
+                        <p className="text-[11px] text-zinc-500 line-clamp-2">
                           {flow.description || "No description"}
                         </p>
-                        <div className="flex flex-wrap gap-1">
-                          {flow.executor_types.map((t) => (
-                            <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 font-mono">
-                              {t}
-                            </span>
-                          ))}
-                        </div>
-                        <div className="flex items-center gap-3 text-[11px] text-zinc-400 dark:text-zinc-500 pt-1 border-t border-zinc-100 dark:border-zinc-800">
+                        <div className="flex items-center text-[11px] text-zinc-600 pt-1 border-t border-zinc-100 dark:border-zinc-800">
                           <span className="flex items-center gap-1"><User className="w-3 h-3" />{flow.author}</span>
                           <span>{flow.steps} step{flow.steps !== 1 ? "s" : ""}</span>
                           <span>{flow.downloads} dl{flow.downloads !== 1 ? "s" : ""}</span>
@@ -661,15 +895,18 @@ export function FlowsPage() {
                             </span>
                           )}
                         </div>
+                        </div>
                       </button>
                     ) : (
-                      <button
+                      <div
                         key={flow.slug}
                         onClick={() => handleRegistryFlowClick(flow)}
-                        disabled={installMutation.isPending && !isInstalled}
-                        className="w-full text-left px-4 sm:px-6 py-3 flex items-start gap-3 transition-colors hover:bg-zinc-50/80 dark:hover:bg-zinc-800/40 group"
+                        className={cn(
+                          "w-full text-left px-4 sm:px-6 py-3 flex items-center gap-3 transition-colors hover:bg-zinc-50/80 dark:hover:bg-zinc-800/40 group cursor-pointer",
+                          installMutation.isPending && !isInstalled && "opacity-50 pointer-events-none",
+                        )}
                       >
-                        <Globe className="w-4 h-4 text-violet-400 shrink-0 mt-0.5" />
+                        {/* Name + details */}
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
                             <span className="text-sm font-medium text-foreground group-hover:text-blue-500 dark:group-hover:text-blue-400 truncate transition-colors">{flow.name}</span>
@@ -678,25 +915,39 @@ export function FlowsPage() {
                                 Featured
                               </span>
                             )}
-                            {isInstalled && (
-                              <span className="flex items-center gap-0.5 text-[9px] px-1 py-0.5 rounded bg-green-100 dark:bg-green-900/40 text-green-600 dark:text-green-400 uppercase tracking-wider shrink-0">
-                                <Check className="w-2.5 h-2.5" />Installed
-                              </span>
-                            )}
                           </div>
-                          <p className="text-xs text-zinc-500 truncate mt-0.5">{flow.description}</p>
-                        </div>
-                        <div className="hidden sm:flex items-center gap-6 shrink-0 text-[11px] text-zinc-500 tabular-nums">
-                          <span className="flex items-center gap-1"><User className="w-3 h-3" />{flow.author}</span>
-                          <span className="w-12 text-right">{flow.steps} step{flow.steps !== 1 ? "s" : ""}</span>
-                          <span className="w-12 text-right">{flow.downloads} dls</span>
-                          {!isInstalled && (
-                            <span className="flex items-center gap-1 text-blue-500 dark:text-blue-400 font-medium">
-                              <Download className="w-3 h-3" />Install
-                            </span>
+                          {flow.description && (
+                            <p className="text-xs text-zinc-500 dark:text-zinc-500 truncate mt-0.5">{flow.description}</p>
                           )}
                         </div>
-                      </button>
+
+                        {/* Right columns */}
+                        <div className="hidden sm:flex items-center gap-3 shrink-0 text-[11px] text-zinc-500 dark:text-zinc-500 tabular-nums">
+                          <span className="w-20 text-right">{flow.author}</span>
+                          <span className="w-12 text-right">{flow.steps} step{flow.steps !== 1 ? "s" : ""}</span>
+                          <span className="w-16 text-right">{flow.downloads}</span>
+                          <span className="w-16 text-right text-zinc-500">{flow.updated_at ? formatRelativeTime(flow.updated_at) : ""}</span>
+                          <span className="w-[4.5rem] text-right">
+                            {isInstalled ? (
+                              <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-green-500/10 text-green-600 dark:text-green-400 ring-1 ring-green-500/30 border-transparent">
+                                <Check className="w-2.5 h-2.5 mr-0.5" />Installed
+                              </Badge>
+                            ) : (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-6 px-2 text-[10px] text-blue-500 dark:text-blue-400 border-blue-300 dark:border-blue-700 hover:bg-blue-50 dark:hover:bg-blue-950/50"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleRegistryFlowClick(flow);
+                                }}
+                              >
+                                <Download className="w-3 h-3 mr-1" />Install
+                              </Button>
+                            )}
+                          </span>
+                        </div>
+                      </div>
                     );
                   })}
                 </div>

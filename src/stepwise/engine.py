@@ -293,9 +293,12 @@ class Engine:
         rerun = job.config.metadata.get("rerun_steps", [])
         if rerun:
             self._rerun_steps[job_id] = set(rerun)
-        job.status = JobStatus.RUNNING
-        job.updated_at = _now()
-        self.store.save_job(job)
+        # Atomic status transition: only set RUNNING if still PENDING
+        updated = self.store.atomic_status_transition(
+            job_id, from_status=JobStatus.PENDING, to_status=JobStatus.RUNNING
+        )
+        if not updated:
+            return  # Job was cancelled/modified between load and start
         self._emit(job_id, JOB_STARTED)
         # Run initial tick
         self.tick()
@@ -3341,9 +3344,17 @@ class AsyncEngine(Engine):
                 return
         # Resolve cross-job data references before running
         self._resolve_job_ref_inputs(job)
-        job.status = JobStatus.RUNNING
-        job.updated_at = _now()
-        self.store.save_job(job)
+        # Atomic status transition: only set RUNNING if still PENDING
+        # (prevents race with concurrent cancel_job)
+        updated = self.store.atomic_status_transition(
+            job_id, from_status=JobStatus.PENDING, to_status=JobStatus.RUNNING
+        )
+        if not updated:
+            _async_logger.info(
+                "Job %s was cancelled before it could start (race condition avoided)",
+                job_id,
+            )
+            return
         self._emit(job_id, JOB_STARTED)
         self._dispatch_ready(job_id)
 
