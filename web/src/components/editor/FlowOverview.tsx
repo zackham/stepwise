@@ -10,7 +10,19 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { FlowConfigPanel } from "@/components/editor/FlowConfigPanel";
+import { useFlowJobs } from "@/hooks/useEditor";
+import { useNavigate } from "@tanstack/react-router";
+import { JobStatusBadge } from "@/components/StatusBadge";
+import { formatDuration } from "@/lib/utils";
 import type { LocalFlow, LocalFlowDetail, FlowMetadata } from "@/lib/types";
+
+function timeAgo(ts: string): string {
+  const diff = Date.now() - new Date(ts).getTime();
+  if (diff < 60000) return "just now";
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  return `${Math.floor(diff / 86400000)}d ago`;
+}
 
 // --- Shared inline editing components ---
 
@@ -131,6 +143,11 @@ export function FlowOverview({
 }: FlowOverviewProps) {
   const metadata = detail?.flow?.metadata;
   const isRegistry = flow.source === "registry";
+  const navigate = useNavigate();
+
+  // Recent jobs for this flow
+  const flowDir = flow.path.includes("/") ? flow.path.substring(0, flow.path.lastIndexOf("/")) : flow.path;
+  const { data: recentJobs = [] } = useFlowJobs(isRegistry ? undefined : flowDir, 5);
 
   return (
     <div className="flex flex-col h-full">
@@ -244,6 +261,40 @@ export function FlowOverview({
             <>
               <Separator />
               <FlowConfigPanel flowPath={flow.path} />
+            </>
+          )}
+          {/* Recent jobs */}
+          {recentJobs.length > 0 && (
+            <>
+              <Separator />
+              <div>
+                <span className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider">Recent Jobs</span>
+                <div className="mt-1.5">
+                  {recentJobs.map((job) => (
+                    <button
+                      key={job.id}
+                      onClick={() => navigate({ to: "/jobs/$jobId", params: { jobId: job.id } })}
+                      className="w-full flex items-center gap-2 rounded px-2 py-2 text-left hover:bg-zinc-800/40 transition-colors"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs text-zinc-300 truncate">{job.name || job.objective}</div>
+                        <div className="text-[10px] text-zinc-600 mt-0.5">
+                          {timeAgo(job.updated_at)}
+                          <span className="mx-1">·</span>
+                          {formatDuration(job.created_at, job.updated_at)}
+                        </div>
+                      </div>
+                      <JobStatusBadge status={job.status as import("@/lib/types").JobStatus} />
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => navigate({ to: "/jobs", search: { view_mode: "list" } })}
+                    className="text-[11px] text-zinc-500 hover:text-blue-400 transition-colors px-2 py-1"
+                  >
+                    View all jobs →
+                  </button>
+                </div>
+              </div>
             </>
           )}
         </div>

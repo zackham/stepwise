@@ -202,15 +202,20 @@ const EVENT_DOT_COLOR: Record<RecentEvent["kind"], string> = {
 
 function NotificationEventItem({
   event,
+  isNew,
   onClick,
 }: {
   event: RecentEvent;
+  isNew?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       onClick={onClick}
-      className="flex w-full items-start gap-2.5 rounded-md px-3 py-2 text-left transition-colors hover:bg-accent"
+      className={cn(
+        "flex w-full items-start gap-2.5 rounded-md px-3 py-2 text-left transition-colors hover:bg-accent",
+        isNew && "bg-blue-500/5",
+      )}
     >
       <span
         className={cn(
@@ -241,11 +246,11 @@ export function AppLayout() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [changelogOpen, setChangelogOpen] = useState(false);
-  const [seenEventCount, setSeenEventCount] = useState(0);
+  const [seenEventIds, setSeenEventIds] = useState<Set<string>>(new Set());
 
   const unreadCount = useMemo(
-    () => Math.max(0, recentEvents.length - seenEventCount),
-    [recentEvents.length, seenEventCount],
+    () => recentEvents.filter((e) => !seenEventIds.has(e.id)).length,
+    [recentEvents, seenEventIds],
   );
 
   useEffect(() => {
@@ -472,7 +477,7 @@ export function AppLayout() {
           {/* Notification dropdown */}
           <DropdownMenu
             onOpenChange={(open) => {
-              if (open) setSeenEventCount(recentEvents.length);
+              if (open) setSeenEventIds(new Set(recentEvents.map((e) => e.id)));
             }}
           >
             <DropdownMenuTrigger
@@ -520,6 +525,7 @@ export function AppLayout() {
                       <NotificationEventItem
                         key={event.id}
                         event={event}
+                        isNew={!seenEventIds.has(event.id)}
                         onClick={() => {
                           navigate({ to: "/jobs/$jobId", params: { jobId: event.jobId } });
                         }}

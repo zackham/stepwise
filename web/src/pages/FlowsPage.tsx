@@ -132,7 +132,7 @@ export function FlowsPage() {
   const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>("all");
   const [timeRange, setTimeRange] = useState<TimeRange>(undefined);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [viewMode, setViewMode] = useState<"grid" | "list">("list");
 
   // Sort state for list view header
   const [sortCol, setSortCol] = useState<FlowSortCol>("last_run");

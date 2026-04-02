@@ -529,8 +529,7 @@ export function JobDetailPage() {
                     </span>
                   )}
                   {costData && (costData.cost_usd > 0 || costData.billing_mode === "subscription") && (
-                    <span className="text-[10px] text-zinc-500 dark:text-zinc-600 flex items-center gap-0.5">
-                      <DollarSign className="w-2.5 h-2.5" />
+                    <span className="text-[10px] text-zinc-500 dark:text-zinc-600">
                       {costData.billing_mode === "subscription"
                         ? "$0 (Max)"
                         : formatCost(costData.cost_usd)}
@@ -590,12 +589,11 @@ export function JobDetailPage() {
                   )}
                   {costData && (costData.cost_usd > 0 || costData.billing_mode === "subscription") && (
                     <span
-                      className="text-[10px] text-zinc-600 flex items-center gap-0.5"
+                      className="text-[10px] text-zinc-600"
                       title={costData.billing_mode === "subscription"
                         ? "Claude Max subscription — no API cost"
                         : "API cost"}
                     >
-                      <DollarSign className="w-2.5 h-2.5" />
                       {costData.billing_mode === "subscription"
                         ? "$0 (Max)"
                         : formatCost(costData.cost_usd)}

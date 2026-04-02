@@ -223,7 +223,9 @@ function useAdaptiveAllocation(
     const measure = () => {
       const lineHeight = 18;
       // Content is rendered with 1 line per slot — chrome = total - value lines
-      chromeHeightRef.current = el.scrollHeight - (slots.length * lineHeight);
+      const cs = getComputedStyle(el);
+      const bottomPad = parseFloat(cs.paddingBottom) || 0;
+      chromeHeightRef.current = el.scrollHeight - (slots.length * lineHeight) + bottomPad;
       setReady(true);
       distribute();
     };
@@ -296,13 +298,19 @@ function AdaptiveRunContent({
     [inputs, inputBindings, result],
   );
 
-  // Measure font + width from a hidden mono probe element
+  // Measure font + width ONCE while overflow:hidden (no scrollbar) — cached, not re-measured on scroll toggle
   const [textMetrics, setTextMetrics] = useState({ font: "12px monospace", width: 300 });
+  const textMetricsMeasured = useRef(false);
   useEffect(() => {
+    // Reset on slot change (new step selected)
+    textMetricsMeasured.current = false;
+  }, [slots]);
+  useEffect(() => {
+    if (textMetricsMeasured.current) return;
     const el = containerRef.current;
     if (!el) return;
     const measure = () => {
-      // Create a temporary mono element to get the actual computed font
+      if (textMetricsMeasured.current) return;
       const probe = document.createElement("span");
       probe.className = "text-xs font-mono";
       probe.style.visibility = "hidden";
@@ -316,18 +324,17 @@ function AdaptiveRunContent({
       const padLeft = parseFloat(containerCs.paddingLeft) || 0;
       const padRight = parseFloat(containerCs.paddingRight) || 0;
       const contentWidth = el.clientWidth - padLeft - padRight;
-      setTextMetrics({ font, width: contentWidth });
+      if (contentWidth > 0) {
+        setTextMetrics({ font, width: contentWidth });
+        textMetricsMeasured.current = true;
+      }
     };
-    // Wait for fonts to load
     if (document.fonts?.ready) {
       document.fonts.ready.then(measure);
     } else {
       measure();
     }
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [containerRef]);
+  }, [containerRef, slots]);
 
   const { allocation, needsScroll, ready } = useAdaptiveAllocation(containerRef, slots, textMetrics.font, textMetrics.width);
 
@@ -367,7 +374,7 @@ function AdaptiveRunContent({
 
       {/* Result section — card treatment */}
       {resultSlots.length > 0 && (
-        <div className="bg-emerald-900/40 -mx-3 px-3 py-2.5">
+        <div className="bg-emerald-50 dark:bg-emerald-900/40 -mx-3 px-3 py-2.5">
           <SectionHeading>Result</SectionHeading>
           <div className="mt-1.5">
             {resultSlots.map((slot, i) => (
@@ -413,22 +420,22 @@ function AdaptiveSlotRow({
     <div className="py-1.5">
       {/* Label pill — field ← source */}
       <div className="mb-1">
-        <span className="flex items-center rounded bg-zinc-800/60 px-2 py-1 text-xs font-mono">
-          <span className="text-cyan-400">{slot.fieldName ?? slot.label}</span>
+        <span className="flex items-center rounded bg-zinc-100 dark:bg-zinc-800/60 px-2 py-1 text-xs font-mono">
+          <span className="text-cyan-600 dark:text-cyan-400">{slot.fieldName ?? slot.label}</span>
           {slot.type === "input" && (
             <>
-              <span className="text-zinc-600 mx-1.5">←</span>
+              <span className="text-zinc-400 dark:text-zinc-600 mx-1.5">←</span>
               {slot.isJobInput ? (
                 <span className="text-zinc-500">$job.{slot.fieldName}</span>
               ) : (
                 <span>
                   <a
                     onClick={() => slot.stepName && onSelectStep?.(slot.stepName)}
-                    className="text-zinc-400 hover:text-blue-400 cursor-pointer transition-colors"
+                    className="text-zinc-500 dark:text-zinc-400 hover:text-blue-500 dark:hover:text-blue-400 cursor-pointer transition-colors"
                   >
                     {slot.stepName}
                   </a>
-                  <span className="text-zinc-600">.{slot.sourceField}</span>
+                  <span className="text-zinc-400 dark:text-zinc-600">.{slot.sourceField}</span>
                 </span>
               )}
             </>
@@ -522,10 +529,12 @@ function MetadataFooter({
           </div>
         )}
         {hasCost && (
-          <span className="font-mono text-emerald-400 text-[11px]">
-            {isSubscription
-              ? "$0 (Max)"
-              : formatCostDisplay(costUsd)}
+          <span className="font-mono text-emerald-600 dark:text-emerald-400 text-[11px]">
+            {costUsd != null && costUsd > 0
+              ? formatCostDisplay(costUsd)
+              : isSubscription
+                ? "$0 (Max)"
+                : formatCostDisplay(costUsd)}
           </span>
         )}
       </div>
@@ -911,6 +920,43 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep }: RunView
   const containerRef = useRef<HTMLDivElement>(null);
   const [scrollEnabled, setScrollEnabled] = useState(false);
 
+  // Reset scroll state on step change
+  useEffect(() => {
+    setScrollEnabled(false);
+  }, [stepDef.name]);
+
+  // Constrain container to viewport height + check overflow once after content settles
+  const [maxHeight, setMaxHeight] = useState<string>("100%");
+  const overflowChecked = useRef(false);
+  useEffect(() => { overflowChecked.current = false; }, [stepDef.name]);
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const measure = () => {
+      const rect = el.getBoundingClientRect();
+      const mh = window.innerHeight - rect.top;
+      setMaxHeight(`${mh}px`);
+
+      // One-time overflow check after content renders
+      if (!overflowChecked.current) {
+        overflowChecked.current = true;
+        // Wait for content to render, then check if it overflows
+        setTimeout(() => {
+          if (!el) return;
+          // Temporarily measure with overflow visible
+          const saved = el.style.overflow;
+          el.style.overflow = "hidden";
+          const overflows = el.scrollHeight > el.clientHeight + 2;
+          el.style.overflow = saved;
+          if (overflows) setScrollEnabled(true);
+        }, 300);
+      }
+    };
+    const timer = setTimeout(measure, 50);
+    window.addEventListener("resize", measure);
+    return () => { clearTimeout(timer); window.removeEventListener("resize", measure); };
+  }, [stepDef.name, runs]);
+
   const isAgent = stepDef.executor.type === "agent";
   const isExternal = stepDef.executor.type === "external";
   const isScript = stepDef.executor.type === "script";
@@ -996,9 +1042,9 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep }: RunView
   const exitRes = run ? exitResolutions[run.attempt] : undefined;
 
   return (
-    <div ref={containerRef} className={cn("p-3 pb-4 space-y-3 animate-step-fade h-full", (scrollEnabled || isAgent) ? "overflow-y-auto" : "overflow-hidden")}>
+    <div ref={containerRef} className={cn("px-3 pb-4 space-y-3 animate-step-fade", scrollEnabled ? "overflow-y-auto" : "overflow-hidden")} style={{ maxHeight }}>
       {/* 1. Header bar — run navigator */}
-      <div className="sticky top-0 z-10 -mx-3 -mt-3 px-3 py-2 border-b border-border bg-zinc-50/80 dark:bg-zinc-950/80 backdrop-blur-sm">
+      <div className="sticky top-0 z-10 -mx-3 px-3 pt-3 pb-2 border-b border-border bg-zinc-50/80 dark:bg-zinc-950/80 backdrop-blur-sm">
         <RunNavigator
           runs={sortedRuns}
           currentIndex={runIndex}
@@ -1044,18 +1090,22 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep }: RunView
       {/* 5. Output area */}
       {/* Live agent stream */}
       {run && isRunning && isAgent && (
-        <AgentStreamView
-          runId={run.id}
-          isLive={true}
-          startedAt={run.started_at}
-          costUsd={costData?.cost_usd}
-          billingMode={costData?.billing_mode}
-        />
+        <div className="max-h-[60vh] overflow-y-auto rounded-lg border border-zinc-800/50">
+          <AgentStreamView
+            runId={run.id}
+            isLive={true}
+            startedAt={run.started_at}
+            costUsd={costData?.cost_usd}
+            billingMode={costData?.billing_mode}
+          />
+        </div>
       )}
 
       {/* Live script output */}
       {run && isRunning && isScript && (
-        <LiveScriptLogView runId={run.id} />
+        <div className="max-h-[60vh] overflow-y-auto rounded-lg border border-zinc-800/50">
+          <LiveScriptLogView runId={run.id} />
+        </div>
       )}
 
       {/* Usage limit waiting */}
@@ -1112,16 +1162,22 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep }: RunView
               </button>
             </div>
           </div>
-          {agentViewMode === "stream" ? (
-            <AgentStreamView runId={run.id} isLive={false} />
-          ) : (
-            <AgentRawView runId={run.id} />
-          )}
+          <div className="max-h-[60vh] overflow-y-auto">
+            {agentViewMode === "stream" ? (
+              <AgentStreamView runId={run.id} isLive={false} />
+            ) : (
+              <AgentRawView runId={run.id} />
+            )}
+          </div>
         </div>
       )}
 
       {/* Completed script logs */}
-      {run?.result && isScript && <ScriptLogView run={run} />}
+      {run?.result && isScript && (
+        <div className="max-h-[60vh] overflow-y-auto rounded-lg border border-zinc-800/50">
+          <ScriptLogView run={run} />
+        </div>
+      )}
 
       {/* Fulfillment notes */}
       {run?.result?.artifact?._fulfillment_notes != null && (
