@@ -160,10 +160,10 @@ export function EditorPage() {
   const selectedStep = searchParams.step ?? null;
   const setSelectedStep = useCallback((step: string | null) => {
     navigate({
-      search: (prev: Record<string, unknown>) => ({
+      search: ((prev: Record<string, unknown>) => ({
         ...prev,
         step: step || undefined,
-      }),
+      })) as never,
       replace: false,
     });
   }, [navigate]);
