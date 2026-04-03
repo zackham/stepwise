@@ -136,11 +136,11 @@ steps:
       cost_usd: 1.50             # kill if cost exceeds $1.50
       duration_minutes: 10        # kill after 10 minutes
     working_dir: /path/to/project # agent CWD
-    continue_session: true        # reuse session across loop iterations
+    session: work                 # named session — reuse across loop iterations
     outputs: [result]
 ```
 
-Cost limits, duration limits, `working_dir`, `continue_session`, exit rules — all work identically across agent backends. The `agent` field only controls which agent binary acpx launches.
+Cost limits, duration limits, `working_dir`, `session`, exit rules — all work identically across agent backends. The `agent` field only controls which agent binary acpx launches.
 
 ## Mixing LLM and Agent Steps
 

@@ -40,6 +40,4 @@ JOB_DEPS_CHANGED = "job.deps_changed"
 FOR_EACH_STARTED = "for_each.started"
 FOR_EACH_COMPLETED = "for_each.completed"
 
-# Context chain events
-CHAIN_CONTEXT_COMPILED = "chain.context_compiled"
 

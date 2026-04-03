@@ -12,11 +12,11 @@ import shutil
 import signal
 import subprocess
 import threading
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from stepwise.events import (
-    CHAIN_CONTEXT_COMPILED,
     CONTEXT_INJECTED,
     EXIT_RESOLVED,
     FOR_EACH_COMPLETED,
@@ -78,6 +78,17 @@ _engine_logger = logging.getLogger("stepwise.engine")
 
 # Default max artifact size (5 MB). Prevents runaway outputs from bloating the DB.
 MAX_ARTIFACT_BYTES = 5 * 1024 * 1024
+
+
+@dataclass
+class SessionState:
+    """Per-job tracking of named session lifecycle."""
+    name: str
+    claude_uuid: str | None = None
+    backend_type: str = "acpx"
+    fork_from: str | None = None
+    agent: str = "claude"
+    created: bool = False
 
 
 # Config keys whose values are passed to subprocess.run(shell=True).
@@ -162,6 +173,30 @@ class Engine:
         self.on_event: Callable[[dict], None] | None = None
         self._injected_contexts: dict[str, list[str]] = {}  # job_id -> contexts
         self._rerun_steps: dict[str, set[str]] = {}  # job_id -> step names to bypass cache
+        self._session_registries: dict[str, dict[str, SessionState]] = {}
+
+    # ── Named Session Registry ──────────────────────────────────────────
+
+    def _build_session_registry(self, job: Job) -> dict[str, SessionState]:
+        """Build named session registry from workflow step definitions."""
+        registry: dict[str, SessionState] = {}
+        for step_name, step_def in job.workflow.steps.items():
+            if not step_def.session:
+                continue
+            session_name = step_def.session
+            if session_name not in registry:
+                agent = "claude"
+                if step_def.executor and step_def.executor.config:
+                    agent = step_def.executor.config.get("agent", "claude")
+                registry[session_name] = SessionState(name=session_name, agent=agent)
+            if step_def.fork_from:
+                registry[session_name].fork_from = step_def.fork_from
+                registry[session_name].backend_type = "claude_direct"
+        return registry
+
+    def _ensure_session_registry(self, job: Job) -> None:
+        if job.id not in self._session_registries:
+            self._session_registries[job.id] = self._build_session_registry(job)
 
     # ── Cross-Job Data Wiring ────────────────────────────────────────────
 
@@ -289,6 +324,8 @@ class Engine:
             raise ValueError(f"Cannot start job in status {job.status.value}")
         # Resolve cross-job data references before running
         self._resolve_job_ref_inputs(job)
+        # Build named session registry
+        self._ensure_session_registry(job)
         # Extract rerun_steps from job metadata
         rerun = job.config.metadata.get("rerun_steps", [])
         if rerun:
@@ -1468,7 +1505,11 @@ class Engine:
         """Close acpx queue owners for all agent sessions used by this job.
 
         Runs in a daemon thread so it doesn't block the engine.
+        Also cleans up the in-memory session registry.
         """
+        # Clean up session registry
+        self._session_registries.pop(job_id, None)
+
         if job is None:
             try:
                 job = self.store.load_job(job_id)
@@ -1709,7 +1750,6 @@ class Engine:
         step_def = job.workflow.steps[step_name]
         attempt = self.store.next_attempt(job.id, step_name)
         inputs, dep_run_ids = self._resolve_inputs(job, step_def)
-        chain_context = self._compile_chain_context(job, step_def, step_name)
 
         run = StepRun(
             id=_gen_id("run"),
@@ -1727,15 +1767,6 @@ class Engine:
             "attempt": attempt,
         })
 
-        # Session continuity: skip chain context if continuing an existing session
-        skip_chain = False
-        if step_def.continue_session and attempt > 1:
-            prev_run = self.store.latest_completed_run(job.id, step_name)
-            if prev_run and prev_run.executor_state and prev_run.executor_state.get("session_name"):
-                skip_chain = True
-        if skip_chain:
-            chain_context = None
-
         ctx = ExecutionContext(
             job_id=job.id,
             step_name=step_name,
@@ -1745,8 +1776,6 @@ class Engine:
             objective=job.objective,
             timeout_minutes=job.config.timeout_minutes,
             injected_context=self._injected_contexts.get(job.id),
-            chain_context=chain_context,
-            chain=step_def.chain,
         )
 
         exec_ref = step_def.executor
@@ -1785,15 +1814,42 @@ class Engine:
         if job.workflow.source_dir and exec_ref.type == "script":
             exec_ref = exec_ref.with_config({"flow_dir": job.workflow.source_dir})
 
-        # Pass session continuity fields to agent executor
+        # Pass session fields to agent executor
         if exec_ref.type == "agent":
             session_ctx: dict = {}
-            if step_def.continue_session:
+
+            # Named sessions (new mechanism)
+            if step_def.session and job.id in self._session_registries:
+                session_state = self._session_registries[job.id].get(step_def.session)
+                if session_state:
+                    session_ctx["_session_name"] = session_state.name
+                    session_ctx["_backend_type"] = session_state.backend_type
+                    session_ctx["_agent"] = session_state.agent
+
+                    if session_state.claude_uuid and not session_state.fork_from:
+                        # Continue existing session
+                        session_ctx["_session_uuid"] = session_state.claude_uuid
+                    elif session_state.fork_from and not session_state.created:
+                        # First step on forked session — pass parent UUID
+                        parent = self._session_registries[job.id].get(session_state.fork_from)
+                        if parent and parent.claude_uuid:
+                            session_ctx["_fork_from_session_id"] = parent.claude_uuid
+                        session_ctx["_backend_type"] = "claude_direct"
+                    elif session_state.created:
+                        # Subsequent step on forked session — continue via claude_direct
+                        session_ctx["_session_uuid"] = session_state.claude_uuid
+                        if session_state.fork_from:
+                            session_ctx["_backend_type"] = "claude_direct"
+
+            # Legacy continue_session support
+            elif step_def.continue_session:
                 session_ctx["continue_session"] = True
                 # Pass previous session name from last completed run
                 prev_run = self.store.latest_completed_run(job.id, step_name)
                 if prev_run and prev_run.executor_state and prev_run.executor_state.get("session_name"):
                     session_ctx["_prev_session_name"] = prev_run.executor_state["session_name"]
+
+            # loop_prompt and circuit breaker (independent of session mechanism)
             if step_def.loop_prompt is not None:
                 session_ctx["loop_prompt"] = step_def.loop_prompt
             if step_def.max_continuous_attempts is not None:
@@ -1906,6 +1962,20 @@ class Engine:
                         self._emit_effector_events(job.id, result.envelope)
                         # Write to cache if enabled
                         self._write_step_cache(job, step_def, run, result.envelope)
+                        # Capture session UUID for named sessions
+                        if step_def.session and job.id in self._session_registries:
+                            state = self._session_registries[job.id].get(step_def.session)
+                            if state and not state.created:
+                                output_path = (run.executor_state or {}).get("output_path")
+                                if output_path:
+                                    try:
+                                        from stepwise.claude_direct import _extract_claude_session_id
+                                        state.claude_uuid = _extract_claude_session_id(output_path)
+                                    except Exception:
+                                        pass
+                                state.created = True
+                                if state.fork_from:
+                                    state.backend_type = "claude_direct"
                         self._process_completion(job, run)
 
             case "watch":
@@ -2460,60 +2530,6 @@ class Engine:
                 dep_run_ids[seq_step] = latest.id
 
         return inputs, dep_run_ids
-
-    # ── Chain Context (M7a) ──────────────────────────────────────────────
-
-    def _compile_chain_context(
-        self, job: Job, step_def: StepDefinition, step_name: str
-    ) -> str | None:
-        """Compile prior chain member transcripts into an XML context block.
-
-        Returns the compiled prefix string, or None if the step is not
-        in a chain or no prior transcripts exist.
-        """
-        if not step_def.chain or step_def.chain not in job.workflow.chains:
-            return None
-
-        chain_config = job.workflow.chains[step_def.chain]
-
-        from stepwise.context import (
-            apply_overflow,
-            collect_chain_transcripts,
-            compile_chain_prefix,
-        )
-
-        def get_latest_completed(sn: str) -> int | None:
-            run = self.store.latest_completed_run(job.id, sn)
-            return run.attempt if run else None
-
-        transcripts = collect_chain_transcripts(
-            workflow=job.workflow,
-            chain_name=step_def.chain,
-            chain_config=chain_config,
-            current_step=step_name,
-            workspace_path=job.workspace_path,
-            get_latest_completed_attempt=get_latest_completed,
-        )
-
-        if not transcripts:
-            return None
-
-        transcripts = apply_overflow(
-            transcripts, chain_config.max_tokens, chain_config.overflow
-        )
-        prefix = compile_chain_prefix(
-            transcripts, step_def.chain, chain_config.include_thinking
-        )
-
-        if prefix:
-            self._emit(job.id, CHAIN_CONTEXT_COMPILED, {
-                "step": step_name,
-                "chain": step_def.chain,
-                "transcript_count": len(transcripts),
-                "total_tokens": sum(t.token_count for t in transcripts),
-            })
-
-        return prefix or None
 
     # ── Exit Resolution ───────────────────────────────────────────────────
 
@@ -3344,6 +3360,8 @@ class AsyncEngine(Engine):
                 return
         # Resolve cross-job data references before running
         self._resolve_job_ref_inputs(job)
+        # Build named session registry
+        self._ensure_session_registry(job)
         # Atomic status transition: only set RUNNING if still PENDING
         # (prevents race with concurrent cancel_job)
         updated = self.store.atomic_status_transition(
@@ -3512,8 +3530,23 @@ class AsyncEngine(Engine):
             exec_ref = exec_ref.with_config({"output_fields": step_def.outputs})
         if exec_ref.type == "agent":
             session_ctx: dict = {}
-            if step_def.continue_session:
+
+            # Named sessions
+            if step_def.session:
+                self._ensure_session_registry(job)
+                if job.id in self._session_registries:
+                    session_state = self._session_registries[job.id].get(step_def.session)
+                    if session_state:
+                        session_ctx["_session_name"] = session_state.name
+                        session_ctx["_backend_type"] = session_state.backend_type
+                        session_ctx["_agent"] = session_state.agent
+                        if session_state.claude_uuid:
+                            session_ctx["_session_uuid"] = session_state.claude_uuid
+
+            # Legacy continue_session
+            elif step_def.continue_session:
                 session_ctx["continue_session"] = True
+
             if step_def.loop_prompt is not None:
                 session_ctx["loop_prompt"] = step_def.loop_prompt
             if step_def.max_continuous_attempts is not None:
@@ -3918,15 +3951,17 @@ class AsyncEngine(Engine):
                     _do_update()
             ctx.state_update_fn = update_state
 
-            # Session locking: if inputs contain _session_id, serialize access
+            # Session locking: serialize access by named session or legacy _session_id
             loop = asyncio.get_running_loop()
             active = len([t for t in self._executor_pool._threads if t.is_alive()])
             _async_logger.info(
                 f"Submitting {step_name} to thread pool (active threads: {active}/{self._executor_pool._max_workers})"
             )
-            session_id = inputs.get("_session_id")
-            if session_id:
-                lock = self._session_locks.get_lock(session_id)
+            # Determine session name for locking: prefer named session from config,
+            # fall back to legacy _session_id from inputs
+            session_name = exec_ref.config.get("_session_name") or inputs.get("_session_id")
+            if session_name:
+                lock = self._session_locks.get_lock(session_name)
                 async with lock:
                     result = await loop.run_in_executor(
                         self._executor_pool, executor.start, inputs, ctx

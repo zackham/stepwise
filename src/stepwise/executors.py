@@ -41,8 +41,6 @@ class ExecutionContext:
     objective: str = ""
     timeout_minutes: int | None = None
     injected_context: list[str] | None = None
-    chain_context: str | None = None  # M7a: compiled prior-context XML block
-    chain: str | None = None  # chain membership — used to decide transcript capture
     state_update_fn: Callable[[dict], None] | None = None
 
 
@@ -929,10 +927,6 @@ class LLMExecutor(Executor):
         # Also support {{var}} (Jinja/Mustache-style) templates
         for k, v in str_inputs.items():
             prompt = prompt.replace("{{" + k + "}}", v)
-
-        # M7a: Prepend chain context (prior conversation history) if present
-        if context.chain_context:
-            prompt = context.chain_context + "\n\n" + prompt
 
         # Append injected context if present
         if context.injected_context:

@@ -107,7 +107,7 @@ Using `model: balanced` in a flow resolves to the first model with `"tier": "bal
 
 **Structured output:** The LLM is instructed to return JSON matching the declared outputs. The executor validates that all declared fields are present in the response. If parsing fails, the step fails with a clear error.
 
-**Session continuity:** LLM steps support `continue_session: true` and `loop_prompt` for iterative refinement loops, just like agent steps.
+**Named sessions:** LLM steps support `session: <name>` and `loop_prompt` for iterative refinement loops, just like agent steps.
 
 ## Agent Executor
 

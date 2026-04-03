@@ -236,16 +236,16 @@ implement:
 
 Auto-injected prompt variables: `$objective`, `$workspace`.
 
-### Session Continuity
+### Named Sessions
 
-Agent and LLM steps with `continue_session: true` reuse the same agent session across loop iterations, continuing the conversation instead of starting fresh. This saves tokens and preserves full conversational context.
+Agent and LLM steps can share conversations using **named sessions**. Steps with the same `session: <name>` reuse the same agent session, continuing the conversation instead of starting fresh. This saves tokens and preserves full conversational context.
 
 ```yaml
 implement:
   executor: agent
+  session: impl
   prompt: "Implement: $spec"
   loop_prompt: "Tests failed:\n$failures\nFix the issues."
-  continue_session: true
   max_continuous_attempts: 5
   inputs:
     spec: $job.spec
@@ -257,47 +257,66 @@ implement:
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `continue_session` | bool | no | `false` | Reuse agent session across loop iterations |
+| `session` | string | no | — | Named session. Steps with the same name share a conversation |
 | `loop_prompt` | string | no | — | Alternate prompt template used on attempt > 1 (falls back to `prompt`) |
-| `max_continuous_attempts` | int | no | — | After N iterations, force fresh session with chain context backfill |
+| `max_continuous_attempts` | int | no | — | After N iterations, force a fresh session |
+| `fork_from` | string | no | — | Fork an independent session from a named parent session |
 
 **Behavior:**
 - First run (attempt 1): creates a new session, sends `prompt`
 - Loop-back (attempt 2+): continues existing session, sends `loop_prompt` (or `prompt` if not set)
-- When `continue_session` is true, M7a chain context injection is skipped (agent already has full history)
-- If `max_continuous_attempts` is exceeded or the session crashes, falls back to fresh session + chain context backfill
+- If `max_continuous_attempts` is exceeded or the session crashes, falls back to a fresh session
 
-**Cross-step session sharing via `_session_id`:**
+**Cross-step session sharing:**
 
-Agent steps with `continue_session: true` automatically emit a `_session_id` output field. Downstream steps can reference this to continue the same conversation:
+Steps with the same `session` name share a conversation. No special input bindings needed — the engine matches by name:
 
 ```yaml
 steps:
   plan:
     executor: agent
+    session: main
     prompt: "Plan: $spec"
-    continue_session: true
     inputs: { spec: $job.spec }
     outputs: [plan]
-    # automatically emits _session_id
 
   implement:
     executor: agent
+    session: main
     prompt: "Now implement the plan."
-    continue_session: true
     inputs:
       plan: plan.plan
-      _session_id:
-        from: plan._session_id
-        optional: true
     outputs: [result]
-    # continues plan's session
+    # continues plan's session — same session name
 ```
 
-- `_session_id` is a reserved output field — flow authors don't declare it in `outputs:`
-- If a step receives `_session_id` input + `continue_session`, it continues that session
-- If a step has `continue_session` but no `_session_id` input, it creates a new session
-- The engine serializes concurrent access to shared sessions via `_SessionLockManager`
+**Forking sessions:**
+
+Use `fork_from` to create an independent session that starts with a copy of the parent session's history. The fork diverges — further messages in either session don't affect the other.
+
+```yaml
+steps:
+  plan:
+    executor: agent
+    session: main
+    prompt: "Plan: $spec"
+    inputs: { spec: $job.spec }
+    outputs: [plan]
+
+  review:
+    executor: agent
+    agent: claude
+    fork_from: main
+    prompt: "Review the plan critically."
+    inputs:
+      plan: plan.plan
+    outputs: [feedback]
+    # gets main's history but diverges independently
+```
+
+- `fork_from` requires `agent: claude` (explicit) on the forking step
+- The forked session is independent — it doesn't affect the parent
+- The engine serializes concurrent access to shared sessions
 
 ## Inputs
 
@@ -680,7 +699,7 @@ decorators:
 14. **Directory flow `run:` paths resolve relative to the flow directory**, not the current working directory.
 15. **Optional inputs use dict syntax.** `score: {from: "review.score", optional: true}` — not `score: review.score?` or similar shorthand.
 16. **Exit rules with `advance` actions fail on no-match.** When you define explicit `advance` rules, the step fails if none match. Add a catch-all `advance` rule or handle all cases.
-17. **`_session_id` is auto-emitted.** Don't declare it in `outputs:` — it's automatically added by agent steps with `continue_session: true`.
+17. **Named sessions use `session:`, not input bindings.** Steps share a conversation by using the same `session: <name>` value. Use `fork_from: <session>` (with `agent: claude`) to branch an independent session from a parent.
 
 ## Validation Checklist
 

@@ -811,16 +811,6 @@ def _html_header(
     if loop_steps:
         parts.append(_stat_card(str(loop_steps), "Looped"))
 
-    # M7a: Chain count
-    if workflow and workflow.chains:
-        chain_count = len(workflow.chains)
-        chain_members = sum(
-            1 for s in workflow.steps.values() if s.chain
-        )
-        parts.append(_stat_card(
-            f"{chain_count}", f"Chain{'s' if chain_count != 1 else ''} ({chain_members} steps)"
-        ))
-
     parts.append("</div>")
     return "\n".join(parts)
 
@@ -935,13 +925,6 @@ def _html_dag(
                 f'font-size="10" font-weight="700" fill="#fff">{attempt_count}</text>'
             )
 
-        # M7a: Chain membership indicator
-        if step.chain:
-            badges += (
-                f'<rect x="{x + node_w - 8}" y="{y + node_h - 14}" width="8" height="8" rx="2" '
-                f'fill="#8b5cf6" opacity="0.7"/>'
-            )
-
         # Wrap in anchor link to step detail
         parts.append(f'<a href="#step-{_e(name)}">')
         parts.append(
@@ -1003,21 +986,11 @@ def _html_timeline(
         if sr.cost > 0 and len(sr.runs) == 1:
             cost_str = f"<span>{_format_cost(sr.cost)}</span>"
 
-        # M7a: Chain badge for timeline
-        step_def = workflow.steps.get(sr.name)
-        chain_badge = ""
-        if step_def and step_def.chain:
-            chain_badge = (
-                f' <span style="font-size: 10px; padding: 1px 6px; border-radius: 4px; '
-                f'background: rgba(139, 92, 246, 0.15); color: #8b5cf6; font-weight: 500;">'
-                f'{_e(step_def.chain)}</span>'
-            )
-
         parts.append(f'<div class="timeline-item">')
         parts.append(f'<div class="timeline-dot" style="border-color: {color}; background: {_status_bg(status)};"></div>')
         parts.append(
             f'<div class="step-name" style="color: {color};">'
-            f'{_status_icon(status)} <a href="#step-{_e(sr.name)}">{_e(sr.name)}</a>{attempt_label}{chain_badge}</div>'
+            f'{_status_icon(status)} <a href="#step-{_e(sr.name)}">{_e(sr.name)}</a>{attempt_label}</div>'
         )
         parts.append(f'<div class="step-meta">')
         parts.append(f'<span>{_e(sr.executor_type)}</span>')
@@ -1110,12 +1083,6 @@ def _html_one_step_detail(
     parts.append(f'<span style="color: {color}; font-size: 14px;">{_status_icon(status)}</span>')
     parts.append(f'<span style="font-weight: 600;">{_e(sr.name)}</span>')
     parts.append(f'<span style="color: var(--text3); font-size: 12px;">{_e(sr.executor_type)}</span>')
-    if step_def.chain:
-        parts.append(
-            f'<span style="font-size: 11px; padding: 1px 6px; border-radius: 4px; '
-            f'background: rgba(139, 92, 246, 0.15); color: #8b5cf6;">'
-            f'&#x26d3; {_e(step_def.chain)}</span>'
-        )
     if sr.cost > 0:
         parts.append(f'<span style="color: var(--text3); font-size: 12px;">{_format_cost(sr.cost)}</span>')
     if len(sr.runs) > 1:
@@ -1187,26 +1154,8 @@ def _html_one_step_detail(
             if run.error_category:
                 parts.append(f'<div style="font-size: 12px; color: var(--text3); margin-top: 4px;">Category: {_e(run.error_category)}</div>')
 
-        # Chain context compilation info from events
-        events = store.load_step_events(run.id)
-        chain_events = [e for e in events if e.get("type") == "chain.context_compiled"]
-        for evt in chain_events:
-            data = evt.get("data", {})
-            chain_name = data.get("chain", "")
-            transcript_count = data.get("transcript_count", 0)
-            total_tokens = data.get("total_tokens", 0)
-            parts.append('<div class="detail-section">')
-            parts.append('<div class="detail-label">Chain Context</div>')
-            parts.append(
-                f'<div style="font-size: 12px; color: #8b5cf6; padding: 6px 10px; '
-                f'background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.2); '
-                f'border-radius: 6px;">&#x26d3; Chain <strong>{_e(chain_name)}</strong> &mdash; '
-                f'{transcript_count} prior transcript{"s" if transcript_count != 1 else ""}, '
-                f'~{total_tokens:,} tokens injected</div>'
-            )
-            parts.append("</div>")
-
         # Exit rule info from events
+        events = store.load_step_events(run.id)
         exit_events = [e for e in events if e.get("type") == "exit_resolved"]
         for evt in exit_events:
             data = evt.get("data", {})

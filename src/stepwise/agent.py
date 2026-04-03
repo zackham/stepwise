@@ -788,83 +788,12 @@ class AcpxBackend:
                     cost_usd=cost,
                 )
 
-        # M7a: Capture session transcript for chain context (non-blocking)
-        # P7 fix: transcript capture was blocking the thread pool worker,
-        # preventing result delivery. Fire on a daemon thread instead.
-        if process.capture_transcript:
-            t = threading.Thread(
-                target=self._capture_transcript,
-                args=(process,),
-                daemon=True,
-                name=f"transcript-{process.session_name}",
-            )
-            t.start()
-
         return AgentStatus(
             state="completed",
             exit_code=0,
             session_id=session_id,
             cost_usd=cost,
         )
-
-    def _capture_transcript(self, process: AgentProcess) -> None:
-        """Capture the full agent session conversation for chain context.
-
-        Calls `acpx sessions show` to retrieve the structured conversation,
-        normalizes it, and saves as a transcript file that downstream chain
-        members can load.
-
-        Skipped when capture_transcript is False (agent steps not in a chain).
-        """
-
-        if not process.capture_transcript:
-            return
-
-        if not process.session_name:
-            return
-
-        try:
-            session_data = self.get_session_messages(process)
-            if not session_data:
-                return
-
-            messages_raw = session_data.get("result", {}).get("messages", [])
-            if not messages_raw:
-                return
-
-            from stepwise.context import (
-                Transcript,
-                estimate_token_count,
-                normalize_acpx_messages,
-                save_transcript,
-            )
-
-            # Normalize with thinking included — compile-time filtering decides what to show
-            normalized = normalize_acpx_messages(messages_raw, include_thinking=True)
-
-            # Use actual token count from acpx if available, else estimate
-            usage = session_data.get("result", {}).get("cumulative_token_usage", {})
-            actual_tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
-            token_count = actual_tokens if actual_tokens > 0 else estimate_token_count(normalized)
-
-            # Parse step_name and attempt from session_name (format: "step-{name}-{attempt}")
-            step_name, attempt = self._parse_session_name(process.session_name)
-
-            transcript = Transcript(
-                step=step_name,
-                attempt=attempt,
-                chain="",   # Set during collection by context module
-                label="",   # Set during collection by context module
-                token_count=token_count,
-                messages=normalized,
-            )
-            save_transcript(process.working_dir, transcript)
-            logger.debug(
-                f"Captured transcript for {step_name} attempt {attempt} "
-                f"({token_count} tokens, {len(normalized)} messages)"
-            )
-        except Exception:
-            logger.warning("Failed to capture transcript for chain context", exc_info=True)
 
     @staticmethod
     def _parse_session_name(session_name: str) -> tuple[str, int]:
@@ -1154,12 +1083,14 @@ class AgentExecutor(Executor):
     def __init__(
         self,
         backend: AgentBackend,
+        claude_direct_backend: AgentBackend | None = None,
         prompt: str = "",
         output_mode: str = "effect",
         output_path: str | None = None,
         **config: Any,
     ) -> None:
         self.backend = backend
+        self.claude_direct = claude_direct_backend
         self.prompt_template = prompt
         self.output_mode = output_mode
         self.output_path = output_path
@@ -1176,6 +1107,14 @@ class AgentExecutor(Executor):
         self.continue_session = config.get("continue_session", False)
         self.loop_prompt = config.get("loop_prompt")
         self.max_continuous_attempts = config.get("max_continuous_attempts")
+        # Named session fields
+        self._session_name = config.get("_session_name")
+
+    def _select_backend(self, config: dict) -> AgentBackend:
+        """Select backend based on config. Returns claude_direct for fork/resume."""
+        if config.get("_backend_type") == "claude_direct" and self.claude_direct:
+            return self.claude_direct
+        return self.backend
 
     def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:
         """Spawn agent, block until completion. Runs in thread pool via AsyncEngine."""
@@ -1190,11 +1129,38 @@ class AgentExecutor(Executor):
         if self.output_mode == "file" and not output_file:
             output_file = f"{context.step_name}-output.json"
 
+        # Circuit breaker: fail the step if named session exceeds max_continuous_attempts
+        if (self._session_name
+                and self.max_continuous_attempts is not None
+                and context.attempt > self.max_continuous_attempts):
+            return ExecutorResult(
+                type="data",
+                envelope=HandoffEnvelope(
+                    artifact={},
+                    sidecar=Sidecar(),
+                    workspace=context.workspace_path,
+                    timestamp=_now(),
+                    executor_meta={"failed": True},
+                ),
+                executor_state={
+                    "failed": True,
+                    "error": f"Circuit breaker: attempt {context.attempt} > max_continuous_attempts {self.max_continuous_attempts}",
+                    "error_category": "circuit_breaker",
+                },
+            )
+
         prompt = self._render_prompt(inputs, context)
 
-        # Session continuity: determine session naming strategy
+        # Session naming strategy
         spawn_config = dict(self.config)
-        if self.continue_session:
+
+        # Named sessions (new mechanism)
+        if self._session_name:
+            # Named session — _session_name already set in config by engine
+            pass  # spawn_config already contains _session_name from self.config
+
+        # Legacy continue_session support
+        elif self.continue_session:
             # Check circuit breaker
             use_existing = True
             if (self.max_continuous_attempts is not None
@@ -1210,13 +1176,15 @@ class AgentExecutor(Executor):
                 job_prefix = context.job_id.replace("job-", "") if context.job_id else "local"
                 spawn_config["_session_name"] = f"step-{job_prefix}-{context.step_name}"
 
-        # Also support received session from _session_id input
+        # Also support received session from _session_id input (legacy)
         if "_session_id" in inputs and inputs["_session_id"]:
             spawn_config["_session_name"] = inputs["_session_id"]
 
-        process = self.backend.spawn(prompt, spawn_config, context)
+        # Select backend based on config
+        backend = self._select_backend(spawn_config)
+        process = backend.spawn(prompt, spawn_config, context)
         logger.info(f"[{step_id}] spawn complete ({time.monotonic() - t0:.1f}s elapsed)")
-        process.capture_transcript = bool(context.chain)
+        process.capture_transcript = False
 
         if context.state_update_fn:
             context.state_update_fn({
@@ -1288,10 +1256,11 @@ class AgentExecutor(Executor):
         workspace_path = context.workspace_path if context else process.working_dir
 
         # Clean up lingering queue owner process for this completed session.
-        # Skip cleanup when continue_session is set — the queue owner and session
-        # must stay alive for downstream steps that reuse this session.
+        # Skip cleanup when continue_session or named session is set — the queue
+        # owner and session must stay alive for downstream steps that reuse this session.
         if (hasattr(self.backend, 'cleanup_session_queue_owner')
-                and not self.continue_session):
+                and not self.continue_session
+                and not self._session_name):
             try:
                 self.backend.cleanup_session_queue_owner(
                     agent_status.session_id,
@@ -1355,11 +1324,13 @@ class AgentExecutor(Executor):
             raise
 
         # Auto-inject _session_id into artifact for cross-step session sharing
-        if self.continue_session and process.session_name:
-            envelope.artifact["_session_id"] = process.session_name
-        elif "_session_id" in inputs and inputs["_session_id"] and process.session_name:
-            # Pass through received session ID
-            envelope.artifact["_session_id"] = inputs["_session_id"]
+        # Only for legacy continue_session — named sessions don't need this.
+        if not self._session_name:
+            if self.continue_session and process.session_name:
+                envelope.artifact["_session_id"] = process.session_name
+            elif "_session_id" in inputs and inputs["_session_id"] and process.session_name:
+                # Pass through received session ID
+                envelope.artifact["_session_id"] = inputs["_session_id"]
 
         return ExecutorResult(
             type="data",
@@ -1529,10 +1500,6 @@ class AgentExecutor(Executor):
         # Also support {{var}} (Jinja/Mustache-style) templates
         for k, v in str_inputs.items():
             prompt = prompt.replace("{{" + k + "}}", v)
-
-        # M7a: Prepend chain context (prior conversation history) if present
-        if context.chain_context:
-            prompt = context.chain_context + "\n\n" + prompt
 
         if context.injected_context:
             prompt += "\n\nAdditional context:\n" + "\n".join(context.injected_context)

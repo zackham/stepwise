@@ -99,7 +99,7 @@ steps:
 | `working_dir` | Directory where the agent runs (loads CLAUDE.md from there) |
 | `outputs` | Declared outputs — agent receives instructions to write these as JSON |
 | `emit_flow` | If `true`, agent can create sub-workflows dynamically |
-| `continue_session` | If `true`, reuses the agent session across loop iterations |
+| `session` | Named session — steps with the same name share a conversation |
 | `loop_prompt` | Alternate prompt used on attempt > 1 |
 | `max_continuous_attempts` | Circuit breaker for continued sessions |
 | `output_mode` | `"effect"` (default), `"stream_result"`, or `"file"` |
@@ -492,16 +492,16 @@ The LLM returns only `scores`. The engine computes `average`, `passed`, and `low
 
 **Expression environment:** Artifact fields as local variables, plus Python builtins (`sum`, `len`, `sorted`, `min`, `max`, `float`, `int`, `str`, `list`, `dict`, `set`, `tuple`, `round`, `abs`, `any`, `all`, `enumerate`, `zip`, `map`, `filter`, `range`, `True`, `False`, `None`) and `regex_extract(pattern, text, default)`.
 
-## Session continuity
+## Named sessions
 
-Agent and LLM steps with `continue_session: true` reuse the same session across loop iterations, continuing the conversation instead of starting fresh.
+Agent and LLM steps can share conversations using **named sessions**. Steps with the same `session: <name>` reuse the same session across loop iterations and across steps, continuing the conversation instead of starting fresh.
 
 ```yaml
 implement:
   executor: agent
+  session: impl
   prompt: "Implement: $spec"
   loop_prompt: "Tests failed:\n$failures\nFix the issues."
-  continue_session: true
   max_continuous_attempts: 5
   inputs:
     spec: $job.spec
@@ -513,34 +513,32 @@ implement:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `continue_session` | bool | `false` | Reuse agent session across loop iterations |
+| `session` | string | --- | Named session. Steps with the same name share a conversation |
 | `loop_prompt` | string | --- | Alternate prompt template on attempt > 1 (falls back to `prompt`) |
 | `max_continuous_attempts` | int | --- | After N iterations, force a fresh session |
+| `fork_from` | string | --- | Fork an independent session from a named parent session |
 
-**Cross-step session sharing:** Agent steps with `continue_session: true` auto-emit `_session_id`. Downstream steps continue the same conversation via optional input:
+**Cross-step session sharing:** Steps with the same `session` name share a conversation — no special input bindings needed:
 
 ```yaml
 steps:
   plan:
     executor: agent
+    session: main
     prompt: "Plan: $spec"
-    continue_session: true
     inputs: { spec: $job.spec }
     outputs: [plan]
 
   implement:
     executor: agent
+    session: main
     prompt: "Implement the plan."
-    continue_session: true
     inputs:
       plan: plan.plan
-      _session_id:
-        from: plan._session_id
-        optional: true
     outputs: [result]
 ```
 
-`_session_id` is a reserved output field — don't declare it in `outputs:`.
+**Forking sessions:** Use `fork_from` to create an independent session from a parent's history. Requires `agent: claude` on the forking step.
 
 ## Caching
 

@@ -11,7 +11,6 @@ from stepwise.models import (
     WorkflowDefinition,
     ExitRule,
     ForEachSpec,
-    ChainConfig,
 )
 from stepwise.schema import generate_input_schema, generate_schema
 

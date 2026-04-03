@@ -10,6 +10,7 @@ import logging
 import os
 
 from stepwise.agent import AgentExecutor, AcpxBackend
+from stepwise.claude_direct import ClaudeDirectBackend
 from pathlib import Path
 from stepwise.config import StepwiseConfig, load_config
 from stepwise.executors import (
@@ -73,8 +74,10 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
         default_agent=default_agent,
         default_permissions=config.agent_permissions,
     )
+    claude_direct_backend = ClaudeDirectBackend()
     registry.register("agent", lambda cfg: AgentExecutor(
         backend=acpx_backend,
+        claude_direct_backend=claude_direct_backend,
         prompt=cfg.get("prompt", ""),
         output_mode=cfg.get("output_mode", "effect"),
         output_path=cfg.get("output_path"),

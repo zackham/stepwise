@@ -284,13 +284,13 @@ See [YAML Format -- Derived Outputs](yaml-format.md#derived-outputs-computed-fie
 
 **Problem:** Agent steps may encounter decisions outside their scope — architectural choices, product tradeoffs, ambiguous requirements. Without explicit boundaries, agents guess silently.
 
-**Pattern:** Define escalation markers in agent prompts. Exit rules detect them and suspend the job for external input. After the human responds, the agent resumes with the answer via `continue_session`.
+**Pattern:** Define escalation markers in agent prompts. Exit rules detect them and suspend the job for external input. After the human responds, the agent resumes with the answer via a named `session`.
 
 ```yaml
 steps:
   implement:
     executor: agent
-    continue_session: true
+    session: impl
     output_mode: stream_result
     prompt: |
       Implement the feature according to the plan.
@@ -331,10 +331,10 @@ steps:
 2. Exit rule matches -> `action: escalate` suspends the job at `implement_escalate`
 3. Human provides answer via web UI or terminal
 4. Engine resumes: `implement` re-runs with `escalation_answer` now resolved
-5. `continue_session: true` preserves the agent's full history — it picks up where it left off
+5. `session: impl` preserves the agent's full history — it picks up where it left off
 
 **Key details:**
-- `continue_session: true` — agent retains full context across the escalation round-trip
+- `session: impl` — agent retains full context across the escalation round-trip
 - `optional: true` on `escalation_answer` — first run proceeds without blocking on the external step
 - `[-500:]` slice — avoids scanning the entire output for the marker
 - `action: escalate` suspends the job (not `action: loop`) — the external step needs the job paused to collect input
@@ -351,13 +351,13 @@ steps:
 
 **Problem:** Quality-gated loops where an agent refines work based on feedback can stall if the agent loses context of what it tried before, or repeat the same mistakes each iteration.
 
-**Pattern:** Use `continue_session: true` with `loop_prompt` to maintain conversational context. The agent sees its prior work and receives targeted critique.
+**Pattern:** Use `session: <name>` with `loop_prompt` to maintain conversational context. The agent sees its prior work and receives targeted critique.
 
 ```yaml
 steps:
   draft:
     executor: agent
-    continue_session: true
+    session: drafting
     output_mode: stream_result
     prompt: |
       Write a technical spec for: $topic
@@ -406,7 +406,7 @@ steps:
         target: draft
 ```
 
-**Why `continue_session` matters:** Without it, each loop iteration starts a fresh agent session. The agent re-reads the codebase, re-discovers patterns, and may repeat mistakes. With it, the agent builds on prior work and receives targeted feedback.
+**Why named sessions matter:** Without a `session` name, each loop iteration starts a fresh agent session. The agent re-reads the codebase, re-discovers patterns, and may repeat mistakes. With a named session, the agent builds on prior work and receives targeted feedback.
 
 **`max_continuous_attempts`:** For long loops, set this to force a fresh session periodically. After N continuous attempts, the engine starts a new session, preventing context window exhaustion.
 
@@ -715,7 +715,7 @@ steps:
 | Mechanical data transformation between steps | **Script step** -- deterministic, no LLM needed |
 | Step depends on prior step's files, not its outputs | `after: [step]` -- ordering without data transfer |
 | Agent may hit decisions outside its scope | **Escalation boundary** -- `>>>ESCALATE:` + external step + loop |
-| Quality-gated iteration loop | **Progressive refinement** -- `continue_session` + `loop_prompt` |
+| Quality-gated iteration loop | **Progressive refinement** -- `session: <name>` + `loop_prompt` |
 | Same pattern used in multiple flows | **Flow composition** -- extract sub-flow, reference via `flow:` |
 | Agent step may fail transiently | **Retry decorator** -- `max_retries` + `backoff` |
 | Expensive step needs a cheaper fallback | **Fallback decorator** -- simpler executor as backup |

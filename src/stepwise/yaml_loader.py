@@ -15,7 +15,6 @@ import yaml
 
 from stepwise.models import (
     CacheConfig,
-    ChainConfig,
     ConfigVar,
     DecoratorRef,
     ExecutorRef,
@@ -919,11 +918,11 @@ def _parse_step(
     # Step-level when condition (pure-pull branching)
     when_condition = step_data.get("when")
 
-    # Chain membership (M7a)
-    chain = step_data.get("chain")
-    chain_label = step_data.get("chain_label")
+    # Named sessions
+    session = step_data.get("session")
+    fork_from = step_data.get("fork_from")
 
-    # Session continuity
+    # Session continuity (legacy)
     continue_session = step_data.get("continue_session", False)
     loop_prompt_raw = step_data.get("loop_prompt")
     loop_prompt = None
@@ -981,8 +980,8 @@ def _parse_step(
         idempotency=idempotency,
         when=when_condition,
         limits=limits,
-        chain=chain,
-        chain_label=chain_label,
+        session=session,
+        fork_from=fork_from,
         continue_session=continue_session,
         loop_prompt=loop_prompt,
         max_continuous_attempts=max_continuous_attempts,
@@ -992,20 +991,108 @@ def _parse_step(
     )
 
 
-def _parse_chains(data: dict) -> dict[str, ChainConfig]:
-    """Parse chain definitions from top-level 'chains' block."""
-    chains_data = data.get("chains")
-    if not chains_data:
-        return {}
-    if not isinstance(chains_data, dict):
-        raise ValueError("'chains' must be a mapping")
+def _validate_sessions(steps: dict[str, StepDefinition], errors: list[str]) -> None:
+    """Validate named session and fork_from constraints across all steps."""
+    # Build session → step mapping
+    session_steps: dict[str, list[str]] = {}  # session_name -> [step_names in order]
+    session_fork_from: dict[str, set[str]] = {}  # session_name -> set of fork_from values
 
-    chains: dict[str, ChainConfig] = {}
-    for name, config_data in chains_data.items():
-        if not isinstance(config_data, dict):
-            raise ValueError(f"Chain '{name}': config must be a mapping")
-        chains[name] = ChainConfig.from_dict(config_data)
-    return chains
+    for step_name, step_def in steps.items():
+        # Rule 1: fork_from requires session
+        if step_def.fork_from and not step_def.session:
+            errors.append(
+                f"Step '{step_name}': fork_from requires a session name"
+            )
+            continue
+
+        if step_def.session:
+            session_steps.setdefault(step_def.session, []).append(step_name)
+            if step_def.fork_from:
+                session_fork_from.setdefault(step_def.session, set()).add(
+                    step_def.fork_from
+                )
+
+        # Rule 6: for_each + session incompatible
+        if step_def.session and step_def.for_each:
+            errors.append(
+                f"Step '{step_name}': session is not compatible with for_each"
+            )
+
+        # Rule 7: old syntax detection
+        if step_def.session and step_def.continue_session:
+            errors.append(
+                f"Step '{step_name}': continue_session is deprecated, use session: <name>"
+            )
+        if step_def.session:
+            for inp in step_def.inputs:
+                if inp.local_name == "_session_id":
+                    errors.append(
+                        f"Step '{step_name}': _session_id input is deprecated, use session: <name>"
+                    )
+
+    for session_name, step_names in session_steps.items():
+        fork_values = session_fork_from.get(session_name, set())
+
+        # Rule 2: fork_from references known session
+        for fv in fork_values:
+            if fv not in session_steps:
+                for sn in step_names:
+                    if steps[sn].fork_from == fv:
+                        errors.append(
+                            f"Step '{sn}': fork_from '{fv}' references unknown session"
+                        )
+
+        # Rule 4: Consistent fork_from within a session
+        if len(fork_values) > 1:
+            errors.append(
+                f"Steps on session '{session_name}' have conflicting fork_from values"
+            )
+
+    # Rule 3: Fork steps require EXPLICIT agent: claude
+    # Default agent is configurable, so we must require explicit declaration
+    for session_name, step_names in session_steps.items():
+        fork_values = session_fork_from.get(session_name, set())
+        if fork_values:
+            # This session is forked — all steps on it need explicit agent: claude
+            for sn in step_names:
+                sd = steps[sn]
+                agent = sd.executor.config.get("agent") if sd.executor and sd.executor.config else None
+                if sd.executor.type != "agent" or agent != "claude":
+                    errors.append(
+                        f"Step '{sn}': session forking requires explicit agent: claude"
+                    )
+            # Parent session steps also need explicit agent: claude
+            for parent_session in fork_values:
+                if parent_session in session_steps:
+                    for sn in session_steps[parent_session]:
+                        sd = steps[sn]
+                        agent = sd.executor.config.get("agent") if sd.executor and sd.executor.config else None
+                        if sd.executor.type != "agent" or agent != "claude":
+                            errors.append(
+                                f"Step '{sn}': session forking requires explicit agent: claude"
+                            )
+
+    # Rule 5: DAG ordering — first step on forked session must depend on parent session
+    for session_name, step_names in session_steps.items():
+        fork_values = session_fork_from.get(session_name, set())
+        if not fork_values:
+            continue
+        parent_session = next(iter(fork_values))
+        if parent_session not in session_steps:
+            continue
+
+        parent_step_names = set(session_steps[parent_session])
+        first_step = steps[step_names[0]]
+        # Check after deps and input deps
+        all_deps = set(first_step.after)
+        for inp in first_step.inputs:
+            if inp.source_step and inp.source_step != "$job":
+                all_deps.add(inp.source_step)
+        if not all_deps.intersection(parent_step_names):
+            errors.append(
+                f"Step '{step_names[0]}': forked session '{session_name}' "
+                f"has no dependency on parent session '{parent_session}'"
+            )
 
 
 def _parse_metadata(data: dict, source_path: Path | None = None) -> FlowMetadata:
@@ -1264,13 +1351,6 @@ def load_workflow_yaml(
     if errors:
         raise YAMLLoadError(errors)
 
-    # Parse chains (M7a)
-    try:
-        chains = _parse_chains(data)
-    except ValueError as e:
-        errors.append(str(e))
-        chains = {}
-
     if errors:
         raise YAMLLoadError(errors)
 
@@ -1311,7 +1391,7 @@ def load_workflow_yaml(
         source_path_str = str(source_path.resolve())
 
     workflow = WorkflowDefinition(
-        steps=steps, metadata=metadata, chains=chains, source_dir=source_dir_str,
+        steps=steps, metadata=metadata, source_dir=source_dir_str,
         source_path=source_path_str,
         config_vars=config_vars, input_vars=input_vars, requires=requires, readme=readme,
     )
@@ -1320,6 +1400,12 @@ def load_workflow_yaml(
     validation_errors = workflow.validate()
     if validation_errors:
         raise YAMLLoadError(validation_errors)
+
+    # Validate named sessions and fork constraints
+    session_errors: list[str] = []
+    _validate_sessions(steps, session_errors)
+    if session_errors:
+        raise YAMLLoadError(session_errors)
 
     return workflow
 
@@ -1376,13 +1462,6 @@ def load_workflow_string(yaml_str: str) -> WorkflowDefinition:
         except ValueError as e:
             errors.append(str(e))
 
-    # Parse chains (M7a)
-    try:
-        chains = _parse_chains(data)
-    except ValueError as e:
-        errors.append(str(e))
-        chains = {}
-
     # Parse config variables, input variables, and requirements
     try:
         config_vars = _parse_config(data)
@@ -1409,11 +1488,17 @@ def load_workflow_string(yaml_str: str) -> WorkflowDefinition:
     readme = _load_readme(None, data)
 
     workflow = WorkflowDefinition(
-        steps=steps, chains=chains,
+        steps=steps,
         config_vars=config_vars, input_vars=input_vars, requires=requires, readme=readme,
     )
     validation_errors = workflow.validate()
     if validation_errors:
         raise YAMLLoadError(validation_errors)
+
+    # Validate named sessions and fork constraints
+    session_errors: list[str] = []
+    _validate_sessions(steps, session_errors)
+    if session_errors:
+        raise YAMLLoadError(session_errors)
 
     return workflow

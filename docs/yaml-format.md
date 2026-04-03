@@ -192,10 +192,11 @@ step_name:
     max_duration_minutes: 30
     max_iterations: 50
 
-  # Session continuity (optional, agent and LLM steps)
-  continue_session: true           # reuse session across loop iterations
+  # Named sessions (optional, agent and LLM steps)
+  session: impl                    # named session — matching names share a conversation
   loop_prompt: "Fix: $errors"      # alternate prompt on attempt > 1
   max_continuous_attempts: 5       # force fresh session after N iterations
+  fork_from: main                  # fork independent session from parent (requires agent: claude)
 
   # Caching (optional)
   cache: true                      # enable with default TTL
@@ -207,10 +208,6 @@ step_name:
   # Error handling (optional)
   on_error: continue               # "fail" (default) | "continue"
   idempotency: idempotent          # idempotent | retriable_with_guard | non_retriable
-
-  # Context chains (optional)
-  chain: main                      # chain membership name
-  chain_label: "Planning"          # label shown in chain prefix
 
   # Decorators (optional)
   decorators:
@@ -490,16 +487,16 @@ steps:
 - Steps that never ran get SKIPPED runs
 - Job completes if at least one terminal has a current completed run; fails otherwise
 
-### Session Continuity
+### Named Sessions
 
-Agent and LLM steps with `continue_session: true` reuse the same agent session across loop iterations, continuing the conversation instead of starting fresh.
+Agent and LLM steps can share conversations using **named sessions**. Steps with the same `session: <name>` reuse the same agent session, continuing the conversation instead of starting fresh.
 
 ```yaml
 implement:
   executor: agent
+  session: impl
   prompt: "Implement: $spec"
   loop_prompt: "Tests failed:\n$failures\nFix the issues."
-  continue_session: true
   max_continuous_attempts: 5
   inputs:
     spec: $job.spec
@@ -511,40 +508,49 @@ implement:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `continue_session` | bool | `false` | Reuse agent session across loop iterations |
+| `session` | string | --- | Named session. Steps with the same name share a conversation |
 | `loop_prompt` | string | --- | Alternate prompt template on attempt > 1 (falls back to `prompt`) |
 | `max_continuous_attempts` | int | --- | After N iterations, force a fresh session |
+| `fork_from` | string | --- | Fork an independent session from a named parent session |
 
 **Behavior:**
 - First run: creates session, sends `prompt`
 - Loop-back (attempt > 1): continues session, sends `loop_prompt` (or `prompt` if not set)
 - If session crashes or `max_continuous_attempts` exceeded, falls back to a fresh session
 
-**Cross-step session sharing:** Agent steps with `continue_session: true` auto-emit `_session_id`. Downstream steps continue the same conversation via optional input:
+**Cross-step session sharing:** Steps with the same `session` name share a conversation — no special input bindings needed:
 
 ```yaml
 steps:
   plan:
     executor: agent
+    session: main
     prompt: "Plan: $spec"
-    continue_session: true
     inputs: { spec: $job.spec }
     outputs: [plan]
-    # automatically emits _session_id
 
   implement:
     executor: agent
+    session: main
     prompt: "Implement the plan."
-    continue_session: true
     inputs:
       plan: plan.plan
-      _session_id:
-        from: plan._session_id
-        optional: true
     outputs: [result]
+    # continues plan's session — same session name
 ```
 
-`_session_id` is a reserved output field — don't declare it in `outputs:`. The engine serializes concurrent access to shared sessions.
+**Forking sessions:** Use `fork_from` to create an independent session that starts with the parent's history but diverges from that point:
+
+```yaml
+  review:
+    executor: agent
+    agent: claude
+    fork_from: main
+    prompt: "Review the plan critically."
+    outputs: [feedback]
+```
+
+`fork_from` requires `agent: claude` (explicit) on the forking step. The engine serializes concurrent access to shared sessions.
 
 ### Agent Output Modes
 
@@ -703,7 +709,8 @@ Requirements are checked by `stepwise validate`, `stepwise info`, and `stepwise 
 | `as: var_name` | `ForEachSpec.item_var` |
 | `on_error: continue` | `ForEachSpec.on_error` |
 | `prompt_file: path/to/file` | Resolved at parse time -> `ExecutorRef.config["prompt"]` |
-| `continue_session: true` | `StepDefinition.continue_session = True` |
+| `session: impl` | `StepDefinition.session = "impl"` |
+| `fork_from: main` | `StepDefinition.fork_from = "main"` |
 | `loop_prompt: "..."` | `StepDefinition.loop_prompt = "..."` |
 | `max_continuous_attempts: 5` | `StepDefinition.max_continuous_attempts = 5` |
 | `config: {var: {...}}` | `WorkflowDefinition.config_vars = [ConfigVar(...)]` |

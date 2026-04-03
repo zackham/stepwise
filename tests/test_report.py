@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 from stepwise.models import (
-    ChainConfig,
     ExitRule,
     ExecutorRef,
     FlowMetadata,
@@ -453,70 +452,7 @@ class TestGenerateReport:
         assert "Flow Source" not in html
         store.close()
 
-    def test_chain_metadata_rendering(self):
-        """Report shows chain indicators in stats, DAG, timeline, and step details."""
-        # Build workflow with chains manually (can't use _make_workflow helper
-        # because it doesn't support chain fields)
-        steps = {
-            "research": StepDefinition(
-                name="research",
-                outputs=["findings"],
-                executor=ExecutorRef(type="agent"),
-                chain="review",
-            ),
-            "draft": StepDefinition(
-                name="draft",
-                outputs=["content"],
-                executor=ExecutorRef(type="agent"),
-                inputs=[InputBinding(local_name="findings", source_step="research", source_field="findings")],
-                chain="review",
-            ),
-            "publish": StepDefinition(
-                name="publish",
-                outputs=["url"],
-                executor=ExecutorRef(type="script"),
-                inputs=[InputBinding(local_name="content", source_step="draft", source_field="content")],
-            ),
-        }
-        wf = WorkflowDefinition(
-            steps=steps,
-            chains={"review": ChainConfig(max_tokens=80000)},
-        )
-        job = _make_job(wf)
-        store = SQLiteStore()
-        store.save_job(job)
-        store.save_run(_make_run(job.id, "research"))
-        store.save_run(_make_run(job.id, "draft"))
-        store.save_run(_make_run(job.id, "publish"))
-
-        # Simulate a chain context compiled event for the draft run
-        store.save_step_event("run-draft-1", "chain.context_compiled", {
-            "step": "draft", "chain": "review",
-            "transcript_count": 1, "total_tokens": 5000,
-        })
-
-        html = generate_report(job, store)
-
-        # Stats: chain count card
-        assert "Chain" in html
-        assert "2 steps" in html  # 2 chain members
-
-        # DAG: purple chain indicator on chain member nodes
-        assert 'fill="#8b5cf6"' in html  # purple rect for chain badge
-
-        # Timeline: chain name badge
-        assert "review" in html  # chain name appears
-
-        # Step detail summary: chain tag on chain member
-        assert "&#x26d3;" in html  # chain link icon
-
-        # Step detail body: chain context compilation stats
-        assert "1 prior transcript" in html
-        assert "5,000 tokens" in html
-
-        # Non-chain step (publish) should NOT have chain badge
-        # (checked implicitly — only 2 chain badges in DAG, not 3)
-        store.close()
+    # Chain metadata rendering test removed — chains feature was replaced by named sessions.
 
 
 # ── Copy Button Tests ───────────────────────────────────────────────

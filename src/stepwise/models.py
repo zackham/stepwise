@@ -67,35 +67,6 @@ class StepRunStatus(Enum):
 # ── Step Limits ───────────────────────────────────────────────────────
 
 
-# ── Chain Config ─────────────────────────────────────────────────────
-
-
-@dataclass
-class ChainConfig:
-    """Configuration for a named context chain."""
-    max_tokens: int = 80000
-    overflow: str = "drop_oldest"  # "drop_oldest" | "drop_middle"
-    include_thinking: bool = False
-    accumulation: str = "full"  # "full" | "latest"
-
-    def to_dict(self) -> dict:
-        return {
-            "max_tokens": self.max_tokens,
-            "overflow": self.overflow,
-            "include_thinking": self.include_thinking,
-            "accumulation": self.accumulation,
-        }
-
-    @classmethod
-    def from_dict(cls, d: dict) -> ChainConfig:
-        return cls(
-            max_tokens=d.get("max_tokens", 80000),
-            overflow=d.get("overflow", "drop_oldest"),
-            include_thinking=d.get("include_thinking", False),
-            accumulation=d.get("accumulation", "full"),
-        )
-
-
 @dataclass
 class StepLimits:
     """Cost and time limits enforced by the engine."""
@@ -466,9 +437,9 @@ class StepDefinition:
     for_each: ForEachSpec | None = None  # iteration over upstream list
     sub_flow: WorkflowDefinition | None = None  # embedded flow for for_each
     output_schema: dict[str, OutputFieldSpec] = field(default_factory=dict)
-    chain: str | None = None  # M7a: context chain membership
-    chain_label: str | None = None  # M7a: label shown in chain prefix
-    continue_session: bool = False  # reuse agent session across loop iterations
+    session: str | None = None  # named session this step participates in
+    fork_from: str | None = None  # fork a new session from this parent session
+    continue_session: bool = False  # LEGACY: reuse agent session across loop iterations
     loop_prompt: str | None = None  # alternate prompt template on attempt > 1
     max_continuous_attempts: int | None = None  # circuit breaker for session reuse
     cache: CacheConfig | None = None  # opt-in result caching
@@ -495,10 +466,10 @@ class StepDefinition:
             d["for_each"] = self.for_each.to_dict()
         if self.sub_flow:
             d["sub_flow"] = self.sub_flow.to_dict()
-        if self.chain:
-            d["chain"] = self.chain
-        if self.chain_label:
-            d["chain_label"] = self.chain_label
+        if self.session:
+            d["session"] = self.session
+        if self.fork_from:
+            d["fork_from"] = self.fork_from
         if self.continue_session:
             d["continue_session"] = True
         if self.loop_prompt is not None:
@@ -528,8 +499,8 @@ class StepDefinition:
             limits=StepLimits.from_dict(d["limits"]) if d.get("limits") else None,
             for_each=ForEachSpec.from_dict(d["for_each"]) if d.get("for_each") else None,
             sub_flow=WorkflowDefinition.from_dict(d["sub_flow"]) if d.get("sub_flow") else None,
-            chain=d.get("chain"),
-            chain_label=d.get("chain_label"),
+            session=d.get("session"),
+            fork_from=d.get("fork_from"),
             continue_session=d.get("continue_session", False),
             loop_prompt=d.get("loop_prompt"),
             max_continuous_attempts=d.get("max_continuous_attempts"),
@@ -587,7 +558,6 @@ class FlowMetadata:
 class WorkflowDefinition:
     steps: dict[str, StepDefinition] = field(default_factory=dict)
     metadata: FlowMetadata = field(default_factory=FlowMetadata)
-    chains: dict[str, ChainConfig] = field(default_factory=dict)  # M7a
     source_dir: str | None = None  # M10: directory containing the flow file
     source_path: str | None = None  # Full path to the flow YAML file
     config_vars: list[ConfigVar] = field(default_factory=list)
@@ -758,36 +728,6 @@ class WorkflowDefinition:
                         f"Step '{name}': for_each on_error must be 'fail_fast' or 'continue', "
                         f"got '{fe.on_error}'"
                     )
-
-        # Check chain definitions
-        for chain_name, chain_config in self.chains.items():
-            members = [n for n, s in self.steps.items() if s.chain == chain_name]
-            if len(members) < 2:
-                errors.append(
-                    f"Chain '{chain_name}': must have at least 2 members, "
-                    f"found {len(members)}"
-                )
-            if chain_config.overflow not in ("drop_oldest", "drop_middle"):
-                errors.append(
-                    f"Chain '{chain_name}': overflow must be 'drop_oldest' or "
-                    f"'drop_middle', got '{chain_config.overflow}'"
-                )
-            if chain_config.accumulation not in ("full", "latest"):
-                errors.append(
-                    f"Chain '{chain_name}': accumulation must be 'full' or "
-                    f"'latest', got '{chain_config.accumulation}'"
-                )
-            if chain_config.max_tokens < 1:
-                errors.append(
-                    f"Chain '{chain_name}': max_tokens must be positive"
-                )
-
-        # Check step chain references are valid
-        for name, step in self.steps.items():
-            if step.chain and step.chain not in self.chains:
-                errors.append(
-                    f"Step '{name}': references undefined chain '{step.chain}'"
-                )
 
         # Check for cycles
         if not errors:
@@ -1397,8 +1337,6 @@ class WorkflowDefinition:
         meta = self.metadata.to_dict()
         if meta:
             d["metadata"] = meta
-        if self.chains:
-            d["chains"] = {n: c.to_dict() for n, c in self.chains.items()}
         if self.source_dir is not None:
             d["source_dir"] = self.source_dir
         if self.source_path is not None:
@@ -1419,16 +1357,12 @@ class WorkflowDefinition:
         for name, step_d in d.get("steps", {}).items():
             steps[name] = StepDefinition.from_dict(step_d)
         metadata = FlowMetadata.from_dict(d.get("metadata", {}))
-        chains = {}
-        for name, chain_d in d.get("chains", {}).items():
-            chains[name] = ChainConfig.from_dict(chain_d)
         config_vars = [ConfigVar.from_dict(v) for v in d.get("config_vars", [])]
         input_vars = [ConfigVar.from_dict(v) for v in d.get("input_vars", [])]
         requires = [FlowRequirement.from_dict(r) for r in d.get("requires", [])]
         return cls(
             steps=steps,
             metadata=metadata,
-            chains=chains,
             source_dir=d.get("source_dir"),
             source_path=d.get("source_path"),
             config_vars=config_vars,

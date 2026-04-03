@@ -25,7 +25,7 @@ Everything you need to author, run, debug, and share workflows locally or on you
 - All step types: script, agent, LLM, external, poll, for-each, callable
 - Input resolution, conditional branching (`when`), optional inputs
 - Step result caching (content-addressable, local SQLite)
-- Session continuity across loop iterations and across steps (via `_session_id`)
+- Named sessions across loop iterations and across steps (via `session:` and `fork_from:`)
 - Agent flow emission and iterative delegation
 - Decorators: retry, timeout, fallback
 

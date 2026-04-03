@@ -22,8 +22,6 @@ RUNTIME_CONFIG_KEYS = frozenset({
     "_project_dir",
     "_prev_session_name",
     "_session_lock_manager",
-    "_chains",
-    "_chain_contexts",
     "_injected_contexts",
     "working_dir",
     "flow_dir",

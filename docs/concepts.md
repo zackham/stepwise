@@ -415,7 +415,7 @@ stepwise run deploy --wait --input repo="/path" --input branch="main"
 
 Agent steps (`executor: agent`) use an LLM with tools inside a step. The agent is scoped to its step's inputs and outputs — it iterates autonomously but only within the boundaries the step defines.
 
-With `continue_session: true`, an agent maintains context across loop iterations, saving tokens by continuing the conversation rather than re-injecting context each time.
+With `session: <name>`, steps sharing the same session name maintain context across iterations and across steps, saving tokens by continuing the conversation rather than re-injecting context each time.
 
 ### As architects
 
