@@ -36,6 +36,7 @@ interface RunViewProps {
   stepDef: StepDefinition;
   hasLiveSource?: boolean;
   onSelectStep?: (stepName: string) => void;
+  onSwitchTab?: (tab: string) => void;
 }
 
 /* ── Helpers ───────────────────────────────────────────────────────── */
@@ -87,19 +88,21 @@ function TimingLine({ run }: { run: StepRun }) {
 /* ── Adaptive Run Content ────────────────────────────────────────── */
 
 interface AdaptiveSlot {
-  type: "input" | "result";
+  type: "input" | "result" | "agent_output";
   label: string; // e.g. "step_name.field_name" or result key
   stepName?: string; // for input slots: the source step (clickable)
   fieldName?: string; // for input slots: the local field name
   sourceField?: string; // for input slots: the source step's field name
   isJobInput?: boolean; // source is $job
   value: string; // stringified value
+  minLines?: number; // minimum lines to show (default 1)
 }
 
 function buildSlots(
   inputs: Record<string, unknown> | null,
   inputBindings: InputBinding[],
   result: HandoffEnvelope | null,
+  agentOutputText?: string | null,
 ): AdaptiveSlot[] {
   const slots: AdaptiveSlot[] = [];
 
@@ -139,6 +142,16 @@ function buildSlots(
     }
   }
 
+  // Build agent output slot
+  if (agentOutputText) {
+    slots.push({
+      type: "agent_output",
+      label: "",
+      value: agentOutputText,
+      minLines: 3,
+    });
+  }
+
   return slots;
 }
 
@@ -159,7 +172,7 @@ function useAdaptiveAllocation(
   width: number,
 ) {
   const [allocation, setAllocation] = useState<number[]>(() =>
-    new Array(slots.length).fill(1)
+    slots.map((s) => s.minLines ?? 1)
   );
   const [needsScroll, setNeedsScroll] = useState(false);
   const [ready, setReady] = useState(false);
@@ -188,16 +201,20 @@ function useAdaptiveAllocation(
     const pixelsForValues = totalAvailable - chromeHeightRef.current;
     const availableLines = Math.floor(pixelsForValues / lineHeight);
 
-    if (availableLines < slots.length) {
+    const minPerSlot = slots.map((s) => s.minLines ?? 1);
+    const totalMinLines = minPerSlot.reduce((a, b) => a + b, 0);
+
+    if (availableLines < totalMinLines) {
       setNeedsScroll(true);
-      setAllocation(new Array(slots.length).fill(1));
+      const naturalLines = naturalLinesRef.current;
+      setAllocation(minPerSlot.map((min, i) => Math.min(min, naturalLines[i] ?? 1)));
       return;
     }
     setNeedsScroll(false);
 
     const naturalLines = naturalLinesRef.current;
-    const alloc = new Array(slots.length).fill(1);
-    let remaining = availableLines - slots.length;
+    const alloc = minPerSlot.map((min, i) => Math.min(min, naturalLines[i] ?? min));
+    let remaining = availableLines - alloc.reduce((a, b) => a + b, 0);
 
     let changed = true;
     while (remaining > 0 && changed) {
@@ -266,7 +283,7 @@ function useAdaptiveAllocation(
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => {
           setReady(false);
-          setAllocation(new Array(slots.length).fill(1));
+          setAllocation(slots.map((s) => s.minLines ?? 1));
         }, 150);
       }
       prevWidthRef.current = newWidth;
@@ -282,20 +299,24 @@ function AdaptiveRunContent({
   inputs,
   inputBindings,
   result,
+  agentOutputText,
   onSelectStep,
+  onViewSessions,
   containerRef,
   onNeedsScroll,
 }: {
   inputs: Record<string, unknown> | null;
   inputBindings: InputBinding[];
   result: HandoffEnvelope | null;
+  agentOutputText?: string | null;
   onSelectStep?: (stepName: string) => void;
+  onViewSessions?: () => void;
   containerRef: React.RefObject<HTMLDivElement | null>;
   onNeedsScroll?: (needs: boolean) => void;
 }) {
   const slots = useMemo(
-    () => buildSlots(inputs, inputBindings, result),
-    [inputs, inputBindings, result],
+    () => buildSlots(inputs, inputBindings, result, agentOutputText),
+    [inputs, inputBindings, result, agentOutputText],
   );
 
   // Measure font + width ONCE while overflow:hidden (no scrollbar) — cached, not re-measured on scroll toggle
@@ -344,12 +365,14 @@ function AdaptiveRunContent({
 
   const inputSlots = useMemo(() => slots.filter((s) => s.type === "input"), [slots]);
   const resultSlots = useMemo(() => slots.filter((s) => s.type === "result"), [slots]);
+  const agentSlots = useMemo(() => slots.filter((s) => s.type === "agent_output"), [slots]);
 
   if (slots.length === 0) return null;
 
-  // allocation is ordered: all input slots first, then result slots
+  // allocation is ordered: input slots, then result slots, then agent output slots
   const inputAllocStart = 0;
   const resultAllocStart = inputSlots.length;
+  const agentAllocStart = inputSlots.length + resultSlots.length;
 
   return (
     <div className="space-y-4" style={ready ? undefined : { visibility: "hidden" }}>
@@ -390,6 +413,29 @@ function AdaptiveRunContent({
           </div>
         </div>
       )}
+
+      {/* Agent output section */}
+      {agentSlots.length > 0 && (
+        <div
+          className="bg-blue-50 dark:bg-blue-900/20 -mx-3 px-3 py-2.5 cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors"
+          onClick={onViewSessions}
+          title="View full output in Sessions tab"
+        >
+          <SectionHeading>Agent Output</SectionHeading>
+          <div className="mt-1.5">
+            {agentSlots.map((slot, i) => (
+              <AdaptiveSlotRow
+                key={i}
+                slot={slot}
+                lines={allocation[agentAllocStart + i] ?? 3}
+                font={textMetrics.font}
+                width={textMetrics.width}
+                onClick={onViewSessions}
+              />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -401,6 +447,7 @@ function AdaptiveSlotRow({
   width,
   onSelectStep,
   isResult,
+  onClick,
 }: {
   slot: AdaptiveSlot;
   lines: number;
@@ -408,6 +455,7 @@ function AdaptiveSlotRow({
   width: number;
   onSelectStep?: (stepName: string) => void;
   isResult?: boolean;
+  onClick?: () => void;
 }) {
   const [modalOpen, setModalOpen] = useState(false);
 
@@ -418,37 +466,39 @@ function AdaptiveSlotRow({
 
   return (
     <div className="py-1.5">
-      {/* Label pill — field ← source */}
-      <div className="mb-1">
-        <span className="flex items-center rounded bg-zinc-100 dark:bg-zinc-800/60 px-2 py-1 text-xs font-mono">
-          <span className="text-cyan-600 dark:text-cyan-400">{slot.fieldName ?? slot.label}</span>
-          {slot.type === "input" && (
-            <>
-              <span className="text-zinc-400 dark:text-zinc-600 mx-1.5">←</span>
-              {slot.isJobInput ? (
-                <span className="text-zinc-500">$job.{slot.fieldName}</span>
-              ) : (
-                <span>
-                  <a
-                    onClick={() => slot.stepName && onSelectStep?.(slot.stepName)}
-                    className="text-zinc-500 dark:text-zinc-400 hover:text-blue-500 dark:hover:text-blue-400 cursor-pointer transition-colors"
-                  >
-                    {slot.stepName}
-                  </a>
-                  <span className="text-zinc-400 dark:text-zinc-600">.{slot.sourceField}</span>
-                </span>
-              )}
-            </>
-          )}
-        </span>
-      </div>
+      {/* Label pill — field ← source (skip if no label) */}
+      {slot.label && (
+        <div className="mb-1">
+          <span className="flex items-center rounded bg-zinc-100 dark:bg-zinc-800/60 px-2 py-1 text-xs font-mono">
+            <span className="text-cyan-600 dark:text-cyan-400">{slot.fieldName ?? slot.label}</span>
+            {slot.type === "input" && (
+              <>
+                <span className="text-zinc-400 dark:text-zinc-600 mx-1.5">←</span>
+                {slot.isJobInput ? (
+                  <span className="text-zinc-500">$job.{slot.fieldName}</span>
+                ) : (
+                  <span>
+                    <a
+                      onClick={() => slot.stepName && onSelectStep?.(slot.stepName)}
+                      className="text-zinc-500 dark:text-zinc-400 hover:text-blue-500 dark:hover:text-blue-400 cursor-pointer transition-colors"
+                    >
+                      {slot.stepName}
+                    </a>
+                    <span className="text-zinc-400 dark:text-zinc-600">.{slot.sourceField}</span>
+                  </span>
+                )}
+              </>
+            )}
+          </span>
+        </div>
+      )}
 
       {/* Value — pretext-truncated */}
       <div
         className={cn(
           "text-xs font-mono cursor-pointer hover:text-zinc-200 transition-colors whitespace-pre-wrap break-words leading-relaxed text-zinc-400",
         )}
-        onClick={() => setModalOpen(true)}
+        onClick={() => onClick ? onClick() : setModalOpen(true)}
       >
         {truncated && displayText.endsWith("…")
           ? <>{displayText.slice(0, -1)}<span className="text-zinc-600">…</span></>
@@ -458,7 +508,7 @@ function AdaptiveSlotRow({
       <ContentModal
         open={modalOpen}
         onOpenChange={setModalOpen}
-        title={slot.label}
+        title={slot.label || slot.type}
         copyContent={slot.value}
       >
         <pre className="whitespace-pre-wrap text-sm text-zinc-300 font-mono p-3 leading-relaxed max-h-[70vh] overflow-auto">
@@ -907,11 +957,11 @@ function RunNavigator({
 
 /* ── Main RunView ─────────────────────────────────────────────────── */
 
-export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep }: RunViewProps) {
+export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onSwitchTab }: RunViewProps) {
   const { data: runs = [] } = useRuns(jobId, stepDef.name);
   const { data: events = [] } = useEvents(jobId);
   const mutations = useStepwiseMutations();
-  const [agentViewMode, setAgentViewMode] = useState<"stream" | "raw">("stream");
+
   const [runIndex, setRunIndex] = useState(0);
 
   const { data: configData } = useConfig();
@@ -1054,26 +1104,32 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep }: RunView
       </div>
 
       {/* 2. Compact timing line */}
-      {run && !isRunning && <TimingLine run={run} />}
+      {run && !isRunning && !isSuspended && <TimingLine run={run} />}
 
-      {/* Running: show live timing instead */}
-      {run && isRunning && (
+      {/* Running or suspended: show live timing */}
+      {run && (isRunning || isSuspended) && (
         <div className="flex items-center gap-1.5 text-[11px] flex-wrap mt-3">
           <span className="text-zinc-300">Started {formatTimePretty(run.started_at)}</span>
           <span className="text-zinc-600">&middot;</span>
-          <span className="text-blue-400 font-medium">
+          <span className={cn("font-medium", isRunning ? "text-blue-400" : "text-amber-400")}>
             <LiveDuration startTime={run.started_at} endTime={run.completed_at} />
           </span>
         </div>
       )}
 
-      {/* 3. Adaptive inputs + result */}
+      {/* 3. Adaptive inputs + result + agent output */}
       {run && (run?.inputs || run?.result) && (
         <AdaptiveRunContent
           inputs={run.inputs}
           inputBindings={stepDef.inputs}
           result={run.result}
+          agentOutputText={
+            isAgent && !isRunning && run?.result?.artifact?.result
+              ? String(run.result.artifact.result)
+              : null
+          }
           onSelectStep={onSelectStep}
+          onViewSessions={() => onSwitchTab?.("session")}
           containerRef={containerRef}
           onNeedsScroll={setScrollEnabled}
         />
@@ -1132,45 +1188,7 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep }: RunView
         </div>
       )}
 
-      {/* Completed agent replay */}
-      {run?.result && isAgent && (
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <SectionHeading>Agent Output</SectionHeading>
-            <div className="flex items-center gap-0.5 bg-zinc-200 dark:bg-zinc-800 rounded p-0.5">
-              <button
-                onClick={() => setAgentViewMode("stream")}
-                className={cn(
-                  "text-[10px] px-2 py-0.5 rounded transition-colors",
-                  agentViewMode === "stream"
-                    ? "bg-white dark:bg-zinc-700 text-zinc-800 dark:text-zinc-200"
-                    : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-                )}
-              >
-                Stream
-              </button>
-              <button
-                onClick={() => setAgentViewMode("raw")}
-                className={cn(
-                  "text-[10px] px-2 py-0.5 rounded transition-colors",
-                  agentViewMode === "raw"
-                    ? "bg-white dark:bg-zinc-700 text-zinc-800 dark:text-zinc-200"
-                    : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-                )}
-              >
-                Raw
-              </button>
-            </div>
-          </div>
-          <div className="max-h-[60vh] overflow-y-auto">
-            {agentViewMode === "stream" ? (
-              <AgentStreamView runId={run.id} isLive={false} />
-            ) : (
-              <AgentRawView runId={run.id} />
-            )}
-          </div>
-        </div>
-      )}
+      {/* Agent output is now shown inline in AdaptiveRunContent above */}
 
       {/* Completed script logs */}
       {run?.result && isScript && (

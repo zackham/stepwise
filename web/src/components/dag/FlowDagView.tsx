@@ -10,6 +10,7 @@ import { ExpandedStepContainer } from "./ExpandedStepContainer";
 import { ForEachExpandedContainer } from "./ForEachExpandedContainer";
 import { FlowPortNode } from "./FlowPortNode";
 import { ExternalInputPanel, getWatchProps } from "./ExternalInputPanel";
+import { ContentModal } from "@/components/ui/content-modal";
 import type { FlowDefinition, StepRun, JobTreeNode, JobStatus } from "@/lib/types";
 import { EntityContextMenu } from "@/components/menus/EntityContextMenu";
 import { ActionContextProvider } from "@/components/menus/ActionContextProvider";
@@ -97,6 +98,7 @@ interface FlowDagViewProps {
   jobId?: string;
   jobStatus?: JobStatus;
   jobActions?: JobActionCallbacks;
+  jobInputs?: Record<string, unknown> | null;
 }
 
 export function FlowDagView({
@@ -116,6 +118,7 @@ export function FlowDagView({
   jobId,
   jobStatus,
   jobActions,
+  jobInputs,
 }: FlowDagViewProps) {
   const theme = useTheme();
   const isDark = theme === "dark";
@@ -127,6 +130,10 @@ export function FlowDagView({
   const [showCriticalPath, setShowCriticalPath] = useState(false);
   const [multiSelected, setMultiSelected] = useState<Set<string>>(new Set());
   const [webglSupported] = useState(() => canUseWebGL());
+  const [edgeLabelModal, setEdgeLabelModal] = useState<{
+    title: string;
+    value: unknown;
+  } | null>(null);
 
   // Clear multi-select when clicking canvas background
   const handleCanvasClick = useCallback((e: React.MouseEvent) => {
@@ -521,13 +528,72 @@ export function FlowDagView({
     };
   }, [selection]);
 
-  // Handle edge label click
+  // Handle edge label click — open a ContentModal with the field value
   const handleClickLabel = useCallback(
     (from: string, to: string, field: string) => {
-      if (!onSelectDataFlow) return;
-      onSelectDataFlow({ kind: "edge-field", fromStep: from, toStep: to, fieldName: field });
+      let value: unknown = undefined;
+      const isFromFlowInput = from === "__flow_input__";
+      if (isFromFlowInput) {
+        if (jobInputs && field in jobInputs) {
+          value = jobInputs[field];
+        } else {
+          // Fallback: try to find it from the target step's resolved inputs
+          const targetRun = latestRuns[to];
+          if (targetRun?.inputs && field in targetRun.inputs) {
+            value = targetRun.inputs[field];
+          }
+        }
+      } else {
+        const run = latestRuns[from];
+        if (run?.result?.artifact) {
+          value = run.result.artifact[field];
+        }
+      }
+      const context = isFromFlowInput ? `Job Input -> ${to}` : `${from} -> ${to}`;
+      const title = `${field} (${context})`;
+      const formatted = value !== undefined
+        ? (typeof value === "string" ? value : JSON.stringify(value, null, 2))
+        : "No data available";
+      setEdgeLabelModal({ title, value: formatted });
     },
-    [onSelectDataFlow],
+    [latestRuns, jobInputs],
+  );
+
+  // Handle flow port clicks — open a ContentModal instead of sidebar
+  const handleFlowPortSelect = useCallback(
+    (sel: DagSelection) => {
+      if (!sel) return;
+      if (sel.kind === "flow-input") {
+        let value: unknown = undefined;
+        if (jobInputs && sel.fieldName in jobInputs) {
+          value = jobInputs[sel.fieldName];
+        }
+        const title = `${sel.fieldName} (Job Input)`;
+        const formatted = value !== undefined
+          ? (typeof value === "string" ? value : JSON.stringify(value, null, 2))
+          : "Input not provided";
+        setEdgeLabelModal({ title, value: formatted });
+        return;
+      }
+      if (sel.kind === "flow-output") {
+        const run = latestRuns[sel.stepName];
+        let value: unknown = undefined;
+        if (run?.result?.artifact) {
+          value = run.result.artifact[sel.fieldName];
+        }
+        const title = `${sel.fieldName} (from ${sel.stepName})`;
+        const formatted = value !== undefined
+          ? (typeof value === "string" ? value : JSON.stringify(value, null, 2))
+          : "No data available";
+        setEdgeLabelModal({ title, value: formatted });
+        return;
+      }
+      // For step or edge-field, forward to parent
+      if (onSelectDataFlow) {
+        onSelectDataFlow(sel);
+      }
+    },
+    [latestRuns, jobInputs, onSelectDataFlow],
   );
 
   // Handle edge label hover (tooltip)
@@ -606,7 +672,7 @@ export function FlowDagView({
           loopEdges={layout.loopEdges}
           width={layout.width}
           height={layout.height}
-          onClickLabel={onSelectDataFlow ? handleClickLabel : undefined}
+          onClickLabel={handleClickLabel}
           selectedLabel={selectedLabel}
           latestRuns={latestRuns}
           onHoverLabel={handleHoverLabel}
@@ -620,7 +686,7 @@ export function FlowDagView({
             key={port.id}
             port={port}
             selection={selection ?? null}
-            onSelect={onSelectDataFlow ?? (() => {})}
+            onSelect={handleFlowPortSelect}
             latestRuns={latestRuns}
           />
         ))}
@@ -699,6 +765,7 @@ export function FlowDagView({
                 childJobStatus={subTrees?.[0]?.job.status ?? null}
                 isCritical={criticalPath?.steps.has(node.id) ?? false}
                 jobId={jobId}
+                zoomScale={zoomDisplay / 100}
                 x={node.x}
                 y={node.y}
                 width={node.width}
@@ -900,6 +967,17 @@ export function FlowDagView({
           </button>
         </div>
       </div>
+      {/* Edge label value modal */}
+      <ContentModal
+        open={!!edgeLabelModal}
+        onOpenChange={(open) => { if (!open) setEdgeLabelModal(null); }}
+        title={edgeLabelModal?.title ?? ""}
+        copyContent={typeof edgeLabelModal?.value === "string" ? edgeLabelModal.value : JSON.stringify(edgeLabelModal?.value, null, 2)}
+      >
+        <pre className="whitespace-pre-wrap text-sm text-zinc-300 font-mono p-3 leading-relaxed">
+          {typeof edgeLabelModal?.value === "string" ? edgeLabelModal.value : JSON.stringify(edgeLabelModal?.value, null, 2)}
+        </pre>
+      </ContentModal>
     </div>
     </EntityContextMenu>
     </ActionContextProvider>

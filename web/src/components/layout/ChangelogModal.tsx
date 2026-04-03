@@ -167,16 +167,43 @@ export function ChangelogModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[80vh] flex-col sm:max-w-2xl">
+      <DialogContent className="flex max-h-[80vh] flex-col sm:max-w-2xl overflow-hidden">
         <DialogHeader>
           <DialogTitle>
-            Changelog{currentVersion ? ` — v${currentVersion}` : ""}
+            Stepwise{currentVersion ? ` v${currentVersion}` : ""}
           </DialogTitle>
-          <DialogDescription>
-            Recent changes and release notes.
+          <DialogDescription className="sr-only">
+            About Stepwise and release notes.
           </DialogDescription>
         </DialogHeader>
-        <ScrollArea className="min-h-0 flex-1 pr-3">
+
+        {/* About preamble */}
+        <div className="flex flex-col gap-2 border-b border-border pb-3">
+          <p className="text-sm text-muted-foreground">
+            Portable workflow orchestration for agents and humans.
+          </p>
+          <div className="flex items-center gap-3 text-xs">
+            <a
+              href="https://stepwise.run"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-500 hover:text-blue-400 hover:underline transition-colors"
+            >
+              stepwise.run
+            </a>
+            <span className="text-zinc-600">·</span>
+            <a
+              href="https://github.com/zackham/stepwise"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-500 hover:text-blue-400 hover:underline transition-colors"
+            >
+              GitHub
+            </a>
+          </div>
+        </div>
+
+        <ScrollArea className="min-h-0 flex-1 overflow-y-auto pr-3">
           {isLoading && (
             <p className="py-8 text-center text-sm text-muted-foreground">
               Loading changelog...

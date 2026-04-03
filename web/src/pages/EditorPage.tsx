@@ -2,7 +2,6 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useParams, useNavigate, useSearch, Link } from "@tanstack/react-router";
 import { YamlEditor } from "@/components/editor/YamlEditor";
-import { EditorToolbar } from "@/components/editor/EditorToolbar";
 import { FlowDagView } from "@/components/dag/FlowDagView";
 import { StepDefinitionPanel } from "@/components/editor/StepDefinitionPanel";
 import { FlowOverview } from "@/components/editor/FlowOverview";
@@ -46,6 +45,7 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { cn } from "@/lib/utils";
 import { ActionContextProvider } from "@/components/menus/ActionContextProvider";
 import type { FlowDefinition, ParseResult } from "@/lib/types";
+import { usePanelRegister } from "@/hooks/usePanelRegister";
 
 const EMPTY_RUNS: never[] = [];
 
@@ -532,6 +532,29 @@ export function EditorPage() {
     return null;
   }, [selectedStep, parsedFlow]);
 
+  // Register panel controls for the global nav bar
+  usePanelRegister({
+    leftPanel: isMobile || isCompact ? undefined : {
+      visible: !leftPanelCollapsed,
+      toggle: () => setLeftPanelCollapsed((c) => !c),
+    },
+    rightPanel: isMobile || isCompact ? undefined : {
+      visible: !rightPanelCollapsed,
+      toggle: () => setRightPanelCollapsed((c) => !c),
+    },
+    chat: {
+      open: chatOpen,
+      toggle: () => setChatOpen((o) => !o),
+      isStreaming: chat.isStreaming,
+      agentMode: chat.agentMode,
+    },
+    actions: {
+      onRun: parsedFlow ? handleRun : undefined,
+      isRunning: mutations.createJob.isPending,
+      parseErrors,
+    },
+  });
+
   if (!flowName) {
     navigate({ to: "/flows" });
     return null;
@@ -558,20 +581,6 @@ export function EditorPage() {
       extraMutations={{ deleteFlow: deleteFlowMutation }}
     >
     <div className="h-full flex flex-col">
-      <EditorToolbar
-        flowName={flowName}
-        onRun={parsedFlow ? handleRun : undefined}
-        isRunning={mutations.createJob.isPending}
-        parseErrors={parseErrors}
-        chatOpen={chatOpen}
-        onToggleChat={() => setChatOpen((o) => !o)}
-        isChatStreaming={chat.isStreaming}
-        agentMode={chat.agentMode}
-        leftPanelVisible={!leftPanelCollapsed}
-        onToggleLeftPanel={() => setLeftPanelCollapsed((c) => !c)}
-        rightPanelVisible={!rightPanelCollapsed}
-        onToggleRightPanel={() => setRightPanelCollapsed((c) => !c)}
-      />
       <div className="flex-1 flex min-h-0">
         {/* Left sidebar: Flow Details + Files */}
         {!isMobile && !isCompact && selectedFlow && !leftPanelCollapsed && (

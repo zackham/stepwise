@@ -1,13 +1,14 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useParams, useNavigate, useSearch, Link } from "@tanstack/react-router";
 import type { JobDetailSearch } from "@/router";
-import { useJob, useRuns, useJobTree, useJobOutput, useJobCost, useStepwiseMutations, useJobSessions } from "@/hooks/useStepwise";
+import { useJob, useRuns, useEvents, useJobTree, useJobOutput, useJobCost, useStepwiseMutations, useJobSessions } from "@/hooks/useStepwise";
 import { SessionTab } from "@/components/jobs/SessionTab";
 import { FlowDagView } from "@/components/dag/FlowDagView";
+import { TimelineView } from "@/components/jobs/TimelineView";
+import { JobTreeView } from "@/components/jobs/JobTreeView";
 import { RunView } from "@/components/jobs/RunView";
-import { StepConfigView } from "@/components/jobs/StepConfigView";
+import { StepDefinitionPanel } from "@/components/editor/StepDefinitionPanel";
 import { JobOverview } from "@/components/jobs/JobOverview";
-import { DataFlowPanel } from "@/components/dag/DataFlowPanel";
 import { JobControls } from "@/components/jobs/JobControls";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import type { DagSelection } from "@/lib/dag-layout";
@@ -17,8 +18,6 @@ import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { MobileFullScreen } from "@/components/layout/MobileFullScreen";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import {
-  PanelLeft,
-  PanelRight,
   PanelLeftClose,
   ScrollText,
   GitBranch,
@@ -35,6 +34,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn, formatDuration, formatCost } from "@/lib/utils";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { usePanelRegister } from "@/hooks/usePanelRegister";
 
 
 function extractErrorMessage(error: string): string {
@@ -119,6 +119,7 @@ export function JobDetailPage() {
   const { data: parentJob } = useJob(job?.parent_job_id ?? undefined);
   const { data: jobTree } = useJobTree(jobId);
   const { data: runs = [] } = useRuns(jobId);
+  const { data: events = [] } = useEvents(jobId);
   const { data: costData } = useJobCost(jobId);
   const { data: sessionData } = useJobSessions(jobId);
   const hasSessions = (sessionData?.sessions?.length ?? 0) > 0;
@@ -131,9 +132,37 @@ export function JobDetailPage() {
   const mutations = useStepwiseMutations();
   const { expandedSteps, toggleExpand } = useAutoExpand(jobId, runs, job, jobTree ?? null);
 
+  // Register panel controls — must be before any early returns (hooks rule)
+  const selectedStep = searchParams.step ?? null;
+  const resolvedStepForPanel = selectedStep && job
+    ? resolveStep(selectedStep, job.id, job.workflow, jobTree ?? null)
+    : null;
+  const showRightPanel = !!resolvedStepForPanel;
+
+  usePanelRegister({
+    leftPanel: isMobile ? undefined : {
+      visible: !leftPanelCollapsed,
+      toggle: () => setLeftPanelCollapsed((c) => !c),
+    },
+    rightPanel: isMobile ? undefined : {
+      visible: showRightPanel,
+      toggle: () => {
+        if (showRightPanel) {
+          setDataFlowSelection(null);
+          navigate({
+            search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined, panel: undefined }),
+            replace: true,
+          });
+        }
+      },
+      disabled: !showRightPanel,
+      label: showRightPanel ? "Hide right panel" : "Select a step to show details",
+    },
+  });
+
   const isTerminal =
     job?.status === "completed" || job?.status === "failed" || job?.status === "cancelled";
-  const { data: outputs } = useJobOutput(job?.id, isTerminal);
+  useJobOutput(job?.id, isTerminal); // prefetch for child components
   // Find the first failed step run for the error summary banner
   const failedRun = useMemo(() => {
     if (job?.status !== "failed") return null;
@@ -141,23 +170,14 @@ export function JobDetailPage() {
   }, [job?.status, runs]);
 
   // Derive state from URL search params
-  const selectedStep = searchParams.step ?? null;
   const selection: DagSelection = dataFlowSelection ?? (selectedStep ? { kind: "step", stepName: selectedStep } : null);
 
   // Derive activeTab: URL tab param > default "run" when step selected
   const activeTab: RightPanelTab = searchParams.tab ?? "run";
 
-  // Build latestRuns map for DataFlowPanel
-  const latestRuns = useMemo(() => {
-    const map: Record<string, (typeof runs)[number]> = {};
-    for (const run of runs) {
-      const existing = map[run.step_name];
-      if (!existing || run.attempt > existing.attempt) {
-        map[run.step_name] = run;
-      }
-    }
-    return map;
-  }, [runs]);
+  // Derive main view mode from URL search param
+  const viewMode = searchParams.view ?? "dag";
+
   const handleSelectStep = useCallback((stepName: string | null) => {
     setDataFlowSelection(null);
     if (stepName) {
@@ -361,96 +381,13 @@ export function JobDetailPage() {
     );
   }
 
-  const resolvedStep = selectedStep
-    ? resolveStep(selectedStep, job.id, job.workflow, jobTree ?? null)
-    : null;
+  const resolvedStep = resolvedStepForPanel;
 
   const stale = job.status === "running" && job.created_by !== "server" &&
     (!job.heartbeat_at || Date.now() - new Date(job.heartbeat_at).getTime() > 60_000);
 
-  // Determine what the right panel shows
-  const isDataFlowSelection =
-    selection?.kind === "edge-field" ||
-    selection?.kind === "flow-input" ||
-    selection?.kind === "flow-output";
-  // Right panel only shows when a step is selected or data flow is selected
-  const showRightPanel = !!resolvedStep || isDataFlowSelection;
-
   return (
     <div className="flex flex-col h-full">
-      {/* Breadcrumb with panel toggles — above sidebars */}
-      <nav
-        aria-label="Breadcrumb"
-        className="flex items-center gap-1 px-4 py-1.5 border-b border-border text-xs shrink-0"
-      >
-          {/* Breadcrumb segments */}
-          <Link
-            to="/jobs"
-            className="truncate max-w-[200px] text-zinc-400 hover:text-foreground transition-colors"
-          >
-            Jobs
-          </Link>
-          <span className="text-zinc-600 shrink-0">/</span>
-          {job.parent_job_id && (
-            <>
-              <Link
-                to="/jobs/$jobId"
-                params={{ jobId: job.parent_job_id }}
-                className="truncate max-w-[200px] text-zinc-400 hover:text-foreground transition-colors"
-              >
-                {parentJob?.name || parentJob?.objective || job.parent_job_id}
-              </Link>
-              <span className="text-zinc-600 shrink-0">/</span>
-            </>
-          )}
-          <span className="truncate max-w-[200px] text-zinc-500">
-            {job.name || job.objective || "Untitled Job"}
-          </span>
-
-          <div className="flex-1" />
-
-          {/* Panel toggle icons */}
-          {!isMobile && (
-            <>
-              <button
-                onClick={() => setLeftPanelCollapsed((c) => !c)}
-                className={cn(
-                  "p-1 rounded transition-colors",
-                  !leftPanelCollapsed
-                    ? "text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
-                    : "text-zinc-400 dark:text-zinc-600 hover:text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
-                )}
-                title={leftPanelCollapsed ? "Show left panel" : "Hide left panel"}
-              >
-                <PanelLeft className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => {
-                  if (showRightPanel) {
-                    // Close right panel by deselecting step
-                    setDataFlowSelection(null);
-                    navigate({
-                      search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined, panel: undefined }),
-                      replace: true,
-                    });
-                  }
-                  // Can't open right panel from here — it requires a step selection
-                }}
-                className={cn(
-                  "p-1 rounded transition-colors",
-                  showRightPanel
-                    ? "text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
-                    : "text-zinc-400 dark:text-zinc-600 cursor-default"
-                )}
-                title={showRightPanel ? "Hide right panel" : "Select a step to show details"}
-                disabled={!showRightPanel}
-              >
-                <PanelRight className="w-4 h-4" />
-              </button>
-            </>
-          )}
-      </nav>
-
       <div className="flex-1 flex min-h-0">
         {/* Left sidebar: Job Overview + Sessions */}
         {!isMobile && !leftPanelCollapsed && (
@@ -538,27 +475,45 @@ export function JobDetailPage() {
                 </div>
                 <div className="flex items-center gap-1">
                   <Link
-                    to="/jobs/$jobId/events"
+                    to="/jobs/$jobId"
                     params={{ jobId }}
-                    className="flex items-center justify-center min-w-[44px] min-h-[44px] text-xs text-zinc-500 hover:text-foreground rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
+                    search={{ view: viewMode === "events" ? undefined : "events" }}
+                    className={cn(
+                      "flex items-center justify-center min-w-[44px] min-h-[44px] text-xs rounded",
+                      viewMode === "events"
+                        ? "text-foreground bg-zinc-200/60 dark:bg-zinc-700/60"
+                        : "text-zinc-500 hover:text-foreground hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
+                    )}
                     aria-label="Events"
                     title="Events"
                   >
                     <ScrollText className="w-3.5 h-3.5" />
                   </Link>
                   <Link
-                    to="/jobs/$jobId/timeline"
+                    to="/jobs/$jobId"
                     params={{ jobId }}
-                    className="flex items-center justify-center min-w-[44px] min-h-[44px] text-xs text-zinc-500 hover:text-foreground rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
+                    search={{ view: viewMode === "timeline" ? undefined : "timeline" }}
+                    className={cn(
+                      "flex items-center justify-center min-w-[44px] min-h-[44px] text-xs rounded",
+                      viewMode === "timeline"
+                        ? "text-foreground bg-zinc-200/60 dark:bg-zinc-700/60"
+                        : "text-zinc-500 hover:text-foreground hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
+                    )}
                     aria-label="Timeline"
                     title="Timeline"
                   >
                     <GanttChart className="w-3.5 h-3.5" />
                   </Link>
                   <Link
-                    to="/jobs/$jobId/tree"
+                    to="/jobs/$jobId"
                     params={{ jobId }}
-                    className="flex items-center justify-center min-w-[44px] min-h-[44px] text-xs text-zinc-500 hover:text-foreground rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
+                    search={{ view: viewMode === "tree" ? undefined : "tree" }}
+                    className={cn(
+                      "flex items-center justify-center min-w-[44px] min-h-[44px] text-xs rounded",
+                      viewMode === "tree"
+                        ? "text-foreground bg-zinc-200/60 dark:bg-zinc-700/60"
+                        : "text-zinc-500 hover:text-foreground hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
+                    )}
                     aria-label="Tree"
                     title="Tree"
                   >
@@ -619,25 +574,43 @@ export function JobDetailPage() {
 
               <div className="flex items-center gap-1 shrink-0">
                 <Link
-                  to="/jobs/$jobId/events"
+                  to="/jobs/$jobId"
                   params={{ jobId }}
-                  className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
+                  search={{ view: viewMode === "events" ? undefined : "events" }}
+                  className={cn(
+                    "flex items-center gap-1 text-xs px-2 py-1 rounded",
+                    viewMode === "events"
+                      ? "text-foreground bg-zinc-200/60 dark:bg-zinc-700/60"
+                      : "text-zinc-500 hover:text-foreground hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
+                  )}
                 >
                   <ScrollText className="w-3.5 h-3.5" />
                   Events
                 </Link>
                 <Link
-                  to="/jobs/$jobId/timeline"
+                  to="/jobs/$jobId"
                   params={{ jobId }}
-                  className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
+                  search={{ view: viewMode === "timeline" ? undefined : "timeline" }}
+                  className={cn(
+                    "flex items-center gap-1 text-xs px-2 py-1 rounded",
+                    viewMode === "timeline"
+                      ? "text-foreground bg-zinc-200/60 dark:bg-zinc-700/60"
+                      : "text-zinc-500 hover:text-foreground hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
+                  )}
                 >
                   <GanttChart className="w-3.5 h-3.5" />
                   Timeline
                 </Link>
                 <Link
-                  to="/jobs/$jobId/tree"
+                  to="/jobs/$jobId"
                   params={{ jobId }}
-                  className="flex items-center gap-1 text-xs text-zinc-500 hover:text-foreground px-2 py-1 rounded hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50"
+                  search={{ view: viewMode === "tree" ? undefined : "tree" }}
+                  className={cn(
+                    "flex items-center gap-1 text-xs px-2 py-1 rounded",
+                    viewMode === "tree"
+                      ? "text-foreground bg-zinc-200/60 dark:bg-zinc-700/60"
+                      : "text-zinc-500 hover:text-foreground hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
+                  )}
                 >
                   <GitBranch className="w-3.5 h-3.5" />
                   Tree
@@ -687,8 +660,56 @@ export function JobDetailPage() {
           </div>
         )}
 
-        {/* DAG */}
+        {/* Main content view — DAG, Events, Timeline, or Tree */}
         <div className="flex-1 overflow-hidden">
+          {viewMode === "events" ? (
+            <ScrollArea className="h-full">
+              <div className="p-4 space-y-1">
+                {events.length === 0 ? (
+                  <div className="text-center text-xs text-zinc-500 py-8">No events</div>
+                ) : (
+                  events.map((event) => (
+                    <div
+                      key={event.id}
+                      className={cn(
+                        "flex items-start gap-3 px-3 py-1.5 rounded text-xs font-mono hover:bg-zinc-100/50 dark:hover:bg-zinc-800/30",
+                        event.data?.step && "cursor-pointer",
+                      )}
+                      onClick={() => {
+                        const step = event.data?.step as string | undefined;
+                        if (step) handleSelectStep(step);
+                      }}
+                    >
+                      <span className="text-zinc-500 shrink-0 tabular-nums w-20">
+                        {new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                      </span>
+                      <span className={cn(
+                        "shrink-0 w-32 truncate",
+                        event.type.includes("failed") && "text-red-400",
+                        event.type.includes("completed") && "text-emerald-400",
+                        event.type.includes("started") && "text-blue-400",
+                        event.type.includes("suspended") && "text-amber-400",
+                      )}>
+                        {event.type}
+                      </span>
+                      <span className="text-zinc-400 truncate flex-1">
+                        {event.data?.step && <span className="text-zinc-300">{event.data.step as string}</span>}
+                        {event.data?.error && <span className="text-red-400 ml-2">{event.data.error as string}</span>}
+                        {event.data?.rule && <span className="ml-2">{event.data.rule as string} → {event.data.action as string}</span>}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </ScrollArea>
+          ) : viewMode === "timeline" ? (
+            <TimelineView job={job} runs={runs} onSelectStep={handleSelectStep} />
+          ) : viewMode === "tree" ? (
+            <JobTreeView
+              jobId={job.id}
+              onNavigateToJob={(id) => navigate({ to: "/jobs/$jobId", params: { jobId: id } })}
+            />
+          ) : (
           <FlowDagView
             workflow={job.workflow}
             runs={runs}
@@ -722,7 +743,9 @@ export function JobDetailPage() {
               isCancelPending: mutations.cancelJob.isPending,
               isRetryPending: mutations.resumeJob.isPending,
             }}
+            jobInputs={job.inputs ?? null}
           />
+          )}
         </div>
       </div>
 
@@ -732,34 +755,6 @@ export function JobDetailPage() {
           setDataFlowSelection(null);
           navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined, panel: undefined }), replace: true });
         };
-
-        // DataFlow selection takes priority (shown as overlay panel)
-        if (isDataFlowSelection && selection) {
-          const dfPanel = (
-            <div className="flex flex-col flex-1 min-h-0">
-              <DataFlowPanel
-                selection={selection}
-                job={job}
-                latestRuns={latestRuns}
-                outputs={outputs ? outputs as Record<string, unknown> : null}
-                onClose={() => { setDataFlowSelection(null); }}
-              />
-            </div>
-          );
-
-          if (isMobile) {
-            return (
-              <MobileFullScreen open={true} onClose={() => setDataFlowSelection(null)} title="Data Flow">
-                {dfPanel}
-              </MobileFullScreen>
-            );
-          }
-          return (
-            <ResizablePanel storageKey="stepwise-job-right-panel-width">
-              {dfPanel}
-            </ResizablePanel>
-          );
-        }
 
         // Step selected: show Run/Step/Session tabs
         if (resolvedStep) {
@@ -807,6 +802,7 @@ export function JobDetailPage() {
                     stepDef={resolvedStep.stepDef}
                     hasLiveSource={!!job?.flow_source_path}
                     onSelectStep={handleSelectStep}
+                    onSwitchTab={(tab) => navigate({ search: (prev: JobDetailSearch) => ({ ...prev, tab: tab as RightPanelTab }), replace: true })}
                   />
                 </div>
               </TabsContent>
@@ -819,7 +815,11 @@ export function JobDetailPage() {
                 )}
               >
                 <div key={selectedStep} className="animate-step-fade">
-                  <StepConfigView stepDef={resolvedStep.stepDef} />
+                  <StepDefinitionPanel
+                    stepDef={resolvedStep.stepDef}
+                    onClose={() => handleSelectStep(null)}
+                    onSelectStep={handleSelectStep}
+                  />
                 </div>
               </TabsContent>
 

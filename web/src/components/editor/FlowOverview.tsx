@@ -314,9 +314,9 @@ export function FlowOverview({
           </Button>
         ) : (
           <>
-            <Button onClick={onRun} size="sm" className="flex-1">
-              <Play className="w-3.5 h-3.5 mr-1.5" />
-              Run
+            <Button onClick={onRun} size="default" className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-medium shadow-sm">
+              <Play className="w-4 h-4 mr-1.5" />
+              Run Flow
             </Button>
             {onDelete && (
               <Button

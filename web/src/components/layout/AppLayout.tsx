@@ -17,9 +17,15 @@ import {
   Moon,
   Bell,
   ChevronDown,
+  PanelLeft,
+  PanelRight,
+  MessageSquare,
+  Play,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CommandPalette } from "@/components/CommandPalette";
+import { PanelProvider, usePanelControls } from "@/contexts/PanelContext";
+import type { AgentMode } from "@/hooks/useEditorChat";
 import {
   Dialog,
   DialogContent,
@@ -214,7 +220,7 @@ function NotificationEventItem({
       onClick={onClick}
       className={cn(
         "flex w-full items-start gap-2.5 rounded-md px-3 py-2 text-left transition-colors hover:bg-accent",
-        isNew && "bg-blue-500/5",
+        isNew && "bg-blue-500/10 dark:bg-blue-500/15",
       )}
     >
       <span
@@ -234,6 +240,99 @@ function NotificationEventItem({
   );
 }
 
+const AGENT_LABELS: Record<AgentMode, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  simple: "AI",
+};
+
+function PanelToggleButtons() {
+  const { controls } = usePanelControls();
+  const { leftPanel, rightPanel, chat, actions } = controls;
+
+  // Nothing to render if no page has registered controls
+  if (!leftPanel && !rightPanel && !chat && !actions) return null;
+
+  return (
+    <div className="flex items-center gap-0.5">
+      {actions?.onRun && (
+        <button
+          onClick={actions.onRun}
+          disabled={actions.isRunning || (actions.parseErrors?.length ?? 0) > 0}
+          className="flex items-center gap-1 rounded-md px-2 py-1.5 text-xs font-medium text-emerald-600 transition-colors hover:bg-zinc-200/50 disabled:opacity-40 disabled:cursor-default dark:text-emerald-400 dark:hover:bg-zinc-800/50"
+          title="Run flow"
+        >
+          <Play className="h-3 w-3" />
+          <span className="hidden md:inline">{actions.isRunning ? "Starting..." : "Run"}</span>
+        </button>
+      )}
+      {actions?.parseErrors && actions.parseErrors.length > 0 && (
+        <span
+          className="hidden max-w-[200px] truncate text-xs text-red-400 md:inline"
+          title={actions.parseErrors.join("\n")}
+        >
+          {actions.parseErrors[0]}
+        </span>
+      )}
+      {leftPanel && (
+        <button
+          onClick={leftPanel.toggle}
+          className={cn(
+            "flex items-center justify-center rounded-md p-1.5 transition-colors",
+            leftPanel.visible
+              ? "text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
+              : "text-zinc-400 dark:text-zinc-600 hover:text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
+          )}
+          title={leftPanel.label ?? (leftPanel.visible ? "Hide left panel" : "Show left panel")}
+        >
+          <PanelLeft className="h-4 w-4" />
+        </button>
+      )}
+      {rightPanel && (
+        <button
+          onClick={rightPanel.toggle}
+          className={cn(
+            "flex items-center justify-center rounded-md p-1.5 transition-colors",
+            rightPanel.disabled
+              ? "text-zinc-400 dark:text-zinc-600 cursor-default"
+              : rightPanel.visible
+                ? "text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
+                : "text-zinc-400 dark:text-zinc-600 hover:text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
+          )}
+          title={rightPanel.label ?? (rightPanel.visible ? "Hide right panel" : "Show right panel")}
+          disabled={rightPanel.disabled}
+        >
+          <PanelRight className="h-4 w-4" />
+        </button>
+      )}
+      {chat && (
+        <button
+          onClick={chat.toggle}
+          className={cn(
+            "relative flex items-center gap-1 rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
+            chat.open
+              ? "text-violet-600 dark:text-violet-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
+              : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
+          )}
+          title={chat.open ? "Close chat" : "Open chat"}
+        >
+          <MessageSquare className="h-3.5 w-3.5" />
+          {chat.agentMode && AGENT_LABELS[chat.agentMode]}
+          {chat.backgrounded && !chat.isStreaming && (
+            <span className="h-1.5 w-1.5 rounded-full bg-violet-500 ml-0.5" />
+          )}
+          {chat.isStreaming && (
+            <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-violet-400 opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-violet-500" />
+            </span>
+          )}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function AppLayout() {
   const { wsState } = useStepwiseWebSocket();
   const { enabled: notificationsEnabled, toggle: toggleNotifications } = useNotifySuspended();
@@ -246,11 +345,30 @@ export function AppLayout() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [changelogOpen, setChangelogOpen] = useState(false);
-  const [seenEventIds, setSeenEventIds] = useState<Set<string>>(new Set());
+  // Persist last-seen timestamp to localStorage so badge count survives page reloads
+  const [lastSeenAt, setLastSeenAt] = useState<number>(() => {
+    try {
+      const stored = localStorage.getItem("stepwise:notifications:lastSeenAt");
+      return stored ? Number(stored) : Date.now();
+    } catch {
+      return Date.now();
+    }
+  });
+
+  const markAllSeen = useCallback(() => {
+    const now = Date.now();
+    setLastSeenAt(now);
+    try { localStorage.setItem("stepwise:notifications:lastSeenAt", String(now)); } catch {}
+  }, []);
+
+  const isEventNew = useCallback(
+    (event: RecentEvent) => new Date(event.timestamp).getTime() > lastSeenAt,
+    [lastSeenAt],
+  );
 
   const unreadCount = useMemo(
-    () => recentEvents.filter((e) => !seenEventIds.has(e.id)).length,
-    [recentEvents, seenEventIds],
+    () => recentEvents.filter(isEventNew).length,
+    [recentEvents, isEventNew],
   );
 
   useEffect(() => {
@@ -367,6 +485,7 @@ export function AppLayout() {
 
   return (
     <WsStatusProvider value={wsState}>
+      <PanelProvider>
       <div className="flex h-screen flex-col bg-background text-foreground">
         {/* Top nav */}
         <header className="flex h-12 shrink-0 items-center gap-6 border-b border-border bg-white/80 px-4 dark:bg-zinc-950/80">
@@ -457,6 +576,9 @@ export function AppLayout() {
 
           <div className="flex-1" />
 
+          {/* Page-level panel controls (conditionally shown) */}
+          <PanelToggleButtons />
+
           {/* WebSocket status indicator */}
           <div className="flex items-center gap-2" title={websocketTitle}>
             <span
@@ -477,7 +599,7 @@ export function AppLayout() {
           {/* Notification dropdown */}
           <DropdownMenu
             onOpenChange={(open) => {
-              if (open) setSeenEventIds(new Set(recentEvents.map((e) => e.id)));
+              if (!open) markAllSeen();
             }}
           >
             <DropdownMenuTrigger
@@ -525,7 +647,7 @@ export function AppLayout() {
                       <NotificationEventItem
                         key={event.id}
                         event={event}
-                        isNew={!seenEventIds.has(event.id)}
+                        isNew={isEventNew(event)}
                         onClick={() => {
                           navigate({ to: "/jobs/$jobId", params: { jobId: event.jobId } });
                         }}
@@ -581,6 +703,7 @@ export function AppLayout() {
         <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
         <ChangelogModal open={changelogOpen} onOpenChange={setChangelogOpen} currentVersion={status?.version} />
       </div>
+    </PanelProvider>
     </WsStatusProvider>
   );
 }

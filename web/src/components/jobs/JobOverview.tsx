@@ -1,13 +1,14 @@
 import { useJobOutput, useJobCost } from "@/hooks/useStepwise";
 import { useConfig } from "@/hooks/useConfig";
 import { JsonView } from "@/components/JsonView";
+import { ContentModal } from "@/components/ui/content-modal";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 import type { Job } from "@/lib/types";
 import { cn, formatDuration, formatCost } from "@/lib/utils";
 import { Link } from "@tanstack/react-router";
 import { Package, Terminal, Monitor, DollarSign } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 interface JobOverviewProps {
   job: Job;
@@ -59,6 +60,7 @@ export function JobOverview({ job }: JobOverviewProps) {
   const { data: outputs, isLoading: outputsLoading } = useJobOutput(job.id, isTerminal);
   const { data: costData } = useJobCost(job.id);
   const { data: configData } = useConfig();
+  const [outputsModalOpen, setOutputsModalOpen] = useState(false);
 
   const normalizedOutputs = useMemo(
     () => (outputs ? normalizeOutputValue(outputs) as Record<string, unknown> : null),
@@ -205,9 +207,25 @@ export function JobOverview({ job }: JobOverviewProps) {
           {outputsLoading ? (
             <div className="text-zinc-500 text-xs py-2">Loading outputs...</div>
           ) : hasOutputs ? (
-            <div className="max-h-40 overflow-y-auto bg-zinc-50/50 dark:bg-zinc-900/50 rounded border border-zinc-200 dark:border-zinc-800 p-2">
-              <JsonView data={normalizedOutputs} defaultExpanded={false} />
-            </div>
+            <>
+              <div
+                onClick={() => setOutputsModalOpen(true)}
+                className="max-h-40 overflow-y-auto bg-zinc-50/50 dark:bg-zinc-900/50 rounded border border-zinc-200 dark:border-zinc-800 p-2 cursor-pointer hover:border-zinc-400 dark:hover:border-zinc-600 transition-colors"
+                title="Click to view all outputs"
+              >
+                <JsonView data={normalizedOutputs} defaultExpanded={false} />
+              </div>
+              <ContentModal
+                open={outputsModalOpen}
+                onOpenChange={setOutputsModalOpen}
+                title="Job Outputs"
+                copyContent={JSON.stringify(normalizedOutputs, null, 2)}
+              >
+                <pre className="whitespace-pre-wrap text-sm text-zinc-300 font-mono p-3 leading-relaxed">
+                  {JSON.stringify(normalizedOutputs, null, 2)}
+                </pre>
+              </ContentModal>
+            </>
           ) : (
             <div className="text-zinc-600 text-xs py-2">No outputs</div>
           )}

@@ -54,6 +54,7 @@ interface StepNodeProps {
   isCritical?: boolean;
   isNested?: boolean;
   jobId?: string;
+  zoomScale?: number;
   x: number;
   y: number;
   width: number;
@@ -183,12 +184,14 @@ function PortDot({
   tooltipContent,
   popoverContent,
   modalTitle,
+  zoomScale = 1,
 }: {
   position: "top" | "bottom";
   colorClasses: string;
   tooltipContent: ReactNode | null;
   popoverContent: ReactNode | null;
   modalTitle?: string;
+  zoomScale?: number;
 }) {
   const [hovered, setHovered] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
@@ -230,16 +233,21 @@ function PortDot({
       onMouseLeave={hasInteraction ? handleLeave : undefined}
       onClick={hasInteraction ? handleClick : undefined}
     >
-      {/* Hover tooltip */}
+      {/* Hover tooltip — counter-scaled to stay at screen size */}
       {hovered && tooltipContent && !modalOpen && (
         <div
           className={cn(
-            "absolute left-1/2 -translate-x-1/2 z-[60] pointer-events-none",
-            "bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-zinc-800 dark:text-zinc-200 rounded-md shadow-xl p-2 max-w-[300px]",
+            "absolute left-1/2 z-[60] pointer-events-none",
             isTop ? "bottom-full mb-1.5" : "top-full mt-1.5"
           )}
+          style={{
+            transform: `translateX(-50%) scale(${1 / zoomScale})`,
+            transformOrigin: isTop ? "bottom center" : "top center",
+          }}
         >
-          {tooltipContent}
+          <div className="bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md shadow-xl p-2 max-w-[280px]">
+            {tooltipContent}
+          </div>
         </div>
       )}
 
@@ -299,7 +307,7 @@ function useInputPortContent(
         {hasRealized ? " — realized" : ""}
       </div>
       {bindingLines.slice(0, 3).map((line, i) => (
-        <div key={i} className="text-[11px] font-mono text-zinc-800 dark:text-zinc-200 truncate max-w-[280px]">{line}</div>
+        <div key={i} className="text-[11px] font-mono text-zinc-800 dark:text-zinc-200 whitespace-pre-wrap break-words max-w-[280px]">{line}</div>
       ))}
       {bindingLines.length > 3 && (
         <div className="text-[10px] text-zinc-500">+{bindingLines.length - 3} more</div>
@@ -360,7 +368,7 @@ function useOutputPortContent(
         {hasRealized ? " — realized" : ""}
       </div>
       {outputs.slice(0, 3).map((name) => (
-        <div key={name} className="text-[11px] font-mono text-zinc-800 dark:text-zinc-200 truncate max-w-[280px]">
+        <div key={name} className="text-[11px] font-mono text-zinc-800 dark:text-zinc-200 whitespace-pre-wrap break-words max-w-[280px]">
           {name}
           {realizedOutputs[name] !== undefined
             ? ` = ${formatPortValue(realizedOutputs[name], 40)}`
@@ -527,6 +535,7 @@ export function StepNode({
   isCritical,
   isNested,
   jobId,
+  zoomScale = 1,
   x,
   y,
   width,
@@ -654,6 +663,7 @@ export function StepNode({
         tooltipContent={inputPort.tooltipContent}
         popoverContent={inputPort.popoverContent}
         modalTitle={`${stepDef.name} — Inputs`}
+        zoomScale={zoomScale}
       />
 
       {/* Content */}
@@ -751,6 +761,7 @@ export function StepNode({
         tooltipContent={outputPort.tooltipContent}
         popoverContent={outputPort.popoverContent}
         modalTitle={`${stepDef.name} — Outputs`}
+        zoomScale={zoomScale}
       />
 
       {/* Hover action buttons */}
