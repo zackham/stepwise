@@ -93,12 +93,8 @@ function executorSubtitle(stepDef: StepDefinition): string {
       return model ? `LLM: ${model}` : "LLM";
     }
     case "agent": {
-      const mode = typeof config.output_mode === "string" ? config.output_mode : undefined;
-      const model = typeof config.model === "string" ? config.model : undefined;
-      const parts = ["Agent"];
-      if (model) parts.push(model);
-      if (mode && mode !== "effect") parts.push(`(${mode})`);
-      return parts.join(" ");
+      const agent = typeof config.agent === "string" ? config.agent : undefined;
+      return agent ? `Agent · ${agent}` : "Agent";
     }
     default:
       return type;
@@ -591,9 +587,10 @@ export function StepNode({
   const showAttemptBadge = attempt > 1 || (maxAttempts != null && attempt >= 1);
 
   const hasSession =
+    !!stepDef.session ||
     stepDef.executor?.config?.continue_session === true ||
     stepDef.inputs?.some((i) => i.source_field === "_session_id");
-  const sessionName = (latestRun?.executor_state as Record<string, unknown> | undefined)?.session_name as string | undefined;
+  const sessionName = stepDef.session ?? (latestRun?.executor_state as Record<string, unknown> | undefined)?.session_name as string | undefined;
 
   const hasTooltipContent =
     stepDef.exit_rules.length > 0 ||
@@ -711,7 +708,7 @@ export function StepNode({
       <div className={cn("text-[10px] text-zinc-500 truncate font-mono leading-tight", !stepDef.description && "mt-1")}>
         {onToggleExpand ? (
           <button
-            className="flex items-center gap-1 text-purple-400 hover:text-purple-300 transition-colors"
+            className="flex items-center gap-1 text-purple-400 hover:text-purple-300 transition-colors cursor-pointer"
             onClick={(e) => {
               e.stopPropagation();
               onToggleExpand();
@@ -723,7 +720,7 @@ export function StepNode({
           </button>
         ) : subJobId && onNavigateSubJob ? (
           <button
-            className="flex items-center gap-1 text-purple-400 hover:text-purple-300 transition-colors"
+            className="flex items-center gap-1 text-purple-400 hover:text-purple-300 transition-colors cursor-pointer"
             onClick={(e) => {
               e.stopPropagation();
               onNavigateSubJob(subJobId);
@@ -749,6 +746,11 @@ export function StepNode({
             <CirclePause className="w-2.5 h-2.5" />
             Awaiting fulfillment
           </span>
+        ) : stepDef.session ? (
+          <div className="flex flex-col">
+            <span className="text-violet-400/80">({stepDef.session})</span>
+            {stepDef.fork_from && <span className="text-violet-400/50 text-[9px]">forked from {stepDef.fork_from}</span>}
+          </div>
         ) : (
           executorSubtitle(stepDef)
         )}
@@ -772,7 +774,7 @@ export function StepNode({
         >
           {canRerun && onRerunStep && (
             <button
-              className="flex items-center gap-1 text-[10px] text-blue-400 hover:bg-blue-500/15 rounded px-1.5 py-0.5 transition-colors"
+              className="flex items-center gap-1 text-[10px] text-blue-400 hover:bg-blue-500/15 rounded px-1.5 py-0.5 transition-colors cursor-pointer"
               onClick={(e) => {
                 e.stopPropagation();
                 onRerunStep(stepDef.name);
@@ -785,7 +787,7 @@ export function StepNode({
           )}
           {canCancelRun && onCancelRun && latestRun && (
             <button
-              className="flex items-center gap-1 text-[10px] text-red-400 hover:bg-red-500/15 rounded px-1.5 py-0.5 transition-colors"
+              className="flex items-center gap-1 text-[10px] text-red-400 hover:bg-red-500/15 rounded px-1.5 py-0.5 transition-colors cursor-pointer"
               onClick={(e) => {
                 e.stopPropagation();
                 onCancelRun(latestRun.id);

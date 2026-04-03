@@ -36,7 +36,7 @@ interface RunViewProps {
   stepDef: StepDefinition;
   hasLiveSource?: boolean;
   onSelectStep?: (stepName: string) => void;
-  onSwitchTab?: (tab: string) => void;
+  onSwitchTab?: (tab: string, runId?: string) => void;
 }
 
 /* ── Helpers ───────────────────────────────────────────────────────── */
@@ -629,7 +629,7 @@ function ExecutorMetaLink({ meta }: { meta: Record<string, unknown> }) {
     <>
       <button
         onClick={() => setModalOpen(true)}
-        className="text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors"
+        className="text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer"
       >
         Executor meta &rarr;
       </button>
@@ -658,7 +658,7 @@ function WorkspaceInline({ workspace }: { workspace: string }) {
       <span className="text-[10px] text-zinc-600">Workspace:</span>
       <button
         onClick={() => copy(workspace)}
-        className="text-[10px] font-mono text-zinc-500 hover:text-zinc-300 transition-colors truncate"
+        className="text-[10px] font-mono text-zinc-500 hover:text-zinc-300 transition-colors truncate cursor-pointer"
         title="Click to copy full path"
       >
         {displayPath}
@@ -689,7 +689,7 @@ function CollapsibleSection({ title, children }: { title: string; children: Reac
   const [open, setOpen] = useState(false);
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors w-full">
+      <CollapsibleTrigger className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors w-full cursor-pointer">
         <ChevronRight
           className={cn("w-2.5 h-2.5 transition-transform", open && "rotate-90")}
         />
@@ -763,7 +763,7 @@ function ScriptLogView({ run }: { run: StepRun }) {
             toast.success("Copied to clipboard");
             setTimeout(() => setCopied(false), 2000);
           }}
-          className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+          className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 cursor-pointer"
         >
           {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
           {copied ? "Copied" : "Copy"}
@@ -807,7 +807,7 @@ function LiveScriptLogView({ runId }: { runId: string }) {
         </div>
         <button
           onClick={() => { navigator.clipboard.writeText(stdout); toast.success("Copied to clipboard"); }}
-          className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors"
+          className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors cursor-pointer"
         >
           <Copy className="w-3 h-3" /> Copy
         </button>
@@ -859,7 +859,7 @@ function AgentRawView({ runId }: { runId: string }) {
             toast.success("Copied to clipboard");
             setTimeout(() => setCopied(false), 2000);
           }}
-          className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+          className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 cursor-pointer"
         >
           {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
           {copied ? "Copied" : "Copy All"}
@@ -932,7 +932,7 @@ function RunNavigator({
         <button
           onClick={() => canPrev && onSelect(currentIndex + 1)}
           disabled={!canPrev}
-          className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-default"
+          className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-default cursor-pointer"
           aria-label="Previous attempt"
         >
           <ChevronLeft className="w-3.5 h-3.5" />
@@ -943,7 +943,7 @@ function RunNavigator({
         <button
           onClick={() => canNext && onSelect(currentIndex - 1)}
           disabled={!canNext}
-          className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-default"
+          className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-default cursor-pointer"
           aria-label="Next attempt"
         >
           <ChevronRight className="w-3.5 h-3.5" />
@@ -1010,6 +1010,7 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onSwitchT
   const isAgent = stepDef.executor.type === "agent";
   const isExternal = stepDef.executor.type === "external";
   const isScript = stepDef.executor.type === "script";
+  const isPoll = stepDef.executor.type === "poll";
 
   const sortedRuns = useMemo(
     () => [...runs].sort((a, b) => b.attempt - a.attempt),
@@ -1129,7 +1130,7 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onSwitchT
               : null
           }
           onSelectStep={onSelectStep}
-          onViewSessions={() => onSwitchTab?.("session")}
+          onViewSessions={() => onSwitchTab?.("session", run?.id)}
           containerRef={containerRef}
           onNeedsScroll={setScrollEnabled}
         />
@@ -1187,6 +1188,100 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onSwitchT
           </div>
         </div>
       )}
+
+      {/* Suspended poll — trigger now button + status */}
+      {run && isSuspended && isPoll && (() => {
+        const watchState = (run.executor_state as Record<string, unknown> | undefined)?._watch as {
+          last_checked_at?: string;
+          check_count?: number;
+          last_error?: string | null;
+          next_check_at?: string;
+        } | undefined;
+        const watchConfig = run.watch?.config as {
+          check_command?: string;
+          interval_seconds?: number;
+          prompt?: string;
+        } | undefined;
+
+        const formatRelativeTime = (iso: string | undefined, direction: "past" | "future"): string => {
+          if (!iso) return "-";
+          const diff = (new Date(iso).getTime() - Date.now()) / 1000;
+          const absDiff = Math.abs(diff);
+          if (absDiff < 60) return direction === "past" ? "just now" : "in <1m";
+          const mins = Math.round(absDiff / 60);
+          if (mins < 60) return direction === "past" ? `${mins}m ago` : `in ${mins}m`;
+          const hrs = Math.round(mins / 60);
+          return direction === "past" ? `${hrs}h ago` : `in ${hrs}h`;
+        };
+
+        const formatInterval = (seconds: number | undefined): string => {
+          if (!seconds) return "-";
+          if (seconds < 60) return `${seconds}s`;
+          if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+          return `${(seconds / 3600).toFixed(1)}h`;
+        };
+
+        return (
+          <>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-amber-500">Polling...</span>
+              <button
+                onClick={() => mutations.triggerPollNow.mutate(run.id)}
+                disabled={mutations.triggerPollNow.isPending}
+                className="text-xs px-2 py-1 rounded bg-zinc-800 border border-zinc-700 text-zinc-300 hover:text-white hover:bg-zinc-700 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {mutations.triggerPollNow.isPending ? "Triggering..." : "Poll Now"}
+              </button>
+            </div>
+
+            {(watchState || watchConfig) && (
+              <div className="space-y-1.5">
+                <SectionHeading>Poll Status</SectionHeading>
+                <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
+                  {watchConfig?.check_command && (
+                    <>
+                      <span className="text-zinc-500">Command</span>
+                      <span className="text-zinc-300 font-mono truncate" title={watchConfig.check_command}>{watchConfig.check_command}</span>
+                    </>
+                  )}
+                  {watchConfig?.interval_seconds != null && (
+                    <>
+                      <span className="text-zinc-500">Interval</span>
+                      <span className="text-zinc-300">{formatInterval(watchConfig.interval_seconds)}</span>
+                    </>
+                  )}
+                  {watchState?.check_count != null && (
+                    <>
+                      <span className="text-zinc-500">Checks</span>
+                      <span className="text-zinc-300">{watchState.check_count}</span>
+                    </>
+                  )}
+                  {watchState?.last_checked_at && (
+                    <>
+                      <span className="text-zinc-500">Last check</span>
+                      <span className="text-zinc-300">{formatRelativeTime(watchState.last_checked_at, "past")}</span>
+                    </>
+                  )}
+                  {watchState?.next_check_at && (
+                    <>
+                      <span className="text-zinc-500">Next check</span>
+                      <span className="text-zinc-300">{formatRelativeTime(watchState.next_check_at, "future")}</span>
+                    </>
+                  )}
+                  {watchState?.last_error != null && (
+                    <>
+                      <span className="text-zinc-500">Last error</span>
+                      <span className={watchState.last_error ? "text-red-400" : "text-zinc-500 italic"}>
+                        {watchState.last_error || "(none)"}
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
+        );
+      })()}
 
       {/* Agent output is now shown inline in AdaptiveRunContent above */}
 

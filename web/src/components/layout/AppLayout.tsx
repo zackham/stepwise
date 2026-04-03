@@ -77,7 +77,7 @@ function ErrorFallback({ error, resetErrorBoundary }: FallbackProps) {
         </pre>
         <button
           onClick={resetErrorBoundary}
-          className="rounded-md bg-zinc-200 px-4 py-2 text-sm font-medium text-zinc-800 transition-colors hover:bg-zinc-300 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+          className="rounded-md bg-zinc-200 px-4 py-2 text-sm font-medium text-zinc-800 transition-colors hover:bg-zinc-300 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700 cursor-pointer"
         >
           Reload
         </button>
@@ -219,7 +219,7 @@ function NotificationEventItem({
     <button
       onClick={onClick}
       className={cn(
-        "flex w-full items-start gap-2.5 rounded-md px-3 py-2 text-left transition-colors hover:bg-accent",
+        "flex w-full items-start gap-2.5 rounded-md px-3 py-2 text-left transition-colors hover:bg-accent cursor-pointer",
         isNew && "bg-blue-500/10 dark:bg-blue-500/15",
       )}
     >
@@ -259,7 +259,7 @@ function PanelToggleButtons() {
         <button
           onClick={actions.onRun}
           disabled={actions.isRunning || (actions.parseErrors?.length ?? 0) > 0}
-          className="flex items-center gap-1 rounded-md px-2 py-1.5 text-xs font-medium text-emerald-600 transition-colors hover:bg-zinc-200/50 disabled:opacity-40 disabled:cursor-default dark:text-emerald-400 dark:hover:bg-zinc-800/50"
+          className="flex items-center gap-1 rounded-md px-2 py-1.5 text-xs font-medium text-emerald-600 transition-colors hover:bg-zinc-200/50 disabled:opacity-40 disabled:cursor-default dark:text-emerald-400 dark:hover:bg-zinc-800/50 cursor-pointer"
           title="Run flow"
         >
           <Play className="h-3 w-3" />
@@ -278,7 +278,7 @@ function PanelToggleButtons() {
         <button
           onClick={leftPanel.toggle}
           className={cn(
-            "flex items-center justify-center rounded-md p-1.5 transition-colors",
+            "flex items-center justify-center rounded-md p-1.5 transition-colors cursor-pointer",
             leftPanel.visible
               ? "text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
               : "text-zinc-400 dark:text-zinc-600 hover:text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
@@ -292,9 +292,9 @@ function PanelToggleButtons() {
         <button
           onClick={rightPanel.toggle}
           className={cn(
-            "flex items-center justify-center rounded-md p-1.5 transition-colors",
+            "flex items-center justify-center rounded-md p-1.5 transition-colors cursor-pointer",
             rightPanel.disabled
-              ? "text-zinc-400 dark:text-zinc-600 cursor-default"
+              ? "text-zinc-400 dark:text-zinc-600 !cursor-default"
               : rightPanel.visible
                 ? "text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
                 : "text-zinc-400 dark:text-zinc-600 hover:text-foreground hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
@@ -309,7 +309,7 @@ function PanelToggleButtons() {
         <button
           onClick={chat.toggle}
           className={cn(
-            "relative flex items-center gap-1 rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
+            "relative flex items-center gap-1 rounded-md px-2 py-1.5 text-xs font-medium transition-colors cursor-pointer",
             chat.open
               ? "text-violet-600 dark:text-violet-400 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
               : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50"
@@ -627,7 +627,7 @@ export function AppLayout() {
                     e.stopPropagation();
                     toggleNotifications();
                   }}
-                  className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+                  className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:text-foreground cursor-pointer"
                 >
                   <span className={cn(notificationsEnabled ? "text-foreground" : "text-muted-foreground/50")}>On</span>
                   <span className="text-muted-foreground/30">/</span>
@@ -662,7 +662,7 @@ export function AppLayout() {
           {/* Theme toggle */}
           <button
             onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-zinc-200/50 hover:text-foreground md:min-h-0 md:min-w-0 dark:hover:bg-zinc-800/50"
+            className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-zinc-200/50 hover:text-foreground md:min-h-0 md:min-w-0 dark:hover:bg-zinc-800/50 cursor-pointer"
             title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
           >
             {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
@@ -680,7 +680,7 @@ export function AppLayout() {
               {status.version && (
                 <button
                   onClick={() => setChangelogOpen(true)}
-                  className="hidden rounded px-1.5 py-0.5 font-mono text-zinc-600 transition-colors hover:bg-zinc-200/60 hover:text-zinc-800 md:inline dark:hover:bg-zinc-800/60 dark:hover:text-zinc-300"
+                  className="hidden rounded px-1.5 py-0.5 font-mono text-zinc-600 transition-colors hover:bg-zinc-200/60 hover:text-zinc-800 md:inline dark:hover:bg-zinc-800/60 dark:hover:text-zinc-300 cursor-pointer"
                   title="View changelog"
                 >
                   v{status.version}

@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import { useSessionTranscript } from "@/hooks/useStepwise";
 import { useSessionStream } from "@/hooks/useSessionStream";
-import { SegmentRow } from "./StreamSegments";
+import { SegmentRow, SegmentList } from "./StreamSegments";
 import type { StreamSegment } from "@/hooks/useAgentStream";
 import type { SessionBoundary } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, ArrowDown, ArrowUp } from "lucide-react";
 import { StepStatusBadge } from "@/components/StatusBadge";
 import type { StepRunStatus } from "@/lib/types";
+import { useAutoScroll } from "@/hooks/useAutoScroll";
 
 interface SessionTranscriptViewProps {
   jobId: string;
@@ -23,7 +24,7 @@ interface SessionTranscriptViewProps {
 }
 
 /** Compute a duration string between two ISO timestamps */
-function durationBetween(start: string | null, end: string | null): string {
+export function durationBetween(start: string | null, end: string | null): string {
   if (!start) return "";
   const startMs = new Date(start).getTime();
   const endMs = end ? new Date(end).getTime() : Date.now();
@@ -54,8 +55,8 @@ function CollapsibleBoundaryHeader({
   return (
     <div
       className={cn(
-        "flex items-center gap-2 py-1.5 px-3 my-0.5 cursor-pointer select-none group",
-        "hover:bg-zinc-800/50 rounded-md transition-colors",
+        "flex items-center gap-2 py-2 px-3 cursor-pointer select-none group",
+        "hover:bg-zinc-100 dark:hover:bg-zinc-800/30 rounded-md transition-colors",
         isHighlighted && "ring-1 ring-violet-500/30 rounded-md bg-violet-500/5"
       )}
       data-step-boundary={boundary.step_name}
@@ -73,7 +74,7 @@ function CollapsibleBoundaryHeader({
           if (onSelect) onSelect();
           else onNavigate();
         }}
-        className="text-[11px] font-medium text-blue-400 hover:text-blue-300 transition-colors truncate"
+        className="text-[11px] font-medium text-blue-400 hover:text-blue-300 transition-colors truncate cursor-pointer"
       >
         {boundary.step_name}
       </button>
@@ -85,8 +86,13 @@ function CollapsibleBoundaryHeader({
       {boundary.status && (
         <StepStatusBadge status={boundary.status as StepRunStatus} />
       )}
+
+      {/* Spacer */}
+      <span className="flex-1" />
+
+      {/* Right side: duration */}
       {duration && (
-        <span className="text-[10px] text-zinc-600 ml-auto shrink-0">{duration}</span>
+        <span className="text-[10px] text-zinc-500 shrink-0">{duration}</span>
       )}
     </div>
   );
@@ -112,7 +118,7 @@ function StepBoundaryMarker({
       <div className="flex-1 h-px bg-border" />
       <button
         onClick={onClick}
-        className="text-[10px] font-medium text-zinc-500 hover:text-zinc-300 bg-zinc-800 border border-border rounded-full px-2.5 py-0.5 transition-colors"
+        className="text-[10px] font-medium text-zinc-500 hover:text-zinc-300 bg-zinc-800 border border-border rounded-full px-2.5 py-0.5 transition-colors cursor-pointer"
       >
         {boundary.step_name}
         {boundary.attempt > 1 && (
@@ -128,7 +134,7 @@ function StepBoundaryMarker({
  * Build a map of boundary index -> segment range [startSegIdx, endSegIdx).
  * Also returns the mapping of segment index -> boundary for rendering.
  */
-function buildBoundarySegmentMap(
+export function buildBoundarySegmentMap(
   boundaries: SessionBoundary[],
   segments: StreamSegment[],
 ) {
@@ -190,55 +196,61 @@ export function SessionTranscriptView({
 
   const { segments, boundaries } = state;
 
-  // Compute initial expanded set
-  const initialExpandedRef = useRef<Set<number> | null>(null);
-  if (initialExpandedRef.current === null) {
+  // Build expanded set from boundaries
+  function buildExpandedSet(bs: typeof boundaries): Set<number> {
     if (focusStep) {
-      // Only expand boundaries matching focusStep
-      const set = new Set<number>();
-      boundaries.forEach((b, i) => {
-        if (b.step_name === focusStep) set.add(i);
-      });
-      initialExpandedRef.current = set;
-    } else if (defaultExpanded) {
-      initialExpandedRef.current = new Set(boundaries.map((_, i) => i));
-    } else {
-      initialExpandedRef.current = new Set<number>();
+      return new Set(bs.map((b, i) => b.step_name === focusStep ? i : -1).filter(i => i >= 0));
     }
+    if (defaultExpanded) {
+      return new Set(bs.map((_, i) => i));
+    }
+    return new Set<number>();
   }
 
   const [expandedBoundaries, setExpandedBoundaries] = useState<Set<number>>(
-    () => initialExpandedRef.current!
+    () => buildExpandedSet(boundaries)
   );
+
+  // Reset when session changes (navigating back and re-entering)
+  const prevSessionRef = useRef(sessionName);
+  useEffect(() => {
+    if (prevSessionRef.current !== sessionName) {
+      prevSessionRef.current = sessionName;
+      setExpandedBoundaries(buildExpandedSet(boundaries));
+    }
+  }, [sessionName, boundaries]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // When focusStep changes, update expanded set
   useEffect(() => {
     if (focusStep) {
-      const set = new Set<number>();
-      boundaries.forEach((b, i) => {
-        if (b.step_name === focusStep) set.add(i);
-      });
-      setExpandedBoundaries(set);
+      setExpandedBoundaries(
+        new Set(boundaries.map((b, i) => b.step_name === focusStep ? i : -1).filter(i => i >= 0))
+      );
     }
   }, [focusStep, boundaries]);
 
-  // When boundaries grow (new step starts during live session), auto-expand new ones
+  // When boundaries load or grow, expand appropriately
   const prevBoundaryCountRef = useRef(boundaries.length);
   useEffect(() => {
-    if (boundaries.length > prevBoundaryCountRef.current) {
-      setExpandedBoundaries((prev) => {
-        const next = new Set(prev);
-        for (let i = prevBoundaryCountRef.current; i < boundaries.length; i++) {
-          // Auto-expand if defaultExpanded or if matches focusStep
-          if (defaultExpanded || (focusStep && boundaries[i].step_name === focusStep)) {
-            next.add(i);
+    if (boundaries.length !== prevBoundaryCountRef.current) {
+      if (prevBoundaryCountRef.current === 0 && boundaries.length > 0) {
+        // Initial load — expand all per config
+        setExpandedBoundaries(buildExpandedSet(boundaries));
+      } else if (boundaries.length > prevBoundaryCountRef.current) {
+        // New boundaries added (live session) — expand new ones
+        setExpandedBoundaries((prev) => {
+          const next = new Set(prev);
+          for (let i = prevBoundaryCountRef.current; i < boundaries.length; i++) {
+            if (defaultExpanded || (focusStep && boundaries[i].step_name === focusStep)) {
+              next.add(i);
+            }
           }
-        }
-        return next;
-      });
+          return next;
+        });
+      }
+      prevBoundaryCountRef.current = boundaries.length;
     }
-    prevBoundaryCountRef.current = boundaries.length;
-  }, [boundaries.length, defaultExpanded, focusStep, boundaries]);
+  }, [boundaries.length, defaultExpanded, focusStep, boundaries]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-scroll to highlighted step boundary
   useEffect(() => {
@@ -278,10 +290,41 @@ export function SessionTranscriptView({
     });
   };
 
+  const { showBackToBottom, showJumpToTop, scrollToBottom, scrollToTop } = useAutoScroll(containerRef, version, isLive);
+
+  const fabOverlay = (
+    <>
+      {showJumpToTop && (
+        <div className="absolute top-2 left-0 right-0 z-10 flex justify-center pointer-events-none">
+          <button
+            onClick={scrollToTop}
+            className="pointer-events-auto flex items-center gap-1 px-3 py-1 rounded-full bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 text-xs text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-50 dark:hover:bg-zinc-700 shadow-lg transition-colors cursor-pointer"
+          >
+            <ArrowUp className="w-3 h-3" />
+            Jump to top
+          </button>
+        </div>
+      )}
+      {showBackToBottom && (
+        <div className="absolute bottom-2 left-0 right-0 z-10 flex justify-center pointer-events-none">
+          <button
+            onClick={scrollToBottom}
+            className="pointer-events-auto flex items-center gap-1 px-3 py-1 rounded-full bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 text-xs text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-50 dark:hover:bg-zinc-700 shadow-lg transition-colors cursor-pointer"
+          >
+            <ArrowDown className="w-3 h-3" />
+            Jump to bottom
+          </button>
+        </div>
+      )}
+    </>
+  );
+
   // Non-collapsible rendering (original behavior)
   if (!collapsibleBoundaries) {
     return (
-      <div ref={containerRef} className="p-4 space-y-0">
+      <div className="flex-1 relative flex flex-col min-h-0 overflow-hidden">
+      {fabOverlay}
+      <div ref={containerRef} className="p-4 space-y-0 flex-1 overflow-y-auto">
         {segments.length === 0 && boundaries.length === 0 && (
           <p className="text-sm text-zinc-500 text-center py-8">
             No output yet
@@ -316,12 +359,15 @@ export function SessionTranscriptView({
             />
           ))}
       </div>
+      </div>
     );
   }
 
   // Collapsible rendering
   return (
-    <div ref={containerRef} className="p-2 space-y-0">
+    <div className="flex-1 relative flex flex-col min-h-0 overflow-hidden">
+    {fabOverlay}
+    <div ref={containerRef} className="p-2 space-y-0 flex-1 overflow-y-auto">
       {segments.length === 0 && boundaries.length === 0 && (
         <p className="text-sm text-zinc-500 text-center py-8">
           No output yet
@@ -345,9 +391,7 @@ export function SessionTranscriptView({
             />
             {isExpanded && (
               <div className="pl-4 pr-1">
-                {segments.slice(startSeg, endSeg).map((seg, i) => (
-                  <SegmentRow key={startSeg + i} segment={seg} />
-                ))}
+                <SegmentList segments={segments.slice(startSeg, endSeg)} />
                 {startSeg === endSeg && (
                   <p className="text-[10px] text-zinc-600 py-1 px-3">No output yet</p>
                 )}
@@ -370,6 +414,7 @@ export function SessionTranscriptView({
       {boundaries.length === 0 && segments.map((seg, i) => (
         <SegmentRow key={i} segment={seg} />
       ))}
+    </div>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useJobSessions } from "@/hooks/useStepwise";
 import { SessionTranscriptView } from "./SessionTranscriptView";
 import { cn } from "@/lib/utils";
@@ -11,6 +11,8 @@ interface SessionTabProps {
   onNavigateToStep: (stepName: string) => void;
   /** When true, uses collapsible boundaries + focusStep for right-panel usage */
   focusStep?: string;
+  /** Pre-select a session by name (opens directly into transcript view) */
+  initialSession?: string | null;
 }
 
 /** Format an ISO timestamp as a relative time string */
@@ -24,6 +26,25 @@ function relativeTime(iso: string | null): string {
   return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
+/** Format a duration in milliseconds to a compact string */
+function formatDurationMs(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  if (ms < 3_600_000) return `${(ms / 60_000).toFixed(1)}m`;
+  return `${(ms / 3_600_000).toFixed(1)}h`;
+}
+
+/** Extract a human-readable session name.
+ *  Named sessions (from session: field) are already clean.
+ *  Auto-generated pattern: "step-{8char_hash}-{step_name}-{attempt}" → extract step name. */
+function formatSessionName(name: string, _stepNames: string[]): string {
+  const autoMatch = name.match(/^step-[a-f0-9]{8}-(.+?)(?:-\d+)?$/);
+  if (autoMatch) {
+    return autoMatch[1];
+  }
+  return name;
+}
+
 function SessionCard({
   session,
   onClick,
@@ -31,18 +52,27 @@ function SessionCard({
   session: SessionInfo;
   onClick: () => void;
 }) {
+  const displayName = formatSessionName(session.session_name, session.step_names);
+
+  // Calculate duration
+  const startMs = session.started_at ? new Date(session.started_at).getTime() : null;
+  const endMs = session.latest_at ? new Date(session.latest_at).getTime() : null;
+  const durationMs = startMs && endMs ? endMs - startMs : null;
+  const startedAgo = session.started_at ? relativeTime(session.started_at) : null;
+  const duration = durationMs !== null && durationMs > 0 ? formatDurationMs(durationMs) : null;
+
   return (
     <button
       onClick={onClick}
       className={cn(
-        "w-full text-left px-3 py-2.5 rounded-md transition-colors",
+        "w-full text-left px-3 py-2.5 rounded-md transition-colors cursor-pointer",
         "hover:bg-zinc-100 dark:hover:bg-zinc-800/60",
         "border border-transparent hover:border-zinc-200 dark:hover:border-zinc-700/50"
       )}
     >
       <div className="flex items-center gap-2">
         <span className="text-sm font-medium text-foreground truncate">
-          {session.session_name}
+          {displayName}
         </span>
         {session.is_active && (
           <span className="relative flex h-2 w-2 shrink-0">
@@ -55,16 +85,22 @@ function SessionCard({
         <span>{session.step_names.length} step{session.step_names.length !== 1 ? "s" : ""}</span>
         <span className="text-zinc-600">·</span>
         <span>{session.run_ids.length} run{session.run_ids.length !== 1 ? "s" : ""}</span>
-        {session.started_at && (
+        {startedAgo && (
           <>
             <span className="text-zinc-600">·</span>
-            <span>{relativeTime(session.started_at)}</span>
-            {session.latest_at && session.latest_at !== session.started_at && (
+            <span>{startedAgo}</span>
+            {duration && (
               <>
-                <span className="text-zinc-700">→</span>
-                <span>{relativeTime(session.latest_at)}</span>
+                <span className="text-zinc-600">·</span>
+                <span>{duration}</span>
               </>
             )}
+          </>
+        )}
+        {session.total_tokens > 0 && (
+          <>
+            <span className="text-zinc-600">·</span>
+            <span>{session.total_tokens >= 1000 ? `${(session.total_tokens / 1000).toFixed(1)}k` : session.total_tokens} tokens</span>
           </>
         )}
       </div>
@@ -72,10 +108,15 @@ function SessionCard({
   );
 }
 
-export function SessionTab({ jobId, highlightStep, onNavigateToStep, focusStep }: SessionTabProps) {
+export function SessionTab({ jobId, highlightStep, onNavigateToStep, focusStep, initialSession }: SessionTabProps) {
   const { data: sessionData, isLoading } = useJobSessions(jobId);
   const sessions = sessionData?.sessions ?? [];
-  const [selectedSession, setSelectedSession] = useState<string | null>(null);
+  const [selectedSession, setSelectedSession] = useState<string | null>(initialSession ?? null);
+
+  // React to external initialSession changes (e.g., "View full session" from right panel)
+  useEffect(() => {
+    if (initialSession) setSelectedSession(initialSession);
+  }, [initialSession]);
 
   if (isLoading) {
     return (
@@ -121,13 +162,13 @@ export function SessionTab({ jobId, highlightStep, onNavigateToStep, focusStep }
         <div className="flex items-center gap-2 px-3 py-2 border-b border-border shrink-0">
           <button
             onClick={() => setSelectedSession(null)}
-            className="flex items-center gap-1 text-xs text-zinc-400 hover:text-foreground transition-colors"
+            className="flex items-center gap-1 text-xs text-zinc-400 hover:text-foreground transition-colors cursor-pointer"
           >
             <ArrowLeft className="w-3 h-3" />
             Sessions
           </button>
           <span className="text-xs font-medium text-foreground truncate">
-            {activeSessionInfo.session_name}
+            {formatSessionName(activeSessionInfo.session_name, activeSessionInfo.step_names)}
           </span>
           {activeSessionInfo.is_active && (
             <span className="relative flex h-2 w-2 shrink-0">
@@ -139,6 +180,7 @@ export function SessionTab({ jobId, highlightStep, onNavigateToStep, focusStep }
         {/* Transcript */}
         <div className="flex-1 min-h-0 overflow-y-auto">
           <SessionTranscriptView
+            key={activeSessionInfo.session_name}
             jobId={jobId}
             sessionName={activeSessionInfo.session_name}
             runIds={activeSessionInfo.run_ids}
@@ -147,7 +189,6 @@ export function SessionTab({ jobId, highlightStep, onNavigateToStep, focusStep }
             onNavigateToStep={onNavigateToStep}
             collapsibleBoundaries={true}
             defaultExpanded={true}
-            focusStep={focusStep}
             onSelectStep={onNavigateToStep}
           />
         </div>

@@ -278,6 +278,16 @@ def _parse_ndjson_events(raw: str) -> list[dict]:
             continue
         try:
             data = json.loads(line)
+
+            # Parse user prompts (session/prompt method, different structure)
+            if data.get("method") == "session/prompt":
+                prompt_parts = data.get("params", {}).get("prompt", [])
+                text_parts = [p.get("text", "") for p in prompt_parts
+                              if isinstance(p, dict) and p.get("type") == "text"]
+                if text_parts:
+                    events.append({"t": "prompt", "text": "\n".join(text_parts)})
+                continue
+
             update = data.get("params", {}).get("update", {})
             su = update.get("sessionUpdate")
 
@@ -292,17 +302,20 @@ def _parse_ndjson_events(raw: str) -> list[dict]:
                     "title": update.get("title", ""),
                     "kind": update.get("kind", ""),
                 })
-            elif su == "tool_call_update" and update.get("status") in ("completed", "failed"):
-                ev: dict = {
-                    "t": "tool_end",
-                    "id": update.get("toolCallId", ""),
-                }
+            elif su == "tool_call_update":
+                status = update.get("status")
                 title = update.get("title", "")
-                if title:
-                    ev["output"] = title
-                if update.get("status") == "failed":
-                    ev["error"] = True
-                events.append(ev)
+                tool_id = update.get("toolCallId", "")
+                if status in ("completed", "failed"):
+                    ev: dict = {"t": "tool_end", "id": tool_id}
+                    if title:
+                        ev["output"] = title
+                    if status == "failed":
+                        ev["error"] = True
+                    events.append(ev)
+                elif title and tool_id:
+                    # Intermediate update with real title (e.g., file path)
+                    events.append({"t": "tool_title", "id": tool_id, "title": title})
             elif su == "usage_update":
                 events.append({
                     "t": "usage",
@@ -1769,6 +1782,27 @@ def rerun_step(job_id: str, step_name: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.post("/api/runs/{run_id}/poll-now")
+def trigger_poll_now(run_id: str):
+    """Reset next_check_at so the engine's next poll cycle picks up this step immediately."""
+    from datetime import timezone
+    engine = _get_engine()
+    run = engine.store.load_run(run_id)
+    if run.status != StepRunStatus.SUSPENDED:
+        raise HTTPException(status_code=400, detail="Run is not suspended")
+    if not run.watch or run.watch.mode != "poll":
+        raise HTTPException(status_code=400, detail="Run is not a poll step")
+    # Reset next_check_at to trigger immediate poll
+    es = run.executor_state or {}
+    watch_state = es.get("_watch", {})
+    watch_state["next_check_at"] = datetime.now(timezone.utc).isoformat()
+    es["_watch"] = watch_state
+    run.executor_state = es
+    engine.store.save_run(run)
+    _notify_change(run.job_id)
+    return {"status": "triggered", "run_id": run_id}
+
+
 @app.post("/api/runs/{run_id}/fulfill")
 def fulfill_watch(run_id: str, req: FulfillWatchRequest):
     engine = _get_engine()
@@ -2023,6 +2057,7 @@ def get_job_sessions(job_id: str):
                 "is_active": False,
                 "started_at": None,
                 "latest_at": None,
+                "total_tokens": 0,
             }
         s = sessions[sname]
         s["run_ids"].append(run.id)
@@ -2030,6 +2065,26 @@ def get_job_sessions(job_id: str):
             s["step_names"].append(run.step_name)
         if run.status == StepRunStatus.RUNNING:
             s["is_active"] = True
+        # Extract token usage from the output NDJSON's last usage_update
+        output_path = (run.executor_state or {}).get("output_path")
+        if output_path:
+            try:
+                with open(output_path) as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            data = json.loads(line)
+                            update = data.get("params", {}).get("update", {})
+                            if update.get("sessionUpdate") == "usage_update":
+                                used = update.get("used", 0)
+                                if used:
+                                    s["total_tokens"] = max(s.get("total_tokens", 0), used)
+                        except (json.JSONDecodeError, KeyError):
+                            pass
+            except (FileNotFoundError, OSError):
+                pass
         ts = run.started_at.isoformat() if run.started_at else None
         if ts and (not s["started_at"] or ts < s["started_at"]):
             s["started_at"] = ts
@@ -2059,6 +2114,7 @@ def get_session_transcript(job_id: str, session_name: str):
 
     all_events: list[dict] = []
     boundaries: list[dict] = []
+    prev_session_tokens = 0
     for run in session_runs:
         boundaries.append({
             "event_index": len(all_events),
@@ -2067,12 +2123,27 @@ def get_session_transcript(job_id: str, session_name: str):
             "run_id": run.id,
             "started_at": run.started_at.isoformat() if run.started_at else None,
             "status": run.status.value,
+            "tokens_used": 0,
         })
         output_path = (run.executor_state or {}).get("output_path")
         if output_path:
             try:
                 with open(output_path) as f:
                     raw = f.read()
+                # Extract per-run token count (cumulative in usage events, compute delta)
+                run_max_tokens = 0
+                for ndjson_line in raw.strip().split("\n"):
+                    if not ndjson_line.strip():
+                        continue
+                    try:
+                        d = json.loads(ndjson_line)
+                        upd = d.get("params", {}).get("update", {})
+                        if upd.get("sessionUpdate") == "usage_update":
+                            run_max_tokens = max(run_max_tokens, upd.get("used", 0))
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+                boundaries[-1]["tokens_used"] = max(0, run_max_tokens - prev_session_tokens)
+                prev_session_tokens = run_max_tokens
                 all_events.extend(_parse_ndjson_events(raw))
             except FileNotFoundError:
                 pass

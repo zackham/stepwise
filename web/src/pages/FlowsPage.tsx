@@ -22,6 +22,7 @@ import {
   LayoutGrid,
   List,
   Loader2,
+  Minus,
   Plus,
   Search,
   Trash2,
@@ -659,30 +660,30 @@ export function FlowsPage() {
                   </div>
                 ) : (
                   <div className="flex-1 overflow-y-auto">
-                    {/* Selection bar */}
-                    {isSelectionActive && (
-                      <div className="sticky top-0 z-10 flex items-center gap-3 px-4 sm:px-6 py-2 bg-blue-50/90 dark:bg-blue-950/60 border-b border-blue-200 dark:border-blue-900 backdrop-blur-sm">
-                        <span className="text-xs font-medium text-blue-700 dark:text-blue-300">
-                          {selectedIds.size} selected
-                        </span>
-                        <button
-                          onClick={handleSelectAll}
-                          className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
-                        >
-                          Select all
-                        </button>
-                        <button
-                          onClick={handleClearSelection}
-                          className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
-                        >
-                          Clear
-                        </button>
-                      </div>
-                    )}
                     <div className="divide-y divide-border">
                       {/* Header row */}
                       <div className="hidden sm:flex items-center px-4 sm:px-6 py-2 gap-3 text-[10px] uppercase tracking-wider text-zinc-500 font-medium select-none">
-                        {isSelectionActive && <span className="w-5 shrink-0" />}
+                        <button
+                          onClick={() => {
+                            if (selectedIds.size === filtered.length && filtered.length > 0) {
+                              handleClearSelection();
+                            } else {
+                              handleSelectAll();
+                            }
+                          }}
+                          className={cn(
+                            "w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-all duration-150",
+                            selectedIds.size > 0
+                              ? "bg-blue-500 border-blue-500 text-white"
+                              : "border-zinc-400 dark:border-zinc-600 hover:border-blue-400 opacity-40 hover:opacity-100",
+                          )}
+                        >
+                          {selectedIds.size > 0 && selectedIds.size === filtered.length
+                            ? <Check className="w-2.5 h-2.5" />
+                            : selectedIds.size > 0
+                              ? <Minus className="w-2.5 h-2.5" />
+                              : null}
+                        </button>
                         <SortHeader col="name" label="Name" current={sortCol} asc={sortAsc} onSort={handleSort} className="flex-1" />
                         <SortHeader col="steps" label="Steps" current={sortCol} asc={sortAsc} onSort={handleSort} className="w-12 text-right" />
                         <SortHeader col="jobs" label="Jobs" current={sortCol} asc={sortAsc} onSort={handleSort} className="w-14 text-right" />
@@ -698,31 +699,31 @@ export function FlowsPage() {
                           <EntityContextMenu key={flow.path} type="flow" data={flow}>
                             <div
                               onClick={(e) => {
+                                if ((e.target as HTMLElement).closest("[data-flow-checkbox]")) return;
                                 if ((e.target as HTMLElement).closest("[data-flow-link]")) return;
-                                handleToggleSelect(flow.path, e.shiftKey);
+                                handleSelectLocalFlow(flow);
                               }}
                               className={cn(
-                                "w-full text-left px-4 sm:px-6 py-3 flex items-center gap-3 transition-colors hover:bg-zinc-50/80 dark:hover:bg-zinc-800/40 group cursor-default",
+                                "w-full text-left px-4 sm:px-6 py-3 flex items-center gap-3 transition-none hover:bg-zinc-50/80 dark:hover:bg-zinc-800/40 group cursor-pointer",
                                 selected && "bg-blue-50/50 dark:bg-blue-950/20",
                               )}
                             >
-                              {/* Checkbox — only visible when selection active */}
-                              {isSelectionActive && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleToggleSelect(flow.path, e.shiftKey);
-                                  }}
-                                  className={cn(
-                                    "w-5 h-5 rounded border flex items-center justify-center shrink-0 transition-all duration-150",
-                                    selected
-                                      ? "bg-blue-500 border-blue-500 text-white"
-                                      : "border-zinc-400 dark:border-zinc-600 bg-white/90 dark:bg-zinc-800/90 hover:border-blue-400",
-                                  )}
-                                >
-                                  {selected && <Check className="w-3 h-3" />}
-                                </button>
-                              )}
+                              {/* Checkbox — subtle, visible on hover or when selected */}
+                              <button
+                                data-flow-checkbox
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleToggleSelect(flow.path, e.shiftKey);
+                                }}
+                                className={cn(
+                                  "w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-all duration-150",
+                                  selected
+                                    ? "bg-blue-500 border-blue-500 text-white opacity-100"
+                                    : "border-zinc-400 dark:border-zinc-600 bg-white/90 dark:bg-zinc-800/90 hover:border-blue-400 opacity-0 group-hover:opacity-40 hover:!opacity-100",
+                                )}
+                              >
+                                {selected && <Check className="w-2.5 h-2.5" />}
+                              </button>
 
                               {/* Name + details */}
                               <div className="flex-1 min-w-0">

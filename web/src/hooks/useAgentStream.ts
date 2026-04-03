@@ -14,6 +14,7 @@ export interface ToolCallState {
 
 export type StreamSegment =
   | { type: "text"; text: string }
+  | { type: "prompt"; text: string }
   | { type: "tool"; tool: ToolCallState };
 
 export interface AgentStreamState {
@@ -40,6 +41,13 @@ export function buildSegmentsFromEvents(events: AgentStreamEvent[]): AgentStream
         type: "tool",
         tool: { id: ev.id, title: ev.title, kind: ev.kind, status: "running" },
       });
+    } else if (ev.t === "tool_title") {
+      for (const seg of segments) {
+        if (seg.type === "tool" && seg.tool.id === ev.id) {
+          seg.tool.title = ev.title;
+          break;
+        }
+      }
     } else if (ev.t === "tool_end") {
       for (const seg of segments) {
         if (seg.type === "tool" && seg.tool.id === ev.id) {
@@ -48,6 +56,8 @@ export function buildSegmentsFromEvents(events: AgentStreamEvent[]): AgentStream
           break;
         }
       }
+    } else if (ev.t === "prompt") {
+      segments.push({ type: "prompt", text: ev.text });
     } else if (ev.t === "usage") {
       usage = { used: ev.used, size: ev.size };
     }

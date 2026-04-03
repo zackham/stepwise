@@ -178,6 +178,12 @@ export function fetchRunCost(
   return request(`/runs/${runId}/cost`);
 }
 
+export function triggerPollNow(
+  runId: string
+): Promise<{ status: string; run_id: string }> {
+  return request(`/runs/${runId}/poll-now`, { method: "POST" });
+}
+
 export function cancelRun(
   runId: string
 ): Promise<{ status: string; run_id: string }> {

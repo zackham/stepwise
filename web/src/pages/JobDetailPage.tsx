@@ -3,6 +3,7 @@ import { useParams, useNavigate, useSearch, Link } from "@tanstack/react-router"
 import type { JobDetailSearch } from "@/router";
 import { useJob, useRuns, useEvents, useJobTree, useJobOutput, useJobCost, useStepwiseMutations, useJobSessions } from "@/hooks/useStepwise";
 import { SessionTab } from "@/components/jobs/SessionTab";
+import { StepSessionView } from "@/components/jobs/StepSessionView";
 import { FlowDagView } from "@/components/dag/FlowDagView";
 import { TimelineView } from "@/components/jobs/TimelineView";
 import { JobTreeView } from "@/components/jobs/JobTreeView";
@@ -129,6 +130,8 @@ export function JobDetailPage() {
   const [expandedStep, setExpandedStep] = useState(false);
   const [autoOpenedPanel, setAutoOpenedPanel] = useState(false);
   const [leftTab, setLeftTab] = useState<LeftPanelTab>("overview");
+  const [leftSessionFocus, setLeftSessionFocus] = useState<string | null>(null);
+  const [focusRunId, setFocusRunId] = useState<string | undefined>();
   const mutations = useStepwiseMutations();
   const { expandedSteps, toggleExpand } = useAutoExpand(jobId, runs, job, jobTree ?? null);
 
@@ -174,6 +177,11 @@ export function JobDetailPage() {
 
   // Derive activeTab: URL tab param > default "run" when step selected
   const activeTab: RightPanelTab = searchParams.tab ?? "run";
+
+  // Clear focusRunId when leaving the session tab
+  useEffect(() => {
+    if (activeTab !== "session") setFocusRunId(undefined);
+  }, [activeTab]);
 
   // Derive main view mode from URL search param
   const viewMode = searchParams.view ?? "dag";
@@ -420,6 +428,7 @@ export function JobDetailPage() {
                   <SessionTab
                     jobId={jobId}
                     highlightStep={selectedStep}
+                    initialSession={leftSessionFocus}
                     onNavigateToStep={(stepName) =>
                       navigate({
                         search: (prev: JobDetailSearch) => ({
@@ -465,7 +474,7 @@ export function JobDetailPage() {
                       {formatDuration(job.created_at, job.updated_at)}
                     </span>
                   )}
-                  {costData && (costData.cost_usd > 0 || costData.billing_mode === "subscription") && (
+                  {costData && costData.cost_usd > 0 && (
                     <span className="text-[10px] text-zinc-500 dark:text-zinc-600">
                       {costData.billing_mode === "subscription"
                         ? "$0 (Max)"
@@ -542,7 +551,7 @@ export function JobDetailPage() {
                       {formatDuration(job.created_at, job.updated_at)}
                     </span>
                   )}
-                  {costData && (costData.cost_usd > 0 || costData.billing_mode === "subscription") && (
+                  {costData && costData.cost_usd > 0 && (
                     <span
                       className="text-[10px] text-zinc-600"
                       title={costData.billing_mode === "subscription"
@@ -639,7 +648,7 @@ export function JobDetailPage() {
             </div>
             <button
               type="button"
-              className="text-amber-600 dark:text-amber-400 hover:text-amber-500 dark:hover:text-amber-300 text-xs font-medium whitespace-nowrap shrink-0"
+              className="text-amber-600 dark:text-amber-400 hover:text-amber-500 dark:hover:text-amber-300 text-xs font-medium whitespace-nowrap shrink-0 cursor-pointer"
               onClick={() =>
                 mutations.rerunStep.mutate({
                   jobId: job.id,
@@ -652,7 +661,7 @@ export function JobDetailPage() {
             </button>
             <button
               type="button"
-              className="text-red-400 hover:text-red-300 underline underline-offset-2 whitespace-nowrap shrink-0"
+              className="text-red-400 hover:text-red-300 underline underline-offset-2 whitespace-nowrap shrink-0 cursor-pointer"
               onClick={() => handleSelectStep(failedRun.step_name)}
             >
               View Details
@@ -782,7 +791,7 @@ export function JobDetailPage() {
                 </TabsList>
                 <button
                   onClick={deselectStep}
-                  className="text-zinc-500 dark:text-zinc-600 hover:text-zinc-700 dark:hover:text-zinc-300 p-0.5 mr-2"
+                  className="text-zinc-500 dark:text-zinc-600 hover:text-zinc-700 dark:hover:text-zinc-300 p-0.5 mr-2 cursor-pointer"
                   title="Close step details"
                 >
                   <X className="w-3.5 h-3.5" />
@@ -802,7 +811,10 @@ export function JobDetailPage() {
                     stepDef={resolvedStep.stepDef}
                     hasLiveSource={!!job?.flow_source_path}
                     onSelectStep={handleSelectStep}
-                    onSwitchTab={(tab) => navigate({ search: (prev: JobDetailSearch) => ({ ...prev, tab: tab as RightPanelTab }), replace: true })}
+                    onSwitchTab={(tab, runId) => {
+                      navigate({ search: (prev: JobDetailSearch) => ({ ...prev, tab: tab as RightPanelTab }), replace: true });
+                      if (runId) setFocusRunId(runId);
+                    }}
                   />
                 </div>
               </TabsContent>
@@ -827,26 +839,44 @@ export function JobDetailPage() {
                 <TabsContent
                   value="session"
                   className={cn(
-                    "flex-1 min-h-0 overflow-y-auto",
+                    "flex-1 min-h-0 flex flex-col",
                     activeTab !== "session" && "hidden"
                   )}
                 >
-                  <SessionTab
-                    jobId={jobId}
-                    highlightStep={selectedStep}
-                    focusStep={resolvedStep.stepDef.name}
-                    onNavigateToStep={(stepName) =>
-                      navigate({
-                        search: (prev: JobDetailSearch) => ({
-                          ...prev,
-                          step: stepName,
-                          tab: "run" as const,
-                          panel: "open" as const,
-                        }),
-                        replace: true,
-                      })
+                  {(() => {
+                    const stepSession = sessionData?.sessions?.find(s =>
+                      s.step_names.includes(resolvedStep.stepDef.name)
+                    );
+                    if (stepSession) {
+                      return (
+                        <StepSessionView
+                          jobId={jobId}
+                          sessionName={stepSession.session_name}
+                          sessionInfo={stepSession}
+                          stepName={resolvedStep.stepDef.name}
+                          focusRunId={focusRunId}
+                          onNavigateToStep={(stepName, tab) =>
+                            navigate({
+                              search: (prev: JobDetailSearch) => ({
+                                ...prev,
+                                step: stepName,
+                                tab: (tab ?? "run") as RightPanelTab,
+                                panel: "open" as const,
+                              }),
+                              replace: true,
+                            })
+                          }
+                          onViewFullSession={() => {
+                            setLeftSessionFocus(stepSession.session_name);
+                            setLeftTab("session");
+                          }}
+                        />
+                      );
                     }
-                  />
+                    return (
+                      <div className="p-4 text-xs text-zinc-500 text-center">No session for this step</div>
+                    );
+                  })()}
                 </TabsContent>
               )}
             </Tabs>

@@ -7,13 +7,14 @@ import {
   Pencil,
   Terminal,
   Cog,
-  Check,
   Loader2,
   ChevronRight,
   X,
 } from "lucide-react";
 import { highlightMatches, countMatches } from "@/lib/log-search";
 import { cn } from "@/lib/utils";
+import { ContentModal } from "@/components/ui/content-modal";
+import { Markdown } from "@/components/ui/markdown";
 
 export function toolIcon(kind: string) {
   switch (kind) {
@@ -36,68 +37,117 @@ export function toolIcon(kind: string) {
   }
 }
 
+function extractFilePath(title: string | undefined, kind: string): string {
+  return title?.replace(/^(Read|Write|Edit|Glob|Grep|Bash)\s+/i, "").replace(/\s+\(.*\)$/, "") || title || kind;
+}
+
 export function ToolCard({ tool }: { tool: ToolCallState }) {
   const [expanded, setExpanded] = useState(false);
   const isRunning = tool.status === "running";
   const isFailed = tool.status === "failed";
+  const isCompleted = tool.status === "completed";
   const hasOutput = !!tool.output;
   const canExpand = hasOutput && !isRunning;
+  const filePath = extractFilePath(tool.title, tool.kind);
 
   return (
-    <div
-      className={cn(
-        "rounded my-1 text-xs font-mono",
-        isRunning
-          ? "bg-zinc-100 dark:bg-zinc-900 border border-blue-500/30"
-          : isFailed
-            ? "bg-zinc-100/50 dark:bg-zinc-900/50 border border-red-500/30"
-            : "bg-zinc-100/50 dark:bg-zinc-900/50 border border-zinc-300/30 dark:border-zinc-700/30",
-      )}
-    >
+    <div className="my-0.5">
       <button
         type="button"
         onClick={() => canExpand && setExpanded((v) => !v)}
         className={cn(
-          "flex items-center gap-1.5 w-full px-2 py-1 text-left",
-          canExpand && "cursor-pointer hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50",
+          "text-xs py-0.5 text-left w-full [overflow-wrap:anywhere]",
+          canExpand && "cursor-pointer hover:text-zinc-200",
           !canExpand && "cursor-default",
+          isRunning ? "text-blue-400" : isFailed ? "text-red-400" : "text-zinc-500",
         )}
       >
-        {canExpand && (
-          <ChevronRight
-            className={cn(
-              "w-3 h-3 text-zinc-500 transition-transform shrink-0",
-              expanded && "rotate-90",
-            )}
-          />
-        )}
-        <span className={isRunning ? "text-blue-600 dark:text-blue-400" : isFailed ? "text-red-600 dark:text-red-400" : "text-zinc-500"}>
-          {toolIcon(tool.kind)}
-        </span>
         <span className={cn(
-          "truncate",
-          isRunning ? "text-blue-700 dark:text-blue-300" : isFailed ? "text-red-700 dark:text-red-300" : "text-zinc-500",
-        )}>
-          {tool.title || tool.kind}
+          "inline-block w-1.5 h-1.5 rounded-full align-middle mr-1.5",
+          isRunning ? "bg-blue-400 animate-pulse" : isFailed ? "bg-red-400" : "bg-emerald-500",
+        )} />
+        <span className={cn("", isRunning ? "text-blue-400" : isFailed ? "text-red-400" : "text-zinc-600")}>
+          {tool.kind}
         </span>
-        <span className="ml-auto shrink-0">
-          {isRunning ? (
-            <Loader2 className="w-3 h-3 text-blue-400 animate-spin" />
-          ) : isFailed ? (
-            <X className="w-3 h-3 text-red-400" />
-          ) : (
-            <Check className="w-3 h-3 text-emerald-400" />
-          )}
+        {" "}
+        <span className={cn("", isCompleted && "text-zinc-500")}>
+          {filePath}
         </span>
+        {isRunning && <Loader2 className="w-2.5 h-2.5 animate-spin inline ml-1 align-middle" />}
+        {isFailed && <X className="w-2.5 h-2.5 inline ml-1 align-middle" />}
       </button>
       {expanded && hasOutput && (
-        <div className="px-2 pb-1.5 pt-0.5 border-t border-zinc-300/30 dark:border-zinc-700/30">
-          <pre className="text-[11px] text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
+        <div className="ml-4 mt-0.5 mb-1">
+          <pre className="text-[11px] text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap break-words max-h-40 overflow-y-auto font-mono">
             {tool.output}
           </pre>
         </div>
       )}
     </div>
+  );
+}
+
+/** Collapsed group of contiguous tool calls */
+function ToolGroup({ tools }: { tools: ToolCallState[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const failed = tools.filter((t) => t.status === "failed").length;
+  const kinds = new Map<string, number>();
+  for (const t of tools) {
+    const k = t.kind || "tool";
+    kinds.set(k, (kinds.get(k) || 0) + 1);
+  }
+  const summary = Array.from(kinds.entries())
+    .map(([k, n]) => `${n} ${k}${n > 1 ? "s" : ""}`)
+    .join(", ");
+
+  return (
+    <div className="my-1">
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 cursor-pointer py-0.5 transition-colors"
+      >
+        <ChevronRight className={cn("w-3 h-3 transition-transform shrink-0", expanded && "rotate-90")} />
+        <span className="text-zinc-600">{summary}</span>
+        {failed > 0 && <span className="text-red-400 text-[10px]">({failed} failed)</span>}
+      </button>
+      {expanded && (
+        <div className="ml-1">
+          {tools.map((tool, i) => (
+            <ToolCard key={tool.id || i} tool={tool} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function PromptSegmentRow({ text }: { text: string }) {
+  const [modalOpen, setModalOpen] = useState(false);
+
+  return (
+    <>
+      <div
+        className="relative mt-4 mb-3 cursor-pointer hover:opacity-80 transition-opacity border-l-2 border-blue-500/30 pl-3"
+        onClick={() => setModalOpen(true)}
+      >
+        <div className="max-h-[7.5rem] overflow-hidden relative">
+          <pre className="whitespace-pre-wrap text-xs text-blue-800/60 dark:text-blue-300/50 leading-relaxed">
+            {text}
+          </pre>
+          <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-white dark:from-zinc-950 to-transparent pointer-events-none" />
+        </div>
+      </div>
+      <ContentModal
+        open={modalOpen}
+        onOpenChange={setModalOpen}
+        title="Prompt"
+        copyContent={text}
+      >
+        <pre className="whitespace-pre-wrap text-sm text-zinc-300 font-mono p-3 leading-relaxed max-h-[70vh] overflow-auto">
+          {text}
+        </pre>
+      </ContentModal>
+    </>
   );
 }
 
@@ -110,18 +160,83 @@ export function SegmentRow({
   searchRegex?: RegExp | null;
   hasActiveSearch?: boolean;
 }) {
+  if (segment.type === "prompt") {
+    return <PromptSegmentRow text={segment.text} />;
+  }
   if (segment.type === "text") {
     const matches = searchRegex ? countMatches(segment.text, searchRegex) > 0 : true;
+    if (searchRegex) {
+      // When searching, fall back to raw text with highlights
+      return (
+        <div className={cn("my-1.5", hasActiveSearch && !matches && "opacity-40")}>
+          <span className="whitespace-pre-wrap text-sm text-zinc-300 leading-relaxed">
+            {highlightMatches(segment.text, searchRegex)}
+          </span>
+        </div>
+      );
+    }
     return (
-      <span
-        className={cn(
-          "whitespace-pre-wrap text-sm font-mono text-zinc-700 dark:text-zinc-300 leading-relaxed",
-          hasActiveSearch && !matches && "opacity-40",
-        )}
-      >
-        {searchRegex ? highlightMatches(segment.text, searchRegex) : segment.text}
-      </span>
+      <div className={cn("my-1.5", hasActiveSearch && !matches && "opacity-40")}>
+        <Markdown>{segment.text}</Markdown>
+      </div>
     );
   }
   return <ToolCard tool={segment.tool} />;
+}
+
+/**
+ * Render a list of segments, collapsing contiguous runs of 3+ tool calls
+ * into an expandable summary.
+ */
+export function SegmentList({
+  segments,
+  searchRegex,
+  hasActiveSearch,
+}: {
+  segments: StreamSegment[];
+  searchRegex?: RegExp | null;
+  hasActiveSearch?: boolean;
+}) {
+  const groups: Array<{ type: "segment"; index: number } | { type: "tool_group"; tools: ToolCallState[] }> = [];
+  let i = 0;
+  while (i < segments.length) {
+    if (segments[i].type === "tool") {
+      // Collect contiguous tool segments
+      const toolStart = i;
+      const tools: ToolCallState[] = [];
+      while (i < segments.length && segments[i].type === "tool") {
+        tools.push((segments[i] as { type: "tool"; tool: ToolCallState }).tool);
+        i++;
+      }
+      if (tools.length >= 3) {
+        groups.push({ type: "tool_group", tools });
+      } else {
+        // Render individually
+        for (let j = toolStart; j < i; j++) {
+          groups.push({ type: "segment", index: j });
+        }
+      }
+    } else {
+      groups.push({ type: "segment", index: i });
+      i++;
+    }
+  }
+
+  return (
+    <>
+      {groups.map((g, gi) => {
+        if (g.type === "tool_group") {
+          return <ToolGroup key={`tg-${gi}`} tools={g.tools} />;
+        }
+        return (
+          <SegmentRow
+            key={g.index}
+            segment={segments[g.index]}
+            searchRegex={searchRegex}
+            hasActiveSearch={hasActiveSearch}
+          />
+        );
+      })}
+    </>
+  );
 }

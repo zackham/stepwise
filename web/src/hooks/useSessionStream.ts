@@ -25,6 +25,16 @@ export function useSessionStream(
   const liveQueueRef = useRef<AgentStreamEvent[]>([]);
   const runIdSetRef = useRef(new Set(runIds));
 
+  // Reset synchronously during render when runIds change
+  const runIdKey = runIds.join(",");
+  const prevRunIdKeyRef = useRef(runIdKey);
+  if (prevRunIdKeyRef.current !== runIdKey) {
+    prevRunIdKeyRef.current = runIdKey;
+    stateRef.current = { segments: [], boundaries: [], usage: null };
+    backfilledRef.current = false;
+    liveQueueRef.current = [];
+  }
+
   // Keep runId set in sync
   useEffect(() => {
     runIdSetRef.current = new Set(runIds);
@@ -45,6 +55,13 @@ export function useSessionStream(
           type: "tool",
           tool: { id: ev.id, title: ev.title, kind: ev.kind, status: "running" },
         });
+      } else if (ev.t === "tool_title") {
+        for (const seg of state.segments) {
+          if (seg.type === "tool" && seg.tool.id === ev.id) {
+            seg.tool.title = ev.title;
+            break;
+          }
+        }
       } else if (ev.t === "tool_end") {
         for (const seg of state.segments) {
           if (seg.type === "tool" && seg.tool.id === ev.id) {
@@ -53,6 +70,8 @@ export function useSessionStream(
             break;
           }
         }
+      } else if (ev.t === "prompt") {
+        state.segments.push({ type: "prompt", text: ev.text });
       } else if (ev.t === "usage") {
         state.usage = { used: ev.used, size: ev.size };
       }
@@ -79,7 +98,6 @@ export function useSessionStream(
   // When backfill arrives, build segments + replay queue
   useEffect(() => {
     if (!backfillEvents || backfilledRef.current) return;
-
     backfilledRef.current = true;
 
     const built = buildSegmentsFromEvents(backfillEvents);
@@ -99,15 +117,5 @@ export function useSessionStream(
     liveQueueRef.current = [];
   }, [backfillEvents, backfillBoundaries, processEvents]);
 
-  // Reset when runIds change fundamentally
-  const runIdKey = runIds.join(",");
-  useEffect(() => {
-    stateRef.current = { segments: [], boundaries: [], usage: null };
-    setVersion(0);
-    backfilledRef.current = false;
-    liveQueueRef.current = [];
-  }, [runIdKey]);
-
-  // eslint-disable-next-line react-hooks/refs -- intentional ref-as-mutable-state pattern (same as useAgentStream)
   return { state: stateRef.current, version };
 }

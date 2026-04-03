@@ -1,13 +1,11 @@
 import { useJobOutput, useJobCost } from "@/hooks/useStepwise";
-import { useConfig } from "@/hooks/useConfig";
-import { JsonView } from "@/components/JsonView";
 import { ContentModal } from "@/components/ui/content-modal";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 import type { Job } from "@/lib/types";
 import { cn, formatDuration, formatCost } from "@/lib/utils";
 import { Link } from "@tanstack/react-router";
-import { Package, Terminal, Monitor, DollarSign } from "lucide-react";
+import { Package, Terminal, Monitor } from "lucide-react";
 import { useMemo, useState } from "react";
 
 interface JobOverviewProps {
@@ -18,6 +16,29 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
   return (
     <div className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider">
       {children}
+    </div>
+  );
+}
+
+function truncateValue(value: unknown, maxLen = 80): string {
+  if (value === null || value === undefined) return "null";
+  if (typeof value === "string") return value.length > maxLen ? value.slice(0, maxLen) + "..." : value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  const json = JSON.stringify(value);
+  return json.length > maxLen ? json.slice(0, maxLen) + "..." : json;
+}
+
+function KeyValueList({ data }: { data: Record<string, unknown> }) {
+  return (
+    <div className="space-y-1">
+      {Object.entries(data).map(([key, value]) => (
+        <div key={key} className="flex gap-2 text-xs leading-snug">
+          <span className="text-zinc-500 shrink-0 font-mono">{key}:</span>
+          <span className="text-zinc-400 font-mono truncate">
+            {typeof value === "string" ? `"${truncateValue(value)}"` : truncateValue(value)}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -59,7 +80,6 @@ export function JobOverview({ job }: JobOverviewProps) {
     job.status === "completed" || job.status === "failed" || job.status === "cancelled";
   const { data: outputs, isLoading: outputsLoading } = useJobOutput(job.id, isTerminal);
   const { data: costData } = useJobCost(job.id);
-  const { data: configData } = useConfig();
   const [outputsModalOpen, setOutputsModalOpen] = useState(false);
 
   const normalizedOutputs = useMemo(
@@ -68,10 +88,41 @@ export function JobOverview({ job }: JobOverviewProps) {
   );
 
   const stepCount = Object.keys(job.workflow.steps).length;
-  const hasInputs = job.inputs && Object.keys(job.inputs).length > 0;
   const hasOutputs = normalizedOutputs && Object.keys(normalizedOutputs).length > 0;
-  const hasConfigVars = job.config && Object.keys(job.config).length > 0;
   const meta = job.workflow.metadata;
+
+  // Split inputs into "Job Inputs" (explicitly passed) vs "Flow Defaults" (config_var defaults not overridden)
+  const configVarNames = new Set(
+    (job.workflow.config_vars ?? []).map((cv) => cv.name),
+  );
+  const configVarDefaults: Record<string, unknown> = {};
+  for (const cv of job.workflow.config_vars ?? []) {
+    if (cv.default !== undefined) {
+      configVarDefaults[cv.name] = cv.default;
+    }
+  }
+
+  const jobInputs: Record<string, unknown> = {};
+  const flowDefaults: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(job.inputs ?? {})) {
+    if (!configVarNames.has(key)) {
+      // Not a config_var — it's a direct job input
+      jobInputs[key] = value;
+    } else if (
+      key in configVarDefaults &&
+      JSON.stringify(value) === JSON.stringify(configVarDefaults[key])
+    ) {
+      // Value matches config_var default — show as flow default
+      flowDefaults[key] = value;
+    } else {
+      // Config var but overridden — show as job input
+      jobInputs[key] = value;
+    }
+  }
+
+  const hasJobInputs = Object.keys(jobInputs).length > 0;
+  const hasFlowDefaults = Object.keys(flowDefaults).length > 0;
 
   return (
     <div className="p-3 space-y-4 animate-step-fade">
@@ -141,13 +192,11 @@ export function JobOverview({ job }: JobOverviewProps) {
             </span>
           </div>
         )}
-        {costData && (costData.cost_usd > 0 || costData.billing_mode === "subscription") && (
+        {costData && costData.cost_usd > 0 && (
           <div className="flex items-center gap-2">
             <span className="text-zinc-500 w-16">Cost</span>
             <span className="font-mono text-zinc-400">
-              {costData.billing_mode === "subscription"
-                ? "$0 (Max)"
-                : formatCost(costData.cost_usd)}
+              {formatCost(costData.cost_usd)}
             </span>
           </div>
         )}
@@ -177,23 +226,19 @@ export function JobOverview({ job }: JobOverviewProps) {
         )}
       </div>
 
-      {/* 3. Config vars */}
-      {hasConfigVars && (
+      {/* 3. Job Inputs */}
+      {hasJobInputs && (
         <div className="space-y-1.5">
-          <SectionHeading>Config</SectionHeading>
-          <div className="bg-zinc-50/50 dark:bg-zinc-900/50 rounded border border-zinc-200 dark:border-zinc-800 p-2">
-            <JsonView data={job.config} defaultExpanded={false} />
-          </div>
+          <SectionHeading>Job Inputs</SectionHeading>
+          <KeyValueList data={jobInputs} />
         </div>
       )}
 
-      {/* 4. Job inputs */}
-      {hasInputs && (
+      {/* 4. Flow Defaults */}
+      {hasFlowDefaults && (
         <div className="space-y-1.5">
-          <SectionHeading>Inputs</SectionHeading>
-          <div className="max-h-40 overflow-y-auto bg-zinc-50/50 dark:bg-zinc-900/50 rounded border border-zinc-200 dark:border-zinc-800 p-2">
-            <JsonView data={job.inputs} defaultExpanded={false} />
-          </div>
+          <SectionHeading>Flow Defaults</SectionHeading>
+          <KeyValueList data={flowDefaults} />
         </div>
       )}
 
@@ -210,10 +255,10 @@ export function JobOverview({ job }: JobOverviewProps) {
             <>
               <div
                 onClick={() => setOutputsModalOpen(true)}
-                className="max-h-40 overflow-y-auto bg-zinc-50/50 dark:bg-zinc-900/50 rounded border border-zinc-200 dark:border-zinc-800 p-2 cursor-pointer hover:border-zinc-400 dark:hover:border-zinc-600 transition-colors"
-                title="Click to view all outputs"
+                className="cursor-pointer rounded px-2 py-1.5 -mx-2 hover:bg-zinc-100 dark:hover:bg-zinc-800/60 transition-colors"
+                title="Click to view full outputs"
               >
-                <JsonView data={normalizedOutputs} defaultExpanded={false} />
+                <KeyValueList data={normalizedOutputs!} />
               </div>
               <ContentModal
                 open={outputsModalOpen}

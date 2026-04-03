@@ -92,6 +92,8 @@ export interface StepDefinition {
   output_schema?: Record<string, OutputFieldSchema>;
   chain?: string;
   chain_label?: string;
+  session?: string;
+  fork_from?: string;
 }
 
 // ── Flow Metadata ────────────────────────────────────────────────────
@@ -314,7 +316,9 @@ export interface EngineStatus {
 
 export type AgentStreamEvent =
   | { t: "text"; text: string }
+  | { t: "prompt"; text: string }
   | { t: "tool_start"; id: string; title: string; kind: string }
+  | { t: "tool_title"; id: string; title: string }
   | { t: "tool_end"; id: string; output?: string; error?: boolean }
   | { t: "usage"; used: number; size: number };
 
@@ -465,6 +469,7 @@ export interface SessionInfo {
   is_active: boolean;
   started_at: string | null;
   latest_at: string | null;
+  total_tokens: number;
 }
 
 export interface SessionBoundary {
@@ -474,6 +479,7 @@ export interface SessionBoundary {
   run_id: string;
   started_at: string | null;
   status: string;
+  tokens_used?: number;
 }
 
 export interface SessionTranscript {

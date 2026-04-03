@@ -288,6 +288,17 @@ export function useStepwiseMutations() {
     onSuccess: invalidateAll,
   });
 
+  const triggerPollNowMutation = useMutation({
+    mutationFn: api.triggerPollNow,
+    onSuccess: () => {
+      invalidateAll();
+      toast.success("Poll triggered");
+    },
+    onError: (error) => {
+      toast.error("Failed to trigger poll", { description: error.message });
+    },
+  });
+
   const cancelRunMutation = useMutation({
     mutationFn: api.cancelRun,
     onSuccess: () => {
@@ -418,6 +429,7 @@ export function useStepwiseMutations() {
     rerunStep: rerunStepMutation,
     fulfillWatch: fulfillWatchMutation,
     injectContext: injectContextMutation,
+    triggerPollNow: triggerPollNowMutation,
     cancelRun: cancelRunMutation,
     deleteJob: deleteJobMutation,
     deleteAllJobs: deleteAllJobsMutation,

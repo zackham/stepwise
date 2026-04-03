@@ -43,134 +43,8 @@ function detectContentType(text: string): ContentType[] {
   return types
 }
 
-function MarkdownView({ text }: { text: string }) {
-  // Simple markdown renderer — handles headings, bold, code blocks, lists, links
-  const lines = text.split("\n")
-  const elements: React.ReactNode[] = []
-  let inCodeBlock = false
-  let codeLines: string[] = []
-  let codeKey = 0
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-
-    if (line.startsWith("```")) {
-      if (inCodeBlock) {
-        elements.push(
-          <pre key={`code-${codeKey++}`} className="bg-zinc-950 rounded p-2 text-xs font-mono text-zinc-300 overflow-x-auto my-2">
-            {codeLines.join("\n")}
-          </pre>
-        )
-        codeLines = []
-        inCodeBlock = false
-      } else {
-        inCodeBlock = true
-      }
-      continue
-    }
-
-    if (inCodeBlock) {
-      codeLines.push(line)
-      continue
-    }
-
-    // Headings
-    const headingMatch = line.match(/^(#{1,6})\s+(.+)/)
-    if (headingMatch) {
-      const level = headingMatch[1].length
-      const sizes = ["text-lg", "text-base", "text-sm", "text-sm", "text-xs", "text-xs"]
-      elements.push(
-        <div key={i} className={cn("font-semibold text-zinc-100 mt-3 mb-1", sizes[level - 1])}>
-          {renderInline(headingMatch[2])}
-        </div>
-      )
-      continue
-    }
-
-    // Empty line
-    if (!line.trim()) {
-      elements.push(<div key={i} className="h-2" />)
-      continue
-    }
-
-    // List items
-    if (/^[-*]\s/.test(line)) {
-      elements.push(
-        <div key={i} className="flex gap-2 text-sm text-zinc-300 leading-relaxed">
-          <span className="text-zinc-600 shrink-0">•</span>
-          <span>{renderInline(line.replace(/^[-*]\s/, ""))}</span>
-        </div>
-      )
-      continue
-    }
-
-    // Numbered list
-    const numMatch = line.match(/^(\d+)\.\s(.+)/)
-    if (numMatch) {
-      elements.push(
-        <div key={i} className="flex gap-2 text-sm text-zinc-300 leading-relaxed">
-          <span className="text-zinc-500 shrink-0 tabular-nums">{numMatch[1]}.</span>
-          <span>{renderInline(numMatch[2])}</span>
-        </div>
-      )
-      continue
-    }
-
-    // Regular paragraph
-    elements.push(
-      <p key={i} className="text-sm text-zinc-300 leading-relaxed">
-        {renderInline(line)}
-      </p>
-    )
-  }
-
-  return <div className="space-y-0.5 p-3">{elements}</div>
-}
-
-function renderInline(text: string): React.ReactNode {
-  // Handle bold, code, links
-  const parts: React.ReactNode[] = []
-  let remaining = text
-  let key = 0
-
-  while (remaining) {
-    // Bold
-    const boldMatch = remaining.match(/\*\*([^*]+)\*\*/)
-    // Inline code
-    const codeMatch = remaining.match(/`([^`]+)`/)
-    // Link
-    const linkMatch = remaining.match(/\[([^\]]+)\]\(([^)]+)\)/)
-
-    // Find earliest match
-    const matches = [
-      boldMatch && { idx: remaining.indexOf(boldMatch[0]), match: boldMatch, type: "bold" },
-      codeMatch && { idx: remaining.indexOf(codeMatch[0]), match: codeMatch, type: "code" },
-      linkMatch && { idx: remaining.indexOf(linkMatch[0]), match: linkMatch, type: "link" },
-    ].filter(Boolean).sort((a, b) => a!.idx - b!.idx)
-
-    if (matches.length === 0) {
-      parts.push(remaining)
-      break
-    }
-
-    const first = matches[0]!
-    if (first.idx > 0) {
-      parts.push(remaining.slice(0, first.idx))
-    }
-
-    if (first.type === "bold") {
-      parts.push(<strong key={key++} className="font-semibold text-zinc-100">{first.match![1]}</strong>)
-    } else if (first.type === "code") {
-      parts.push(<code key={key++} className="px-1 py-0.5 rounded bg-zinc-800 text-zinc-300 text-xs font-mono">{first.match![1]}</code>)
-    } else if (first.type === "link") {
-      parts.push(<span key={key++} className="text-blue-400">{first.match![1]}</span>)
-    }
-
-    remaining = remaining.slice(first.idx + first.match![0].length)
-  }
-
-  return parts.length === 1 ? parts[0] : <>{parts}</>
-}
+import { Markdown } from "@/components/ui/markdown";
+export { Markdown as MarkdownView };
 
 function JsonView({ text }: { text: string }) {
   const formatted = useMemo(() => {
@@ -262,7 +136,7 @@ export function ContentModal({
           {hasTabs && copyContent ? (
             (() => {
               const tab = contentTypes.includes(activeTab) ? activeTab : defaultTab
-              if (tab === "markdown") return <MarkdownView text={copyContent} />
+              if (tab === "markdown") return <div className="p-3"><Markdown>{copyContent}</Markdown></div>
               if (tab === "json") return <JsonView text={copyContent} />
               return (
                 <pre className="whitespace-pre-wrap text-sm text-zinc-300 font-mono p-3 leading-relaxed">
