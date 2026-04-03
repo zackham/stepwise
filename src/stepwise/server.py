@@ -2279,7 +2279,12 @@ def get_changelog():
     """Return the CHANGELOG.md content as plain text."""
     from fastapi.responses import PlainTextResponse
 
-    # Try source tree first (editable installs), then installed package
+    # Try bundled changelog first (installed package)
+    bundled = Path(__file__).parent / "_changelog.md"
+    if bundled.is_file():
+        return PlainTextResponse(bundled.read_text(encoding="utf-8"))
+
+    # Try source tree (editable installs / development)
     source_changelog = Path(__file__).parent.parent.parent / "CHANGELOG.md"
     if source_changelog.is_file():
         return PlainTextResponse(source_changelog.read_text(encoding="utf-8"))
