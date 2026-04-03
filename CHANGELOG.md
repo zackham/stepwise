@@ -3,6 +3,26 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.34.0] — 2026-04-02
+
+### Added
+- **Named sessions** — steps with matching `session: <name>` share a single agent conversation. Replaces `continue_session` + `_session_id` input wiring with a declarative, one-field approach
+- **Session forking** — `fork_from: <session>` creates an independent session branched from the parent's full conversation context. Enables parallel review, critique, and analysis patterns
+- **ClaudeDirectBackend** — new agent backend that calls `claude` CLI directly for fork/resume operations. Writes ACP-compatible NDJSON so the web UI, DB, and reports see identical data regardless of backend
+- **Session validation rules** — 7 parse-time checks: fork requires explicit `agent: claude`, fork_from must reference known session, for_each + session incompatible, old syntax detection, DAG ordering for forks
+- **`_extract_claude_session_id()`** — reliable extraction of Claude session UUIDs from ACP NDJSON (reads only `result.sessionId`, never `params.sessionId`)
+
+### Changed
+- **Dual-backend agent executor** — `AgentExecutor` now accepts both `AcpxBackend` and `ClaudeDirectBackend`, routing automatically based on session fork state
+- **Session locking** — `_SessionLockManager` now keys by session name from step definitions instead of `_session_id` from inputs
+- **Circuit breaker** — `max_continuous_attempts` now fails the step instead of silently creating a new session
+
+### Removed
+- **Chains** — `chains:` top-level block, `chain:`/`chain_label:` step fields, `ChainConfig`, `context.py` (398 lines), and all chain context compilation. Zero production flows used chains
+- **`_session_id` auto-emission** — steps no longer inject `_session_id` into artifacts. Engine manages session lifecycle via registry
+- **`continue_session`** — deprecated in favor of `session:`. Legacy fallback kept for backward compatibility
+- **Transcript capture** — removed chain-dependent transcript capture (UI uses raw NDJSON output files directly)
+
 ## [0.22.0] — 2026-03-30
 
 ### Added
