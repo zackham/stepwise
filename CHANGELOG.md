@@ -3,6 +3,39 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.35.0] — 2026-04-03
+
+### Added
+- **Step-scoped session tab** — right sidebar session view filters to the selected step's runs, shows session name, shared-with pills, and link to full session in job details
+- **Prompt display in sessions** — agent prompts parsed from NDJSON `session/prompt` events and shown inline with blue left-border accent, gradient fade, click-to-expand in modal
+- **Tool file paths** — tool calls now show actual file paths (e.g., "read scripts/main.py") instead of generic "Read File", via `tool_title` events from intermediate `tool_call_update` messages
+- **Per-run token counts** — session boundaries display incremental token usage per run
+- **Trigger poll now** — `POST /runs/{run_id}/poll-now` endpoint and UI button for suspended poll steps to force an immediate check
+- **Poll status display** — poll steps show check count, last/next check time, command, interval, and last error
+- **Shared markdown renderer** — `react-markdown` + `remark-gfm` replaces all hand-rolled markdown renderers across content modals, changelog, chat messages, and session transcripts
+- **Auto-scroll with FABs** — session views auto-scroll to bottom on load, follow streaming content, show jump-to-top/bottom floating buttons when scrolled
+- **Updated column in flows list** — shows when each flow file was last modified, sortable
+- **Bundled changelog** — `CHANGELOG.md` packaged with the wheel so the changelog modal works in installed deployments
+
+### Changed
+- **Session transcript redesign** — proportional font for agent prose, lightweight inline tool calls (dot + kind + path, no cards), contiguous tool runs of 3+ collapse into expandable summaries
+- **Panel controls in global nav** — panel toggle buttons moved from page-level breadcrumb bars to the global top navigation via PanelContext
+- **Job overview sidebar** — config/outputs flattened (no expand/collapse), split into Job Inputs vs Flow Defaults, outputs click-to-open modal
+- **Flows list checkboxes** — subtle hover checkboxes, select-all header, removed selection bar
+- **Jobs list checkboxes** — same pattern as flows list, row click navigates to job
+- **Cursor-pointer audit** — 35+ clickable elements fixed across the UI, including base Button and TabsTrigger components
+- **Chat messages** — reuse shared ToolCard and Markdown components, show tool input args (file paths, commands)
+- **Output viewing** — replaced sidebar panel with ContentModal popups for job outputs and edge data flow labels
+- **Notification badge** — persists last-seen timestamp in localStorage, highlights new events on open
+- **DAG step subtitle** — shows agent backend name instead of output_mode; named sessions show session name in violet
+
+### Fixed
+- **Duplicate flow dispatch** — `_run_stepwise_flow` checks for already-running jobs before dispatching
+- **Suspended step duration** — live-ticking amber duration shown for polling/suspended steps
+- **Port tooltip zoom** — input/output port tooltips counter-scaled to stay at screen size regardless of zoom
+- **Changelog modal** — scrolling fixed, about section with homepage and GitHub links added
+- **$0 cost hidden** — cost display suppressed when zero (subscription billing)
+
 ## [0.34.0] — 2026-04-02
 
 ### Added
