@@ -70,7 +70,7 @@ describe("useJobs", () => {
   });
 
   it("passes status filter to API", async () => {
-    mockedApi.fetchJobs.mockResolvedValueOnce([]);
+    mockedApi.fetchJobs.mockResolvedValueOnce({ jobs: [], total: 0 });
 
     const { result } = renderHook(() => useJobs("running"), {
       wrapper: createWrapper(),
@@ -81,7 +81,7 @@ describe("useJobs", () => {
   });
 
   it("has a 5-second refetch interval", () => {
-    mockedApi.fetchJobs.mockResolvedValue([]);
+    mockedApi.fetchJobs.mockResolvedValue({ jobs: [], total: 0 });
 
     const { result } = renderHook(() => useJobs(), {
       wrapper: createWrapper(),
