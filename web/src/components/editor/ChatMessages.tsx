@@ -34,17 +34,22 @@ export function ChatMessages({ messages, isStreaming, onApplyYaml, emptyMessage 
             {/* Tool activities */}
             {msg.role === "assistant" && msg.toolActivities && msg.toolActivities.length > 0 && (
               <div className="space-y-0">
-                {msg.toolActivities.map((tool) => (
-                  <ToolCard
-                    key={tool.id}
-                    tool={{
-                      id: tool.id,
-                      title: tool.name,
-                      kind: tool.kind ?? "tool",
-                      status: tool.done ? "completed" : "running",
-                    } satisfies ToolCallState}
-                  />
-                ))}
+                {msg.toolActivities.map((tool) => {
+                  // Build a descriptive title from tool name + input args
+                  const arg = tool.input.file_path || tool.input.path || tool.input.command || tool.input.pattern || "";
+                  const title = arg ? `${tool.name} ${arg}` : tool.name;
+                  return (
+                    <ToolCard
+                      key={tool.id}
+                      tool={{
+                        id: tool.id,
+                        title,
+                        kind: tool.kind ?? tool.name,
+                        status: tool.done ? "completed" : "running",
+                      } satisfies ToolCallState}
+                    />
+                  );
+                })}
               </div>
             )}
 
