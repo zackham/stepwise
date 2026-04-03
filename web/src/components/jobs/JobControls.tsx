@@ -35,11 +35,9 @@ export function JobControls({ job, selectedStep, runs }: JobControlsProps) {
   const mutations = useStepwiseMutations();
   const stale = isStale(job);
 
-  // Get lifecycle actions from registry (exclude inject-context — handled separately)
   const lifecycleActions = getActionsForEntity("job", job)
     .filter((a) => a.group === "lifecycle" && a.id !== "job.inject-context");
 
-  // Rerun logic for selected step
   const selectedRun = selectedStep && runs
     ? runs.filter((r) => r.step_name === selectedStep).sort((a, b) => b.attempt - a.attempt)[0] ?? null
     : null;
@@ -50,7 +48,6 @@ export function JobControls({ job, selectedStep, runs }: JobControlsProps) {
     selectedRun.status === "cancelled"
   );
 
-  // Minimal ActionContext for executing registry actions directly
   const ctx: ActionContext = {
     mutations,
     navigate: () => {},
@@ -59,69 +56,65 @@ export function JobControls({ job, selectedStep, runs }: JobControlsProps) {
     extraMutations: undefined,
   };
 
+  const hasContent = lifecycleActions.length > 0 || stale || (selectedStep && canRerunStep);
+  if (!hasContent) return null;
+
   return (
-    <>
-      <div className="flex items-center gap-2 p-3 border-b border-border bg-zinc-50/50 dark:bg-zinc-900/50 overflow-x-auto flex-nowrap">
-        <TooltipProvider>
-          {/* Registry-driven lifecycle buttons */}
-          {lifecycleActions.map((action) => {
-            const Icon = action.icon;
-            const tooltip = TOOLTIP_MAP[action.id];
-            const style = STYLE_MAP[action.id] ?? "";
+    <div className="flex items-center gap-2 shrink-0 overflow-x-auto flex-nowrap pr-2">
+      <TooltipProvider>
+        {lifecycleActions.map((action) => {
+          const Icon = action.icon;
+          const tooltip = TOOLTIP_MAP[action.id];
+          const style = STYLE_MAP[action.id] ?? "";
 
-            const btn = (
-              <Button
-                key={action.id}
-                variant="outline"
-                size="sm"
-                onClick={() => action.execute(job, ctx)}
-                className={style}
-              >
-                {Icon && <Icon className="w-3.5 h-3.5 mr-1.5" />}
-                {action.label}
-              </Button>
-            );
-
-            if (tooltip) {
-              return (
-                <Tooltip key={action.id}>
-                  <TooltipTrigger render={btn} />
-                  <TooltipContent>{tooltip}</TooltipContent>
-                </Tooltip>
-              );
-            }
-            return btn;
-          })}
-
-          {/* Stale warning indicator */}
-          {stale && (
-            <div className="flex items-center gap-1.5 text-amber-500 text-xs">
-              <AlertTriangle className="w-3.5 h-3.5" />
-              Owner not responding
-            </div>
-          )}
-
-          {/* Rerun selected step */}
-          {selectedStep && canRerunStep && (
+          const btn = (
             <Button
+              key={action.id}
               variant="outline"
               size="sm"
-              disabled={mutations.rerunStep.isPending}
-              onClick={() =>
-                mutations.rerunStep.mutate({
-                  jobId: job.id,
-                  stepName: selectedStep,
-                })
-              }
+              onClick={() => action.execute(job, ctx)}
+              className={style}
             >
-              <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
-              Restart {selectedStep}
+              {Icon && <Icon className="w-3.5 h-3.5 mr-1.5" />}
+              {action.label}
             </Button>
-          )}
+          );
 
-          <div className="flex-1" />
-        </TooltipProvider>
-      </div>
-    </>
+          if (tooltip) {
+            return (
+              <Tooltip key={action.id}>
+                <TooltipTrigger render={btn} />
+                <TooltipContent>{tooltip}</TooltipContent>
+              </Tooltip>
+            );
+          }
+          return btn;
+        })}
+
+        {stale && (
+          <div className="flex items-center gap-1.5 text-amber-500 text-xs">
+            <AlertTriangle className="w-3.5 h-3.5" />
+            Owner not responding
+          </div>
+        )}
+
+        {selectedStep && canRerunStep && (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={mutations.rerunStep.isPending}
+            onClick={() =>
+              mutations.rerunStep.mutate({
+                jobId: job.id,
+                stepName: selectedStep,
+              })
+            }
+          >
+            <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+            Restart {selectedStep}
+          </Button>
+        )}
+      </TooltipProvider>
+    </div>
   );
 }

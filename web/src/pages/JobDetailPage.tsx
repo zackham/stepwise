@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useParams, useNavigate, useSearch, Link } from "@tanstack/react-router";
 import type { JobDetailSearch } from "@/router";
-import { useJob, useRuns, useEvents, useJobTree, useJobOutput, useJobCost, useStepwiseMutations, useJobSessions } from "@/hooks/useStepwise";
+import { useJob, useRuns, useEvents, useJobTree, useJobOutput, useStepwiseMutations, useJobSessions } from "@/hooks/useStepwise";
 import { SessionTab } from "@/components/jobs/SessionTab";
 import { StepSessionView } from "@/components/jobs/StepSessionView";
 import { FlowDagView } from "@/components/dag/FlowDagView";
@@ -10,8 +10,6 @@ import { JobTreeView } from "@/components/jobs/JobTreeView";
 import { RunView } from "@/components/jobs/RunView";
 import { StepDefinitionPanel } from "@/components/editor/StepDefinitionPanel";
 import { JobOverview } from "@/components/jobs/JobOverview";
-import { JobControls } from "@/components/jobs/JobControls";
-import { JobStatusBadge } from "@/components/StatusBadge";
 import type { DagSelection } from "@/lib/dag-layout";
 import { useAutoSelectSuspended } from "@/hooks/useAutoSelectSuspended";
 import { useAutoExpand } from "@/hooks/useAutoExpand";
@@ -19,31 +17,27 @@ import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { MobileFullScreen } from "@/components/layout/MobileFullScreen";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import {
-  PanelLeftClose,
-  ScrollText,
-  GitBranch,
-  GanttChart,
-  Clock,
   AlertTriangle,
-  DollarSign,
   X,
+  Workflow,
+  ScrollText,
+  GanttChart,
+  GitBranch,
 } from "lucide-react";
-import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 import { ResizablePanel } from "@/components/ui/ResizablePanel";
 import type { JobTreeNode, StepDefinition } from "@/lib/types";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn, formatDuration, formatCost } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { usePanelRegister } from "@/hooks/usePanelRegister";
+import { ActionContextProvider } from "@/components/menus/ActionContextProvider";
 
 
 function extractErrorMessage(error: string): string {
   const firstLine = error.split("\n")[0];
-  // Try to extract message from embedded JSON like: OpenRouter 400 for model=...: {"error":{"message":"...",...}}
   const jsonMatch = firstLine.match(/\{.*"message"\s*:\s*"([^"]+)"/);
   if (jsonMatch) {
-    // Return the prefix (e.g. "OpenRouter 400 for model=x") + the extracted message
     const jsonStart = firstLine.indexOf("{");
     const prefix = firstLine.slice(0, jsonStart).replace(/:\s*$/, "");
     return `${prefix}: ${jsonMatch[1]}`;
@@ -51,23 +45,6 @@ function extractErrorMessage(error: string): string {
   return firstLine;
 }
 
-function CopyableId({ id }: { id: string }) {
-  const { copy, justCopied } = useCopyFeedback();
-  return (
-    <span
-      onClick={() => copy(id)}
-      className="cursor-pointer hover:text-blue-400 relative"
-      title="Click to copy"
-    >
-      {id}
-      {justCopied && (
-        <span className="absolute -top-6 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-zinc-800 text-green-400 text-[10px] font-sans whitespace-nowrap animate-in fade-in zoom-in-95 duration-100 pointer-events-none">
-          Copied
-        </span>
-      )}
-    </span>
-  );
-}
 
 function resolveStep(
   stepName: string,
@@ -75,11 +52,9 @@ function resolveStep(
   workflow: { steps: Record<string, StepDefinition> },
   jobTree: JobTreeNode | null,
 ): { stepDef: StepDefinition; jobId: string } | null {
-  // Handle for_each scoped keys: "forEach:<instanceJobId>:<childStepName>"
   const forEachMatch = stepName.match(/^forEach:([^:]+):(.+)$/);
   if (forEachMatch) {
     const [, instanceJobId, childStepName] = forEachMatch;
-    // Find the sub-job matching instanceJobId and resolve within it
     if (jobTree) {
       const target = findJobTreeById(jobTree, instanceJobId);
       if (target) {
@@ -121,7 +96,6 @@ export function JobDetailPage() {
   const { data: jobTree } = useJobTree(jobId);
   const { data: runs = [] } = useRuns(jobId);
   const { data: events = [] } = useEvents(jobId);
-  const { data: costData } = useJobCost(jobId);
   const { data: sessionData } = useJobSessions(jobId);
   const hasSessions = (sessionData?.sessions?.length ?? 0) > 0;
   const searchParams = useSearch({ from: "/jobs/$jobId" }) as JobDetailSearch;
@@ -135,7 +109,6 @@ export function JobDetailPage() {
   const mutations = useStepwiseMutations();
   const { expandedSteps, toggleExpand } = useAutoExpand(jobId, runs, job, jobTree ?? null);
 
-  // Register panel controls — must be before any early returns (hooks rule)
   const selectedStep = searchParams.step ?? null;
   const resolvedStepForPanel = selectedStep && job
     ? resolveStep(selectedStep, job.id, job.workflow, jobTree ?? null)
@@ -165,25 +138,20 @@ export function JobDetailPage() {
 
   const isTerminal =
     job?.status === "completed" || job?.status === "failed" || job?.status === "cancelled";
-  useJobOutput(job?.id, isTerminal); // prefetch for child components
-  // Find the first failed step run for the error summary banner
+  useJobOutput(job?.id, isTerminal);
   const failedRun = useMemo(() => {
     if (job?.status !== "failed") return null;
     return runs.find((r) => r.status === "failed") ?? null;
   }, [job?.status, runs]);
 
-  // Derive state from URL search params
   const selection: DagSelection = dataFlowSelection ?? (selectedStep ? { kind: "step", stepName: selectedStep } : null);
 
-  // Derive activeTab: URL tab param > default "run" when step selected
   const activeTab: RightPanelTab = searchParams.tab ?? "run";
 
-  // Clear focusRunId when leaving the session tab
   useEffect(() => {
     if (activeTab !== "session") setFocusRunId(undefined);
   }, [activeTab]);
 
-  // Derive main view mode from URL search param
   const viewMode = searchParams.view ?? "dag";
 
   const handleSelectStep = useCallback((stepName: string | null) => {
@@ -205,10 +173,8 @@ export function JobDetailPage() {
     setDataFlowSelection(sel);
   }, []);
 
-  // Auto-select newly suspended external steps
   useAutoSelectSuspended(runs, selection, handleSelectStep);
 
-  // Reset local state when switching jobs
   useEffect(() => {
     setDataFlowSelection(null);
     setExpandedStep(false);
@@ -216,7 +182,6 @@ export function JobDetailPage() {
     setLeftTab("overview");
   }, [jobId]);
 
-  // Auto-open right panel for terminal jobs (only on initial load, when no URL panel param)
   useEffect(() => {
     if (searchParams.panel || autoOpenedPanel) return;
     if (job) {
@@ -226,7 +191,6 @@ export function JobDetailPage() {
     }
   }, [job, searchParams.panel, autoOpenedPanel]);
 
-  // Topological step order for keyboard navigation
   const topoStepNames = useMemo(() => {
     if (!job?.workflow?.steps) return [];
     const steps = job.workflow.steps;
@@ -270,7 +234,6 @@ export function JobDetailPage() {
     return sorted;
   }, [job?.workflow?.steps]);
 
-  // Keyboard navigation for DAG steps
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
@@ -338,7 +301,6 @@ export function JobDetailPage() {
   if (isLoading) {
     return (
       <div className="flex h-full" data-testid="job-detail-skeleton">
-        {/* Left sidebar skeleton */}
         <div className="hidden md:flex w-72 border-r border-border flex-col shrink-0">
           <div className="p-3 border-b border-border">
             <Skeleton className="h-5 w-24" />
@@ -357,7 +319,6 @@ export function JobDetailPage() {
             ))}
           </div>
         </div>
-        {/* Main content skeleton */}
         <div className="flex-1 flex flex-col">
           <div className="h-10 border-b border-border flex items-center px-4 gap-3">
             <Skeleton className="h-4 w-48" />
@@ -391,13 +352,9 @@ export function JobDetailPage() {
 
   const resolvedStep = resolvedStepForPanel;
 
-  const stale = job.status === "running" && job.created_by !== "server" &&
-    (!job.heartbeat_at || Date.now() - new Date(job.heartbeat_at).getTime() > 60_000);
-
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1 flex min-h-0">
-        {/* Left sidebar: Job Overview + Sessions */}
         {!isMobile && !leftPanelCollapsed && (
           <ResizablePanel
             storageKey="stepwise-job-left-panel-width"
@@ -447,325 +404,175 @@ export function JobDetailPage() {
           </ResizablePanel>
         )}
 
-        {/* Center: header + controls + DAG */}
         <div className="flex-1 flex flex-col min-w-0">
-        {/* Job header */}
-        <div className="px-4 py-2 border-b border-border bg-zinc-50/30 dark:bg-zinc-950/30 shrink-0">
-          {isMobile ? (
-            <>
-              {/* Mobile Row 1: name + status */}
-              <div className="flex items-center gap-2">
-                <h2 className="text-sm font-semibold truncate text-foreground flex-1 min-w-0">
-                  {job.name || job.objective || "Untitled Job"}
-                </h2>
-                <JobStatusBadge status={job.status} />
-                {stale && (
-                  <span className="flex items-center gap-0.5 text-amber-500 text-[10px]">
-                    <AlertTriangle className="w-3 h-3" />
-                  </span>
-                )}
-              </div>
-              {/* Mobile Row 2: duration + cost | route icons */}
-              <div className="flex items-center justify-between mt-1">
-                <div className="flex items-center gap-2">
-                  {job.status !== "pending" && job.status !== "staged" && (
-                    <span className="text-[10px] text-zinc-500 dark:text-zinc-600 flex items-center gap-0.5">
-                      <Clock className="w-2.5 h-2.5" />
-                      {formatDuration(job.created_at, job.updated_at)}
-                    </span>
-                  )}
-                  {costData && costData.cost_usd > 0 && (
-                    <span className="text-[10px] text-zinc-500 dark:text-zinc-600">
-                      {costData.billing_mode === "subscription"
-                        ? "$0 (Max)"
-                        : formatCost(costData.cost_usd)}
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-1">
-                  <Link
-                    to="/jobs/$jobId"
-                    params={{ jobId }}
-                    search={{ view: viewMode === "events" ? undefined : "events" }}
-                    className={cn(
-                      "flex items-center justify-center min-w-[44px] min-h-[44px] text-xs rounded",
-                      viewMode === "events"
-                        ? "text-foreground bg-zinc-200/60 dark:bg-zinc-700/60"
-                        : "text-zinc-500 hover:text-foreground hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
-                    )}
-                    aria-label="Events"
-                    title="Events"
-                  >
-                    <ScrollText className="w-3.5 h-3.5" />
-                  </Link>
-                  <Link
-                    to="/jobs/$jobId"
-                    params={{ jobId }}
-                    search={{ view: viewMode === "timeline" ? undefined : "timeline" }}
-                    className={cn(
-                      "flex items-center justify-center min-w-[44px] min-h-[44px] text-xs rounded",
-                      viewMode === "timeline"
-                        ? "text-foreground bg-zinc-200/60 dark:bg-zinc-700/60"
-                        : "text-zinc-500 hover:text-foreground hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
-                    )}
-                    aria-label="Timeline"
-                    title="Timeline"
-                  >
-                    <GanttChart className="w-3.5 h-3.5" />
-                  </Link>
-                  <Link
-                    to="/jobs/$jobId"
-                    params={{ jobId }}
-                    search={{ view: viewMode === "tree" ? undefined : "tree" }}
-                    className={cn(
-                      "flex items-center justify-center min-w-[44px] min-h-[44px] text-xs rounded",
-                      viewMode === "tree"
-                        ? "text-foreground bg-zinc-200/60 dark:bg-zinc-700/60"
-                        : "text-zinc-500 hover:text-foreground hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
-                    )}
-                    aria-label="Tree"
-                    title="Tree"
-                  >
-                    <GitBranch className="w-3.5 h-3.5" />
-                  </Link>
-                </div>
-              </div>
-            </>
-          ) : (
-            <div className="flex items-center gap-3">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <h2 className="text-sm font-semibold truncate text-foreground">
-                    {job.name || job.objective || "Untitled Job"}
-                  </h2>
-                  <JobStatusBadge status={job.status} />
-                  {stale && (
-                    <span className="flex items-center gap-0.5 text-amber-500 text-[10px]">
-                      <AlertTriangle className="w-3 h-3" />
-                      Stale
-                    </span>
-                  )}
-                  {job.status !== "pending" && job.status !== "staged" && (
-                    <span className="text-[10px] text-zinc-500 dark:text-zinc-600 flex items-center gap-0.5">
-                      <Clock className="w-2.5 h-2.5" />
-                      {formatDuration(job.created_at, job.updated_at)}
-                    </span>
-                  )}
-                  {costData && costData.cost_usd > 0 && (
-                    <span
-                      className="text-[10px] text-zinc-600"
-                      title={costData.billing_mode === "subscription"
-                        ? "Claude Max subscription — no API cost"
-                        : "API cost"}
-                    >
-                      {costData.billing_mode === "subscription"
-                        ? "$0 (Max)"
-                        : formatCost(costData.cost_usd)}
-                    </span>
-                  )}
-                </div>
-                <div className="text-[10px] font-mono text-zinc-500 dark:text-zinc-600 mt-0.5 break-all flex items-center gap-2 flex-wrap">
-                  {job.name && job.objective && (
-                    <span className="font-sans text-zinc-500">{job.objective}</span>
-                  )}
-                  {job.workflow.metadata?.name && (
-                    <Link
-                      to="/flows/$flowName"
-                      params={{ flowName: job.workflow.metadata.name }}
-                      className="font-sans text-blue-600 dark:text-blue-400 hover:text-blue-500 dark:hover:text-blue-300 underline underline-offset-2"
-                    >
-                      {job.workflow.metadata.name}
-                    </Link>
-                  )}
-                  <CopyableId id={job.id} />
-                </div>
-              </div>
-
-              <div className="flex items-center gap-1 shrink-0">
-                <Link
-                  to="/jobs/$jobId"
-                  params={{ jobId }}
-                  search={{ view: viewMode === "events" ? undefined : "events" }}
-                  className={cn(
-                    "flex items-center gap-1 text-xs px-2 py-1 rounded",
-                    viewMode === "events"
-                      ? "text-foreground bg-zinc-200/60 dark:bg-zinc-700/60"
-                      : "text-zinc-500 hover:text-foreground hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
-                  )}
-                >
+          <Tabs
+            value={viewMode}
+            onValueChange={(v) =>
+              navigate({
+                search: (prev: JobDetailSearch) => ({
+                  ...prev,
+                  view: v === "dag" ? undefined : (v as JobDetailSearch["view"]),
+                }),
+                replace: true,
+              })
+            }
+            className="flex flex-col flex-1 min-h-0 gap-0"
+          >
+            <div className="flex items-center border-b border-border bg-zinc-50/50 dark:bg-zinc-900/50 shrink-0">
+              <TabsList variant="line" className="px-1">
+                <TabsTrigger value="dag" className="text-xs gap-1 px-2.5">
+                  <Workflow className="w-3.5 h-3.5" />
+                  {!isMobile && "Flow"}
+                </TabsTrigger>
+                <TabsTrigger value="events" className="text-xs gap-1 px-2.5">
                   <ScrollText className="w-3.5 h-3.5" />
-                  Events
-                </Link>
-                <Link
-                  to="/jobs/$jobId"
-                  params={{ jobId }}
-                  search={{ view: viewMode === "timeline" ? undefined : "timeline" }}
-                  className={cn(
-                    "flex items-center gap-1 text-xs px-2 py-1 rounded",
-                    viewMode === "timeline"
-                      ? "text-foreground bg-zinc-200/60 dark:bg-zinc-700/60"
-                      : "text-zinc-500 hover:text-foreground hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
-                  )}
-                >
+                  {!isMobile && "Events"}
+                </TabsTrigger>
+                <TabsTrigger value="timeline" className="text-xs gap-1 px-2.5">
                   <GanttChart className="w-3.5 h-3.5" />
-                  Timeline
-                </Link>
-                <Link
-                  to="/jobs/$jobId"
-                  params={{ jobId }}
-                  search={{ view: viewMode === "tree" ? undefined : "tree" }}
-                  className={cn(
-                    "flex items-center gap-1 text-xs px-2 py-1 rounded",
-                    viewMode === "tree"
-                      ? "text-foreground bg-zinc-200/60 dark:bg-zinc-700/60"
-                      : "text-zinc-500 hover:text-foreground hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50",
-                  )}
-                >
+                  {!isMobile && "Timeline"}
+                </TabsTrigger>
+                <TabsTrigger value="tree" className="text-xs gap-1 px-2.5">
                   <GitBranch className="w-3.5 h-3.5" />
-                  Tree
-                </Link>
-              </div>
+                  {!isMobile && "Tree"}
+                </TabsTrigger>
+              </TabsList>
             </div>
-          )}
+
+            {failedRun && (
+              <div className="flex items-center gap-2 px-4 py-2 border-b border-red-300/50 dark:border-red-900/50 bg-red-100/30 dark:bg-red-950/30 text-xs">
+                <AlertTriangle className="w-3.5 h-3.5 text-red-500 dark:text-red-400 shrink-0" />
+                <div className="flex-1 min-w-0 truncate">
+                  <span className="text-red-700 dark:text-red-300 font-medium">
+                    Step "{failedRun.step_name}" failed
+                  </span>
+                  {failedRun.error && (
+                    <span className="text-red-500/70 dark:text-red-400/70 ml-2">
+                      — {extractErrorMessage(failedRun.error)}
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="text-amber-600 dark:text-amber-400 hover:text-amber-500 dark:hover:text-amber-300 text-xs font-medium whitespace-nowrap shrink-0 cursor-pointer"
+                  onClick={() =>
+                    mutations.rerunStep.mutate({
+                      jobId: job.id,
+                      stepName: failedRun.step_name,
+                    })
+                  }
+                  disabled={mutations.rerunStep.isPending}
+                >
+                  Retry Step
+                </button>
+                <button
+                  type="button"
+                  className="text-red-400 hover:text-red-300 underline underline-offset-2 whitespace-nowrap shrink-0 cursor-pointer"
+                  onClick={() => handleSelectStep(failedRun.step_name)}
+                >
+                  View Details
+                </button>
+              </div>
+            )}
+
+            <TabsContent value="dag" className={cn("flex-1 min-h-0", viewMode !== "dag" && "hidden")}>
+              <FlowDagView
+                workflow={job.workflow}
+                runs={runs}
+                jobTree={jobTree ?? null}
+                expandedSteps={expandedSteps}
+                onToggleExpand={toggleExpand}
+                selectedStep={selectedStep}
+                onSelectStep={handleSelectStep}
+                onNavigateSubJob={(subJobId) =>
+                  navigate({ to: "/jobs/$jobId", params: { jobId: subJobId } })
+                }
+                onFulfillWatch={(runId, payload) =>
+                  mutations.fulfillWatch.mutate({ runId, payload })
+                }
+                isFulfilling={mutations.fulfillWatch.isPending}
+                selection={selection}
+                onSelectDataFlow={handleSelectDataFlow}
+                flowName={job.workflow.metadata?.name || job.name || job.objective || "Flow"}
+                jobId={job.id}
+                jobStatus={job.status}
+                jobActions={{
+                  onPauseJob: () => mutations.pauseJob.mutate(job.id),
+                  onResumeJob: () => mutations.resumeJob.mutate(job.id),
+                  onCancelJob: () => mutations.cancelJob.mutate(job.id),
+                  onRetryJob: () => mutations.resumeJob.mutate(job.id),
+                  onStartJob: () => mutations.startJob.mutate(job.id),
+                  onRerunStep: (stepName) => mutations.rerunStep.mutate({ jobId: job.id, stepName }),
+                  onCancelRun: (runId) => mutations.cancelRun.mutate(runId),
+                  isPausePending: mutations.pauseJob.isPending,
+                  isResumePending: mutations.resumeJob.isPending || mutations.startJob.isPending,
+                  isCancelPending: mutations.cancelJob.isPending,
+                  isRetryPending: mutations.resumeJob.isPending,
+                }}
+                jobInputs={job.inputs ?? null}
+              />
+            </TabsContent>
+            <TabsContent value="events" className={cn("flex-1 min-h-0", viewMode !== "events" && "hidden")}>
+              <ScrollArea className="h-full">
+                <div className="p-4 space-y-1">
+                  {events.length === 0 ? (
+                    <div className="text-center text-xs text-zinc-500 py-8">No events</div>
+                  ) : (
+                    events.map((event) => (
+                      <div
+                        key={event.id}
+                        className={cn(
+                          "flex items-start gap-3 px-3 py-1.5 rounded text-xs font-mono hover:bg-zinc-100/50 dark:hover:bg-zinc-800/30",
+                          !!event.data?.step && "cursor-pointer",
+                        )}
+                        onClick={() => {
+                          const step = event.data?.step as string | undefined;
+                          if (step) handleSelectStep(step);
+                        }}
+                      >
+                        <span className="text-zinc-500 shrink-0 tabular-nums w-20">
+                          {new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                        </span>
+                        <span className={cn(
+                          "shrink-0 w-32 truncate",
+                          event.type.includes("failed") && "text-red-400",
+                          event.type.includes("completed") && "text-emerald-400",
+                          event.type.includes("started") && "text-blue-400",
+                          event.type.includes("suspended") && "text-amber-400",
+                        )}>
+                          {event.type}
+                        </span>
+                        <span className="text-zinc-400 truncate flex-1">
+                          {!!event.data?.step && <span className="text-zinc-300">{String(event.data.step)}</span>}
+                          {!!event.data?.error && <span className="text-red-400 ml-2">{String(event.data.error)}</span>}
+                          {!!event.data?.rule && <span className="ml-2">{String(event.data.rule)} → {String(event.data.action)}</span>}
+                        </span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </ScrollArea>
+            </TabsContent>
+            <TabsContent value="timeline" className={cn("flex-1 min-h-0", viewMode !== "timeline" && "hidden")}>
+              <TimelineView job={job} runs={runs} onSelectStep={handleSelectStep} />
+            </TabsContent>
+            <TabsContent value="tree" className={cn("flex-1 min-h-0", viewMode !== "tree" && "hidden")}>
+              <ActionContextProvider>
+                <JobTreeView
+                  jobId={job.id}
+                  onNavigateToJob={(id) => navigate({ to: "/jobs/$jobId", params: { jobId: id } })}
+                />
+              </ActionContextProvider>
+            </TabsContent>
+          </Tabs>
         </div>
 
-        {/* Controls */}
-        <JobControls job={job} selectedStep={selectedStep} runs={runs} />
-
-        {/* Error summary banner */}
-        {failedRun && (
-          <div className="flex items-center gap-2 px-4 py-2 border-b border-red-300/50 dark:border-red-900/50 bg-red-100/30 dark:bg-red-950/30 text-xs">
-            <AlertTriangle className="w-3.5 h-3.5 text-red-500 dark:text-red-400 shrink-0" />
-            <div className="flex-1 min-w-0 truncate">
-              <span className="text-red-700 dark:text-red-300 font-medium">
-                Step "{failedRun.step_name}" failed
-              </span>
-              {failedRun.error && (
-                <span className="text-red-500/70 dark:text-red-400/70 ml-2">
-                  — {extractErrorMessage(failedRun.error)}
-                </span>
-              )}
-            </div>
-            <button
-              type="button"
-              className="text-amber-600 dark:text-amber-400 hover:text-amber-500 dark:hover:text-amber-300 text-xs font-medium whitespace-nowrap shrink-0 cursor-pointer"
-              onClick={() =>
-                mutations.rerunStep.mutate({
-                  jobId: job.id,
-                  stepName: failedRun.step_name,
-                })
-              }
-              disabled={mutations.rerunStep.isPending}
-            >
-              Retry Step
-            </button>
-            <button
-              type="button"
-              className="text-red-400 hover:text-red-300 underline underline-offset-2 whitespace-nowrap shrink-0 cursor-pointer"
-              onClick={() => handleSelectStep(failedRun.step_name)}
-            >
-              View Details
-            </button>
-          </div>
-        )}
-
-        {/* Main content view — DAG, Events, Timeline, or Tree */}
-        <div className="flex-1 overflow-hidden">
-          {viewMode === "events" ? (
-            <ScrollArea className="h-full">
-              <div className="p-4 space-y-1">
-                {events.length === 0 ? (
-                  <div className="text-center text-xs text-zinc-500 py-8">No events</div>
-                ) : (
-                  events.map((event) => (
-                    <div
-                      key={event.id}
-                      className={cn(
-                        "flex items-start gap-3 px-3 py-1.5 rounded text-xs font-mono hover:bg-zinc-100/50 dark:hover:bg-zinc-800/30",
-                        !!event.data?.step && "cursor-pointer",
-                      )}
-                      onClick={() => {
-                        const step = event.data?.step as string | undefined;
-                        if (step) handleSelectStep(step);
-                      }}
-                    >
-                      <span className="text-zinc-500 shrink-0 tabular-nums w-20">
-                        {new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-                      </span>
-                      <span className={cn(
-                        "shrink-0 w-32 truncate",
-                        event.type.includes("failed") && "text-red-400",
-                        event.type.includes("completed") && "text-emerald-400",
-                        event.type.includes("started") && "text-blue-400",
-                        event.type.includes("suspended") && "text-amber-400",
-                      )}>
-                        {event.type}
-                      </span>
-                      <span className="text-zinc-400 truncate flex-1">
-                        {!!event.data?.step && <span className="text-zinc-300">{String(event.data.step)}</span>}
-                        {!!event.data?.error && <span className="text-red-400 ml-2">{String(event.data.error)}</span>}
-                        {!!event.data?.rule && <span className="ml-2">{String(event.data.rule)} → {String(event.data.action)}</span>}
-                      </span>
-                    </div>
-                  ))
-                )}
-              </div>
-            </ScrollArea>
-          ) : viewMode === "timeline" ? (
-            <TimelineView job={job} runs={runs} onSelectStep={handleSelectStep} />
-          ) : viewMode === "tree" ? (
-            <JobTreeView
-              jobId={job.id}
-              onNavigateToJob={(id) => navigate({ to: "/jobs/$jobId", params: { jobId: id } })}
-            />
-          ) : (
-          <FlowDagView
-            workflow={job.workflow}
-            runs={runs}
-            jobTree={jobTree ?? null}
-            expandedSteps={expandedSteps}
-            onToggleExpand={toggleExpand}
-            selectedStep={selectedStep}
-            onSelectStep={handleSelectStep}
-            onNavigateSubJob={(subJobId) =>
-              navigate({ to: "/jobs/$jobId", params: { jobId: subJobId } })
-            }
-            onFulfillWatch={(runId, payload) =>
-              mutations.fulfillWatch.mutate({ runId, payload })
-            }
-            isFulfilling={mutations.fulfillWatch.isPending}
-            selection={selection}
-            onSelectDataFlow={handleSelectDataFlow}
-            flowName={job.workflow.metadata?.name || job.name || job.objective || "Flow"}
-            jobId={job.id}
-            jobStatus={job.status}
-            jobActions={{
-              onPauseJob: () => mutations.pauseJob.mutate(job.id),
-              onResumeJob: () => mutations.resumeJob.mutate(job.id),
-              onCancelJob: () => mutations.cancelJob.mutate(job.id),
-              onRetryJob: () => mutations.resumeJob.mutate(job.id),
-              onStartJob: () => mutations.startJob.mutate(job.id),
-              onRerunStep: (stepName) => mutations.rerunStep.mutate({ jobId: job.id, stepName }),
-              onCancelRun: (runId) => mutations.cancelRun.mutate(runId),
-              isPausePending: mutations.pauseJob.isPending,
-              isResumePending: mutations.resumeJob.isPending || mutations.startJob.isPending,
-              isCancelPending: mutations.cancelJob.isPending,
-              isRetryPending: mutations.resumeJob.isPending,
-            }}
-            jobInputs={job.inputs ?? null}
-          />
-          )}
-        </div>
-      </div>
-
-      {/* Right sidebar — step detail only */}
       {(() => {
         const deselectStep = () => {
           setDataFlowSelection(null);
           navigate({ search: (prev: JobDetailSearch) => ({ ...prev, step: undefined, tab: undefined, panel: undefined }), replace: true });
         };
 
-        // Step selected: show Run/Step/Session tabs
         if (resolvedStep) {
           const panelContent = (
             <Tabs
@@ -805,7 +612,7 @@ export function JobDetailPage() {
                   activeTab !== "run" && "hidden"
                 )}
               >
-                <div key={selectedStep} className="animate-step-fade">
+                <div key={selectedStep} className="animate-step-fade h-full">
                   <RunView
                     jobId={resolvedStep.jobId}
                     stepDef={resolvedStep.stepDef}
@@ -904,7 +711,6 @@ export function JobDetailPage() {
         return null;
       })()}
 
-      {/* Expanded step overlay */}
       {isMobile ? (
         <MobileFullScreen
           open={expandedStep && !!resolvedStep}

@@ -14,6 +14,7 @@ import {
 import { highlightMatches, countMatches } from "@/lib/log-search";
 import { cn } from "@/lib/utils";
 import { ContentModal } from "@/components/ui/content-modal";
+import { FadedText } from "@/components/ui/FadedText";
 import { Markdown } from "@/components/ui/markdown";
 
 export function toolIcon(kind: string) {
@@ -122,32 +123,16 @@ function ToolGroup({ tools }: { tools: ToolCallState[] }) {
 }
 
 export function PromptSegmentRow({ text }: { text: string }) {
-  const [modalOpen, setModalOpen] = useState(false);
-
   return (
-    <>
-      <div
-        className="relative mt-4 mb-3 cursor-pointer hover:opacity-80 transition-opacity border-l-2 border-blue-500/30 pl-3"
-        onClick={() => setModalOpen(true)}
-      >
-        <div className="max-h-[7.5rem] overflow-hidden relative">
-          <pre className="whitespace-pre-wrap text-xs text-blue-800/60 dark:text-blue-300/50 leading-relaxed">
-            {text}
-          </pre>
-          <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-white dark:from-zinc-950 to-transparent pointer-events-none" />
-        </div>
-      </div>
-      <ContentModal
-        open={modalOpen}
-        onOpenChange={setModalOpen}
+    <div className="mt-4 mb-3 border-l-2 border-blue-500/30 pl-3">
+      <FadedText
+        value={text}
+        maxHeight={120}
         title="Prompt"
-        copyContent={text}
-      >
-        <pre className="whitespace-pre-wrap text-sm text-zinc-300 font-mono p-3 leading-relaxed max-h-[70vh] overflow-auto">
-          {text}
-        </pre>
-      </ContentModal>
-    </>
+        className="whitespace-pre-wrap text-xs text-blue-800/60 dark:text-blue-300/50 leading-relaxed m-0"
+        fadeHeight={32}
+      />
+    </div>
   );
 }
 

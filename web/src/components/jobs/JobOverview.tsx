@@ -1,11 +1,12 @@
-import { useJobOutput, useJobCost } from "@/hooks/useStepwise";
+import { useJobOutput, useJobCost, useStepwiseMutations } from "@/hooks/useStepwise";
 import { ContentModal } from "@/components/ui/content-modal";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { useCopyFeedback } from "@/hooks/useCopyFeedback";
+import { Button } from "@/components/ui/button";
 import type { Job } from "@/lib/types";
 import { cn, formatDuration, formatCost } from "@/lib/utils";
 import { Link } from "@tanstack/react-router";
-import { Package, Terminal, Monitor } from "lucide-react";
+import { Package, Terminal, Monitor, Play, Pause, RotateCcw, XCircle, RefreshCw, AlertTriangle } from "lucide-react";
 import { useMemo, useState } from "react";
 
 interface JobOverviewProps {
@@ -76,10 +77,13 @@ function normalizeOutputValue(value: unknown): unknown {
 
 export function JobOverview({ job }: JobOverviewProps) {
   const { copy: copyId, justCopied: idCopied } = useCopyFeedback();
+  const mutations = useStepwiseMutations();
   const isTerminal =
     job.status === "completed" || job.status === "failed" || job.status === "cancelled";
   const { data: outputs, isLoading: outputsLoading } = useJobOutput(job.id, isTerminal);
   const { data: costData } = useJobCost(job.id);
+  const stale = job.status === "running" && job.created_by !== "server" &&
+    (!job.heartbeat_at || Date.now() - new Date(job.heartbeat_at).getTime() > 60_000);
   const [outputsModalOpen, setOutputsModalOpen] = useState(false);
 
   const normalizedOutputs = useMemo(
@@ -139,7 +143,74 @@ export function JobOverview({ job }: JobOverviewProps) {
         )}
       </div>
 
-      {/* 2. Info grid */}
+      {/* 2. Actions */}
+      {(() => {
+        const s = job.status;
+        const buttons: React.ReactNode[] = [];
+
+        if (s === "staged" || s === "pending") {
+          buttons.push(
+            <Button key="start" variant="outline" size="sm" className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10" onClick={() => mutations.startJob.mutate(job.id)}>
+              <Play className="w-3.5 h-3.5 mr-1.5" />Start
+            </Button>
+          );
+        }
+        if (s === "running") {
+          buttons.push(
+            <Button key="pause" variant="outline" size="sm" onClick={() => mutations.pauseJob.mutate(job.id)} disabled={mutations.pauseJob.isPending}>
+              <Pause className="w-3.5 h-3.5 mr-1.5" />Pause
+            </Button>
+          );
+          buttons.push(
+            <Button key="cancel" variant="outline" size="sm" className="border-red-500/30 text-red-400 hover:bg-red-500/10" onClick={() => mutations.cancelJob.mutate(job.id)} disabled={mutations.cancelJob.isPending}>
+              <XCircle className="w-3.5 h-3.5 mr-1.5" />Cancel
+            </Button>
+          );
+        }
+        if (s === "paused") {
+          buttons.push(
+            <Button key="resume" variant="outline" size="sm" className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10" onClick={() => mutations.resumeJob.mutate(job.id)} disabled={mutations.resumeJob.isPending}>
+              <Play className="w-3.5 h-3.5 mr-1.5" />Resume
+            </Button>
+          );
+          buttons.push(
+            <Button key="cancel" variant="outline" size="sm" className="border-red-500/30 text-red-400 hover:bg-red-500/10" onClick={() => mutations.cancelJob.mutate(job.id)} disabled={mutations.cancelJob.isPending}>
+              <XCircle className="w-3.5 h-3.5 mr-1.5" />Cancel
+            </Button>
+          );
+        }
+        if (s === "failed") {
+          buttons.push(
+            <Button key="retry" variant="outline" size="sm" className="border-amber-500/30 text-amber-400 hover:bg-amber-500/10" onClick={() => mutations.resumeJob.mutate(job.id)} disabled={mutations.resumeJob.isPending}>
+              <RefreshCw className="w-3.5 h-3.5 mr-1.5" />Retry
+            </Button>
+          );
+        }
+        if (s === "completed" || s === "failed" || s === "cancelled") {
+          buttons.push(
+            <Button key="reset" variant="outline" size="sm" onClick={() => mutations.resetJob.mutate(job.id)} disabled={mutations.resetJob.isPending}>
+              <RotateCcw className="w-3.5 h-3.5 mr-1.5" />Reset
+            </Button>
+          );
+        }
+
+        if (buttons.length === 0 && !stale) return null;
+        return (
+          <div className="space-y-2">
+            {stale && (
+              <div className="flex items-center gap-1.5 text-amber-500 text-xs">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                Owner not responding
+              </div>
+            )}
+            {buttons.length > 0 && (
+              <div className="flex flex-wrap gap-2">{buttons}</div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* 3. Info grid */}
       <div className="text-xs space-y-1.5">
         <div className="flex items-center gap-2">
           <span className="text-zinc-500 w-16">Job ID</span>
@@ -154,18 +225,6 @@ export function JobOverview({ job }: JobOverviewProps) {
             {job.id}
           </span>
         </div>
-        {meta?.name && (
-          <div className="flex items-center gap-2">
-            <span className="text-zinc-500 w-16">Flow</span>
-            <Link
-              to="/flows/$flowName"
-              params={{ flowName: meta.name }}
-              className="text-blue-600 dark:text-blue-400 hover:text-blue-500 dark:hover:text-blue-300 underline underline-offset-2 text-[10px] font-mono"
-            >
-              {meta.name}
-            </Link>
-          </div>
-        )}
         <div className="flex items-center gap-2">
           <span className="text-zinc-500 w-16">Steps</span>
           <span className="font-mono text-zinc-700 dark:text-zinc-300">{stepCount}</span>

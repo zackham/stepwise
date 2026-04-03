@@ -161,18 +161,6 @@ function ExitRulesSection({ rules }: { rules: ExitRule[] }) {
 
 /* ── Port tooltip / popover helpers ────────────────────────────── */
 
-function formatPortValue(value: unknown, maxLen = 80): string {
-  if (value === null || value === undefined) return "null";
-  if (typeof value === "boolean" || typeof value === "number") return String(value);
-  if (typeof value === "string") {
-    if (value.length <= maxLen) return value;
-    return value.slice(0, maxLen - 3) + "...";
-  }
-  const json = JSON.stringify(value, null, 2);
-  if (json.length <= maxLen) return json;
-  return json.slice(0, maxLen - 3) + "...";
-}
-
 /** Interactive port dot with hover tooltip and click modal */
 function PortDot({
   position,
@@ -293,20 +281,29 @@ function useInputPortContent(
     }
   }
 
-  const hasRealized = Object.keys(realizedInputs).length > 0;
-
-  // Tooltip: compact summary
   const tooltipContent = (
-    <div className="flex flex-col gap-1">
-      <div className="text-[10px] font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
-        {inputs.length} input{inputs.length !== 1 ? "s" : ""}
-        {hasRealized ? " — realized" : ""}
-      </div>
-      {bindingLines.slice(0, 3).map((line, i) => (
-        <div key={i} className="text-[11px] font-mono text-zinc-800 dark:text-zinc-200 whitespace-pre-wrap break-words max-w-[280px]">{line}</div>
-      ))}
-      {bindingLines.length > 3 && (
-        <div className="text-[10px] text-zinc-500">+{bindingLines.length - 3} more</div>
+    <div className="flex flex-col gap-2">
+      {inputs.slice(0, 4).map((inp) => {
+        const binding = inp.any_of_sources
+          ? `any_of(${inp.any_of_sources.map((s) => `${s.step}.${s.field}`).join(", ")})`
+          : `${inp.source_step}.${inp.source_field}`;
+        const realized = realizedInputs[inp.local_name];
+        return (
+          <div key={inp.local_name}>
+            <div className="text-[10px] font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wide mb-1">
+              {inp.local_name}
+              <span className="normal-case font-normal text-zinc-600 dark:text-zinc-500 ml-1.5">← {binding}</span>
+            </div>
+            {realized !== undefined && (
+              <pre className="text-[11px] font-mono text-zinc-800 dark:text-zinc-200 whitespace-pre-wrap break-words max-w-[280px] max-h-[200px] overflow-auto m-0">
+                {typeof realized === "string" ? realized : JSON.stringify(realized, null, 2)}
+              </pre>
+            )}
+          </div>
+        );
+      })}
+      {inputs.length > 4 && (
+        <div className="text-[10px] text-zinc-500">+{inputs.length - 4} more</div>
       )}
     </div>
   );
@@ -354,25 +351,27 @@ function useOutputPortContent(
     const val = artifact?.[name];
     if (val !== undefined) realizedOutputs[name] = val;
   }
-  const hasRealized = Object.keys(realizedOutputs).length > 0;
-
-  // Tooltip: compact summary
   const tooltipContent = (
-    <div className="flex flex-col gap-1">
-      <div className="text-[10px] font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
-        {outputs.length} output{outputs.length !== 1 ? "s" : ""}
-        {hasRealized ? " — realized" : ""}
-      </div>
-      {outputs.slice(0, 3).map((name) => (
-        <div key={name} className="text-[11px] font-mono text-zinc-800 dark:text-zinc-200 whitespace-pre-wrap break-words max-w-[280px]">
-          {name}
-          {realizedOutputs[name] !== undefined
-            ? ` = ${formatPortValue(realizedOutputs[name], 40)}`
-            : ""}
-        </div>
-      ))}
-      {outputs.length > 3 && (
-        <div className="text-[10px] text-zinc-500">+{outputs.length - 3} more</div>
+    <div className="flex flex-col gap-2">
+      {outputs.slice(0, 4).map((name) => {
+        const realized = realizedOutputs[name];
+        return (
+          <div key={name}>
+            <div className="text-[10px] font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wide mb-1">
+              {name}
+            </div>
+            {realized !== undefined ? (
+              <pre className="text-[11px] font-mono text-zinc-800 dark:text-zinc-200 whitespace-pre-wrap break-words max-w-[280px] max-h-[200px] overflow-auto m-0">
+                {typeof realized === "string" ? realized : JSON.stringify(realized, null, 2)}
+              </pre>
+            ) : (
+              <span className="text-[11px] font-mono text-zinc-600">(pending)</span>
+            )}
+          </div>
+        );
+      })}
+      {outputs.length > 4 && (
+        <div className="text-[10px] text-zinc-500">+{outputs.length - 4} more</div>
       )}
     </div>
   );
@@ -415,7 +414,7 @@ function StepTooltip({
   const hasExitRules = stepDef.exit_rules.length > 0;
 
   return (
-    <div className="absolute left-0 top-full mt-1 z-50 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-sm border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-2xl p-2.5 min-w-[280px] max-w-[400px]">
+    <div className="absolute left-0 top-full mt-1 z-50 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md shadow-xl p-2 min-w-[280px] max-w-[400px]">
       {/* Header: executor type */}
       <div className="flex items-center gap-1.5 mb-2 pb-1.5 border-b border-zinc-200 dark:border-zinc-800">
         <span className="text-zinc-500 dark:text-zinc-400">

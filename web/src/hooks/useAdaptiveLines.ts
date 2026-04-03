@@ -81,7 +81,7 @@ function measureFont(container: HTMLElement): string {
   probe.textContent = "X";
   container.appendChild(probe);
   const cs = getComputedStyle(probe);
-  const font = `${cs.fontSize} ${cs.fontFamily}`;
+  const font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
   container.removeChild(probe);
   return font;
 }
@@ -215,6 +215,8 @@ export function useAdaptiveLines(
     const chromeHeight = skeletonHeight - totalMinLineHeight;
 
     // 4. Available height = viewport bottom - container top
+    //    Can't use el.clientHeight because it reflects current content size,
+    //    not the maximum available space (content grows based on allocation).
     const availableHeight = window.innerHeight - rect.top;
 
     // 5. Content width (no scrollbar)

@@ -15,7 +15,7 @@ export function usePretextMeasure() {
 
     const readMetrics = () => {
       const cs = getComputedStyle(el);
-      fontRef.current = `${cs.fontSize} ${cs.fontFamily}`;
+      fontRef.current = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
       lineHeightRef.current = parseFloat(cs.lineHeight) || 20;
       widthRef.current = el.clientWidth;
       setReady(true);

@@ -24,7 +24,8 @@ import { toast } from "sonner";
 import { cn, formatCost, formatDuration } from "@/lib/utils";
 import { VirtualizedLogView } from "@/components/logs/VirtualizedLogView";
 import { LiveDuration } from "@/components/LiveDuration";
-import { measureTextHeight, truncateToLines } from "@/lib/pretext-measure";
+import { FadedText } from "@/components/ui/FadedText";
+import { useAdaptiveLines } from "@/hooks/useAdaptiveLines";
 import {
   Collapsible,
   CollapsibleContent,
@@ -138,7 +139,7 @@ function buildSlots(
       const strVal = typeof value === "string" ? value
         : typeof value === "number" || typeof value === "boolean" ? String(value)
         : JSON.stringify(value, null, 2);
-      slots.push({ type: "result", label: key, value: strVal });
+      slots.push({ type: "result", label: key, value: strVal, minLines: 3 });
     }
   }
 
@@ -155,145 +156,6 @@ function buildSlots(
   return slots;
 }
 
-/**
- * Two-pass adaptive allocation with caching:
- *
- * Pass 1 (hidden): render with 1 line per value, visibility:hidden.
- *   Measure chrome height = scrollHeight - (slots.length * lineHeight).
- *   Cache it.
- *
- * Pass 2: compute allocation from cached chrome height + viewport.
- *   No re-render needed for resize — just recalculate from cache.
- */
-function useAdaptiveAllocation(
-  containerRef: React.RefObject<HTMLDivElement | null>,
-  slots: AdaptiveSlot[],
-  font: string,
-  width: number,
-) {
-  const [allocation, setAllocation] = useState<number[]>(() =>
-    slots.map((s) => s.minLines ?? 1)
-  );
-  const [needsScroll, setNeedsScroll] = useState(false);
-  const [ready, setReady] = useState(false);
-  const chromeHeightRef = useRef(0);
-  const naturalLinesRef = useRef<number[]>([]);
-
-  // Compute natural line counts (only when slots or width change)
-  useEffect(() => {
-    if (width <= 0 || slots.length === 0) return;
-    const lineHeight = 18;
-    naturalLinesRef.current = slots.map((slot) => {
-      if (!slot.value) return 1;
-      const h = measureTextHeight(slot.value, font, width, lineHeight, { whiteSpace: "pre-wrap" });
-      return Math.max(1, Math.ceil(h / lineHeight));
-    });
-  }, [slots, font, width]);
-
-  const distribute = useCallback(() => {
-    const el = containerRef.current;
-    if (!el || slots.length === 0) return;
-
-    const lineHeight = 18;
-    const containerTop = el.getBoundingClientRect().top;
-    const viewportBottom = window.innerHeight;
-    const totalAvailable = viewportBottom - containerTop;
-    const pixelsForValues = totalAvailable - chromeHeightRef.current;
-    const availableLines = Math.floor(pixelsForValues / lineHeight);
-
-    const minPerSlot = slots.map((s) => s.minLines ?? 1);
-    const totalMinLines = minPerSlot.reduce((a, b) => a + b, 0);
-
-    if (availableLines < totalMinLines) {
-      setNeedsScroll(true);
-      const naturalLines = naturalLinesRef.current;
-      setAllocation(minPerSlot.map((min, i) => Math.min(min, naturalLines[i] ?? 1)));
-      return;
-    }
-    setNeedsScroll(false);
-
-    const naturalLines = naturalLinesRef.current;
-    const alloc = minPerSlot.map((min, i) => Math.min(min, naturalLines[i] ?? min));
-    let remaining = availableLines - alloc.reduce((a, b) => a + b, 0);
-
-    let changed = true;
-    while (remaining > 0 && changed) {
-      changed = false;
-      for (let i = 0; i < slots.length; i++) {
-        if (remaining <= 0) break;
-        if (alloc[i] < (naturalLines[i] ?? 1)) {
-          alloc[i]++;
-          remaining--;
-          changed = true;
-        }
-      }
-    }
-
-    setAllocation(alloc);
-  }, [containerRef, slots]);
-
-  // Pass 1: measure chrome height (runs once after first render with 1-line values)
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el || slots.length === 0 || ready) return;
-
-    const measure = () => {
-      const lineHeight = 18;
-      // Content is rendered with 1 line per slot — chrome = total - value lines
-      const cs = getComputedStyle(el);
-      const bottomPad = parseFloat(cs.paddingBottom) || 0;
-      chromeHeightRef.current = el.scrollHeight - (slots.length * lineHeight) + bottomPad;
-      setReady(true);
-      distribute();
-    };
-
-    const raf = requestAnimationFrame(measure);
-    return () => cancelAnimationFrame(raf);
-  }, [containerRef, slots.length, ready, distribute]);
-
-  // On resize, just redistribute from cached chrome height
-  useEffect(() => {
-    if (!ready) return;
-    window.addEventListener("resize", distribute);
-    return () => window.removeEventListener("resize", distribute);
-  }, [ready, distribute]);
-
-  // Re-distribute when ready or font/width changes
-  useEffect(() => {
-    if (ready) distribute();
-  }, [ready, distribute, font, width]);
-
-  // Reset when slots change (new step selected)
-  useEffect(() => {
-    setReady(false);
-    setAllocation(new Array(slots.length).fill(1));
-  }, [slots]);
-
-  // Sidebar resize: debounce, then full re-measure
-  const prevWidthRef = useRef(0);
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-
-    let debounceTimer: ReturnType<typeof setTimeout>;
-    const ro = new ResizeObserver(() => {
-      const newWidth = el.clientWidth;
-      if (prevWidthRef.current && newWidth !== prevWidthRef.current) {
-        // Width changed (sidebar drag) — debounce and re-measure everything
-        clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-          setReady(false);
-          setAllocation(slots.map((s) => s.minLines ?? 1));
-        }, 150);
-      }
-      prevWidthRef.current = newWidth;
-    });
-    ro.observe(el);
-    return () => { ro.disconnect(); clearTimeout(debounceTimer); };
-  }, [containerRef, slots.length]);
-
-  return { allocation, needsScroll, ready };
-}
 
 function AdaptiveRunContent({
   inputs,
@@ -303,7 +165,6 @@ function AdaptiveRunContent({
   onSelectStep,
   onViewSessions,
   containerRef,
-  onNeedsScroll,
 }: {
   inputs: Record<string, unknown> | null;
   inputBindings: InputBinding[];
@@ -312,56 +173,18 @@ function AdaptiveRunContent({
   onSelectStep?: (stepName: string) => void;
   onViewSessions?: () => void;
   containerRef: React.RefObject<HTMLDivElement | null>;
-  onNeedsScroll?: (needs: boolean) => void;
 }) {
   const slots = useMemo(
     () => buildSlots(inputs, inputBindings, result, agentOutputText),
     [inputs, inputBindings, result, agentOutputText],
   );
 
-  // Measure font + width ONCE while overflow:hidden (no scrollbar) — cached, not re-measured on scroll toggle
-  const [textMetrics, setTextMetrics] = useState({ font: "12px monospace", width: 300 });
-  const textMetricsMeasured = useRef(false);
-  useEffect(() => {
-    // Reset on slot change (new step selected)
-    textMetricsMeasured.current = false;
-  }, [slots]);
-  useEffect(() => {
-    if (textMetricsMeasured.current) return;
-    const el = containerRef.current;
-    if (!el) return;
-    const measure = () => {
-      if (textMetricsMeasured.current) return;
-      const probe = document.createElement("span");
-      probe.className = "text-xs font-mono";
-      probe.style.visibility = "hidden";
-      probe.style.position = "absolute";
-      probe.textContent = "X";
-      el.appendChild(probe);
-      const cs = getComputedStyle(probe);
-      const font = `${cs.fontSize} ${cs.fontFamily}`;
-      el.removeChild(probe);
-      const containerCs = getComputedStyle(el);
-      const padLeft = parseFloat(containerCs.paddingLeft) || 0;
-      const padRight = parseFloat(containerCs.paddingRight) || 0;
-      const contentWidth = el.clientWidth - padLeft - padRight;
-      if (contentWidth > 0) {
-        setTextMetrics({ font, width: contentWidth });
-        textMetricsMeasured.current = true;
-      }
-    };
-    if (document.fonts?.ready) {
-      document.fonts.ready.then(measure);
-    } else {
-      measure();
-    }
-  }, [containerRef, slots]);
+  const adaptiveSlots = useMemo(
+    () => slots.map((s) => ({ value: s.value, minLines: s.minLines })),
+    [slots],
+  );
 
-  const { allocation, needsScroll, ready } = useAdaptiveAllocation(containerRef, slots, textMetrics.font, textMetrics.width);
-
-  useEffect(() => {
-    onNeedsScroll?.(needsScroll);
-  }, [needsScroll, onNeedsScroll]);
+  const { allocations, lineHeight, ready } = useAdaptiveLines(containerRef, adaptiveSlots);
 
   const inputSlots = useMemo(() => slots.filter((s) => s.type === "input"), [slots]);
   const resultSlots = useMemo(() => slots.filter((s) => s.type === "result"), [slots]);
@@ -369,7 +192,6 @@ function AdaptiveRunContent({
 
   if (slots.length === 0) return null;
 
-  // allocation is ordered: input slots, then result slots, then agent output slots
   const inputAllocStart = 0;
   const resultAllocStart = inputSlots.length;
   const agentAllocStart = inputSlots.length + resultSlots.length;
@@ -385,9 +207,8 @@ function AdaptiveRunContent({
               <AdaptiveSlotRow
                 key={i}
                 slot={slot}
-                lines={allocation[inputAllocStart + i] ?? 3}
-                font={textMetrics.font}
-                width={textMetrics.width}
+                lines={allocations[inputAllocStart + i] ?? 1}
+                lineHeight={lineHeight}
                 onSelectStep={onSelectStep}
               />
             ))}
@@ -404,9 +225,8 @@ function AdaptiveRunContent({
               <AdaptiveSlotRow
                 key={i}
                 slot={slot}
-                lines={allocation[resultAllocStart + i] ?? 3}
-                font={textMetrics.font}
-                width={textMetrics.width}
+                lines={allocations[resultAllocStart + i] ?? 3}
+                lineHeight={lineHeight}
                 isResult
               />
             ))}
@@ -427,9 +247,8 @@ function AdaptiveRunContent({
               <AdaptiveSlotRow
                 key={i}
                 slot={slot}
-                lines={allocation[agentAllocStart + i] ?? 3}
-                font={textMetrics.font}
-                width={textMetrics.width}
+                lines={allocations[agentAllocStart + i] ?? 3}
+                lineHeight={lineHeight}
                 onClick={onViewSessions}
               />
             ))}
@@ -443,27 +262,18 @@ function AdaptiveRunContent({
 function AdaptiveSlotRow({
   slot,
   lines,
-  font,
-  width,
+  lineHeight = 19.5,
   onSelectStep,
   isResult,
   onClick,
 }: {
   slot: AdaptiveSlot;
   lines: number;
-  font: string;
-  width: number;
+  lineHeight?: number;
   onSelectStep?: (stepName: string) => void;
   isResult?: boolean;
   onClick?: () => void;
 }) {
-  const [modalOpen, setModalOpen] = useState(false);
-
-  const { text: displayText, truncated } = useMemo(
-    () => truncateToLines(slot.value, font, width, 18, lines, { whiteSpace: "pre-wrap" }),
-    [slot.value, font, width, lines],
-  );
-
   return (
     <div className="py-1.5">
       {/* Label pill — field ← source (skip if no label) */}
@@ -493,28 +303,15 @@ function AdaptiveSlotRow({
         </div>
       )}
 
-      {/* Value — pretext-truncated */}
-      <div
-        className={cn(
-          "text-xs font-mono cursor-pointer hover:text-zinc-200 transition-colors whitespace-pre-wrap break-words leading-relaxed text-zinc-400",
-        )}
-        onClick={() => onClick ? onClick() : setModalOpen(true)}
-      >
-        {truncated && displayText.endsWith("…")
-          ? <>{displayText.slice(0, -1)}<span className="text-zinc-600">…</span></>
-          : displayText}
+      {/* Value — height-capped with gradient fade, data-adaptive-value for hook measurement */}
+      <div data-adaptive-value={slot.value}>
+        <FadedText
+          value={slot.value}
+          maxHeight={lines * lineHeight}
+          title={slot.label || slot.type}
+          onClick={onClick}
+        />
       </div>
-
-      <ContentModal
-        open={modalOpen}
-        onOpenChange={setModalOpen}
-        title={slot.label || slot.type}
-        copyContent={slot.value}
-      >
-        <pre className="whitespace-pre-wrap text-sm text-zinc-300 font-mono p-3 leading-relaxed max-h-[70vh] overflow-auto">
-          {slot.value}
-        </pre>
-      </ContentModal>
     </div>
   );
 }
@@ -968,17 +765,9 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onSwitchT
   const isSubscription = configData?.billing_mode === "subscription";
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const [scrollEnabled, setScrollEnabled] = useState(false);
 
-  // Reset scroll state on step change
-  useEffect(() => {
-    setScrollEnabled(false);
-  }, [stepDef.name]);
-
-  // Constrain container to viewport height + check overflow once after content settles
+  // Constrain container to viewport height
   const [maxHeight, setMaxHeight] = useState<string>("100%");
-  const overflowChecked = useRef(false);
-  useEffect(() => { overflowChecked.current = false; }, [stepDef.name]);
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -986,21 +775,6 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onSwitchT
       const rect = el.getBoundingClientRect();
       const mh = window.innerHeight - rect.top;
       setMaxHeight(`${mh}px`);
-
-      // One-time overflow check after content renders
-      if (!overflowChecked.current) {
-        overflowChecked.current = true;
-        // Wait for content to render, then check if it overflows
-        setTimeout(() => {
-          if (!el) return;
-          // Temporarily measure with overflow visible
-          const saved = el.style.overflow;
-          el.style.overflow = "hidden";
-          const overflows = el.scrollHeight > el.clientHeight + 2;
-          el.style.overflow = saved;
-          if (overflows) setScrollEnabled(true);
-        }, 300);
-      }
     };
     const timer = setTimeout(measure, 50);
     window.addEventListener("resize", measure);
@@ -1093,7 +867,7 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onSwitchT
   const exitRes = run ? exitResolutions[run.attempt] : undefined;
 
   return (
-    <div ref={containerRef} className={cn("px-3 pb-4 space-y-3 animate-step-fade", scrollEnabled ? "overflow-y-auto" : "overflow-hidden")} style={{ maxHeight }}>
+    <div ref={containerRef} className="px-3 pb-4 space-y-3 animate-step-fade overflow-y-auto" style={{ maxHeight }}>
       {/* 1. Header bar — run navigator */}
       <div className="sticky top-0 z-10 -mx-3 px-3 pt-3 pb-2 border-b border-border bg-zinc-50/80 dark:bg-zinc-950/80 backdrop-blur-sm">
         <RunNavigator
@@ -1132,7 +906,6 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onSwitchT
           onSelectStep={onSelectStep}
           onViewSessions={() => onSwitchTab?.("session", run?.id)}
           containerRef={containerRef}
-          onNeedsScroll={setScrollEnabled}
         />
       )}
 
@@ -1372,7 +1145,7 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onSwitchT
 
       {/* Actions for non-failed runs */}
       {run && !isFailed && (
-        <div className="flex gap-2 pb-1">
+        <div className="flex gap-2">
           {canRerun && (
             <Button
               variant="outline"
