@@ -1,9 +1,9 @@
-import { useEffect, useRef } from "react";
-import { Loader2, Check, Pencil } from "lucide-react";
+import { useRef, useMemo } from "react";
+import { Loader2, Check, Pencil, ArrowDown, ArrowUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Markdown } from "@/components/ui/markdown";
 import { ToolCard } from "@/components/jobs/StreamSegments";
+import { useAutoScroll } from "@/hooks/useAutoScroll";
 import type { ChatMessage } from "@/hooks/useEditorChat";
 import type { ToolCallState } from "@/hooks/useAgentStream";
 
@@ -16,15 +16,36 @@ interface ChatMessagesProps {
 
 export function ChatMessages({ messages, isStreaming, onApplyYaml, emptyMessage }: ChatMessagesProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages]);
+  const contentVersion = useMemo(() => messages.length + (isStreaming ? 1 : 0), [messages.length, isStreaming]);
+  const { showBackToBottom, showJumpToTop, scrollToBottom, scrollToTop } = useAutoScroll(scrollRef, contentVersion, isStreaming);
 
   return (
-    <ScrollArea className="flex-1 min-h-0">
-      <div ref={scrollRef} className="p-3 space-y-3">
+    <div className="flex-1 min-h-0 relative flex flex-col overflow-hidden">
+      {/* Scroll FABs */}
+      {showJumpToTop && (
+        <div className="absolute top-2 left-0 right-0 z-10 flex justify-center pointer-events-none">
+          <button
+            onClick={scrollToTop}
+            className="pointer-events-auto flex items-center gap-1 px-3 py-1 rounded-full bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 text-xs text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-50 dark:hover:bg-zinc-700 shadow-lg transition-colors cursor-pointer"
+          >
+            <ArrowUp className="w-3 h-3" />
+            Jump to top
+          </button>
+        </div>
+      )}
+      {showBackToBottom && (
+        <div className="absolute bottom-2 left-0 right-0 z-10 flex justify-center pointer-events-none">
+          <button
+            onClick={scrollToBottom}
+            className="pointer-events-auto flex items-center gap-1 px-3 py-1 rounded-full bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 text-xs text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-50 dark:hover:bg-zinc-700 shadow-lg transition-colors cursor-pointer"
+          >
+            <ArrowDown className="w-3 h-3" />
+            Jump to bottom
+          </button>
+        </div>
+      )}
+
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3">
         {messages.length === 0 && emptyMessage && (
           <p className="text-xs text-zinc-500">{emptyMessage}</p>
         )}
@@ -35,7 +56,6 @@ export function ChatMessages({ messages, isStreaming, onApplyYaml, emptyMessage 
             {msg.role === "assistant" && msg.toolActivities && msg.toolActivities.length > 0 && (
               <div className="space-y-0">
                 {msg.toolActivities.map((tool) => {
-                  // Build a descriptive title from tool name + input args
                   const arg = tool.input.file_path || tool.input.path || tool.input.command || tool.input.pattern || "";
                   const title = arg ? `${tool.name} ${arg}` : tool.name;
                   return (
@@ -121,6 +141,6 @@ export function ChatMessages({ messages, isStreaming, onApplyYaml, emptyMessage 
           </div>
         )}
       </div>
-    </ScrollArea>
+    </div>
   );
 }

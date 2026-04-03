@@ -385,12 +385,13 @@ def _acpx_agent_loop(
                 tool_id = update.get("toolCallId", "")
                 title = update.get("title", "")
                 kind = update.get("kind", "")
+                raw_input = update.get("rawInput", {})
                 tool_kinds[tool_id] = kind
                 yield {
                     "type": "tool_use",
                     "tool_name": title,
                     "tool_use_id": tool_id,
-                    "tool_input": {},
+                    "tool_input": raw_input if isinstance(raw_input, dict) else {},
                     "tool_kind": kind,
                 }
 
