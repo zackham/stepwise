@@ -16,7 +16,7 @@ export function usePanelRegister(controls: PanelControls) {
   // Build a fingerprint of the scalar values so we only re-register when something changes.
   const fingerprint = JSON.stringify({
     lv: controls.leftPanel?.visible,
-    ld: controls.leftPanel?.disabled,
+    ld: (controls.leftPanel as Record<string, unknown> | undefined)?.disabled,
     rv: controls.rightPanel?.visible,
     rd: controls.rightPanel?.disabled,
     co: controls.chat?.open,

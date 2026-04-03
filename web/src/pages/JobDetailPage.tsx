@@ -682,7 +682,7 @@ export function JobDetailPage() {
                       key={event.id}
                       className={cn(
                         "flex items-start gap-3 px-3 py-1.5 rounded text-xs font-mono hover:bg-zinc-100/50 dark:hover:bg-zinc-800/30",
-                        event.data?.step && "cursor-pointer",
+                        !!event.data?.step && "cursor-pointer",
                       )}
                       onClick={() => {
                         const step = event.data?.step as string | undefined;
@@ -702,9 +702,9 @@ export function JobDetailPage() {
                         {event.type}
                       </span>
                       <span className="text-zinc-400 truncate flex-1">
-                        {event.data?.step && <span className="text-zinc-300">{event.data.step as string}</span>}
-                        {event.data?.error && <span className="text-red-400 ml-2">{event.data.error as string}</span>}
-                        {event.data?.rule && <span className="ml-2">{event.data.rule as string} → {event.data.action as string}</span>}
+                        {!!event.data?.step && <span className="text-zinc-300">{String(event.data.step)}</span>}
+                        {!!event.data?.error && <span className="text-red-400 ml-2">{String(event.data.error)}</span>}
+                        {!!event.data?.rule && <span className="ml-2">{String(event.data.rule)} → {String(event.data.action)}</span>}
                       </span>
                     </div>
                   ))
