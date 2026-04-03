@@ -54,7 +54,7 @@ import type { LocalFlow, RegistryFlow } from "@/lib/types";
 type Tab = "local" | "registry";
 type VisibilityFilter = "all" | "interactive" | "background" | "internal";
 type TimeRange = "today" | "7d" | "30d" | undefined;
-type FlowSortCol = "name" | "steps" | "jobs" | "last_run";
+type FlowSortCol = "name" | "steps" | "jobs" | "last_run" | "updated";
 type RegistrySortCol = "name" | "author" | "steps" | "downloads" | "updated";
 
 const VISIBILITY_OPTIONS = [
@@ -271,6 +271,14 @@ export function FlowsPage() {
           if (!ta) return 1;
           if (!tb) return -1;
           return dir * ta.localeCompare(tb);
+        }
+        case "updated": {
+          const ma = a.modified_at ?? "";
+          const mb = b.modified_at ?? "";
+          if (ma === mb) return a.name.localeCompare(b.name);
+          if (!ma) return 1;
+          if (!mb) return -1;
+          return dir * ma.localeCompare(mb);
         }
         default:
           return 0;
@@ -688,6 +696,7 @@ export function FlowsPage() {
                         <SortHeader col="steps" label="Steps" current={sortCol} asc={sortAsc} onSort={handleSort} className="w-12 text-right" />
                         <SortHeader col="jobs" label="Jobs" current={sortCol} asc={sortAsc} onSort={handleSort} className="w-14 text-right" />
                         <SortHeader col="last_run" label="Last Run" current={sortCol} asc={sortAsc} onSort={handleSort} className="w-16 text-right" />
+                        <SortHeader col="updated" label="Updated" current={sortCol} asc={sortAsc} onSort={handleSort} className="w-16 text-right" />
                       </div>
                       {filtered.map((flow) => {
                         const stats = statsMap.get(flowDirKey(flow.path));
@@ -760,7 +769,8 @@ export function FlowsPage() {
                               <div className="hidden sm:flex items-center gap-4 shrink-0 text-[11px] text-zinc-500 dark:text-zinc-500 tabular-nums">
                                 <span className="w-12 text-right">{flow.steps_count} step{flow.steps_count !== 1 ? "s" : ""}</span>
                                 <span className="w-14 text-right">{jobCount > 0 ? `${jobCount} job${jobCount !== 1 ? "s" : ""}` : "—"}</span>
-                                <span className="w-16 text-right">{lastRun ? formatRelativeTime(lastRun) : "never"}</span>
+                                <span className="w-16 text-right">{lastRun ? formatRelativeTime(lastRun) : "—"}</span>
+                                <span className="w-16 text-right">{flow.modified_at ? formatRelativeTime(flow.modified_at) : "—"}</span>
                               </div>
                             </div>
                           </EntityContextMenu>
