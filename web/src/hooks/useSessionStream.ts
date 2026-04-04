@@ -7,6 +7,7 @@ export interface SessionStreamState {
   segments: StreamSegment[];
   boundaries: SessionBoundary[];
   usage: { used: number; size: number } | null;
+  eventToSegment?: number[];
 }
 
 export function useSessionStream(
@@ -105,6 +106,7 @@ export function useSessionStream(
       segments: built.segments,
       boundaries: backfillBoundaries ?? [],
       usage: built.usage,
+      eventToSegment: built.eventToSegment,
     };
 
     // Replay queued live events

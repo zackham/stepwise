@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
-import { useJobSessions } from "@/hooks/useStepwise";
+import { useJobSessions, useSessionStepEntries } from "@/hooks/useStepwise";
 import { SessionTranscriptView } from "./SessionTranscriptView";
+import { SessionStepFlow } from "./SessionStepFlow";
 import { cn } from "@/lib/utils";
 import type { SessionInfo } from "@/lib/types";
 import { ArrowLeft } from "lucide-react";
@@ -47,12 +48,17 @@ function formatSessionName(name: string, _stepNames: string[]): string {
 
 function SessionCard({
   session,
+  jobId,
   onClick,
+  onNavigateToStep,
 }: {
   session: SessionInfo;
+  jobId: string;
   onClick: () => void;
+  onNavigateToStep?: (stepName: string) => void;
 }) {
   const displayName = formatSessionName(session.session_name, session.step_names);
+  const stepEntries = useSessionStepEntries(jobId, session);
 
   // Calculate duration
   const startMs = session.started_at ? new Date(session.started_at).getTime() : null;
@@ -81,9 +87,8 @@ function SessionCard({
           </span>
         )}
       </div>
+      <SessionStepFlow entries={stepEntries} onSelectStep={onNavigateToStep} />
       <div className="flex items-center gap-2 mt-1 text-[10px] text-zinc-500">
-        <span>{session.step_names.length} step{session.step_names.length !== 1 ? "s" : ""}</span>
-        <span className="text-zinc-600">·</span>
         <span>{session.run_ids.length} run{session.run_ids.length !== 1 ? "s" : ""}</span>
         {startedAgo && (
           <>
@@ -112,6 +117,8 @@ export function SessionTab({ jobId, highlightStep, onNavigateToStep, focusStep, 
   const { data: sessionData, isLoading } = useJobSessions(jobId);
   const sessions = sessionData?.sessions ?? [];
   const [selectedSession, setSelectedSession] = useState<string | null>(initialSession ?? null);
+  const firstSession = sessions.length === 1 ? sessions[0] : null;
+  const singleSessionEntries = useSessionStepEntries(jobId, firstSession);
 
   // React to external initialSession changes (e.g., "View full session" from right panel)
   useEffect(() => {
@@ -138,18 +145,31 @@ export function SessionTab({ jobId, highlightStep, onNavigateToStep, focusStep, 
   if (sessions.length === 1) {
     const s = sessions[0];
     return (
-      <SessionTranscriptView
-        jobId={jobId}
-        sessionName={s.session_name}
-        runIds={s.run_ids}
-        isLive={s.is_active}
-        highlightStep={highlightStep}
-        onNavigateToStep={onNavigateToStep}
-        collapsibleBoundaries={true}
-        defaultExpanded={true}
-        focusStep={focusStep}
-        onSelectStep={onNavigateToStep}
-      />
+      <div className="flex flex-col h-full">
+        {singleSessionEntries.length > 1 && (
+          <div className="px-3 py-2 border-b border-border shrink-0">
+            <SessionStepFlow
+              entries={singleSessionEntries}
+              currentStep={highlightStep ?? undefined}
+              onSelectStep={onNavigateToStep}
+            />
+          </div>
+        )}
+        <div className="flex-1 min-h-0">
+          <SessionTranscriptView
+            jobId={jobId}
+            sessionName={s.session_name}
+            runIds={s.run_ids}
+            isLive={s.is_active}
+            highlightStep={highlightStep}
+            onNavigateToStep={onNavigateToStep}
+            collapsibleBoundaries={true}
+            defaultExpanded={true}
+            focusStep={focusStep}
+            onSelectStep={onNavigateToStep}
+          />
+        </div>
+      </div>
     );
   }
 
@@ -203,7 +223,9 @@ export function SessionTab({ jobId, highlightStep, onNavigateToStep, focusStep, 
         <SessionCard
           key={s.session_name}
           session={s}
+          jobId={jobId}
           onClick={() => setSelectedSession(s.session_name)}
+          onNavigateToStep={onNavigateToStep}
         />
       ))}
     </div>

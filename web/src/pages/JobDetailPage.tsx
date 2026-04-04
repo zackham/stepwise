@@ -6,7 +6,6 @@ import { SessionTab } from "@/components/jobs/SessionTab";
 import { StepSessionView } from "@/components/jobs/StepSessionView";
 import { FlowDagView } from "@/components/dag/FlowDagView";
 import { TimelineView } from "@/components/jobs/TimelineView";
-import { JobTreeView } from "@/components/jobs/JobTreeView";
 import { RunView } from "@/components/jobs/RunView";
 import { StepDefinitionPanel } from "@/components/editor/StepDefinitionPanel";
 import { JobOverview } from "@/components/jobs/JobOverview";
@@ -22,7 +21,6 @@ import {
   Workflow,
   ScrollText,
   GanttChart,
-  GitBranch,
 } from "lucide-react";
 import { ResizablePanel } from "@/components/ui/ResizablePanel";
 import type { JobTreeNode, StepDefinition } from "@/lib/types";
@@ -31,7 +29,6 @@ import { cn } from "@/lib/utils";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { usePanelRegister } from "@/hooks/usePanelRegister";
-import { ActionContextProvider } from "@/components/menus/ActionContextProvider";
 
 
 function extractErrorMessage(error: string): string {
@@ -384,7 +381,6 @@ export function JobDetailPage() {
                 <TabsContent value="session" className={cn("flex-1 min-h-0 overflow-y-auto", leftTab !== "session" && "hidden")}>
                   <SessionTab
                     jobId={jobId}
-                    highlightStep={selectedStep}
                     initialSession={leftSessionFocus}
                     onNavigateToStep={(stepName) =>
                       navigate({
@@ -424,17 +420,13 @@ export function JobDetailPage() {
                   <Workflow className="w-3.5 h-3.5" />
                   {!isMobile && "Flow"}
                 </TabsTrigger>
-                <TabsTrigger value="events" className="text-xs gap-1 px-2.5">
-                  <ScrollText className="w-3.5 h-3.5" />
-                  {!isMobile && "Events"}
-                </TabsTrigger>
                 <TabsTrigger value="timeline" className="text-xs gap-1 px-2.5">
                   <GanttChart className="w-3.5 h-3.5" />
                   {!isMobile && "Timeline"}
                 </TabsTrigger>
-                <TabsTrigger value="tree" className="text-xs gap-1 px-2.5">
-                  <GitBranch className="w-3.5 h-3.5" />
-                  {!isMobile && "Tree"}
+                <TabsTrigger value="events" className="text-xs gap-1 px-2.5">
+                  <ScrollText className="w-3.5 h-3.5" />
+                  {!isMobile && "Events"}
                 </TabsTrigger>
               </TabsList>
             </div>
@@ -512,6 +504,9 @@ export function JobDetailPage() {
                 jobInputs={job.inputs ?? null}
               />
             </TabsContent>
+            <TabsContent value="timeline" className={cn("flex-1 min-h-0", viewMode !== "timeline" && "hidden")}>
+              <TimelineView job={job} runs={runs} onSelectStep={handleSelectStep} />
+            </TabsContent>
             <TabsContent value="events" className={cn("flex-1 min-h-0", viewMode !== "events" && "hidden")}>
               <ScrollArea className="h-full">
                 <div className="p-4 space-y-1">
@@ -553,17 +548,6 @@ export function JobDetailPage() {
                 </div>
               </ScrollArea>
             </TabsContent>
-            <TabsContent value="timeline" className={cn("flex-1 min-h-0", viewMode !== "timeline" && "hidden")}>
-              <TimelineView job={job} runs={runs} onSelectStep={handleSelectStep} />
-            </TabsContent>
-            <TabsContent value="tree" className={cn("flex-1 min-h-0", viewMode !== "tree" && "hidden")}>
-              <ActionContextProvider>
-                <JobTreeView
-                  jobId={job.id}
-                  onNavigateToJob={(id) => navigate({ to: "/jobs/$jobId", params: { jobId: id } })}
-                />
-              </ActionContextProvider>
-            </TabsContent>
           </Tabs>
         </div>
 
@@ -590,7 +574,7 @@ export function JobDetailPage() {
                   <TabsTrigger value="step" className="text-xs gap-1 px-2.5">
                     Step
                   </TabsTrigger>
-                  {hasSessions && (
+                  {hasSessions && resolvedStep.stepDef.executor.type !== "agent" && (
                     <TabsTrigger value="session" className="text-xs gap-1 px-2.5">
                       Session
                     </TabsTrigger>
@@ -618,9 +602,9 @@ export function JobDetailPage() {
                     stepDef={resolvedStep.stepDef}
                     hasLiveSource={!!job?.flow_source_path}
                     onSelectStep={handleSelectStep}
-                    onSwitchTab={(tab, runId) => {
-                      navigate({ search: (prev: JobDetailSearch) => ({ ...prev, tab: tab as RightPanelTab }), replace: true });
-                      if (runId) setFocusRunId(runId);
+                    onViewFullSession={(sessionName) => {
+                      setLeftSessionFocus(sessionName);
+                      setLeftTab("session");
                     }}
                   />
                 </div>
@@ -642,7 +626,7 @@ export function JobDetailPage() {
                 </div>
               </TabsContent>
 
-              {hasSessions && (
+              {hasSessions && resolvedStep.stepDef.executor.type !== "agent" && (
                 <TabsContent
                   value="session"
                   className={cn(

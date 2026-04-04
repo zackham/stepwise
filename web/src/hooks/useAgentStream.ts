@@ -20,12 +20,15 @@ export type StreamSegment =
 export interface AgentStreamState {
   segments: StreamSegment[];
   usage: { used: number; size: number } | null;
+  eventToSegment?: number[];
 }
 
 // ── Build segments from events ──────────────────────────────────────
 
 export function buildSegmentsFromEvents(events: AgentStreamEvent[]): AgentStreamState {
   const segments: StreamSegment[] = [];
+  // Maps each raw event index to the segment index it belongs to (or -1 if no segment)
+  const eventToSegment: number[] = [];
   let usage: { used: number; size: number } | null = null;
 
   for (const ev of events) {
@@ -33,14 +36,17 @@ export function buildSegmentsFromEvents(events: AgentStreamEvent[]): AgentStream
       const last = segments[segments.length - 1];
       if (last && last.type === "text") {
         last.text += ev.text;
+        eventToSegment.push(segments.length - 1);
       } else {
         segments.push({ type: "text", text: ev.text });
+        eventToSegment.push(segments.length - 1);
       }
     } else if (ev.t === "tool_start") {
       segments.push({
         type: "tool",
         tool: { id: ev.id, title: ev.title, kind: ev.kind, status: "running" },
       });
+      eventToSegment.push(segments.length - 1);
     } else if (ev.t === "tool_title") {
       for (const seg of segments) {
         if (seg.type === "tool" && seg.tool.id === ev.id) {
@@ -48,6 +54,7 @@ export function buildSegmentsFromEvents(events: AgentStreamEvent[]): AgentStream
           break;
         }
       }
+      eventToSegment.push(-1);
     } else if (ev.t === "tool_end") {
       for (const seg of segments) {
         if (seg.type === "tool" && seg.tool.id === ev.id) {
@@ -56,14 +63,19 @@ export function buildSegmentsFromEvents(events: AgentStreamEvent[]): AgentStream
           break;
         }
       }
+      eventToSegment.push(-1);
     } else if (ev.t === "prompt") {
       segments.push({ type: "prompt", text: ev.text });
+      eventToSegment.push(segments.length - 1);
     } else if (ev.t === "usage") {
       usage = { used: ev.used, size: ev.size };
+      eventToSegment.push(-1);
+    } else {
+      eventToSegment.push(-1);
     }
   }
 
-  return { segments, usage };
+  return { segments, usage, eventToSegment };
 }
 
 // ── Live stream hook (with backfill support) ────────────────────────

@@ -57,7 +57,7 @@ export function ToolCard({ tool }: { tool: ToolCallState }) {
         type="button"
         onClick={() => canExpand && setExpanded((v) => !v)}
         className={cn(
-          "text-xs py-0.5 text-left w-full [overflow-wrap:anywhere]",
+          "text-xs py-0.5 text-left w-full truncate block",
           canExpand && "cursor-pointer hover:text-zinc-200",
           !canExpand && "cursor-default",
           isRunning ? "text-blue-400" : isFailed ? "text-red-400" : "text-zinc-500",
@@ -124,12 +124,12 @@ function ToolGroup({ tools }: { tools: ToolCallState[] }) {
 
 export function PromptSegmentRow({ text }: { text: string }) {
   return (
-    <div className="mt-4 mb-3 border-l-2 border-blue-500/30 pl-3">
+    <div className="mt-1 mb-2 rounded-lg bg-violet-950/30 px-3 py-2">
       <FadedText
         value={text}
         maxHeight={120}
         title="Prompt"
-        className="whitespace-pre-wrap text-xs text-blue-800/60 dark:text-blue-300/50 leading-relaxed m-0"
+        className="whitespace-pre-wrap text-xs text-zinc-200 leading-relaxed m-0"
         fadeHeight={32}
       />
     </div>

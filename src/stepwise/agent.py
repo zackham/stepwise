@@ -1609,6 +1609,11 @@ class AgentExecutor(Executor):
                         "session_id": agent_status.session_id,
                     }
 
+        # Zero out cost for subscription billing (agent runs are free on Max/subscription)
+        cost = agent_status.cost_usd
+        if self.config.get("_billing_mode") == "subscription":
+            cost = 0
+
         return HandoffEnvelope(
             artifact=artifact,
             sidecar=Sidecar(),
@@ -1616,7 +1621,7 @@ class AgentExecutor(Executor):
             timestamp=_now(),
             executor_meta={
                 "session_id": agent_status.session_id,
-                "cost_usd": agent_status.cost_usd,
+                "cost_usd": cost,
                 "exit_code": agent_status.exit_code,
             },
         )

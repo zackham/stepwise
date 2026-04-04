@@ -55,10 +55,11 @@ function CollapsibleBoundaryHeader({
   return (
     <div
       className={cn(
-        "flex items-center gap-2 py-2 px-3 cursor-pointer select-none group",
+        "grid items-center gap-x-2 py-2 px-3 cursor-pointer select-none group",
         "hover:bg-zinc-100 dark:hover:bg-zinc-800/30 rounded-md transition-colors",
         isHighlighted && "ring-1 ring-violet-500/30 rounded-md bg-violet-500/5"
       )}
+      style={{ gridTemplateColumns: "auto 1fr auto auto auto" }}
       data-step-boundary={boundary.step_name}
       onClick={onToggle}
     >
@@ -68,32 +69,36 @@ function CollapsibleBoundaryHeader({
           isExpanded && "rotate-90"
         )}
       />
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          if (onSelect) onSelect();
-          else onNavigate();
-        }}
-        className="text-[11px] font-medium text-blue-400 hover:text-blue-300 transition-colors truncate cursor-pointer"
-      >
-        {boundary.step_name}
-      </button>
-      {boundary.attempt > 1 && (
-        <span className="text-[10px] text-zinc-600 bg-zinc-800 border border-zinc-700 rounded px-1 shrink-0">
-          #{boundary.attempt}
-        </span>
-      )}
-      {boundary.status && (
-        <StepStatusBadge status={boundary.status as StepRunStatus} />
-      )}
-
-      {/* Spacer */}
-      <span className="flex-1" />
-
-      {/* Right side: duration */}
-      {duration && (
-        <span className="text-[10px] text-zinc-500 shrink-0">{duration}</span>
-      )}
+      <div className="flex items-center gap-2 min-w-0">
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            if (onSelect) onSelect();
+            else onNavigate();
+          }}
+          className="text-[11px] font-medium text-blue-400 hover:text-blue-300 transition-colors truncate cursor-pointer"
+        >
+          {boundary.step_name}
+        </button>
+        {boundary.attempt > 1 && (
+          <span className="text-[10px] text-zinc-600 bg-zinc-800 border border-zinc-700 rounded px-1 shrink-0">
+            #{boundary.attempt}
+          </span>
+        )}
+      </div>
+      <span className="shrink-0">
+        {boundary.status && <StepStatusBadge status={boundary.status as StepRunStatus} />}
+      </span>
+      <span className="text-xs text-zinc-600 font-mono text-right w-14 shrink-0">
+        {boundary.tokens_used != null && boundary.tokens_used > 0
+          ? boundary.tokens_used >= 1000
+            ? `${(boundary.tokens_used / 1000).toFixed(1)}k`
+            : String(boundary.tokens_used)
+          : ""}
+      </span>
+      <span className="text-xs text-zinc-500 text-right w-10 shrink-0">
+        {duration}
+      </span>
     </div>
   );
 }
@@ -137,20 +142,32 @@ function StepBoundaryMarker({
 export function buildBoundarySegmentMap(
   boundaries: SessionBoundary[],
   segments: StreamSegment[],
+  eventToSegment?: number[],
 ) {
   const boundaryAtSegment = new Map<number, SessionBoundary>();
   // segmentRangeForBoundary: Map<boundaryIdx, [startSeg, endSeg)>
   const segmentRangeForBoundary = new Map<number, [number, number]>();
 
   if (boundaries.length > 0 && segments.length > 0) {
-    let segIdx = 0;
-    let evtCount = 0;
     const boundarySegStarts: number[] = [];
 
     for (const b of boundaries) {
-      while (segIdx < segments.length && evtCount < b.event_index) {
-        evtCount++;
-        segIdx++;
+      let segIdx: number;
+      if (eventToSegment && b.event_index < eventToSegment.length) {
+        // Use precise mapping from raw event index to segment index
+        segIdx = eventToSegment[b.event_index];
+        // If the event didn't create a segment (-1), find the next valid one
+        if (segIdx < 0) {
+          for (let j = b.event_index + 1; j < eventToSegment.length; j++) {
+            if (eventToSegment[j] >= 0) { segIdx = eventToSegment[j]; break; }
+          }
+          if (segIdx < 0) segIdx = segments.length;
+        }
+      } else if (eventToSegment) {
+        segIdx = segments.length;
+      } else {
+        // Fallback: assume 1:1 (legacy, may be inaccurate)
+        segIdx = Math.min(b.event_index, segments.length);
       }
       boundaryAtSegment.set(segIdx, b);
       boundarySegStarts.push(segIdx);
@@ -194,7 +211,7 @@ export function SessionTranscriptView({
   );
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const { segments, boundaries } = state;
+  const { segments, boundaries, eventToSegment } = state;
 
   // Build expanded set from boundaries
   function buildExpandedSet(bs: typeof boundaries): Set<number> {
@@ -265,9 +282,9 @@ export function SessionTranscriptView({
 
   // Build boundary-to-segment mapping
   const { boundaryAtSegment, segmentRangeForBoundary } = useMemo(
-    () => buildBoundarySegmentMap(boundaries, segments),
+    () => buildBoundarySegmentMap(boundaries, segments, eventToSegment),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [boundaries, segments, version],
+    [boundaries, segments, eventToSegment, version],
   );
 
   // Compute durations between boundaries
@@ -367,7 +384,7 @@ export function SessionTranscriptView({
   return (
     <div className="flex-1 relative flex flex-col min-h-0 overflow-hidden">
     {fabOverlay}
-    <div ref={containerRef} className="p-2 space-y-0 flex-1 overflow-y-auto">
+    <div ref={containerRef} className="py-1 space-y-0 flex-1 overflow-y-auto">
       {segments.length === 0 && boundaries.length === 0 && (
         <p className="text-sm text-zinc-500 text-center py-8">
           No output yet

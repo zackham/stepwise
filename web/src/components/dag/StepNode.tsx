@@ -1,4 +1,5 @@
 import { type KeyboardEvent, type ReactNode, useState, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import {
   CirclePause,
   RotateCw,
@@ -10,6 +11,8 @@ import {
   RefreshCw,
   XCircle,
   Link2,
+  Copy,
+  Check,
 } from "lucide-react";
 import { ContentModal } from "@/components/ui/content-modal";
 import { StepStatusBadge } from "@/components/StatusBadge";
@@ -20,6 +23,24 @@ import type { ExitRule, StepDefinition, StepRun, StepRunStatus } from "@/lib/typ
 import { cn, safeRenderValue } from "@/lib/utils";
 import { LiveDuration } from "@/components/LiveDuration";
 import { executorIcon, executorLabel } from "@/lib/executor-utils";
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+      className="text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer shrink-0 p-0.5"
+      title="Copy to clipboard"
+    >
+      {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+    </button>
+  );
+}
 
 /** Color accents for executor type — left-border visual clustering */
 const EXECUTOR_ACCENT: Record<string, string> = {
@@ -180,9 +201,11 @@ function PortDot({
   const [hovered, setHovered] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleEnter = useCallback(() => {
     if (modalOpen) return;
+    if (leaveTimer.current) { clearTimeout(leaveTimer.current); leaveTimer.current = null; }
     hoverTimer.current = setTimeout(() => setHovered(true), 250);
   }, [modalOpen]);
 
@@ -194,51 +217,73 @@ function PortDot({
     setHovered(false);
   }, []);
 
+  const modalClosedAt = useRef(0);
   const handleClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
     if (!popoverContent) return;
+    // Prevent immediate reopen after modal close
+    if (Date.now() - modalClosedAt.current < 300) return;
     setModalOpen(true);
     setHovered(false);
   }, [popoverContent]);
+  const handleModalChange = useCallback((open: boolean) => {
+    setModalOpen(open);
+    if (!open) modalClosedAt.current = Date.now();
+  }, []);
 
   const isTop = position === "top";
   const hasInteraction = !!tooltipContent || !!popoverContent;
 
+  const dotRef = useRef<HTMLDivElement>(null);
+
+  // Get screen position of the dot for portaled tooltip
+  const getTooltipStyle = useCallback((): React.CSSProperties => {
+    const el = dotRef.current;
+    if (!el) return { display: "none" };
+    const rect = el.getBoundingClientRect();
+    const left = rect.left + rect.width / 2;
+    if (isTop) {
+      return { position: "fixed", left, bottom: window.innerHeight - rect.top + 6, transform: "translateX(-50%)", zIndex: 99999 };
+    }
+    return { position: "fixed", left, top: rect.bottom + 6, transform: "translateX(-50%)", zIndex: 99999 };
+  }, [isTop]);
+
   return (
     <div
+      ref={dotRef}
       className={cn(
         "absolute left-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full border-2",
         isTop ? "-top-1.5" : "-bottom-1.5",
         colorClasses,
-        hasInteraction && "cursor-pointer hover:scale-150 hover:brightness-125 transition-transform duration-100"
+        hasInteraction && "cursor-pointer hover:brightness-125 transition-colors duration-100"
       )}
       onMouseEnter={hasInteraction ? handleEnter : undefined}
       onMouseLeave={hasInteraction ? handleLeave : undefined}
       onClick={hasInteraction ? handleClick : undefined}
     >
-      {/* Hover tooltip — counter-scaled to stay at screen size */}
-      {hovered && tooltipContent && !modalOpen && (
+      {/* Hover tooltip — portaled to body to escape stacking contexts */}
+      {hovered && tooltipContent && !modalOpen && createPortal(
         <div
-          className={cn(
-            "absolute left-1/2 z-[60] pointer-events-none",
-            isTop ? "bottom-full mb-1.5" : "top-full mt-1.5"
-          )}
-          style={{
-            transform: `translateX(-50%) scale(${1 / zoomScale})`,
-            transformOrigin: isTop ? "bottom center" : "top center",
-          }}
+          className="pointer-events-none"
+          style={getTooltipStyle()}
         >
-          <div className="bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md shadow-xl p-2 max-w-[280px]">
-            {tooltipContent}
+          <div className="bg-zinc-900 border border-zinc-700 rounded-md shadow-xl p-2 min-w-[300px] max-w-[500px]">
+            <div
+              className="max-h-[230px] overflow-hidden"
+              style={{ maskImage: "linear-gradient(to bottom, black 75%, transparent 100%)", WebkitMaskImage: "linear-gradient(to bottom, black 75%, transparent 100%)" }}
+            >
+              {tooltipContent}
+            </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/* Click modal */}
       <ContentModal
         open={modalOpen}
-        onOpenChange={setModalOpen}
+        onOpenChange={handleModalChange}
         title={modalTitle ?? (isTop ? "Inputs" : "Outputs")}
       >
         <div className="p-3">
@@ -316,16 +361,20 @@ function useInputPortContent(
           ? `any_of(${inp.any_of_sources.map((s) => `${s.step}.${s.field}`).join(", ")})`
           : `${inp.source_step}.${inp.source_field}`;
         const realized = realizedInputs[inp.local_name];
+        const valueStr = realized !== undefined
+          ? (typeof realized === "string" ? realized : JSON.stringify(realized, null, 2))
+          : null;
         return (
           <div key={inp.local_name}>
-            <div className="text-xs text-zinc-400 mb-1">
+            <div className="flex items-center gap-2 text-xs text-zinc-400 mb-1">
               <span className="font-medium text-zinc-200">{inp.local_name}</span>
-              <span className="mx-1.5 text-zinc-600">←</span>
+              <span className="text-zinc-600">←</span>
               <span>{binding}</span>
+              {valueStr && <span className="ml-auto"><CopyButton text={valueStr} /></span>}
             </div>
-            {realized !== undefined && (
+            {valueStr && (
               <pre className="text-xs font-mono text-zinc-300 bg-zinc-950 rounded p-2 overflow-auto max-h-[200px] whitespace-pre-wrap break-words">
-                {typeof realized === "string" ? realized : JSON.stringify(realized, null, 2)}
+                {valueStr}
               </pre>
             )}
           </div>
@@ -381,12 +430,18 @@ function useOutputPortContent(
     <div className="p-3 space-y-3">
       {outputs.map((name) => {
         const realized = realizedOutputs[name];
+        const valueStr = realized !== undefined
+          ? (typeof realized === "string" ? realized : JSON.stringify(realized, null, 2))
+          : null;
         return (
           <div key={name}>
-            <div className="text-xs font-medium text-zinc-200 mb-1">{name}</div>
-            {realized !== undefined ? (
+            <div className="flex items-center gap-2 text-xs mb-1">
+              <span className="font-medium text-zinc-200">{name}</span>
+              {valueStr && <span className="ml-auto"><CopyButton text={valueStr} /></span>}
+            </div>
+            {valueStr ? (
               <pre className="text-xs font-mono text-zinc-300 bg-zinc-950 rounded p-2 overflow-auto max-h-[200px] whitespace-pre-wrap break-words">
-                {typeof realized === "string" ? realized : JSON.stringify(realized, null, 2)}
+                {valueStr}
               </pre>
             ) : (
               <span className="text-xs text-zinc-600">(pending)</span>

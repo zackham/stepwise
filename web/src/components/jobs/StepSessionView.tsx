@@ -111,7 +111,7 @@ export function StepSessionView({
     sessionInfo.is_active
   );
 
-  const { segments, boundaries } = state;
+  const { segments, boundaries, eventToSegment } = state;
 
   // Filter boundaries to only those for this step
   const stepBoundaries = useMemo(
@@ -127,9 +127,9 @@ export function StepSessionView({
 
   // Build boundary-to-segment mapping from ALL boundaries/segments
   const { segmentRangeForBoundary } = useMemo(
-    () => buildBoundarySegmentMap(boundaries, segments),
+    () => buildBoundarySegmentMap(boundaries, segments, eventToSegment),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [boundaries, segments, version]
+    [boundaries, segments, eventToSegment, version]
   );
 
   // Map from stepBoundary -> its index in the full boundaries array -> segment range

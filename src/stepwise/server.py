@@ -1832,12 +1832,14 @@ def get_step_events(
 
 @app.get("/api/runs/{run_id}/cost")
 def get_run_cost(run_id: str):
-    """Get accumulated cost for a run from step events."""
+    """Get accumulated cost for a run from step events or executor meta."""
     engine = _get_engine()
-    if engine.billing_mode == "subscription":
-        return {"run_id": run_id, "cost_usd": 0, "billing_mode": "subscription"}
-    cost = engine.store.accumulated_cost(run_id)
-    return {"run_id": run_id, "cost_usd": cost, "billing_mode": "api_key"}
+    try:
+        run = engine.store.load_run(run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
+    cost = engine._run_cost(run)
+    return {"run_id": run_id, "cost_usd": cost, "billing_mode": engine.billing_mode or "api_key"}
 
 
 @app.post("/api/runs/{run_id}/cancel")
@@ -1971,10 +1973,8 @@ def get_job_cost(job_id: str):
         engine.get_job(job_id)  # validate job exists
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
-    if engine.billing_mode == "subscription":
-        return {"job_id": job_id, "cost_usd": 0, "billing_mode": "subscription"}
     cost = engine.job_cost(job_id)
-    return {"job_id": job_id, "cost_usd": round(cost, 4) if cost else 0, "billing_mode": "api_key"}
+    return {"job_id": job_id, "cost_usd": round(cost, 4) if cost else 0, "billing_mode": engine.billing_mode or "api_key"}
 
 
 @app.get("/api/jobs/{job_id}/suspended")

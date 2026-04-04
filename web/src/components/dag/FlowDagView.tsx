@@ -596,8 +596,10 @@ export function FlowDagView({
     [latestRuns, jobInputs, onSelectDataFlow],
   );
 
-  // Handle edge label hover (tooltip)
+  // Handle edge label hover (tooltip) — lingers 2s for screenshots
+  const labelLeaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleHoverLabel = useCallback((info: HoveredLabelInfo) => {
+    if (labelLeaveTimer.current) { clearTimeout(labelLeaveTimer.current); labelLeaveTimer.current = null; }
     setHoveredLabel(info);
   }, []);
   const handleLeaveLabel = useCallback(() => {

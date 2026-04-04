@@ -1,9 +1,11 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
-import { useRuns, useEvents, useRunCost, useStepwiseMutations } from "@/hooks/useStepwise";
+import { useRuns, useEvents, useRunCost, useStepwiseMutations, useJobSessions, useSessionStepEntries } from "@/hooks/useStepwise";
 import { useConfig } from "@/hooks/useConfig";
 import type { StepDefinition, StepRun, HandoffEnvelope, InputBinding } from "@/lib/types";
 import { StepStatusBadge } from "@/components/StatusBadge";
 import { AgentStreamView } from "./AgentStreamView";
+import { SessionStepFlow } from "./SessionStepFlow";
+import { SectionHeading, SidebarSection, InputsSection, OutputsSection } from "./RunSections";
 import { JsonView } from "@/components/JsonView";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,29 +17,23 @@ import {
   Copy,
   Check,
   Terminal,
+  Maximize2,
 } from "lucide-react";
 import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 import { ContentModal } from "@/components/ui/content-modal";
-import { useAgentOutput } from "@/hooks/useStepwise";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useScriptStream } from "@/hooks/useScriptStream";
 import { toast } from "sonner";
 import { cn, formatCost, formatDuration } from "@/lib/utils";
 import { VirtualizedLogView } from "@/components/logs/VirtualizedLogView";
 import { LiveDuration } from "@/components/LiveDuration";
-import { FadedText } from "@/components/ui/FadedText";
-import { useAdaptiveLines } from "@/hooks/useAdaptiveLines";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 
 interface RunViewProps {
   jobId: string;
   stepDef: StepDefinition;
   hasLiveSource?: boolean;
   onSelectStep?: (stepName: string) => void;
-  onSwitchTab?: (tab: string, runId?: string) => void;
+  onViewFullSession?: (sessionName: string) => void;
 }
 
 /* ── Helpers ───────────────────────────────────────────────────────── */
@@ -48,18 +44,17 @@ function formatCostDisplay(cost: number | null | undefined): string {
 }
 
 /** Pretty timestamp: "6:58 PM" */
+function formatTokensCompact(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
 function formatTimePretty(ts: string | null): string {
   if (!ts) return "-";
   return new Date(ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-function SectionHeading({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider">
-      {children}
-    </div>
-  );
-}
 
 /* ── Redesigned completed-run sections ────────────────────────────── */
 
@@ -68,9 +63,8 @@ function TimingLine({ run }: { run: StepRun }) {
   const { copy: copyRunId, justCopied: runIdCopied } = useCopyFeedback();
 
   return (
-    <div className="flex items-center gap-1.5 text-[11px] flex-wrap mt-3">
+    <div className="flex items-center gap-3 text-[11px] flex-wrap mt-3">
       <span className="text-zinc-300">Started {formatTimePretty(run.started_at)}</span>
-      <span className="text-zinc-600">&middot;</span>
       <span className="text-zinc-200 font-medium">{formatDuration(run.started_at, run.completed_at)}</span>
       <span
         onClick={() => copyRunId(run.id)}
@@ -86,245 +80,45 @@ function TimingLine({ run }: { run: StepRun }) {
   );
 }
 
-/* ── Adaptive Run Content ────────────────────────────────────────── */
+/* ── Run Content (inputs + outputs) ──────────────────────────────── */
 
-interface AdaptiveSlot {
-  type: "input" | "result" | "agent_output";
-  label: string; // e.g. "step_name.field_name" or result key
-  stepName?: string; // for input slots: the source step (clickable)
-  fieldName?: string; // for input slots: the local field name
-  sourceField?: string; // for input slots: the source step's field name
-  isJobInput?: boolean; // source is $job
-  value: string; // stringified value
-  minLines?: number; // minimum lines to show (default 1)
-}
-
-function buildSlots(
-  inputs: Record<string, unknown> | null,
-  inputBindings: InputBinding[],
-  result: HandoffEnvelope | null,
-  agentOutputText?: string | null,
-): AdaptiveSlot[] {
-  const slots: AdaptiveSlot[] = [];
-
-  // Build input slots
-  if (inputs) {
-    const bindingMap = new Map<string, InputBinding>();
-    for (const b of inputBindings) bindingMap.set(b.local_name, b);
-
-    for (const [field, value] of Object.entries(inputs)) {
-      const binding = bindingMap.get(field);
-      const isJob = binding?.source_step === "$job";
-      const stepName = binding?.source_step ?? "";
-      const strVal = typeof value === "string" ? value
-        : typeof value === "number" || typeof value === "boolean" ? String(value)
-        : JSON.stringify(value, null, 2);
-
-      slots.push({
-        type: "input",
-        label: isJob ? field : `${stepName}.${field}`,
-        stepName: isJob ? undefined : stepName,
-        fieldName: field,
-        sourceField: binding?.source_field ?? field,
-        isJobInput: isJob,
-        value: strVal,
-      });
-    }
-  }
-
-  // Build result slots
-  if (result?.artifact) {
-    const userKeys = Object.entries(result.artifact).filter(([k]) => !k.startsWith("_"));
-    for (const [key, value] of userKeys) {
-      const strVal = typeof value === "string" ? value
-        : typeof value === "number" || typeof value === "boolean" ? String(value)
-        : JSON.stringify(value, null, 2);
-      slots.push({ type: "result", label: key, value: strVal, minLines: 3 });
-    }
-  }
-
-  // Build agent output slot
-  if (agentOutputText) {
-    slots.push({
-      type: "agent_output",
-      label: "",
-      value: agentOutputText,
-      minLines: 3,
-    });
-  }
-
-  return slots;
-}
-
-
-function AdaptiveRunContent({
+function RunContentTable({
   inputs,
   inputBindings,
   result,
-  agentOutputText,
   onSelectStep,
-  onViewSessions,
-  containerRef,
+  executorType,
 }: {
   inputs: Record<string, unknown> | null;
   inputBindings: InputBinding[];
   result: HandoffEnvelope | null;
-  agentOutputText?: string | null;
   onSelectStep?: (stepName: string) => void;
-  onViewSessions?: () => void;
-  containerRef: React.RefObject<HTMLDivElement | null>;
+  executorType?: string;
 }) {
-  const slots = useMemo(
-    () => buildSlots(inputs, inputBindings, result, agentOutputText),
-    [inputs, inputBindings, result, agentOutputText],
-  );
-
-  const adaptiveSlots = useMemo(
-    () => slots.map((s) => ({ value: s.value, minLines: s.minLines })),
-    [slots],
-  );
-
-  const { allocations, lineHeight, ready } = useAdaptiveLines(containerRef, adaptiveSlots);
-
-  const inputSlots = useMemo(() => slots.filter((s) => s.type === "input"), [slots]);
-  const resultSlots = useMemo(() => slots.filter((s) => s.type === "result"), [slots]);
-  const agentSlots = useMemo(() => slots.filter((s) => s.type === "agent_output"), [slots]);
-
-  if (slots.length === 0) return null;
-
-  const inputAllocStart = 0;
-  const resultAllocStart = inputSlots.length;
-  const agentAllocStart = inputSlots.length + resultSlots.length;
+  const hasInputs = inputs && Object.keys(inputs).length > 0;
+  const hasResult = result?.artifact && Object.keys(result.artifact).filter(k => !k.startsWith("_")).length > 0;
+  if (!hasInputs && !hasResult) return null;
 
   return (
-    <div className="space-y-4" style={ready ? undefined : { visibility: "hidden" }}>
-      {/* Inputs section */}
-      {inputSlots.length > 0 && (
-        <div>
-          <SectionHeading>Inputs</SectionHeading>
-          <div className="mt-1.5">
-            {inputSlots.map((slot, i) => (
-              <AdaptiveSlotRow
-                key={i}
-                slot={slot}
-                lines={allocations[inputAllocStart + i] ?? 1}
-                lineHeight={lineHeight}
-                onSelectStep={onSelectStep}
-              />
-            ))}
-          </div>
-        </div>
+    <>
+      {hasInputs && (
+        <InputsSection inputs={inputs!} inputBindings={inputBindings} onSelectStep={onSelectStep} />
       )}
-
-      {/* Result section — card treatment */}
-      {resultSlots.length > 0 && (
-        <div className="bg-emerald-50 dark:bg-emerald-900/40 -mx-3 px-3 py-2.5">
-          <SectionHeading>Result</SectionHeading>
-          <div className="mt-1.5">
-            {resultSlots.map((slot, i) => (
-              <AdaptiveSlotRow
-                key={i}
-                slot={slot}
-                lines={allocations[resultAllocStart + i] ?? 3}
-                lineHeight={lineHeight}
-                isResult
-              />
-            ))}
-          </div>
-        </div>
+      {hasResult && (
+        <OutputsSection result={result!} executorType={executorType} />
       )}
-
-      {/* Agent output section */}
-      {agentSlots.length > 0 && (
-        <div
-          className="bg-blue-50 dark:bg-blue-900/20 -mx-3 px-3 py-2.5 cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors"
-          onClick={onViewSessions}
-          title="View full output in Sessions tab"
-        >
-          <SectionHeading>Agent Output</SectionHeading>
-          <div className="mt-1.5">
-            {agentSlots.map((slot, i) => (
-              <AdaptiveSlotRow
-                key={i}
-                slot={slot}
-                lines={allocations[agentAllocStart + i] ?? 3}
-                lineHeight={lineHeight}
-                onClick={onViewSessions}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
+    </>
   );
 }
 
-function AdaptiveSlotRow({
-  slot,
-  lines,
-  lineHeight = 19.5,
-  onSelectStep,
-  isResult,
-  onClick,
-}: {
-  slot: AdaptiveSlot;
-  lines: number;
-  lineHeight?: number;
-  onSelectStep?: (stepName: string) => void;
-  isResult?: boolean;
-  onClick?: () => void;
-}) {
-  return (
-    <div className="py-1.5">
-      {/* Label pill — field ← source (skip if no label) */}
-      {slot.label && (
-        <div className="mb-1">
-          <span className="flex items-center rounded bg-zinc-100 dark:bg-zinc-800/60 px-2 py-1 text-xs font-mono">
-            <span className="text-cyan-600 dark:text-cyan-400">{slot.fieldName ?? slot.label}</span>
-            {slot.type === "input" && (
-              <>
-                <span className="text-zinc-400 dark:text-zinc-600 mx-1.5">←</span>
-                {slot.isJobInput ? (
-                  <span className="text-zinc-500">$job.{slot.fieldName}</span>
-                ) : (
-                  <span>
-                    <a
-                      onClick={() => slot.stepName && onSelectStep?.(slot.stepName)}
-                      className="text-zinc-500 dark:text-zinc-400 hover:text-blue-500 dark:hover:text-blue-400 cursor-pointer transition-colors"
-                    >
-                      {slot.stepName}
-                    </a>
-                    <span className="text-zinc-400 dark:text-zinc-600">.{slot.sourceField}</span>
-                  </span>
-                )}
-              </>
-            )}
-          </span>
-        </div>
-      )}
-
-      {/* Value — height-capped with gradient fade, data-adaptive-value for hook measurement */}
-      <div data-adaptive-value={slot.value}>
-        <FadedText
-          value={slot.value}
-          maxHeight={lines * lineHeight}
-          title={slot.label || slot.type}
-          onClick={onClick}
-        />
-      </div>
-    </div>
-  );
-}
-
-/** Compact metadata footer: exit, cost, executor meta, workspace */
-function MetadataFooter({
+/** Run details table — exit, cost, workspace, meta in a clean grid */
+function RunDetailsTable({
   exitRes,
   costUsd,
   isSubscription,
   showCost,
   executorMeta,
   workspace,
-  sidecar,
 }: {
   exitRes?: { rule: string; action: string };
   costUsd?: number;
@@ -332,170 +126,97 @@ function MetadataFooter({
   showCost: boolean;
   executorMeta?: Record<string, unknown>;
   workspace?: string;
-  sidecar?: HandoffEnvelope["sidecar"];
 }) {
-  const hasExit = !!exitRes;
+  const { copy: copyWs, justCopied: wsCopied } = useCopyFeedback();
+  const [metaModalOpen, setMetaModalOpen] = useState(false);
+
   const hasCost = showCost && (isSubscription || (costUsd != null && costUsd > 0));
-  // Filter out keys already shown elsewhere (stdout, stderr, return_code, cost)
   const filteredMeta = useMemo(() => {
     if (!executorMeta) return null;
     const skip = new Set(["stdout", "stderr", "return_code", "cost_usd"]);
     const entries = Object.entries(executorMeta).filter(([k]) => !skip.has(k));
     return entries.length > 0 ? Object.fromEntries(entries) : null;
   }, [executorMeta]);
-  const hasSidecar = sidecar && (
-    sidecar.decisions_made?.length > 0 ||
-    sidecar.assumptions?.length > 0 ||
-    sidecar.open_questions?.length > 0 ||
-    sidecar.constraints_discovered?.length > 0
-  );
-  const hasWorkspace = !!workspace;
 
-  if (!hasExit && !hasCost && !filteredMeta && !hasWorkspace && !hasSidecar) return null;
+  const hasAnything = !!exitRes || hasCost || !!filteredMeta || !!workspace;
+  if (!hasAnything) return null;
+
+  // Shorten workspace for display
+  const displayWs = workspace
+    ? (() => { const i = workspace.indexOf("/jobs/"); return i !== -1 ? workspace.slice(i + 1) : workspace; })()
+    : null;
 
   return (
-    <div className="space-y-1.5 pt-2">
-      {/* Exit + Cost on one line */}
-      <div className="flex items-center gap-4 flex-wrap text-xs">
-        {hasExit && exitRes && (
-          <div className="flex items-center gap-1.5">
-            <span className="text-zinc-600">Exit:</span>
-            <span
-              className={cn(
-                "font-medium",
-                exitRes.action === "advance" && "text-emerald-400",
-                exitRes.action === "loop" && "text-purple-400",
-                exitRes.action === "escalate" && "text-red-400",
-                exitRes.action === "abandon" && "text-red-500"
-              )}
-            >
-              {exitRes.rule}
+    <div className="text-xs space-y-1.5">
+      {exitRes && (
+        <div className="flex items-baseline gap-2">
+          <span className="text-zinc-500 w-16 shrink-0">Exit</span>
+          {exitRes.rule === "implicit_advance" ? (
+            <span className="font-medium text-emerald-400">implicit advance</span>
+          ) : (
+            <span className="flex items-baseline gap-1.5">
+              <span
+                className={cn(
+                  "font-medium",
+                  exitRes.action === "advance" && "text-emerald-400",
+                  exitRes.action === "loop" && "text-purple-400",
+                  exitRes.action === "escalate" && "text-red-400",
+                  exitRes.action === "abandon" && "text-red-500"
+                )}
+              >
+                {exitRes.rule}
+              </span>
+              <span className="text-zinc-600">&rarr;</span>
+              <span className="text-zinc-400">{exitRes.action}</span>
             </span>
-            <span className="text-zinc-600">&rarr;</span>
-            <span className="text-zinc-400">{exitRes.action}</span>
-          </div>
-        )}
-        {hasCost && (
-          <span className="font-mono text-emerald-600 dark:text-emerald-400 text-[11px]">
+          )}
+        </div>
+      )}
+      {hasCost && (
+        <div className="flex items-baseline gap-2">
+          <span className="text-zinc-500 w-16 shrink-0">Cost</span>
+          <span className="font-mono text-emerald-400">
             {costUsd != null && costUsd > 0
               ? formatCostDisplay(costUsd)
-              : isSubscription
-                ? "$0 (Max)"
-                : formatCostDisplay(costUsd)}
+              : isSubscription ? "$0 (Max)" : "-"}
           </span>
-        )}
-      </div>
-
-      {/* Sidecar collapsible */}
-      {hasSidecar && sidecar && (
-        <CollapsibleSection title="Sidecar">
-          <div className="space-y-1.5">
-            {sidecar.decisions_made?.length > 0 && (
-              <SidecarList label="Decisions" items={sidecar.decisions_made} />
-            )}
-            {sidecar.assumptions?.length > 0 && (
-              <SidecarList label="Assumptions" items={sidecar.assumptions} />
-            )}
-            {sidecar.open_questions?.length > 0 && (
-              <SidecarList label="Open questions" items={sidecar.open_questions} />
-            )}
-            {sidecar.constraints_discovered?.length > 0 && (
-              <SidecarList label="Constraints" items={sidecar.constraints_discovered} />
-            )}
-          </div>
-        </CollapsibleSection>
+        </div>
       )}
-
-      {/* Executor meta + workspace on one compact line */}
-      {(filteredMeta || (hasWorkspace && workspace)) && (
-        <div className="flex items-center gap-3 flex-wrap">
-          {filteredMeta && <ExecutorMetaLink meta={filteredMeta} />}
-          {hasWorkspace && workspace && <WorkspaceInline workspace={workspace} />}
+      {workspace && displayWs && (
+        <div className="flex items-baseline gap-2">
+          <span className="text-zinc-500 w-16 shrink-0">Workspace</span>
+          <span
+            onClick={() => copyWs(workspace)}
+            className={cn(
+              "font-mono truncate cursor-pointer hover:text-blue-400 transition-colors",
+              wsCopied ? "text-green-400" : "text-zinc-500"
+            )}
+            title="Click to copy full path"
+          >
+            {displayWs}
+          </span>
+        </div>
+      )}
+      {filteredMeta && (
+        <div className="flex items-baseline gap-2">
+          <span className="text-zinc-500 w-16 shrink-0">Meta</span>
+          <button
+            onClick={() => setMetaModalOpen(true)}
+            className="text-zinc-500 hover:text-blue-400 transition-colors cursor-pointer font-mono"
+          >
+            {Object.keys(filteredMeta).join(", ")}
+          </button>
+          <ContentModal
+            open={metaModalOpen}
+            onOpenChange={setMetaModalOpen}
+            title="Executor Meta"
+            copyContent={JSON.stringify(filteredMeta, null, 2)}
+          >
+            <JsonView data={filteredMeta} defaultExpanded={true} />
+          </ContentModal>
         </div>
       )}
     </div>
-  );
-}
-
-/** Executor meta as a clickable link that opens a modal */
-function ExecutorMetaLink({ meta }: { meta: Record<string, unknown> }) {
-  const [modalOpen, setModalOpen] = useState(false);
-  const metaStr = JSON.stringify(meta, null, 2);
-
-  return (
-    <>
-      <button
-        onClick={() => setModalOpen(true)}
-        className="text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer"
-      >
-        Executor meta &rarr;
-      </button>
-      <ContentModal
-        open={modalOpen}
-        onOpenChange={setModalOpen}
-        title="Executor Meta"
-        copyContent={metaStr}
-      >
-        <JsonView data={meta} defaultExpanded={true} />
-      </ContentModal>
-    </>
-  );
-}
-
-/** Workspace displayed inline with click-to-copy */
-function WorkspaceInline({ workspace }: { workspace: string }) {
-  const { copy, justCopied } = useCopyFeedback();
-
-  // Trim to relative path from jobs/ directory
-  const jobsIdx = workspace.indexOf("/jobs/");
-  const displayPath = jobsIdx !== -1 ? workspace.slice(jobsIdx + 1) : workspace;
-
-  return (
-    <div className="flex items-center gap-1.5">
-      <span className="text-[10px] text-zinc-600">Workspace:</span>
-      <button
-        onClick={() => copy(workspace)}
-        className="text-[10px] font-mono text-zinc-500 hover:text-zinc-300 transition-colors truncate cursor-pointer"
-        title="Click to copy full path"
-      >
-        {displayPath}
-      </button>
-      {justCopied && (
-        <span className="text-[9px] text-green-400 animate-in fade-in duration-150">Copied</span>
-      )}
-    </div>
-  );
-}
-
-function SidecarList({ label, items }: { label: string; items: string[] }) {
-  return (
-    <div>
-      <span className="text-[10px] text-zinc-500 uppercase tracking-wider">{label}</span>
-      <ul className="mt-0.5 space-y-0.5">
-        {items.map((item, i) => (
-          <li key={i} className="text-xs text-zinc-400 pl-2">
-            &bull; {typeof item === "string" ? item : JSON.stringify(item)}
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function CollapsibleSection({ title, children }: { title: string; children: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors w-full cursor-pointer">
-        <ChevronRight
-          className={cn("w-2.5 h-2.5 transition-transform", open && "rotate-90")}
-        />
-        <span>{title}</span>
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="ml-3.5 mt-1">{children}</div>
-      </CollapsibleContent>
-    </Collapsible>
   );
 }
 
@@ -637,38 +358,6 @@ function LiveScriptLogView({ runId }: { runId: string }) {
   );
 }
 
-/* ── Agent raw event viewer ───────────────────────────────────────── */
-
-function AgentRawView({ runId }: { runId: string }) {
-  const { data } = useAgentOutput(runId);
-  const [copied, setCopied] = useState(false);
-  const text = (data?.events ?? []).map((e: unknown) => JSON.stringify(e)).join("\n");
-
-  if (!text) return <div className="text-xs text-zinc-600">No output</div>;
-
-  return (
-    <div>
-      <div className="flex justify-end mb-1">
-        <button
-          onClick={() => {
-            navigator.clipboard.writeText(text);
-            setCopied(true);
-            toast.success("Copied to clipboard");
-            setTimeout(() => setCopied(false), 2000);
-          }}
-          className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 cursor-pointer"
-        >
-          {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-          {copied ? "Copied" : "Copy All"}
-        </button>
-      </div>
-      <pre className="text-[10px] font-mono bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded p-2 text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap break-all max-h-96 overflow-auto">
-        {text}
-      </pre>
-    </div>
-  );
-}
-
 /* ── Truncated prompt with click-to-expand modal ──────────────────── */
 
 function PromptBlock({ prompt }: { prompt: string }) {
@@ -754,7 +443,7 @@ function RunNavigator({
 
 /* ── Main RunView ─────────────────────────────────────────────────── */
 
-export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onSwitchTab }: RunViewProps) {
+export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onViewFullSession }: RunViewProps) {
   const { data: runs = [] } = useRuns(jobId, stepDef.name);
   const { data: events = [] } = useEvents(jobId);
   const mutations = useStepwiseMutations();
@@ -785,6 +474,29 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onSwitchT
   const isExternal = stepDef.executor.type === "external";
   const isScript = stepDef.executor.type === "script";
   const isPoll = stepDef.executor.type === "poll";
+
+  // Session info for agent steps
+  const { data: sessionData } = useJobSessions(isAgent ? jobId : undefined);
+  const stepSession = useMemo(() => {
+    if (!isAgent || !sessionData?.sessions) return null;
+    return sessionData.sessions.find(s => s.step_names.includes(stepDef.name)) ?? null;
+  }, [isAgent, sessionData, stepDef.name]);
+  const sessionStepEntries = useSessionStepEntries(isAgent ? jobId : undefined, stepSession);
+  const [agentUsage, setAgentUsage] = useState<{ used: number; size: number } | null>(null);
+  const [sessionModalOpen, setSessionModalOpen] = useState(false);
+  const handleUsage = useCallback((u: { used: number; size: number } | null) => setAgentUsage(u), []);
+  // Tokens used by steps before the current one in this session
+  const priorTokens = useMemo(() => {
+    let sum = 0;
+    for (const e of sessionStepEntries) {
+      if (e.name === stepDef.name) break;
+      sum += e.tokens;
+    }
+    return sum;
+  }, [sessionStepEntries, stepDef.name]);
+  const currentStepTokens = useMemo(() => {
+    return sessionStepEntries.find(e => e.name === stepDef.name)?.tokens ?? 0;
+  }, [sessionStepEntries, stepDef.name]);
 
   const sortedRuns = useMemo(
     () => [...runs].sort((a, b) => b.attempt - a.attempt),
@@ -885,291 +597,528 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onSwitchT
       {run && (isRunning || isSuspended) && (
         <div className="flex items-center gap-1.5 text-[11px] flex-wrap mt-3">
           <span className="text-zinc-300">Started {formatTimePretty(run.started_at)}</span>
-          <span className="text-zinc-600">&middot;</span>
-          <span className={cn("font-medium", isRunning ? "text-blue-400" : "text-amber-400")}>
+              <span className={cn("font-medium", isRunning ? "text-blue-400" : "text-amber-400")}>
             <LiveDuration startTime={run.started_at} endTime={run.completed_at} />
           </span>
         </div>
       )}
 
-      {/* 3. Adaptive inputs + result + agent output */}
-      {run && (run?.inputs || run?.result) && (
-        <AdaptiveRunContent
-          inputs={run.inputs}
-          inputBindings={stepDef.inputs}
-          result={run.result}
-          agentOutputText={
-            isAgent && !isRunning && run?.result?.artifact?.result
-              ? String(run.result.artifact.result)
-              : null
-          }
-          onSelectStep={onSelectStep}
-          onViewSessions={() => onSwitchTab?.("session", run?.id)}
-          containerRef={containerRef}
-        />
-      )}
+      {/* ── Agent step layout: meta/actions first, then stream ── */}
+      {isAgent && (
+        <>
+          {/* Metadata footer (exit, cost, workspace) */}
+          {run?.result && (
+            <RunDetailsTable
+              exitRes={exitRes}
+              costUsd={run.result.executor_meta?.cost_usd as number | undefined}
+              isSubscription={isSubscription}
+              showCost={showCost}
+              executorMeta={run.result.executor_meta}
+              workspace={run.result.workspace}
+            />
+          )}
 
-      {/* 4. Prompt (interpolated) */}
-      {runPrompt && (
-        <div className="space-y-1.5">
-          <SectionHeading>Prompt</SectionHeading>
-          <PromptBlock prompt={runPrompt} />
-        </div>
-      )}
-
-      {/* 5. Output area */}
-      {/* Live agent stream */}
-      {run && isRunning && isAgent && (
-        <div className="max-h-[60vh] overflow-y-auto rounded-lg border border-zinc-800/50">
-          <AgentStreamView
-            runId={run.id}
-            isLive={true}
-            startedAt={run.started_at}
-            costUsd={costData?.cost_usd}
-            billingMode={costData?.billing_mode}
-          />
-        </div>
-      )}
-
-      {/* Live script output */}
-      {run && isRunning && isScript && (
-        <div className="max-h-[60vh] overflow-y-auto rounded-lg border border-zinc-800/50">
-          <LiveScriptLogView runId={run.id} />
-        </div>
-      )}
-
-      {/* Usage limit waiting */}
-      {run?.status === "running" && !!(run?.executor_state as Record<string, unknown> | undefined)?.usage_limit_waiting && (() => {
-        const es = run.executor_state as Record<string, unknown>;
-        const resetAt = es.reset_at ? String(es.reset_at) : null;
-        const limitMsg = es.usage_limit_message ? String(es.usage_limit_message) : null;
-        return (
-          <div className="rounded-md bg-amber-100 dark:bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300 border border-amber-500/20">
-            <div className="font-medium">Usage limit reached</div>
-            {resetAt && <div>Resuming at {new Date(resetAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>}
-            {limitMsg && <div className="mt-1 text-xs opacity-75">{limitMsg}</div>}
-          </div>
-        );
-      })()}
-
-      {/* Suspended external — fulfillment status */}
-      {run && isSuspended && isExternal && (
-        <div className="rounded-md bg-blue-100 dark:bg-blue-500/10 p-3 text-sm text-blue-700 dark:text-blue-300 border border-blue-500/20">
-          <div className="font-medium">Waiting for input</div>
-          <div className="text-xs mt-1 opacity-75">
-            This step is suspended and waiting for external fulfillment.
-          </div>
-        </div>
-      )}
-
-      {/* Suspended poll — trigger now button + status */}
-      {run && isSuspended && isPoll && (() => {
-        const watchState = (run.executor_state as Record<string, unknown> | undefined)?._watch as {
-          last_checked_at?: string;
-          check_count?: number;
-          last_error?: string | null;
-          next_check_at?: string;
-        } | undefined;
-        const watchConfig = run.watch?.config as {
-          check_command?: string;
-          interval_seconds?: number;
-          prompt?: string;
-        } | undefined;
-
-        const formatRelativeTime = (iso: string | undefined, direction: "past" | "future"): string => {
-          if (!iso) return "-";
-          const diff = (new Date(iso).getTime() - Date.now()) / 1000;
-          const absDiff = Math.abs(diff);
-          if (absDiff < 60) return direction === "past" ? "just now" : "in <1m";
-          const mins = Math.round(absDiff / 60);
-          if (mins < 60) return direction === "past" ? `${mins}m ago` : `in ${mins}m`;
-          const hrs = Math.round(mins / 60);
-          return direction === "past" ? `${hrs}h ago` : `in ${hrs}h`;
-        };
-
-        const formatInterval = (seconds: number | undefined): string => {
-          if (!seconds) return "-";
-          if (seconds < 60) return `${seconds}s`;
-          if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
-          return `${(seconds / 3600).toFixed(1)}h`;
-        };
-
-        return (
-          <>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-amber-500">Polling...</span>
-              <button
-                onClick={() => mutations.triggerPollNow.mutate(run.id)}
-                disabled={mutations.triggerPollNow.isPending}
-                className="text-xs px-2 py-1 rounded bg-zinc-800 border border-zinc-700 text-zinc-300 hover:text-white hover:bg-zinc-700 transition-colors cursor-pointer disabled:opacity-50"
-              >
-                {mutations.triggerPollNow.isPending ? "Triggering..." : "Poll Now"}
-              </button>
-            </div>
-
-            {(watchState || watchConfig) && (
-              <div className="space-y-1.5">
-                <SectionHeading>Poll Status</SectionHeading>
-                <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
-                  {watchConfig?.check_command && (
-                    <>
-                      <span className="text-zinc-500">Command</span>
-                      <span className="text-zinc-300 font-mono truncate" title={watchConfig.check_command}>{watchConfig.check_command}</span>
-                    </>
-                  )}
-                  {watchConfig?.interval_seconds != null && (
-                    <>
-                      <span className="text-zinc-500">Interval</span>
-                      <span className="text-zinc-300">{formatInterval(watchConfig.interval_seconds)}</span>
-                    </>
-                  )}
-                  {watchState?.check_count != null && (
-                    <>
-                      <span className="text-zinc-500">Checks</span>
-                      <span className="text-zinc-300">{watchState.check_count}</span>
-                    </>
-                  )}
-                  {watchState?.last_checked_at && (
-                    <>
-                      <span className="text-zinc-500">Last check</span>
-                      <span className="text-zinc-300">{formatRelativeTime(watchState.last_checked_at, "past")}</span>
-                    </>
-                  )}
-                  {watchState?.next_check_at && (
-                    <>
-                      <span className="text-zinc-500">Next check</span>
-                      <span className="text-zinc-300">{formatRelativeTime(watchState.next_check_at, "future")}</span>
-                    </>
-                  )}
-                  {watchState?.last_error != null && (
-                    <>
-                      <span className="text-zinc-500">Last error</span>
-                      <span className={watchState.last_error ? "text-red-400" : "text-zinc-500 italic"}>
-                        {watchState.last_error || "(none)"}
-                      </span>
-                    </>
-                  )}
-                </div>
-              </div>
-            )}
-          </>
-        );
-      })()}
-
-      {/* Agent output is now shown inline in AdaptiveRunContent above */}
-
-      {/* Completed script logs */}
-      {run?.result && isScript && (
-        <div className="max-h-[60vh] overflow-y-auto rounded-lg border border-zinc-800/50">
-          <ScriptLogView run={run} />
-        </div>
-      )}
-
-      {/* Fulfillment notes */}
-      {run?.result?.artifact?._fulfillment_notes != null && (
-        <div className="text-xs text-zinc-400 bg-zinc-900/30 rounded-lg border border-zinc-800 px-3 py-2 whitespace-pre-wrap">
-          {String(run.result.artifact._fulfillment_notes)}
-        </div>
-      )}
-
-      {/* 7. Error */}
-      {run && isFailed && run.error && (
-        <div className="space-y-1.5">
-          <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-2.5 text-sm">
-            <div className="flex items-center gap-1.5 text-red-400 mb-1">
-              <AlertTriangle className="w-3.5 h-3.5" />
-              <span className="font-medium text-xs">Error</span>
-              {run.error_category && (
-                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-red-500/20 text-red-300">
-                  {run.error_category}
+          {/* Exit resolution for runs without result (e.g. failed) */}
+          {!run?.result && exitRes && (
+            <div className="flex items-baseline gap-2 text-xs">
+              <span className="text-zinc-500 w-16 shrink-0">Exit</span>
+              {exitRes.rule === "implicit_advance" ? (
+                <span className="font-medium text-emerald-400">implicit advance</span>
+              ) : (
+                <span className="flex items-baseline gap-1.5">
+                  <span className={cn("font-medium",
+                    exitRes.action === "advance" && "text-emerald-400",
+                    exitRes.action === "loop" && "text-purple-400",
+                    exitRes.action === "escalate" && "text-red-400",
+                    exitRes.action === "abandon" && "text-red-500"
+                  )}>{exitRes.rule}</span>
+                  <span className="text-zinc-600">&rarr;</span>
+                  <span className="text-zinc-400">{exitRes.action}</span>
                 </span>
               )}
             </div>
-            <div className="text-red-300/80 text-xs font-mono whitespace-pre-wrap break-words">
-              {run.error}
+          )}
+
+          {/* Actions */}
+          {run && (
+            <div className="flex gap-2">
+              {isFailed && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-amber-500/30 text-amber-400 hover:bg-amber-500/10"
+                  disabled={mutations.rerunStep.isPending}
+                  onClick={() => mutations.rerunStep.mutate({ jobId, stepName: stepDef.name })}
+                >
+                  <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+                  Retry
+                </Button>
+              )}
+              {!isFailed && canRerun && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={mutations.rerunStep.isPending}
+                  onClick={() => mutations.rerunStep.mutate({ jobId, stepName: stepDef.name })}
+                >
+                  <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+                  Restart
+                </Button>
+              )}
+              {isRunning && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                  disabled={mutations.cancelRun.isPending}
+                  onClick={() => mutations.cancelRun.mutate(run.id)}
+                >
+                  <StopCircle className="w-3.5 h-3.5 mr-1.5" />
+                  Cancel
+                </Button>
+              )}
             </div>
-          </div>
-          {run.traceback && (
-            <details className="text-xs">
-              <summary className="text-zinc-500 cursor-pointer hover:text-zinc-400">Traceback</summary>
-              <pre className="mt-1 text-[10px] font-mono text-red-300/60 whitespace-pre-wrap break-all bg-zinc-950 rounded p-2 max-h-48 overflow-auto">
-                {run.traceback}
-              </pre>
-            </details>
           )}
-          <Button
-            variant="outline"
-            size="sm"
-            className="border-amber-500/30 text-amber-400 hover:bg-amber-500/10"
-            disabled={mutations.rerunStep.isPending}
-            onClick={() => mutations.rerunStep.mutate({ jobId, stepName: stepDef.name })}
-          >
-            <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
-            Retry
-          </Button>
-        </div>
-      )}
 
-      {/* 8. Metadata footer */}
-      {run?.result && (
-        <MetadataFooter
-          exitRes={exitRes}
-          costUsd={run.result.executor_meta?.cost_usd as number | undefined}
-          isSubscription={isSubscription}
-          showCost={showCost}
-          executorMeta={run.result.executor_meta}
-          workspace={run.result.workspace}
-          sidecar={run.result.sidecar}
-        />
-      )}
+          {/* Inputs + result */}
+          {run && (run?.inputs || run?.result) && (
+            <RunContentTable
+              inputs={run.inputs}
+              inputBindings={stepDef.inputs}
+              result={run.result}
+              onSelectStep={onSelectStep}
+              executorType={stepDef.executor.type}
+            />
+          )}
 
-      {/* Exit resolution for runs without result (e.g. failed) */}
-      {!run?.result && exitRes && (
-        <div className="flex items-center gap-1.5 text-xs">
-          <span className="text-zinc-600">Exit:</span>
-          <span
-            className={cn(
-              "font-medium",
-              exitRes.action === "advance" && "text-emerald-400",
-              exitRes.action === "loop" && "text-purple-400",
-              exitRes.action === "escalate" && "text-red-400",
-              exitRes.action === "abandon" && "text-red-500"
-            )}
-          >
-            {exitRes.rule}
-          </span>
-          <span className="text-zinc-600">&rarr;</span>
-          <span className="text-zinc-400">{exitRes.action}</span>
-        </div>
-      )}
+          {/* Error */}
+          {run && isFailed && run.error && (
+            <div className="space-y-1.5">
+              <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-2.5 text-sm">
+                <div className="flex items-center gap-1.5 text-red-400 mb-1">
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  <span className="font-medium text-xs">Error</span>
+                  {run.error_category && (
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-red-500/20 text-red-300">
+                      {run.error_category}
+                    </span>
+                  )}
+                </div>
+                <div className="text-red-300/80 text-xs font-mono whitespace-pre-wrap break-words">
+                  {run.error}
+                </div>
+              </div>
+              {run.traceback && (
+                <details className="text-xs">
+                  <summary className="text-zinc-500 cursor-pointer hover:text-zinc-400">Traceback</summary>
+                  <pre className="mt-1 text-[10px] font-mono text-red-300/60 whitespace-pre-wrap break-all bg-zinc-950 rounded p-2 max-h-48 overflow-auto">
+                    {run.traceback}
+                  </pre>
+                </details>
+              )}
+            </div>
+          )}
 
-      {/* Actions for non-failed runs */}
-      {run && !isFailed && (
-        <div className="flex gap-2">
-          {canRerun && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={mutations.rerunStep.isPending}
-              onClick={() => mutations.rerunStep.mutate({ jobId, stepName: stepDef.name })}
+          {/* Usage limit waiting */}
+          {run?.status === "running" && !!(run?.executor_state as Record<string, unknown> | undefined)?.usage_limit_waiting && (() => {
+            const es = run.executor_state as Record<string, unknown>;
+            const resetAt = es.reset_at ? String(es.reset_at) : null;
+            const limitMsg = es.usage_limit_message ? String(es.usage_limit_message) : null;
+            return (
+              <div className="rounded-md bg-amber-100 dark:bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300 border border-amber-500/20">
+                <div className="font-medium">Usage limit reached</div>
+                {resetAt && <div>Resuming at {new Date(resetAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>}
+                {limitMsg && <div className="mt-1 text-xs opacity-75">{limitMsg}</div>}
+              </div>
+            );
+          })()}
+
+          {/* Session + agent stream */}
+          {run && (
+            <>
+            <SidebarSection
+              title={/^step-[a-f0-9]{8}-/.test(stepSession?.session_name ?? "")
+                ? "Session"
+                : stepSession ? `Session: ${stepSession.session_name}` : "Session"}
+              detail={
+                <span className="flex items-center gap-1.5">
+                  {stepSession?.is_active && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse inline-block" />
+                  )}
+                  {agentUsage ? (
+                    <span className="text-[10px] text-zinc-500 font-mono flex items-center gap-1.5">
+                      {formatTokensCompact(agentUsage.used)} / {formatTokensCompact(agentUsage.size)}
+                      <span className="w-16 h-1.5 bg-zinc-800 rounded-full overflow-hidden flex">
+                        <span
+                          className="h-full bg-zinc-600 transition-all shrink-0"
+                          style={{ width: `${Math.min((priorTokens / agentUsage.size) * 100, 100)}%` }}
+                        />
+                        <span
+                          className="h-full bg-blue-500 transition-all shrink-0"
+                          style={{ width: `${Math.min((currentStepTokens / agentUsage.size) * 100, 100)}%` }}
+                        />
+                      </span>
+                    </span>
+                  ) : stepSession && stepSession.total_tokens > 0 ? (
+                    <span className="text-[10px] text-zinc-500 font-mono">
+                      {formatTokensCompact(stepSession.total_tokens)}
+                    </span>
+                  ) : null}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setSessionModalOpen(true); }}
+                    className="text-zinc-600 hover:text-zinc-300 transition-colors cursor-pointer p-0.5"
+                    title="Expand session"
+                  >
+                    <Maximize2 className="w-3 h-3" />
+                  </button>
+                </span>
+              }
             >
-              <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
-              Restart
-            </Button>
+              {stepSession && sessionStepEntries.length > 1 && (
+                <div className="text-xs space-y-1.5">
+                  {(() => {
+                    const isNamed = !/^step-[a-f0-9]{8}-/.test(stepSession.session_name);
+                    return isNamed && onViewFullSession ? (
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-zinc-500 w-16 shrink-0">Name</span>
+                        <button
+                          onClick={() => onViewFullSession(stepSession.session_name)}
+                          className="font-mono text-blue-400 hover:text-blue-300 transition-colors cursor-pointer"
+                        >
+                          {stepSession.session_name}
+                        </button>
+                      </div>
+                    ) : null;
+                  })()}
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-zinc-500 w-16 shrink-0">Runs</span>
+                    <div className="font-mono space-y-0.5">
+                      {sessionStepEntries.map((entry) => {
+                        const isCurrent = entry.name === stepDef.name;
+                        return (
+                          <div key={entry.name}>
+                            {isCurrent ? (
+                              <span className="font-semibold text-zinc-200">
+                                {entry.name}
+                                {entry.tokens > 0 && <span className="text-zinc-500 font-normal"> {formatTokensCompact(entry.tokens)}</span>}
+                              </span>
+                            ) : (
+                              <span>
+                                <button
+                                  onClick={() => onSelectStep?.(entry.name)}
+                                  className="text-blue-400 hover:text-blue-300 transition-colors cursor-pointer"
+                                >
+                                  {entry.name}
+                                </button>
+                                {entry.tokens > 0 && <span className="text-zinc-500"> {formatTokensCompact(entry.tokens)}</span>}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Agent stream — inline, no scroll wrapper */}
+              <div className="-mx-3 -mb-4">
+                <AgentStreamView
+                  runId={run.id}
+                  isLive={isRunning}
+                  startedAt={run.started_at}
+                  costUsd={isRunning ? costData?.cost_usd : (run.result?.executor_meta?.cost_usd as number | undefined)}
+                  billingMode={isRunning ? costData?.billing_mode : undefined}
+                  onUsage={handleUsage}
+                  compact
+                />
+              </div>
+            </SidebarSection>
+
+            {/* Session expanded modal */}
+            <Dialog open={sessionModalOpen} onOpenChange={setSessionModalOpen}>
+              <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto p-0">
+                <DialogHeader className="px-6 pt-6 pb-2">
+                  <DialogTitle className="text-sm">
+                    {stepDef.name} — Session Transcript
+                  </DialogTitle>
+                </DialogHeader>
+                <div className="px-6 pb-6">
+                  <AgentStreamView
+                    runId={run.id}
+                    isLive={isRunning}
+                    startedAt={run.started_at}
+                  />
+                </div>
+              </DialogContent>
+            </Dialog>
+            </>
           )}
-          {isRunning && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="border-red-500/30 text-red-400 hover:bg-red-500/10"
-              disabled={mutations.cancelRun.isPending}
-              onClick={() => mutations.cancelRun.mutate(run.id)}
-            >
-              <StopCircle className="w-3.5 h-3.5 mr-1.5" />
-              Cancel
-            </Button>
+        </>
+      )}
+
+      {/* ── Non-agent step layout ── */}
+      {!isAgent && (
+        <>
+          {/* Metadata (exit, cost, workspace) */}
+          {run?.result && (
+            <RunDetailsTable
+              exitRes={exitRes}
+              costUsd={run.result.executor_meta?.cost_usd as number | undefined}
+              isSubscription={isSubscription}
+              showCost={showCost}
+              executorMeta={run.result.executor_meta}
+              workspace={run.result.workspace}
+            />
           )}
-        </div>
+
+          {/* Exit resolution for runs without result (e.g. failed) */}
+          {!run?.result && exitRes && (
+            <div className="flex items-baseline gap-2 text-xs">
+              <span className="text-zinc-500 w-16 shrink-0">Exit</span>
+              {exitRes.rule === "implicit_advance" ? (
+                <span className="font-medium text-emerald-400">implicit advance</span>
+              ) : (
+                <span className="flex items-baseline gap-1.5">
+                  <span className={cn("font-medium",
+                    exitRes.action === "advance" && "text-emerald-400",
+                    exitRes.action === "loop" && "text-purple-400",
+                    exitRes.action === "escalate" && "text-red-400",
+                    exitRes.action === "abandon" && "text-red-500"
+                  )}>{exitRes.rule}</span>
+                  <span className="text-zinc-600">&rarr;</span>
+                  <span className="text-zinc-400">{exitRes.action}</span>
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* Error */}
+          {run && isFailed && run.error && (
+            <div className="space-y-1.5">
+              <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-2.5 text-sm">
+                <div className="flex items-center gap-1.5 text-red-400 mb-1">
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  <span className="font-medium text-xs">Error</span>
+                  {run.error_category && (
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-red-500/20 text-red-300">
+                      {run.error_category}
+                    </span>
+                  )}
+                </div>
+                <div className="text-red-300/80 text-xs font-mono whitespace-pre-wrap break-words">
+                  {run.error}
+                </div>
+              </div>
+              {run.traceback && (
+                <details className="text-xs">
+                  <summary className="text-zinc-500 cursor-pointer hover:text-zinc-400">Traceback</summary>
+                  <pre className="mt-1 text-[10px] font-mono text-red-300/60 whitespace-pre-wrap break-all bg-zinc-950 rounded p-2 max-h-48 overflow-auto">
+                    {run.traceback}
+                  </pre>
+                </details>
+              )}
+            </div>
+          )}
+
+          {/* Actions */}
+          {run && (
+            <div className="flex gap-2">
+              {isFailed && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-amber-500/30 text-amber-400 hover:bg-amber-500/10"
+                  disabled={mutations.rerunStep.isPending}
+                  onClick={() => mutations.rerunStep.mutate({ jobId, stepName: stepDef.name })}
+                >
+                  <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+                  Retry
+                </Button>
+              )}
+              {!isFailed && canRerun && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={mutations.rerunStep.isPending}
+                  onClick={() => mutations.rerunStep.mutate({ jobId, stepName: stepDef.name })}
+                >
+                  <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+                  Restart
+                </Button>
+              )}
+              {isRunning && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                  disabled={mutations.cancelRun.isPending}
+                  onClick={() => mutations.cancelRun.mutate(run.id)}
+                >
+                  <StopCircle className="w-3.5 h-3.5 mr-1.5" />
+                  Cancel
+                </Button>
+              )}
+            </div>
+          )}
+
+          {/* Inputs + outputs */}
+          {run && (run?.inputs || run?.result) && (
+            <RunContentTable
+              inputs={run.inputs}
+              inputBindings={stepDef.inputs}
+              result={run.result}
+              onSelectStep={onSelectStep}
+              executorType={stepDef.executor.type}
+            />
+          )}
+
+          {/* Prompt (interpolated) */}
+          {runPrompt && (
+            <SidebarSection title="Prompt">
+              <PromptBlock prompt={runPrompt} />
+            </SidebarSection>
+          )}
+
+          {/* Live script output */}
+          {run && isRunning && isScript && (
+            <div className="max-h-[60vh] overflow-y-auto rounded-lg border border-zinc-800/50">
+              <LiveScriptLogView runId={run.id} />
+            </div>
+          )}
+
+          {/* Usage limit waiting */}
+          {run?.status === "running" && !!(run?.executor_state as Record<string, unknown> | undefined)?.usage_limit_waiting && (() => {
+            const es = run.executor_state as Record<string, unknown>;
+            const resetAt = es.reset_at ? String(es.reset_at) : null;
+            const limitMsg = es.usage_limit_message ? String(es.usage_limit_message) : null;
+            return (
+              <div className="rounded-md bg-amber-100 dark:bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300 border border-amber-500/20">
+                <div className="font-medium">Usage limit reached</div>
+                {resetAt && <div>Resuming at {new Date(resetAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>}
+                {limitMsg && <div className="mt-1 text-xs opacity-75">{limitMsg}</div>}
+              </div>
+            );
+          })()}
+
+          {/* Suspended external — fulfillment status */}
+          {run && isSuspended && isExternal && (
+            <div className="rounded-md bg-blue-100 dark:bg-blue-500/10 p-3 text-sm text-blue-700 dark:text-blue-300 border border-blue-500/20">
+              <div className="font-medium">Waiting for input</div>
+              <div className="text-xs mt-1 opacity-75">
+                This step is suspended and waiting for external fulfillment.
+              </div>
+            </div>
+          )}
+
+          {/* Suspended poll — trigger now button + status */}
+          {run && isSuspended && isPoll && (() => {
+            const watchState = (run.executor_state as Record<string, unknown> | undefined)?._watch as {
+              last_checked_at?: string;
+              check_count?: number;
+              last_error?: string | null;
+              next_check_at?: string;
+            } | undefined;
+            const watchConfig = run.watch?.config as {
+              check_command?: string;
+              interval_seconds?: number;
+              prompt?: string;
+            } | undefined;
+
+            const formatRelativeTime = (iso: string | undefined, direction: "past" | "future"): string => {
+              if (!iso) return "-";
+              const diff = (new Date(iso).getTime() - Date.now()) / 1000;
+              const absDiff = Math.abs(diff);
+              if (absDiff < 60) return direction === "past" ? "just now" : "in <1m";
+              const mins = Math.round(absDiff / 60);
+              if (mins < 60) return direction === "past" ? `${mins}m ago` : `in ${mins}m`;
+              const hrs = Math.round(mins / 60);
+              return direction === "past" ? `${hrs}h ago` : `in ${hrs}h`;
+            };
+
+            const formatInterval = (seconds: number | undefined): string => {
+              if (!seconds) return "-";
+              if (seconds < 60) return `${seconds}s`;
+              if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+              return `${(seconds / 3600).toFixed(1)}h`;
+            };
+
+            return (
+              <>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-amber-500">Polling...</span>
+                  <button
+                    onClick={() => mutations.triggerPollNow.mutate(run.id)}
+                    disabled={mutations.triggerPollNow.isPending}
+                    className="text-xs px-2 py-1 rounded bg-zinc-800 border border-zinc-700 text-zinc-300 hover:text-white hover:bg-zinc-700 transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    {mutations.triggerPollNow.isPending ? "Triggering..." : "Poll Now"}
+                  </button>
+                </div>
+
+                {(watchState || watchConfig) && (
+                  <div className="space-y-1.5">
+                    <SectionHeading>Poll Status</SectionHeading>
+                    <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
+                      {watchConfig?.check_command && (
+                        <>
+                          <span className="text-zinc-500">Command</span>
+                          <span className="text-zinc-300 font-mono truncate" title={watchConfig.check_command}>{watchConfig.check_command}</span>
+                        </>
+                      )}
+                      {watchConfig?.interval_seconds != null && (
+                        <>
+                          <span className="text-zinc-500">Interval</span>
+                          <span className="text-zinc-300">{formatInterval(watchConfig.interval_seconds)}</span>
+                        </>
+                      )}
+                      {watchState?.check_count != null && (
+                        <>
+                          <span className="text-zinc-500">Checks</span>
+                          <span className="text-zinc-300">{watchState.check_count}</span>
+                        </>
+                      )}
+                      {watchState?.last_checked_at && (
+                        <>
+                          <span className="text-zinc-500">Last check</span>
+                          <span className="text-zinc-300">{formatRelativeTime(watchState.last_checked_at, "past")}</span>
+                        </>
+                      )}
+                      {watchState?.next_check_at && (
+                        <>
+                          <span className="text-zinc-500">Next check</span>
+                          <span className="text-zinc-300">{formatRelativeTime(watchState.next_check_at, "future")}</span>
+                        </>
+                      )}
+                      {watchState?.last_error != null && (
+                        <>
+                          <span className="text-zinc-500">Last error</span>
+                          <span className={watchState.last_error ? "text-red-400" : "text-zinc-500 italic"}>
+                            {watchState.last_error || "(none)"}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </>
+            );
+          })()}
+
+          {/* Completed script logs */}
+          {run?.result && isScript && (
+            <div className="max-h-[60vh] overflow-y-auto rounded-lg border border-zinc-800/50">
+              <ScriptLogView run={run} />
+            </div>
+          )}
+
+          {/* Fulfillment notes */}
+          {run?.result?.artifact?._fulfillment_notes != null && (
+            <div className="text-xs text-zinc-400 bg-zinc-900/30 rounded-lg border border-zinc-800 px-3 py-2 whitespace-pre-wrap">
+              {String(run.result.artifact._fulfillment_notes)}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

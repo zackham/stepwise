@@ -1,6 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { toast } from "sonner";
 import * as api from "@/lib/api";
+import type { SessionInfo } from "@/lib/types";
 
 // ── Query hooks ──────────────────────────────────────────────────────
 
@@ -135,6 +137,35 @@ export function useSessionTranscript(
     enabled: !!jobId && !!sessionName,
     staleTime: Infinity,
   });
+}
+
+export interface SessionStepEntry {
+  name: string;
+  runs: number;
+  tokens: number;
+}
+
+/** Ordered step entries with run counts and token usage for a session. Backed by cached transcript query. */
+export function useSessionStepEntries(
+  jobId: string | undefined,
+  session: SessionInfo | null | undefined,
+): SessionStepEntry[] {
+  const { data: transcript } = useSessionTranscript(jobId, session?.session_name);
+  return useMemo(() => {
+    if (!session) return [];
+    const boundaries = transcript?.boundaries ?? [];
+    const runCounts = new Map<string, number>();
+    const tokenCounts = new Map<string, number>();
+    for (const b of boundaries) {
+      runCounts.set(b.step_name, (runCounts.get(b.step_name) ?? 0) + 1);
+      tokenCounts.set(b.step_name, (tokenCounts.get(b.step_name) ?? 0) + (b.tokens_used ?? 0));
+    }
+    return session.step_names.map(name => ({
+      name,
+      runs: runCounts.get(name) ?? 1,
+      tokens: tokenCounts.get(name) ?? 0,
+    }));
+  }, [session, transcript]);
 }
 
 export function useSimilarErrors(

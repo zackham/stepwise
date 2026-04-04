@@ -1,48 +1,18 @@
 import { useJobOutput, useJobCost, useStepwiseMutations } from "@/hooks/useStepwise";
-import { ContentModal } from "@/components/ui/content-modal";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 import { Button } from "@/components/ui/button";
 import type { Job } from "@/lib/types";
 import { cn, formatDuration, formatCost } from "@/lib/utils";
 import { Link } from "@tanstack/react-router";
-import { Package, Terminal, Monitor, Play, Pause, RotateCcw, XCircle, RefreshCw, AlertTriangle } from "lucide-react";
+import { Terminal, Monitor, Play, Pause, RotateCcw, XCircle, RefreshCw, AlertTriangle } from "lucide-react";
 import { useMemo, useState } from "react";
+import { SidebarSection, JobInputsSection, JobOutputsSection } from "./RunSections";
 
 interface JobOverviewProps {
   job: Job;
 }
 
-function SectionHeading({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider">
-      {children}
-    </div>
-  );
-}
-
-function truncateValue(value: unknown, maxLen = 80): string {
-  if (value === null || value === undefined) return "null";
-  if (typeof value === "string") return value.length > maxLen ? value.slice(0, maxLen) + "..." : value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  const json = JSON.stringify(value);
-  return json.length > maxLen ? json.slice(0, maxLen) + "..." : json;
-}
-
-function KeyValueList({ data }: { data: Record<string, unknown> }) {
-  return (
-    <div className="space-y-1">
-      {Object.entries(data).map(([key, value]) => (
-        <div key={key} className="flex gap-2 text-xs leading-snug">
-          <span className="text-zinc-500 shrink-0 font-mono">{key}:</span>
-          <span className="text-zinc-400 font-mono truncate">
-            {typeof value === "string" ? `"${truncateValue(value)}"` : truncateValue(value)}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
 
 function parseJsonString(value: string): unknown {
   const trimmed = value.trimStart();
@@ -84,12 +54,20 @@ export function JobOverview({ job }: JobOverviewProps) {
   const { data: costData } = useJobCost(job.id);
   const stale = job.status === "running" && job.created_by !== "server" &&
     (!job.heartbeat_at || Date.now() - new Date(job.heartbeat_at).getTime() > 60_000);
-  const [outputsModalOpen, setOutputsModalOpen] = useState(false);
 
-  const normalizedOutputs = useMemo(
-    () => (outputs ? normalizeOutputValue(outputs) as Record<string, unknown> : null),
-    [outputs],
-  );
+  const normalizedOutputs = useMemo(() => {
+    if (!outputs) return null;
+    const normalized = normalizeOutputValue(outputs);
+    // Terminal outputs come as an array (one per terminal step) — merge into a single object
+    if (Array.isArray(normalized)) {
+      const merged: Record<string, unknown> = {};
+      for (const item of normalized) {
+        if (item && typeof item === "object") Object.assign(merged, item);
+      }
+      return merged;
+    }
+    return normalized as Record<string, unknown>;
+  }, [outputs]);
 
   const stepCount = Object.keys(job.workflow.steps).length;
   const hasOutputs = normalizedOutputs && Object.keys(normalizedOutputs).length > 0;
@@ -138,12 +116,99 @@ export function JobOverview({ job }: JobOverviewProps) {
           </h3>
           <JobStatusBadge status={job.status} />
         </div>
-        {job.name && job.objective && (
+        {job.name && job.objective && job.name !== job.objective && (
           <p className="text-xs text-muted-foreground">{job.objective}</p>
         )}
       </div>
 
-      {/* 2. Actions */}
+      {/* 2. Info grid */}
+      <div className="text-xs space-y-1.5">
+        {meta?.name && (
+          <div className="flex items-center gap-2">
+            <span className="text-zinc-500 w-16">Flow</span>
+            <Link
+              to="/flows/$flowName"
+              params={{ flowName: meta.name }}
+              className="font-mono text-blue-400 hover:text-blue-300 transition-colors"
+            >
+              {meta.name}
+            </Link>
+          </div>
+        )}
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-500 w-16">Job ID</span>
+          <span
+            onClick={() => copyId(job.id)}
+            className={cn(
+              "font-mono cursor-pointer hover:text-blue-400 transition-colors",
+              idCopied ? "text-green-400" : "text-zinc-600"
+            )}
+            title="Click to copy"
+          >
+            {job.id}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-500 w-16">Steps</span>
+          <span className="font-mono text-zinc-700 dark:text-zinc-300">{stepCount}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-500 w-16">Created</span>
+          <span className="font-mono text-zinc-500">
+            {new Date(job.created_at).toLocaleString()}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-500 w-16">Duration</span>
+          <span className="font-mono text-zinc-400">
+            {job.status === "staged" || job.status === "pending"
+              ? "-"
+              : formatDuration(job.created_at, job.updated_at)}
+          </span>
+        </div>
+        {isTerminal && (
+          <div className="flex items-center gap-2">
+            <span className="text-zinc-500 w-16">Finished</span>
+            <span className="font-mono text-zinc-500">
+              {new Date(job.updated_at).toLocaleString()}
+            </span>
+          </div>
+        )}
+        {costData && costData.cost_usd > 0 && (
+          <div className="flex items-center gap-2">
+            <span className="text-zinc-500 w-16">Cost</span>
+            <span className="font-mono text-zinc-400">
+              {formatCost(costData.cost_usd)}
+            </span>
+          </div>
+        )}
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-500 w-16">Source</span>
+          <span className="flex items-center gap-1 text-zinc-400 font-mono">
+            {job.created_by.startsWith("cli:") ? (
+              <>
+                <Terminal className="w-3 h-3" />
+                CLI (PID {job.runner_pid ?? job.created_by.slice(4)})
+              </>
+            ) : (
+              <>
+                <Monitor className="w-3 h-3" />
+                Server
+              </>
+            )}
+          </span>
+        </div>
+        {job.heartbeat_at && (
+          <div className="flex items-center gap-2">
+            <span className="text-zinc-500 w-16">Heartbeat</span>
+            <span className="font-mono text-zinc-500">
+              {new Date(job.heartbeat_at).toLocaleString()}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* 3. Actions */}
       {(() => {
         const s = job.status;
         const buttons: React.ReactNode[] = [];
@@ -210,136 +275,26 @@ export function JobOverview({ job }: JobOverviewProps) {
         );
       })()}
 
-      {/* 3. Info grid */}
-      <div className="text-xs space-y-1.5">
-        <div className="flex items-center gap-2">
-          <span className="text-zinc-500 w-16">Job ID</span>
-          <span
-            onClick={() => copyId(job.id)}
-            className={cn(
-              "font-mono text-[10px] cursor-pointer hover:text-blue-400 transition-colors",
-              idCopied ? "text-green-400" : "text-zinc-600"
-            )}
-            title="Click to copy"
-          >
-            {job.id}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-zinc-500 w-16">Steps</span>
-          <span className="font-mono text-zinc-700 dark:text-zinc-300">{stepCount}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-zinc-500 w-16">Created</span>
-          <span className="font-mono text-zinc-500 text-[10px]">
-            {new Date(job.created_at).toLocaleString()}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-zinc-500 w-16">Duration</span>
-          <span className="font-mono text-zinc-400">
-            {job.status === "staged" || job.status === "pending"
-              ? "-"
-              : formatDuration(job.created_at, job.updated_at)}
-          </span>
-        </div>
-        {isTerminal && (
-          <div className="flex items-center gap-2">
-            <span className="text-zinc-500 w-16">Finished</span>
-            <span className="font-mono text-zinc-500 text-[10px]">
-              {new Date(job.updated_at).toLocaleString()}
-            </span>
-          </div>
-        )}
-        {costData && costData.cost_usd > 0 && (
-          <div className="flex items-center gap-2">
-            <span className="text-zinc-500 w-16">Cost</span>
-            <span className="font-mono text-zinc-400">
-              {formatCost(costData.cost_usd)}
-            </span>
-          </div>
-        )}
-        <div className="flex items-center gap-2">
-          <span className="text-zinc-500 w-16">Source</span>
-          <span className="flex items-center gap-1 text-zinc-400 text-[10px] font-mono">
-            {job.created_by.startsWith("cli:") ? (
-              <>
-                <Terminal className="w-3 h-3" />
-                CLI (PID {job.runner_pid ?? job.created_by.slice(4)})
-              </>
-            ) : (
-              <>
-                <Monitor className="w-3 h-3" />
-                Server
-              </>
-            )}
-          </span>
-        </div>
-        {job.heartbeat_at && (
-          <div className="flex items-center gap-2">
-            <span className="text-zinc-500 w-16">Heartbeat</span>
-            <span className="font-mono text-zinc-500 text-[10px]">
-              {new Date(job.heartbeat_at).toLocaleString()}
-            </span>
-          </div>
-        )}
-      </div>
-
-      {/* 3. Job Inputs */}
-      {hasJobInputs && (
-        <div className="space-y-1.5">
-          <SectionHeading>Job Inputs</SectionHeading>
-          <KeyValueList data={jobInputs} />
-        </div>
-      )}
+      {/* 4. Job Inputs */}
+      {hasJobInputs && <JobInputsSection inputs={jobInputs} />}
 
       {/* 4. Flow Defaults */}
-      {hasFlowDefaults && (
-        <div className="space-y-1.5">
-          <SectionHeading>Flow Defaults</SectionHeading>
-          <KeyValueList data={flowDefaults} />
-        </div>
-      )}
+      {hasFlowDefaults && <JobInputsSection inputs={flowDefaults} />}
 
       {/* 5. Job outputs */}
       {isTerminal && (
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-1">
-            <Package className="w-3 h-3 text-zinc-500" />
-            <SectionHeading>Outputs</SectionHeading>
-          </div>
-          {outputsLoading ? (
-            <div className="text-zinc-500 text-xs py-2">Loading outputs...</div>
-          ) : hasOutputs ? (
-            <>
-              <div
-                onClick={() => setOutputsModalOpen(true)}
-                className="cursor-pointer rounded px-2 py-1.5 -mx-2 hover:bg-zinc-100 dark:hover:bg-zinc-800/60 transition-colors"
-                title="Click to view full outputs"
-              >
-                <KeyValueList data={normalizedOutputs!} />
-              </div>
-              <ContentModal
-                open={outputsModalOpen}
-                onOpenChange={setOutputsModalOpen}
-                title="Job Outputs"
-                copyContent={JSON.stringify(normalizedOutputs, null, 2)}
-              >
-                <pre className="whitespace-pre-wrap text-sm text-zinc-300 font-mono p-3 leading-relaxed">
-                  {JSON.stringify(normalizedOutputs, null, 2)}
-                </pre>
-              </ContentModal>
-            </>
-          ) : (
-            <div className="text-zinc-600 text-xs py-2">No outputs</div>
-          )}
-        </div>
+        outputsLoading ? (
+          <div className="text-zinc-500 text-xs py-2">Loading outputs...</div>
+        ) : hasOutputs ? (
+          <JobOutputsSection outputs={normalizedOutputs!} />
+        ) : (
+          <div className="text-zinc-600 text-xs py-2">No outputs</div>
+        )
       )}
 
       {/* 6. Flow metadata */}
       {meta && (meta.author || meta.description) && (
-        <div className="space-y-1.5">
-          <SectionHeading>Flow Metadata</SectionHeading>
+        <SidebarSection title="Flow Metadata">
           <div className="text-xs space-y-1">
             {meta.author && (
               <div>
@@ -354,8 +309,9 @@ export function JobOverview({ job }: JobOverviewProps) {
               </div>
             )}
           </div>
-        </div>
+        </SidebarSection>
       )}
+
     </div>
   );
 }

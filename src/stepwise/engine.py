@@ -806,7 +806,7 @@ class Engine:
         cost = self.store.accumulated_cost(run.id)
         if cost:
             return cost
-        # Fallback: LLMExecutor stores cost in executor_meta (no step_events)
+        # Fallback: LLMExecutor and AgentExecutor store cost in executor_meta
         if run.result and run.result.executor_meta:
             meta_cost = run.result.executor_meta.get("cost_usd")
             if meta_cost:
@@ -1816,7 +1816,7 @@ class Engine:
 
         # Pass session fields to agent executor
         if exec_ref.type == "agent":
-            session_ctx: dict = {}
+            session_ctx: dict = {"_billing_mode": self.billing_mode}
 
             # Named sessions (new mechanism)
             if step_def.session and job.id in self._session_registries:
@@ -3529,7 +3529,7 @@ class AsyncEngine(Engine):
         if step_def.outputs and "output_fields" not in exec_ref.config:
             exec_ref = exec_ref.with_config({"output_fields": step_def.outputs})
         if exec_ref.type == "agent":
-            session_ctx: dict = {}
+            session_ctx: dict = {"_billing_mode": self.billing_mode}
 
             # Named sessions
             if step_def.session:

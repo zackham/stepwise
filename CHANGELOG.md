@@ -3,6 +3,41 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.36.0] — 2026-04-03
+
+### Added
+- **Collapsible sidebar sections** — reusable `SidebarSection` component with HR, title, chevron toggle; used for Inputs, Outputs, Session, Flow Metadata, and Prompt sections across both sidebars
+- **Session step flow** — ordered step chain with token counts (e.g., `reflect 155.9k → prompt_review 5.3k → build 17.1k`) shown in session headers and sidebar session cards
+- **Session modal view** — expand button on session section opens full transcript in a wide dialog
+- **LLM response rendering** — single-output LLM steps render response directly with markdown auto-detection and expand button, instead of key-value output rows
+- **Context window usage bar** — two-color progress bar (gray = prior steps, blue = current step) in session header
+- **Timeline step details** — executor type, model, agent, session name shown in timeline row labels and hover tooltips
+- **Port tooltip copy buttons** — each input/output in DAG port modals has a clipboard copy icon
+- **Job overview: Flow link** — clickable flow name in job sidebar info grid navigates to flow editor
+
+### Changed
+- **Agent step Run tab redesign** — unified layout: meta/exit/cost/actions at top, inputs/outputs as collapsible sections with colored keys (cyan inputs, emerald outputs), full session transcript inline below
+- **Session tab hidden for agent steps** — transcript is embedded in Run tab; Session tab only shows for non-agent steps
+- **AgentStreamView simplified** — removed search bar, virtualization, and inner scroll containers; segments render flat in the sidebar
+- **Input/output display** — replaced adaptive-height slots with clean key-value rows: input mappings show full YAML-style source (e.g., `prompt ← $job.prompt`), 3-line clamp, click-to-expand modals
+- **Run details table** — exit, cost, workspace, meta displayed as aligned key-value grid (matches job overview style); implicit_advance shows as "implicit advance" without arrow
+- **Job outputs flattened** — terminal output arrays merged into single object instead of showing array indices
+- **Port tooltips portaled** — rendered via `createPortal` to document.body, fixing z-index issues where step nodes overlapped tooltips
+- **Port hover** — removed scale-150 on hover (was scaling the tooltip); dots brighten on hover instead
+- **Port modal reopen fix** — click-outside dismiss no longer immediately reopens the modal
+- **Prompt bubble** — violet background bubble instead of blockquote left-border style; white text
+- **Tool calls single-line** — truncated to one line in agent stream view
+- **Font size bump** — info grid tables, session boundary headers, and token counts bumped from 10px to 12px across both sidebars
+- **Tab reorder** — Timeline moved before Events; Tree view tab removed
+- **Actions repositioned** — Reset/Start/Cancel buttons moved below info grid in job sidebar; Restart/Cancel below meta in step sidebar
+- **Compact token display** — `155.9k / 1M` format instead of full numbers
+
+### Fixed
+- **Session boundary mapping** — `buildBoundarySegmentMap` now uses accurate `eventToSegment` array from `buildSegmentsFromEvents`, fixing last-step content not appearing in session views
+- **Job cost on subscription** — agent step costs stored as $0 at write time when on subscription billing; cost endpoints no longer short-circuit to zero
+- **Run cost endpoint** — uses `_run_cost()` with executor_meta fallback instead of step_events only
+- **Sessions tab independence** — left sidebar Sessions tab no longer reacts to step selection changes
+
 ## [0.35.0] — 2026-04-03
 
 ### Added
