@@ -316,9 +316,12 @@ class TestCancelForce:
 class TestCancelRun:
     """Test cancel --run for specific run cancellation."""
 
-    def test_cancel_specific_running_run(self):
-        """--run should cancel a specific RUNNING step run."""
-        store = SQLiteStore(":memory:")
+    def test_cancel_specific_running_run(self, tmp_path):
+        """--run should cancel a specific RUNNING step run via _cancel_run."""
+        from stepwise.project import init_project
+        project = init_project(tmp_path)
+        store = SQLiteStore(str(project.db_path))
+
         job = Job(
             id=_gen_id("job"),
             objective="test",
@@ -337,33 +340,29 @@ class TestCancelRun:
             started_at=_now(),
         )
         store.save_run(run)
+        store.close()
 
         from stepwise.cli import _cancel_run
-        args = argparse.Namespace(output="table")
+        args = argparse.Namespace(output="json")
 
-        with patch("stepwise.cli._find_project_or_exit") as mock_project, \
-             patch("stepwise.cli._io") as mock_io:
-            mock_io.return_value = MagicMock()
-            # We need to intercept SQLiteStore creation — instead, test directly
-            # by calling _cancel_run after setting up our store.
-            # Since _cancel_run creates its own store, we test at the integration level:
-            # Just verify the function logic by testing _cancel_force which is simpler.
-            pass
+        with patch("stepwise.cli._find_project_or_exit", return_value=project):
+            result = _cancel_run(args, run.id)
 
-        # Direct test: manually set run status to verify logic
-        run.status = StepRunStatus.FAILED
-        run.error = "Cancelled by user (--run)"
-        run.error_category = "user_cancelled"
-        run.completed_at = _now()
-        store.save_run(run)
+        assert result == 0  # EXIT_SUCCESS
 
-        reloaded = store.load_run(run.id)
+        store2 = SQLiteStore(str(project.db_path))
+        reloaded = store2.load_run(run.id)
+        store2.close()
         assert reloaded.status == StepRunStatus.FAILED
         assert "Cancelled by user" in reloaded.error
+        assert reloaded.error_category == "user_cancelled"
 
-    def test_cancel_run_rejects_non_running(self):
+    def test_cancel_run_rejects_non_running(self, tmp_path):
         """--run should reject runs that are not in RUNNING status."""
-        store = SQLiteStore(":memory:")
+        from stepwise.project import init_project
+        project = init_project(tmp_path)
+        store = SQLiteStore(str(project.db_path))
+
         job = Job(
             id=_gen_id("job"),
             objective="test",
@@ -382,15 +381,25 @@ class TestCancelRun:
             started_at=_now(),
         )
         store.save_run(run)
+        store.close()
 
-        # The run is COMPLETED, so it should not be cancellable
-        assert run.status == StepRunStatus.COMPLETED
+        from stepwise.cli import _cancel_run, EXIT_USAGE_ERROR
+        args = argparse.Namespace(output="json")
 
+        with patch("stepwise.cli._find_project_or_exit", return_value=project):
+            result = _cancel_run(args, run.id)
 
-class TestCancelEndpoint:
-    """Test the server cancel_run endpoint behavior (already exists in server.py)."""
+        assert result == EXIT_USAGE_ERROR
 
-    def test_server_cancel_run_endpoint_exists(self):
-        """Verify the cancel_run endpoint signature exists in server.py."""
-        from stepwise.server import cancel_run
-        assert callable(cancel_run)
+    def test_cancel_run_not_found(self, tmp_path):
+        """--run with non-existent run ID should return error."""
+        from stepwise.project import init_project
+        project = init_project(tmp_path)
+
+        from stepwise.cli import _cancel_run, EXIT_JOB_FAILED
+        args = argparse.Namespace(output="json")
+
+        with patch("stepwise.cli._find_project_or_exit", return_value=project):
+            result = _cancel_run(args, "run-nonexistent")
+
+        assert result == EXIT_JOB_FAILED
