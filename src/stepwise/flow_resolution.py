@@ -22,12 +22,32 @@ class FlowInfo:
 
 
 @dataclass
+class IncludedFlow:
+    """A flow included in a kit via the include field."""
+    name: str               # the name it's known as within the kit
+    path: Path              # resolved path to FLOW.yaml
+    source_ref: str         # original include string (e.g., "@author:slug@^1.0")
+    source_type: str        # "registry", "kit", or "standalone"
+
+
+@dataclass
 class KitInfo:
     """A discovered kit."""
     name: str
     path: Path              # path to KIT.yaml
-    flow_names: list[str] = field(default_factory=list)   # member flow names (bare)
-    flow_paths: list[Path] = field(default_factory=list)   # paths to member FLOW.yaml files
+    flow_names: list[str] = field(default_factory=list)   # bundled flow names (bare)
+    flow_paths: list[Path] = field(default_factory=list)   # paths to bundled FLOW.yaml files
+    included_flows: list[IncludedFlow] = field(default_factory=list)  # resolved includes
+
+    @property
+    def all_flow_names(self) -> list[str]:
+        """All flow names: bundled + included."""
+        return self.flow_names + [f.name for f in self.included_flows]
+
+    @property
+    def all_flow_paths(self) -> list[Path]:
+        """All flow paths: bundled + included."""
+        return self.flow_paths + [f.path for f in self.included_flows]
 
 
 class FlowResolutionError(Exception):
@@ -155,10 +175,29 @@ def _resolve_kit_flow(kit_name: str, flow_name: str, project_dir: Path) -> Path:
             continue
         kit_found = True
 
+        # Check bundled flows first
         flow_dir = kit_dir / flow_name
         flow_marker = flow_dir / FLOW_DIR_MARKER
         if flow_marker.is_file():
             return flow_marker
+
+        # Check included flows
+        try:
+            from stepwise.yaml_loader import load_kit_yaml, KitLoadError
+            kit_def = load_kit_yaml(kit_marker)
+            if kit_def.include:
+                bundled = set()
+                for child in kit_dir.iterdir():
+                    if child.is_dir() and (child / FLOW_DIR_MARKER).is_file():
+                        bundled.add(child.name)
+                included = resolve_kit_includes(
+                    kit_name, kit_def.include, project_dir, bundled,
+                )
+                for inc in included:
+                    if inc.name == flow_name:
+                        return inc.path
+        except Exception:
+            pass
 
     if kit_found:
         raise FlowResolutionError(
@@ -200,6 +239,263 @@ def get_kit_defaults_for_flow(flow_path: Path) -> dict | None:
     if not kit_def.defaults:
         return None
     return dict(kit_def.defaults)
+
+
+class IncludeRef:
+    """Parsed include reference."""
+    __slots__ = ("raw", "ref_type", "author", "slug", "version_constraint", "kit", "flow")
+
+    def __init__(self, raw: str, ref_type: str, **kwargs):
+        self.raw = raw
+        self.ref_type = ref_type  # "registry", "kit", "standalone"
+        self.author = kwargs.get("author", "")
+        self.slug = kwargs.get("slug", "")
+        self.version_constraint = kwargs.get("version_constraint", "")
+        self.kit = kwargs.get("kit", "")
+        self.flow = kwargs.get("flow", "")
+
+    @property
+    def flow_name(self) -> str:
+        """The bare flow name this will be known as in the kit."""
+        if self.ref_type == "registry":
+            return self.slug
+        if self.ref_type == "kit":
+            return self.flow
+        return self.raw  # standalone
+
+
+def parse_include_ref(ref: str) -> IncludeRef:
+    """Parse an include string into a structured reference.
+
+    Formats:
+        @author:slug           → registry, latest
+        @author:slug@^1.0     → registry, version constraint
+        @author:slug@1.2.3    → registry, exact version
+        kit/flow              → local kit flow
+        flow-name             → local standalone flow
+    """
+    ref = ref.strip()
+    if not ref:
+        raise FlowResolutionError("Empty include reference")
+
+    # Registry: @author:slug[@constraint]
+    if ref.startswith("@"):
+        rest = ref[1:]  # strip leading @
+        # Split on @ for version constraint (second @ is the version delimiter)
+        if "@" in rest:
+            ref_part, version_part = rest.split("@", 1)
+        else:
+            ref_part = rest
+            version_part = ""
+
+        if ":" not in ref_part:
+            raise FlowResolutionError(
+                f"Invalid registry include: {ref!r}. "
+                f"Expected @author:slug or @author:slug@constraint"
+            )
+        author, slug = ref_part.split(":", 1)
+        if not author or not slug:
+            raise FlowResolutionError(f"Invalid registry include: {ref!r}")
+        return IncludeRef(
+            ref, "registry", author=author, slug=slug,
+            version_constraint=version_part,
+        )
+
+    # Kit flow: kit/flow (one slash, no @ prefix)
+    if "/" in ref:
+        parts = ref.split("/")
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            raise FlowResolutionError(
+                f"Invalid kit flow include: {ref!r}. Expected kit/flow format."
+            )
+        return IncludeRef(ref, "kit", kit=parts[0], flow=parts[1])
+
+    # Standalone flow
+    if not FLOW_NAME_PATTERN.match(ref):
+        raise FlowResolutionError(f"Invalid include reference: {ref!r}")
+    return IncludeRef(ref, "standalone")
+
+
+def resolve_kit_includes(
+    kit_name: str,
+    includes: list[str],
+    project_dir: Path,
+    bundled_names: set[str],
+    auto_fetch: bool = True,
+) -> list[IncludedFlow]:
+    """Resolve include references to actual flow paths.
+
+    Args:
+        kit_name: Name of the kit being resolved (for error messages).
+        includes: List of include reference strings from KIT.yaml.
+        project_dir: Project root directory.
+        bundled_names: Set of flow names already bundled in the kit.
+        auto_fetch: If True, auto-install missing registry flows.
+
+    Returns:
+        List of resolved IncludedFlow objects.
+
+    Raises:
+        FlowResolutionError: If an include can't be resolved or collides.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    resolved: list[IncludedFlow] = []
+    seen_names: set[str] = set()
+
+    for ref_str in includes:
+        ref = parse_include_ref(ref_str)
+        flow_name = ref.flow_name
+
+        # Check for collision with bundled flows
+        if flow_name in bundled_names:
+            raise FlowResolutionError(
+                f"Kit '{kit_name}': include '{ref_str}' conflicts with "
+                f"bundled flow '{flow_name}'. Flow names must be unique within a kit."
+            )
+
+        # Check for collision with other includes
+        if flow_name in seen_names:
+            raise FlowResolutionError(
+                f"Kit '{kit_name}': duplicate include name '{flow_name}' "
+                f"from '{ref_str}'. Flow names must be unique within a kit."
+            )
+
+        try:
+            if ref.ref_type == "registry":
+                path = _resolve_registry_include(
+                    ref, project_dir, auto_fetch=auto_fetch,
+                )
+            elif ref.ref_type == "kit":
+                path = _resolve_kit_flow(ref.kit, ref.flow, project_dir)
+            else:
+                path = resolve_flow(ref.raw, project_dir)
+
+            resolved.append(IncludedFlow(
+                name=flow_name,
+                path=path,
+                source_ref=ref_str,
+                source_type=ref.ref_type,
+            ))
+            seen_names.add(flow_name)
+        except FlowResolutionError as e:
+            logger.warning("Kit '%s': failed to resolve include '%s': %s", kit_name, ref_str, e)
+            # Don't hard-fail on unresolvable includes — warn and skip
+            # This allows kits to work with partial includes when offline
+
+    return resolved
+
+
+def _resolve_registry_include(
+    ref: IncludeRef, project_dir: Path, auto_fetch: bool = True,
+) -> Path:
+    """Resolve a registry include, optionally auto-fetching."""
+    # Check if already installed
+    reg_dir = project_dir / ".stepwise" / "registry" / f"@{ref.author}" / ref.slug
+    flow_yaml = reg_dir / FLOW_DIR_MARKER
+    if not flow_yaml.is_file():
+        # Try single-file variant
+        flow_yaml = reg_dir / f"{ref.slug}{FLOW_FILE_SUFFIX}"
+
+    if flow_yaml.is_file():
+        # Installed — check version constraint if specified
+        if ref.version_constraint:
+            _check_version_constraint(flow_yaml, ref)
+        return flow_yaml
+
+    if not auto_fetch:
+        raise FlowResolutionError(
+            f"Registry flow @{ref.author}:{ref.slug} not installed. "
+            f"Run: stepwise get @{ref.author}:{ref.slug}"
+        )
+
+    # Auto-fetch from registry
+    import logging
+    logging.getLogger(__name__).info(
+        "Auto-installing registry flow @%s:%s for kit include", ref.author, ref.slug,
+    )
+    try:
+        from stepwise.registry_client import fetch_flow
+        flow_data = fetch_flow(ref.slug)
+        if not flow_data:
+            raise FlowResolutionError(
+                f"Registry flow @{ref.author}:{ref.slug} not found in registry"
+            )
+
+        from stepwise.bundle import unpack_bundle
+        files = flow_data.get("files") or {}
+        yaml_content = flow_data.get("yaml", "")
+        origin = {
+            "registry": "https://stepwise.run",
+            "author": flow_data.get("author", ref.author),
+            "slug": ref.slug,
+            "version": flow_data.get("version", ""),
+        }
+        target = reg_dir
+        unpack_bundle(target, yaml_content, files, origin)
+
+        flow_yaml = target / FLOW_DIR_MARKER
+        if not flow_yaml.is_file():
+            raise FlowResolutionError(
+                f"Failed to install @{ref.author}:{ref.slug} — FLOW.yaml not created"
+            )
+
+        if ref.version_constraint:
+            _check_version_constraint(flow_yaml, ref)
+
+        return flow_yaml
+
+    except ImportError:
+        raise FlowResolutionError(
+            f"Registry client not available. "
+            f"Run: stepwise get @{ref.author}:{ref.slug}"
+        )
+    except Exception as e:
+        raise FlowResolutionError(
+            f"Failed to auto-install @{ref.author}:{ref.slug}: {e}"
+        )
+
+
+def _check_version_constraint(flow_yaml: Path, ref: IncludeRef) -> None:
+    """Check if an installed flow's version satisfies the constraint."""
+    from stepwise.version import version_matches, VersionError
+
+    # Read version from the flow's origin.json or YAML metadata
+    origin_path = flow_yaml.parent / ".origin.json"
+    version = ""
+    if origin_path.is_file():
+        import json
+        try:
+            origin = json.loads(origin_path.read_text())
+            version = origin.get("version", "")
+        except Exception:
+            pass
+
+    if not version:
+        # Try reading from YAML metadata
+        try:
+            from stepwise.yaml_loader import load_workflow_yaml
+            wf = load_workflow_yaml(flow_yaml, kit_defaults={})  # empty to skip auto-detect
+            version = wf.metadata.version
+        except Exception:
+            pass
+
+    if not version:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Cannot check version constraint for @%s:%s — no version found",
+            ref.author, ref.slug,
+        )
+        return
+
+    try:
+        if not version_matches(version, ref.version_constraint):
+            raise FlowResolutionError(
+                f"@{ref.author}:{ref.slug} version {version} does not satisfy "
+                f"constraint {ref.version_constraint!r}"
+            )
+    except VersionError as e:
+        raise FlowResolutionError(str(e))
 
 
 def _list_kit_flows(kit_name: str, project_dir: Path) -> str:
@@ -246,8 +542,14 @@ def _find_kit_dirs(project_dir: Path) -> dict[Path, str]:
     return kit_dirs
 
 
-def discover_kits(project_dir: Path) -> list[KitInfo]:
-    """Find all kits in a project directory."""
+def discover_kits(project_dir: Path, resolve_includes: bool = True) -> list[KitInfo]:
+    """Find all kits in a project directory.
+
+    Args:
+        project_dir: Project root.
+        resolve_includes: If True, resolve include references. Set False to
+            avoid network calls or circular resolution.
+    """
     kit_dirs = _find_kit_dirs(project_dir)
     kits: list[KitInfo] = []
     for resolved_dir, kit_name in sorted(kit_dirs.items(), key=lambda x: x[1]):
@@ -259,11 +561,33 @@ def discover_kits(project_dir: Path) -> list[KitInfo]:
                 if marker.is_file():
                     flow_names.append(child.name)
                     flow_paths.append(marker)
+
+        # Resolve includes
+        included_flows: list[IncludedFlow] = []
+        if resolve_includes:
+            kit_yaml_path = resolved_dir / KIT_DIR_MARKER
+            try:
+                from stepwise.yaml_loader import load_kit_yaml, KitLoadError
+                kit_def = load_kit_yaml(kit_yaml_path)
+                if kit_def.include:
+                    included_flows = resolve_kit_includes(
+                        kit_name=kit_name,
+                        includes=kit_def.include,
+                        project_dir=project_dir,
+                        bundled_names=set(flow_names),
+                    )
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Failed to resolve includes for kit '%s'", kit_name, exc_info=True,
+                )
+
         kits.append(KitInfo(
             name=kit_name,
             path=resolved_dir / KIT_DIR_MARKER,
             flow_names=flow_names,
             flow_paths=flow_paths,
+            included_flows=included_flows,
         ))
     return kits
 

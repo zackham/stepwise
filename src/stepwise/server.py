@@ -3003,6 +3003,10 @@ def list_kits():
             raw_yaml = kit_info.path.read_text()
         except Exception:
             pass
+        included = [
+            {"name": f.name, "source_ref": f.source_ref, "source_type": f.source_type}
+            for f in kit_info.included_flows
+        ]
         result.append({
             "name": kit_info.name,
             "description": kit_def.description if kit_def else "",
@@ -3010,8 +3014,9 @@ def list_kits():
             "category": kit_def.category if kit_def else "",
             "usage": kit_def.usage if kit_def else "",
             "tags": kit_def.tags if kit_def else [],
-            "flow_count": len(kit_info.flow_names),
-            "flow_names": kit_info.flow_names,
+            "flow_count": len(kit_info.all_flow_names),
+            "flow_names": kit_info.all_flow_names,
+            "included_flows": included,
             "raw_yaml": raw_yaml,
         })
     return result
