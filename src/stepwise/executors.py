@@ -42,6 +42,7 @@ class ExecutionContext:
     timeout_minutes: int | None = None
     injected_context: list[str] | None = None
     state_update_fn: Callable[[dict], None] | None = None
+    flow_source_dir: str | None = None
 
 
 # ── Executor Result ────────────────────────────────────────────────────

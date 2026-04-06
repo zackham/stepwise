@@ -477,7 +477,8 @@ class AcpxBackend:
         step_id = f"{context.step_name}@{context.job_id or 'local'}"
         logger.info(f"[{step_id}] spawn started (thread={thread})")
 
-        working_dir = str(Path(config.get("working_dir", context.workspace_path)).resolve())
+        default_dir = context.flow_source_dir or context.workspace_path
+        working_dir = str(Path(config.get("working_dir", default_dir)).resolve())
         Path(working_dir).mkdir(parents=True, exist_ok=True)
 
         agent = config.get("agent", self.default_agent)
@@ -973,7 +974,8 @@ class MockAgentBackend:
         self._next_pid += 1
         self.spawn_count += 1
 
-        working_dir = config.get("working_dir", context.workspace_path)
+        default_dir = getattr(context, 'flow_source_dir', None) or context.workspace_path
+        working_dir = config.get("working_dir", default_dir)
         output_path = f"/tmp/mock-agent-{pid}.jsonl"
         session_name = config.get("_session_name") or f"step-{context.step_name}-{context.attempt}"
 
