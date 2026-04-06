@@ -3186,11 +3186,77 @@ def _format_age(seconds: int) -> str:
         return f"{seconds // 86400}d"
 
 
+def _get_kit(args: argparse.Namespace, data: dict, slug: str, author_hint: str | None) -> int:
+    """Install a kit from the registry."""
+    from stepwise.bundle import unpack_bundle, unpack_kit_bundle
+    from stepwise.flow_resolution import registry_kit_dir
+    from stepwise.registry_client import RegistryError, fetch_flow, get_registry_url
+
+    io = _io(args)
+    author = data.get("author", "unknown")
+    downloads = data.get("downloads", 0)
+    bundled_flows = data.get("bundled_flows", [])
+    include_refs = data.get("include", [])
+    force = getattr(args, "force", False)
+
+    project_dir = Path.cwd()
+    target_dir = registry_kit_dir(author, slug, project_dir)
+
+    if target_dir.exists() and not force:
+        io.log("error", f"{target_dir} already exists (use --force to overwrite)")
+        return EXIT_USAGE_ERROR
+
+    from datetime import datetime, timezone
+
+    origin = {
+        "registry": get_registry_url(),
+        "author": author,
+        "slug": slug,
+        "type": "kit",
+        "version": data.get("version", "1.0"),
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    unpack_kit_bundle(
+        target_dir=target_dir,
+        kit_yaml=data.get("kit_yaml", ""),
+        bundled_flows=bundled_flows,
+        origin=origin,
+    )
+
+    flow_count = len(bundled_flows)
+    include_count = 0
+
+    if include_refs:
+        from stepwise.flow_resolution import parse_include_ref, registry_flow_dir
+
+        for ref_str in include_refs:
+            try:
+                ref = parse_include_ref(ref_str)
+                if ref.ref_type == "registry":
+                    inc_dir = registry_flow_dir(ref.author, ref.slug, project_dir)
+                    if not inc_dir.exists():
+                        inc_data = fetch_flow(ref.slug)
+                        unpack_bundle(
+                            target_dir=inc_dir,
+                            yaml_content=inc_data["yaml"],
+                            files=inc_data.get("files"),
+                        )
+                        include_count += 1
+            except Exception as e:
+                io.log("warn", f"Failed to fetch include '{ref_str}': {e}")
+
+    inc_msg = f" + {include_count} include(s)" if include_count else ""
+    io.log("success", f"Downloaded @{author}:{slug} ({flow_count} flows{inc_msg}, {downloads:,} downloads)")
+    io.log("info", f"Run: stepwise run @{author}:{slug}/<flow-name>")
+    return EXIT_SUCCESS
+
+
 def cmd_get(args: argparse.Namespace) -> int:
     """Download a flow by URL or registry name."""
     from stepwise.bundle import unpack_bundle
     from stepwise.flow_resolution import parse_registry_ref, registry_flow_dir
-    from stepwise.registry_client import fetch_flow, get_registry_url, RegistryError
+    from stepwise.registry_client import RegistryError, fetch_flow, fetch_kit, get_registry_url
 
     io = _io(args)
     target = args.target
@@ -3212,11 +3278,28 @@ def cmd_get(args: argparse.Namespace) -> int:
         author_hint = None
 
     force = getattr(args, "force", False)
+
+    # Try flow first, fall back to kit
+    data = None
+    entity_type = None
     try:
         data = fetch_flow(slug)
+        entity_type = "flow"
     except RegistryError as e:
-        io.log("error", str(e))
-        return EXIT_USAGE_ERROR
+        if e.status_code != 404:
+            io.log("error", str(e))
+            return EXIT_USAGE_ERROR
+
+    if not data:
+        try:
+            data = fetch_kit(slug)
+            entity_type = "kit"
+        except RegistryError as e:
+            io.log("error", str(e))
+            return EXIT_USAGE_ERROR
+
+    if entity_type == "kit":
+        return _get_kit(args, data, slug, author_hint)
 
     bundle_files = data.get("files")
     steps = data.get("steps", "?")
@@ -3346,10 +3429,72 @@ def cmd_logout(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
+def _share_kit(args: argparse.Namespace, kit_yaml_path: Path) -> int:
+    """Publish a kit to the registry."""
+    from stepwise.bundle import BundleError, collect_kit_bundle
+    from stepwise.registry_client import RegistryError, load_auth, publish_kit, update_kit
+    from stepwise.yaml_loader import KitLoadError, load_kit_yaml
+
+    io = _io(args)
+    kit_dir = kit_yaml_path.parent
+
+    try:
+        kit_def = load_kit_yaml(str(kit_yaml_path))
+    except KitLoadError as e:
+        io.log("error", f"Invalid KIT.yaml: {e}")
+        return EXIT_USAGE_ERROR
+
+    try:
+        kit_yaml, bundled_flows = collect_kit_bundle(kit_dir)
+    except BundleError as e:
+        io.log("error", str(e))
+        return EXIT_USAGE_ERROR
+
+    flow_count = len(bundled_flows)
+    io.log("success", f"Validated kit '{kit_def.name}' ({flow_count} flows)")
+    for bf in bundled_flows:
+        file_count = len(bf.get("files") or {})
+        file_msg = f" + {file_count} file(s)" if file_count else ""
+        io.log("info", f"  {bf['name']}{file_msg}")
+
+    if not io.prompt_confirm(f"Publish kit '{kit_def.name}' ({flow_count} flows)?"):
+        io.log("info", "Cancelled.")
+        return EXIT_SUCCESS
+
+    auth = load_auth()
+    auth_token = auth["auth_token"] if auth else None
+    author = getattr(args, "author", None)
+    do_update = getattr(args, "update", False)
+
+    if not do_update and not auth_token:
+        io.log("error", "You need to log in first. Run `stepwise login`.")
+        return EXIT_USAGE_ERROR
+
+    try:
+        if do_update:
+            import re
+
+            slug = re.sub(r"[^a-z0-9]+", "-", kit_def.name.lower().strip()).strip("-")
+            result = update_kit(slug, kit_yaml, bundled_flows, auth_token=auth_token)
+            io.log("success", f"Updated kit: {result.get('url', slug)}")
+        else:
+            result = publish_kit(kit_yaml, bundled_flows, author=author, auth_token=auth_token)
+            slug = result.get("slug", "")
+            io.log("success", f"Published kit '{kit_def.name}' ({flow_count} flows)")
+            io.log("info", f"Get: stepwise get {slug}")
+    except RegistryError as e:
+        io.log("error", str(e))
+        if e.status_code == 401:
+            io.log("info", "Your session may have expired. Run `stepwise login` to re-authenticate.")
+        return EXIT_USAGE_ERROR
+
+    return EXIT_SUCCESS
+
+
 def cmd_share(args: argparse.Namespace) -> int:
     """Publish a flow to the registry."""
     from stepwise.bundle import BundleError, collect_bundle
-    from stepwise.flow_resolution import FlowResolutionError, resolve_flow
+    from stepwise.flow_resolution import FlowResolutionError, resolve_flow, _discovery_dirs
     from stepwise.registry_client import load_auth, publish_flow, update_flow, RegistryError
     from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
 
@@ -3358,6 +3503,12 @@ def cmd_share(args: argparse.Namespace) -> int:
     if not flow_arg:
         io.log("error", "share requires a flow name or file path")
         return EXIT_USAGE_ERROR
+
+    # Check if target is a kit directory (has KIT.yaml)
+    for d in _discovery_dirs(_project_dir(args) or Path.cwd()):
+        candidate = d / flow_arg
+        if candidate.is_dir() and (candidate / "KIT.yaml").is_file():
+            return _share_kit(args, candidate / "KIT.yaml")
 
     try:
         flow_path = resolve_flow(flow_arg, _project_dir(args))
@@ -3490,8 +3641,9 @@ def cmd_search(args: argparse.Namespace) -> int:
         return EXIT_USAGE_ERROR
 
     flows = result.get("flows", [])
-    if not flows:
-        io.log("info", "No flows found.")
+    kits = result.get("kits", [])
+    if not flows and not kits:
+        io.log("info", "No results found.")
         return EXIT_SUCCESS
 
     if output == "json":
@@ -3502,16 +3654,26 @@ def cmd_search(args: argparse.Namespace) -> int:
     rows = []
     for f in flows:
         rows.append([
+            f.get("type", "flow"),
             f["slug"],
             f.get("author", "?"),
             str(f.get("steps", "?")),
             f"{f.get('downloads', 0):,}",
         ])
-    io.table(["NAME", "AUTHOR", "STEPS", "DOWNLOADS"], rows)
+    for k in kits:
+        rows.append([
+            "kit",
+            k["slug"],
+            k.get("author", "?"),
+            str(k.get("flow_count", "?")),
+            f"{k.get('downloads', 0):,}",
+        ])
+    io.table(["TYPE", "NAME", "AUTHOR", "STEPS", "DOWNLOADS"], rows)
 
-    total = result.get("total", len(flows))
-    if total > len(flows):
-        io.log("info", f"Showing {len(flows)} of {total} flows")
+    total = result.get("total", len(flows) + len(kits))
+    shown = len(flows) + len(kits)
+    if total > shown:
+        io.log("info", f"Showing {shown} of {total} results")
     return EXIT_SUCCESS
 
 

@@ -774,6 +774,11 @@ def parse_registry_ref(ref: str) -> tuple[str, str] | None:
     return None
 
 
+def registry_kit_dir(author: str, slug: str, project_dir: Path) -> Path:
+    """Return the directory path for a registry kit install."""
+    return project_dir / ".stepwise" / "registry" / f"@{author}" / slug
+
+
 def _discovery_dirs(project_dir: Path) -> list[Path]:
     """Return ordered list of directories to search for flows."""
     return [

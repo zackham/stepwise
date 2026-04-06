@@ -228,13 +228,17 @@ class TestFlowStubs:
         assert rc == EXIT_SUCCESS
         captured = capsys.readouterr()
         combined = captured.out + captured.err
-        assert "no flows found" in combined.lower()
+        assert "no results found" in combined.lower()
 
     def test_get_name_not_found(self, capsys, monkeypatch):
         from stepwise.registry_client import RegistryError
         monkeypatch.setattr(
             "stepwise.registry_client.fetch_flow",
             lambda slug, **kw: (_ for _ in ()).throw(RegistryError("Flow 'tweet-generator' not found in registry", 404)),
+        )
+        monkeypatch.setattr(
+            "stepwise.registry_client.fetch_kit",
+            lambda slug, **kw: (_ for _ in ()).throw(RegistryError("Kit 'tweet-generator' not found in registry", 404)),
         )
         rc = main(["get", "tweet-generator"])
         assert rc == EXIT_USAGE_ERROR

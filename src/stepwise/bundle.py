@@ -122,3 +122,72 @@ def unpack_bundle(
         origin_path.write_text(json.dumps(origin, indent=2) + "\n")
 
     return flow_path
+
+
+def collect_kit_bundle(kit_dir: Path) -> tuple[str, list[dict[str, str]]]:
+    """Collect a kit directory for publishing.
+
+    Returns (kit_yaml_content, bundled_flows) where bundled_flows is:
+    [{"name": "flow-name", "yaml": "...", "files": {"path": "content"} | None}, ...]
+    """
+    kit_yaml_path = kit_dir / "KIT.yaml"
+    if not kit_yaml_path.is_file():
+        raise BundleError(f"No KIT.yaml in {kit_dir}")
+
+    kit_yaml = kit_yaml_path.read_text(encoding="utf-8")
+    bundled_flows: list[dict] = []
+
+    for sub in sorted(kit_dir.iterdir()):
+        if not sub.is_dir():
+            continue
+        flow_yaml = sub / "FLOW.yaml"
+        if not flow_yaml.is_file():
+            continue
+        name = sub.name
+        yaml_content = flow_yaml.read_text(encoding="utf-8")
+        files = collect_bundle(sub)
+        bundled_flows.append({
+            "name": name,
+            "yaml": yaml_content,
+            "files": files if files else None,
+        })
+
+    if not bundled_flows:
+        raise BundleError(
+            f"Kit '{kit_dir.name}' has no bundled flows "
+            f"(no subdirectories with FLOW.yaml)"
+        )
+
+    return kit_yaml, bundled_flows
+
+
+def unpack_kit_bundle(
+    target_dir: Path,
+    kit_yaml: str,
+    bundled_flows: list[dict],
+    origin: dict | None = None,
+) -> Path:
+    """Unpack a kit bundle into a directory.
+
+    Creates: target_dir/KIT.yaml, target_dir/{flow}/FLOW.yaml, target_dir/.origin.json
+    """
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    kit_path = target_dir / "KIT.yaml"
+    kit_path.write_text(kit_yaml)
+
+    for flow in bundled_flows:
+        flow_name = flow["name"]
+        yaml_content = flow.get("yaml_content") or flow.get("yaml", "")
+        files = flow.get("files_json") or flow.get("files")
+        unpack_bundle(
+            target_dir=target_dir / flow_name,
+            yaml_content=yaml_content,
+            files=files,
+        )
+
+    if origin:
+        origin_path = target_dir / ".origin.json"
+        origin_path.write_text(json.dumps(origin, indent=2) + "\n")
+
+    return kit_path

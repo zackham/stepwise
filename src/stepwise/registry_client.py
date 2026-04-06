@@ -344,3 +344,126 @@ def update_flow(
             f"Update failed: {resp.status_code} {resp.text}", resp.status_code
         )
     return _ensure_json(resp, f"update flow '{slug}'")
+
+
+# ── Kit API ───────────────────────────────────────────────────────
+
+
+def publish_kit(
+    kit_yaml: str,
+    bundled_flows: list[dict[str, Any]],
+    author: str | None = None,
+    auth_token: str | None = None,
+) -> dict[str, Any]:
+    """Publish a kit to the registry.
+
+    bundled_flows: list of {"name": str, "yaml": str, "files": dict | None}
+    """
+    url = get_registry_url()
+    payload: dict[str, Any] = {
+        "kit_yaml": kit_yaml,
+        "bundled_flows": bundled_flows,
+        "source": "cli",
+    }
+    if author:
+        payload["author"] = author
+
+    headers = {}
+    if auth_token:
+        headers["Authorization"] = f"Bearer {auth_token}"
+
+    with _client() as client:
+        resp = client.post(f"{url}/api/kits", json=payload, headers=headers)
+
+    if resp.status_code == 409:
+        raise RegistryError(
+            "Kit already exists. Use 'stepwise share --update' to update.",
+            409,
+        )
+    if resp.status_code not in (200, 201):
+        raise RegistryError(
+            f"Publish failed: {resp.status_code} {resp.text}", resp.status_code
+        )
+
+    data = _ensure_json(resp, "publish kit")
+    if data.get("update_token") and data.get("slug"):
+        save_token(data["slug"], data["update_token"])
+    return data
+
+
+def fetch_kit(slug: str, *, count_download: bool = True) -> dict[str, Any]:
+    """Fetch kit metadata + bundled flows from the registry."""
+    url = get_registry_url()
+    headers = {}
+    if count_download:
+        headers["X-Stepwise-Download"] = "true"
+    with _client() as client:
+        resp = client.get(f"{url}/api/kits/{slug}", headers=headers)
+    if resp.status_code == 404:
+        raise RegistryError(f"Kit '{slug}' not found in registry", 404)
+    if resp.status_code != 200:
+        raise RegistryError(
+            f"Registry error: {resp.status_code} {resp.text}", resp.status_code
+        )
+    return _ensure_json(resp, f"fetch kit '{slug}'")
+
+
+def fetch_kit_flow(kit_slug: str, flow_name: str) -> dict[str, Any]:
+    """Fetch a specific bundled flow from a kit."""
+    url = get_registry_url()
+    with _client() as client:
+        resp = client.get(f"{url}/api/kits/{kit_slug}/flows/{flow_name}")
+    if resp.status_code == 404:
+        raise RegistryError(
+            f"Flow '{flow_name}' not found in kit '{kit_slug}'", 404
+        )
+    if resp.status_code != 200:
+        raise RegistryError(
+            f"Registry error: {resp.status_code} {resp.text}", resp.status_code
+        )
+    return _ensure_json(resp, f"fetch kit flow '{kit_slug}/{flow_name}'")
+
+
+def update_kit(
+    slug: str,
+    kit_yaml: str,
+    bundled_flows: list[dict[str, Any]],
+    changelog: str | None = None,
+    auth_token: str | None = None,
+) -> dict[str, Any]:
+    """Update an existing kit in the registry."""
+    token = get_token(slug)
+    if not token:
+        token = auth_token
+    if not token:
+        raise RegistryError(
+            f"No update token for '{slug}'. "
+            f"Run `stepwise login` or publish from the original machine."
+        )
+
+    url = get_registry_url()
+    payload: dict[str, Any] = {
+        "kit_yaml": kit_yaml,
+        "bundled_flows": bundled_flows,
+    }
+    if changelog:
+        payload["changelog"] = changelog
+
+    with _client() as client:
+        resp = client.put(
+            f"{url}/api/kits/{slug}",
+            json=payload,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    if resp.status_code == 403:
+        raise RegistryError(
+            "Invalid update token — you may not own this kit.", 403
+        )
+    if resp.status_code == 404:
+        raise RegistryError(f"Kit '{slug}' not found in registry", 404)
+    if resp.status_code != 200:
+        raise RegistryError(
+            f"Update failed: {resp.status_code} {resp.text}", resp.status_code
+        )
+    return _ensure_json(resp, f"update kit '{slug}'")
