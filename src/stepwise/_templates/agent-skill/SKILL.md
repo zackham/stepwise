@@ -54,12 +54,18 @@ stepwise job create <flow> \
   --output json
 # Returns {"id": "abc123", ...}
 
-# 2. Wire dependencies
+# 2. Wire dependencies (two methods)
+# a. Data wiring — passes data AND auto-creates dependency:
+stepwise job create <flow> \
+  --input plan_file=<upstream-job-id>.plan_file \
+  --group mygroup --name "impl: feature" --output json
+
+# b. Ordering only (no data flow):
 stepwise job dep <downstream-id> --after <upstream-id>
 
 # 3. Review and release
 stepwise job show --group mygroup
-stepwise job run --group mygroup
+stepwise job run --group mygroup --wait
 ```
 
 If you need IDs in shell variables: `... --output json | jq -r .id`
@@ -71,12 +77,53 @@ If you need IDs in shell variables: `... --output json | jq -r .id`
 
 Jobs in the same group with no dependencies run in parallel.
 
+### Job run flags
+
+`stepwise job run` supports the same control flags as `stepwise run`:
+
+- `--wait` — block until completion, JSON output on stdout (for groups, waits for ALL jobs)
+- `--async` — fire-and-forget, returns job IDs immediately
+- `--notify URL` — webhook notification on completion/failure
+- `--notify-context JSON` — extra context to include in webhook payload
+- `--max-concurrent N` — limit concurrent jobs in a group (requires `--group`)
+
+Use `--wait` with `run_in_background=True` for non-blocking dispatch with automatic notification.
+
 ## Suspensions
 
 When a flow pauses for human input (exit code 5):
 ```bash
 stepwise fulfill <run-id> '{"field": "value"}' --wait
 ```
+
+## Debugging & Recovery
+
+### Inspect a failed job
+```bash
+stepwise job show <job-id>     # overview with step statuses
+stepwise events <job-id>       # full event log
+```
+
+### Restart a single failed step (without rerunning the whole job)
+```bash
+# Via API — web UI exposes this as a button
+curl -X POST http://localhost:8340/api/jobs/<job-id>/steps/<step-name>/rerun
+```
+
+### Cancel zombie runs on a failed job
+```bash
+stepwise cancel <job-id> --force         # cancel all RUNNING runs on a terminal job
+stepwise cancel --run <run-id>           # cancel a specific step run by ID
+```
+
+### Run modes comparison
+| Context | Command |
+|---------|---------|
+| CLI session (blocking) | `stepwise run <flow> --wait` |
+| CLI session (background) | `stepwise run <flow> --wait` with `run_in_background=True` |
+| Telegram/async context | `stepwise run <flow> --async --notify <webhook>` |
+| Pre-staged job | `stepwise job run <id> --wait` |
+| Job group | `stepwise job run --group <name> --wait` |
 
 ## Creating or Modifying Flows
 
