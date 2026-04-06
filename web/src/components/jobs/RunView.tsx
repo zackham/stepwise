@@ -16,12 +16,10 @@ import {
   StopCircle,
   Copy,
   Check,
-  Terminal,
   Maximize2,
 } from "lucide-react";
 import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 import { ContentModal } from "@/components/ui/content-modal";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useScriptStream } from "@/hooks/useScriptStream";
 import { toast } from "sonner";
 import { cn, formatCost, formatDuration } from "@/lib/utils";
@@ -247,58 +245,29 @@ function highlightLogLine(line: string): React.ReactNode {
   return <span className={className}>{line}</span>;
 }
 
-/* ── Script log viewer (completed runs) ───────────────────────────── */
+/* ── Script log viewer (completed runs) — renders inside SidebarSection ── */
 
 function ScriptLogView({ run }: { run: StepRun }) {
-  const [copied, setCopied] = useState(false);
   const stdout = (run.result?.executor_meta?.stdout as string) ?? "";
   const stderr = (run.result?.executor_meta?.stderr as string) ?? "";
-  const returnCode = run.result?.executor_meta?.return_code as number | undefined;
   if (!stdout && !stderr) return null;
 
   const fullText = [stdout, stderr ? `--- stderr ---\n${stderr}` : ""].filter(Boolean).join("\n");
   const lines = fullText.split("\n");
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-1">
-        <div className="flex items-center gap-1.5 text-xs text-zinc-500">
-          <Terminal className="w-3 h-3" />
-          <span>Logs</span>
-          {returnCode != null && (
-            <span className={cn(
-              "font-mono text-[10px] px-1 py-0.5 rounded",
-              returnCode === 0 ? "text-emerald-400 bg-emerald-500/10" : "text-red-400 bg-red-500/10"
-            )}>
-              exit {returnCode}
-            </span>
-          )}
-        </div>
-        <button
-          onClick={() => {
-            navigator.clipboard.writeText(fullText);
-            setCopied(true);
-            toast.success("Copied to clipboard");
-            setTimeout(() => setCopied(false), 2000);
-          }}
-          className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 cursor-pointer"
-        >
-          {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-          {copied ? "Copied" : "Copy"}
-        </button>
-      </div>
-      <div className="bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded overflow-hidden">
-        <VirtualizedLogView
-          lines={lines}
-          className="text-[11px] font-mono p-2 text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap break-all leading-relaxed"
-          renderLine={(line) => highlightLogLine(line)}
-        />
-      </div>
+    <div className="-mx-3 -mb-4">
+      <VirtualizedLogView
+        lines={lines}
+        inline
+        className="text-[11px] font-mono px-3 py-2 text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap break-all leading-relaxed"
+        renderLine={(line) => highlightLogLine(line)}
+      />
     </div>
   );
 }
 
-/* ── Live script log viewer (running) ─────────────────────────────── */
+/* ── Live script log viewer (running) — renders inside SidebarSection ── */
 
 function LiveScriptLogView({ runId }: { runId: string }) {
   const { stdout, stderr, truncated, version } = useScriptStream(runId);
@@ -317,44 +286,99 @@ function LiveScriptLogView({ runId }: { runId: string }) {
   if (rawLines.length > 0 && rawLines[rawLines.length - 1] === "") rawLines.pop();
 
   return (
-    <div>
-      <div className="text-xs text-zinc-500 dark:text-zinc-500 mb-1 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse" />
-          Live Output
-        </div>
-        <button
-          onClick={() => { navigator.clipboard.writeText(stdout); toast.success("Copied to clipboard"); }}
-          className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors cursor-pointer"
-        >
-          <Copy className="w-3 h-3" /> Copy
-        </button>
-      </div>
+    <div className="-mx-3 -mb-4">
       {truncated && (
-        <div className="text-[10px] text-amber-400/70 mb-1 font-mono">[earlier output truncated]</div>
+        <div className="text-[10px] text-amber-400/70 mb-1 px-3 font-mono">[earlier output truncated]</div>
       )}
-      <div className="bg-zinc-50 dark:bg-zinc-950 rounded border border-zinc-200 dark:border-zinc-800">
-        <VirtualizedLogView
-          lines={rawLines}
-          isLive={true}
-          version={version}
-          className="p-2 font-mono text-xs"
-          renderLine={(line) => (
-            <span className="whitespace-pre-wrap break-words leading-relaxed">
-              {line === "" ? "\u00A0" : highlightLogLine(line)}
-            </span>
-          )}
-        />
-      </div>
+      <VirtualizedLogView
+        lines={rawLines}
+        isLive={true}
+        version={version}
+        inline
+        className="px-3 py-2 font-mono text-xs"
+        renderLine={(line) => (
+          <span className="whitespace-pre-wrap break-words leading-relaxed">
+            {line === "" ? "\u00A0" : highlightLogLine(line)}
+          </span>
+        )}
+      />
       {stderr && (
-        <div className="mt-2">
+        <div className="px-3 pb-2">
           <div className="text-xs text-red-400/70 dark:text-red-400/70 mb-1">stderr</div>
-          <pre className="bg-zinc-50 dark:bg-zinc-950 rounded border border-red-300/20 dark:border-red-500/20 p-2 font-mono text-xs text-red-600 dark:text-red-300/80 max-h-48 overflow-auto whitespace-pre-wrap break-words">
+          <pre className="rounded border border-red-300/20 dark:border-red-500/20 p-2 font-mono text-xs text-red-600 dark:text-red-300/80 max-h-48 overflow-auto whitespace-pre-wrap break-words">
             {stderr}
           </pre>
         </div>
       )}
     </div>
+  );
+}
+
+/* ── Script output sidebar section wrapper ────────────────────────── */
+
+function ScriptOutputSection({
+  returnCode,
+  fullText,
+  isLive,
+  children,
+}: {
+  returnCode?: number;
+  fullText?: string;
+  isLive?: boolean;
+  children: React.ReactNode;
+}) {
+  const { copy, justCopied } = useCopyFeedback();
+  const [modalOpen, setModalOpen] = useState(false);
+
+  return (
+    <>
+      <SidebarSection
+        title="Output"
+        detail={
+          <span className="flex items-center gap-1.5">
+            {isLive && (
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse inline-block" />
+            )}
+            {returnCode != null && (
+              <span className={cn(
+                "font-mono text-[10px] px-1 py-0.5 rounded",
+                returnCode === 0 ? "text-emerald-400 bg-emerald-500/10" : "text-red-400 bg-red-500/10"
+              )}>
+                exit {returnCode}
+              </span>
+            )}
+            {fullText && (
+              <button
+                onClick={(e) => { e.stopPropagation(); copy(fullText); }}
+                className="text-zinc-600 hover:text-zinc-300 transition-colors cursor-pointer p-0.5"
+                title="Copy output"
+              >
+                {justCopied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+              </button>
+            )}
+            {fullText && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setModalOpen(true); }}
+                className="text-zinc-600 hover:text-zinc-300 transition-colors cursor-pointer p-0.5"
+                title="Expand output"
+              >
+                <Maximize2 className="w-3 h-3" />
+              </button>
+            )}
+          </span>
+        }
+      >
+        {children}
+      </SidebarSection>
+
+      {fullText && (
+        <ContentModal open={modalOpen} onOpenChange={setModalOpen} title="Script Output" copyContent={fullText}>
+          <pre className="whitespace-pre-wrap text-sm text-zinc-300 font-mono p-3 leading-relaxed">
+            {fullText}
+          </pre>
+        </ContentModal>
+      )}
+    </>
   );
 }
 
@@ -836,22 +860,15 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onViewFul
             </SidebarSection>
 
             {/* Session expanded modal */}
-            <Dialog open={sessionModalOpen} onOpenChange={setSessionModalOpen}>
-              <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto p-0">
-                <DialogHeader className="px-6 pt-6 pb-2">
-                  <DialogTitle className="text-sm">
-                    {stepDef.name} — Session Transcript
-                  </DialogTitle>
-                </DialogHeader>
-                <div className="px-6 pb-6">
-                  <AgentStreamView
-                    runId={run.id}
-                    isLive={isRunning}
-                    startedAt={run.started_at}
-                  />
-                </div>
-              </DialogContent>
-            </Dialog>
+            <ContentModal open={sessionModalOpen} onOpenChange={setSessionModalOpen} title={`${stepDef.name} — Session Transcript`}>
+              <div className="p-3">
+                <AgentStreamView
+                  runId={run.id}
+                  isLive={isRunning}
+                  startedAt={run.started_at}
+                />
+              </div>
+            </ContentModal>
             </>
           )}
         </>
@@ -982,9 +999,9 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onViewFul
 
           {/* Live script output */}
           {run && isRunning && isScript && (
-            <div className="max-h-[60vh] overflow-y-auto rounded-lg border border-zinc-800/50">
+            <ScriptOutputSection isLive>
               <LiveScriptLogView runId={run.id} />
-            </div>
+            </ScriptOutputSection>
           )}
 
           {/* Usage limit waiting */}
@@ -1106,11 +1123,21 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onViewFul
           })()}
 
           {/* Completed script logs */}
-          {run?.result && isScript && (
-            <div className="max-h-[60vh] overflow-y-auto rounded-lg border border-zinc-800/50">
-              <ScriptLogView run={run} />
-            </div>
-          )}
+          {run?.result && isScript && (() => {
+            const stdout = (run.result?.executor_meta?.stdout as string) ?? "";
+            const stderr = (run.result?.executor_meta?.stderr as string) ?? "";
+            const returnCode = run.result?.executor_meta?.return_code as number | undefined;
+            const fullText = [stdout, stderr ? `--- stderr ---\n${stderr}` : ""].filter(Boolean).join("\n");
+            if (!stdout && !stderr) return null;
+            return (
+              <ScriptOutputSection
+                returnCode={returnCode}
+                fullText={fullText}
+              >
+                <ScriptLogView run={run} />
+              </ScriptOutputSection>
+            );
+          })()}
 
           {/* Fulfillment notes */}
           {run?.result?.artifact?._fulfillment_notes != null && (

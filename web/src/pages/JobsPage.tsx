@@ -345,6 +345,25 @@ const JobListRow = memo(function JobListRow({
               </span>
             )}
           </div>
+          {/* Mobile meta row — shows all info hidden on desktop */}
+          <div className="flex items-center gap-2 mt-1 sm:hidden text-[10px] text-zinc-500 flex-wrap">
+            <JobStatusBadge status={job.status} />
+            <span>{progress.completed}/{progress.total} steps</span>
+            {cost != null && cost > 0 && (
+              <span>{formatCost(cost)}</span>
+            )}
+            <span>
+              {job.status === "staged" || job.status === "pending"
+                ? "—"
+                : formatDuration(job.created_at, job.updated_at)}
+            </span>
+            <span>{timeAgo(job.updated_at)}</span>
+            {hasDeps && depNames && (
+              <span className="truncate max-w-[120px]" title={depNames.join(", ")}>
+                dep: {depNames.join(", ")}
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Dependencies column */}
@@ -906,103 +925,96 @@ export function JobsPage() {
     <ActionContextProvider>
       <div className="flex flex-col h-full">
         {/* Unified Toolbar */}
-        <div className="flex items-center gap-3 px-4 py-2 border-b border-border shrink-0 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-sm">
-          {/* Left section */}
-          <div className="flex items-center gap-2 shrink-0">
-            {/* Grid/List toggle */}
-            <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5 bg-zinc-100/50 dark:bg-zinc-900/50">
-              <button
-                onClick={() => setViewMode("list")}
-                className={cn(
-                  "flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors",
-                  viewMode === "list"
-                    ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
-                    : "text-zinc-500 hover:text-foreground",
-                )}
-              >
-                <List className="w-3.5 h-3.5" />
-                List
-              </button>
-              <button
-                onClick={() => setViewMode("grid")}
-                className={cn(
-                  "flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors",
-                  viewMode === "grid"
-                    ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
-                    : "text-zinc-500 hover:text-foreground",
-                )}
-              >
-                <LayoutGrid className="w-3.5 h-3.5" />
-                Grid
-              </button>
-            </div>
-
-            {/* Search */}
-            <div className="relative">
-              <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" />
-              <Input
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Filter..."
-                className="pl-8 h-8 w-40 text-sm bg-background border-border dark:border-input dark:bg-input/30"
-              />
-            </div>
-
-            {/* Flow filter */}
-            <ComboBox
-              value={flowFilter}
-              onChange={setFlowFilter}
-              options={flowOptions}
-              placeholder="All flows"
-              searchPlaceholder="Filter by flow..."
-              sortable
-            />
-
-            {/* Time range */}
-            <ComboBox
-              value={timeRange ?? "all"}
-              onChange={(v) => setTimeRange(v === "all" ? undefined : v as TimeRange)}
-              options={TIME_RANGE_OPTIONS}
-              placeholder="All time"
-              searchPlaceholder="Time range..."
-            />
-
-            {/* Status filters + total */}
-            <StatusFilterPills
-              jobs={allJobs}
-              activeStatuses={activeStatuses}
-              onToggle={toggleStatus}
-            />
-            <span className="text-xs text-zinc-500">
-              {totalJobCount > allJobs.length
-                ? `${allJobs.length} most recent (of ${totalJobCount})`
-                : `${allJobs.length} total`}
-            </span>
-            <span className="text-zinc-700">·</span>
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2 border-b border-border shrink-0 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-sm">
+          {/* Grid/List toggle */}
+          <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5 bg-zinc-100/50 dark:bg-zinc-900/50">
             <button
-              onClick={() => setShowArchived((s) => !s)}
+              onClick={() => setViewMode("list")}
               className={cn(
-                "text-xs transition-colors",
-                showArchived ? "text-foreground/70 hover:text-foreground" : "text-zinc-600 hover:text-zinc-400"
+                "flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors",
+                viewMode === "list"
+                  ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
+                  : "text-zinc-500 hover:text-foreground",
               )}
             >
-              {showArchived ? "Hide archived" : "Show archived"}
+              <List className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">List</span>
+            </button>
+            <button
+              onClick={() => setViewMode("grid")}
+              className={cn(
+                "flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors",
+                viewMode === "grid"
+                  ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
+                  : "text-zinc-500 hover:text-foreground",
+              )}
+            >
+              <LayoutGrid className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Grid</span>
             </button>
           </div>
 
-          <div className="flex-1 min-w-0" />
+          {/* Search */}
+          <div className="relative flex-1 sm:flex-none">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" />
+            <Input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Filter..."
+              className="pl-8 h-8 w-full sm:w-40 text-sm bg-background border-border dark:border-input dark:bg-input/30"
+            />
+          </div>
 
-          {/* Right section */}
-          <div className="flex items-center gap-2 shrink-0">
-            {/* Create job */}
+          {/* Create job — moved next to search on mobile */}
+          <div className="sm:order-last sm:ml-auto">
             <CreateJobDialog
               onCreated={(jobId) =>
                 navigate({ to: "/jobs/$jobId", params: { jobId } })
               }
             />
-
-
           </div>
+
+          {/* Flow filter */}
+          <ComboBox
+            value={flowFilter}
+            onChange={setFlowFilter}
+            options={flowOptions}
+            placeholder="All flows"
+            searchPlaceholder="Filter by flow..."
+            sortable
+          />
+
+          {/* Time range */}
+          <ComboBox
+            value={timeRange ?? "all"}
+            onChange={(v) => setTimeRange(v === "all" ? undefined : v as TimeRange)}
+            options={TIME_RANGE_OPTIONS}
+            placeholder="All time"
+            searchPlaceholder="Time range..."
+          />
+
+          {/* Status filters + total */}
+          <div className="flex items-center gap-1 flex-wrap">
+            <StatusFilterPills
+              jobs={allJobs}
+              activeStatuses={activeStatuses}
+              onToggle={toggleStatus}
+            />
+          </div>
+          <span className="text-xs text-zinc-500 whitespace-nowrap">
+            {totalJobCount > allJobs.length
+              ? `${allJobs.length} of ${totalJobCount}`
+              : `${allJobs.length} total`}
+          </span>
+          <button
+            onClick={() => setShowArchived((s) => !s)}
+            className={cn(
+              "text-xs transition-colors whitespace-nowrap",
+              showArchived ? "text-foreground/70 hover:text-foreground" : "text-zinc-600 hover:text-zinc-400"
+            )}
+          >
+            {showArchived ? "Hide archived" : "Show archived"}
+          </button>
         </div>
 
         {/* Content */}

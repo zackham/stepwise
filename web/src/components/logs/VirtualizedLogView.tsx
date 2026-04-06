@@ -11,6 +11,8 @@ interface VirtualizedLogViewProps {
   version?: number;
   className?: string;
   renderLine?: (line: string, index: number) => ReactNode;
+  /** When true, renders all lines inline with no max-height or scroll container. */
+  inline?: boolean;
 }
 
 export function VirtualizedLogView({
@@ -19,9 +21,23 @@ export function VirtualizedLogView({
   version = 0,
   className,
   renderLine = (line) => line,
+  inline = false,
 }: VirtualizedLogViewProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
+
+  // Inline mode: render all lines flat, no scroll container
+  if (inline) {
+    return (
+      <div className={className}>
+        {lines.map((line, i) => (
+          <div key={i} data-line={i}>
+            {renderLine(line, i)}
+          </div>
+        ))}
+      </div>
+    );
+  }
 
   // Below threshold: render flat
   if (lines.length <= VIRTUAL_THRESHOLD) {

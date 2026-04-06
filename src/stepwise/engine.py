@@ -1227,10 +1227,14 @@ class Engine:
             # Loop guard 2: circular dep chains (score→refine→score via any_of).
             # The currentness check walks the cycle and always finds a
             # superseded run, causing infinite relaunch. Block if in cycle.
-            # Exception: external steps provide genuinely new data (human input)
+            # Exception 1: external steps provide genuinely new data (human input)
             # and should always be allowed to relaunch in cycles.
+            # Exception 2: if the cycle contains an external step, it acts as
+            # a natural gate (suspends for fulfillment), preventing infinite
+            # relaunch. Non-external steps in such cycles should re-run.
             if (step_def.executor.type != "external"
-                    and self._step_in_dep_cycle(job, step_name)):
+                    and self._step_in_dep_cycle(job, step_name)
+                    and not self._cycle_has_external_gate(job, step_name)):
                 return False
 
         # Check regular deps (non-any_of, non-$job, non-optional): ALL must have current completed runs
@@ -1447,6 +1451,44 @@ class Engine:
             dep_def = job.workflow.steps.get(dep)
             if dep_def:
                 queue.extend(self._dep_steps(dep_def))
+        return False
+
+    def _cycle_has_external_gate(self, job: Job, step_name: str) -> bool:
+        """Check if any cycle containing step_name passes through an external step.
+
+        External steps suspend and require explicit fulfillment, so they
+        naturally prevent infinite relaunch in dependency cycles. When a
+        cycle contains an external step, non-external steps in that cycle
+        should be allowed to re-run after the external step is fulfilled.
+        """
+        step_def = job.workflow.steps.get(step_name)
+        if not step_def:
+            return False
+        # BFS from step_name's deps — find paths back to step_name
+        # and check if any path passes through an external step.
+        visited: set[str] = set()
+        # Each queue entry: (current_dep, has_external_on_path)
+        queue: list[tuple[str, bool]] = [
+            (dep, False) for dep in set(self._dep_steps(step_def))
+        ]
+        while queue:
+            dep, has_ext = queue.pop(0)
+            if dep == "$job":
+                continue
+            dep_def = job.workflow.steps.get(dep)
+            if not dep_def:
+                continue
+            is_ext = dep_def.executor.type == "external"
+            path_has_ext = has_ext or is_ext
+            if dep == step_name:
+                if path_has_ext:
+                    return True
+                continue  # cycle found but no external gate on this path
+            if dep in visited:
+                continue
+            visited.add(dep)
+            for next_dep in self._dep_steps(dep_def):
+                queue.append((next_dep, path_has_ext))
         return False
 
     # ── Job Completion ────────────────────────────────────────────────────
@@ -3838,6 +3880,16 @@ class AsyncEngine(Engine):
 
     def _launch(self, job: Job, step_name: str) -> StepRun:
         """Override: dispatch normal-step executors to thread pool."""
+        # Guard against concurrent launches of the same step (race between
+        # HTTP fulfill thread and event loop poll thread).
+        existing = self.store.latest_run(job.id, step_name)
+        if existing and existing.status == StepRunStatus.RUNNING:
+            _async_logger.debug(
+                "Skipping duplicate launch of %s/%s — already running (run %s)",
+                job.id, step_name, existing.id,
+            )
+            return existing
+
         step_def = job.workflow.steps[step_name]
 
         # Special step types: synchronous (they create sub-jobs)

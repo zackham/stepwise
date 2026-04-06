@@ -115,31 +115,6 @@ const jobDetailRoute = createRoute({
   validateSearch: validateJobDetailSearch,
 });
 
-// Legacy route redirects: events/tree/timeline → job detail with view param
-const jobEventsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/jobs/$jobId/events",
-  beforeLoad: ({ params }) => {
-    throw redirect({ to: "/jobs/$jobId", params: { jobId: params.jobId }, search: { view: "events" } });
-  },
-});
-
-const jobTreeRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/jobs/$jobId/tree",
-  beforeLoad: ({ params }) => {
-    throw redirect({ to: "/jobs/$jobId", params: { jobId: params.jobId }, search: { view: "tree" } });
-  },
-});
-
-const jobTimelineRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/jobs/$jobId/timeline",
-  beforeLoad: ({ params }) => {
-    throw redirect({ to: "/jobs/$jobId", params: { jobId: params.jobId }, search: { view: "timeline" } });
-  },
-});
-
 // Flows list
 const flowsRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -204,9 +179,6 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   jobsRoute,
   jobDetailRoute,
-  jobEventsRoute,
-  jobTreeRoute,
-  jobTimelineRoute,
   flowsRoute,
   flowEditorRoute,
   editorRedirectRoute,

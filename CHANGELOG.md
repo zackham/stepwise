@@ -3,6 +3,30 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.37.0] — 2026-04-06
+
+### Added
+- **Kits** — group related flows into named collections with `KIT.yaml`. Organize flows by domain (e.g., `swdev` kit with plan-light, plan, plan-strong, implement, fast-implement)
+- **Kit namespaced resolution** — reference kit flows as `kit/flow` (e.g., `stepwise run swdev/plan-light`). Strict resolution with helpful hints on bare names
+- **Kit includes** — reference flows from other kits (`podcast/podcast-deep`), standalone flows, or registry flows (`@author:slug@^1.0`) in your kit's `include` field. Auto-fetch missing registry includes
+- **Full semver support** — version constraints for kit includes: `^1.0` (caret), `~1.2` (tilde), exact (`1.2.3`), PEP 440 passthrough (`>=1.0,<2.0`)
+- **Kit defaults** — `defaults` field in KIT.yaml inherited by all member flows (e.g., shared `author`, `visibility`). Explicit flow values always win
+- **`stepwise catalog`** — generate a kit/flow catalog section for SKILL.md, grouped by category
+- **`stepwise new kit/flow`** — create a flow inside a kit directory (e.g., `stepwise new swdev/my-flow`)
+- **`stepwise agent-help <kit>`** — L2 progressive disclosure: kit usage/composition instructions plus full flow details for all member flows
+- **Kit registry support** — `stepwise share` auto-detects kits (KIT.yaml present), publishes as atomic package with all bundled flows. `stepwise get @author:kit` installs kit + bundled flows + resolves includes. `stepwise search` shows TYPE column (flow/kit)
+- **Kit API endpoints** — `GET/POST/PUT/DELETE /api/kits`, cross-table slug uniqueness with flows, FTS search, unified search via `GET /api/flows?include_kits=true`
+- **Web UI folder navigation** — flows page shows kits as folder cards (Google Drive-style: click to drill in, breadcrumb back). Kit info sheet with usage and "View KIT.yaml" modal
+- **Editor kit detail** — FlowOverview shows kit info bar for kit member flows with link to kit and KIT.yaml viewer
+
+### Changed
+- **Agent-help output** — flows grouped by kit in L0/L1, standalone flows in separate section. Kit usage/composition instructions shown inline
+- **Flow discovery** — `discover_kits()` resolves includes, `discover_flows()` returns kit membership via `kit_name` field
+- **`stepwise flows`** — grouped by kit with flow count
+
+### Documentation
+- Updated 8 docs for kits: flow-sharing.md (retitled to "Flow and Kit Sharing"), cli.md, README.md, concepts.md, quickstart.md, yaml-format.md (KIT.yaml format reference), writing-flows.md, FLOW_REFERENCE.md
+
 ## [0.36.0] — 2026-04-03
 
 ### Added
