@@ -23,6 +23,7 @@ from stepwise.models import (
     FlowRequirement,
     ForEachSpec,
     InputBinding,
+    KitDefinition,
     OutputFieldSpec,
     StepDefinition,
     StepLimits,
@@ -41,6 +42,21 @@ def _regex_extract(pattern: str, text: str, default: str | None = None) -> str |
     Returns the first captured group, or *default* if no match.
     """
     m = re.search(pattern, text)
+    if m and m.lastindex:
+        return m.group(1)
+    return default
+
+
+def _regex_extract_last(pattern: str, text: str, default: str | None = None) -> str | None:
+    """Extract the last capture group match from text using a regex pattern.
+
+    Uses a greedy lead-in ([\\s\\S]*) before the pattern to skip past earlier
+    occurrences — handles cases where agents reference a tag in prose (e.g.
+    backtick-escaped `<tag>`) before using it for real.
+    """
+    # Wrap pattern with greedy lead-in to match the LAST occurrence
+    last_pattern = r"[\s\S]*" + pattern
+    m = re.search(last_pattern, text, re.DOTALL)
     if m and m.lastindex:
         return m.group(1)
     return default
@@ -69,6 +85,7 @@ SAFE_BUILTINS = {
     "null": None,
     # String / regex helpers
     "regex_extract": _regex_extract,
+    "regex_extract_last": _regex_extract_last,
 }
 
 
@@ -101,6 +118,70 @@ class YAMLLoadError(Exception):
     def __init__(self, errors: list[str]):
         self.errors = errors
         super().__init__(f"YAML workflow errors: {'; '.join(errors)}")
+
+
+class KitLoadError(Exception):
+    """Error loading a KIT.yaml file."""
+    def __init__(self, errors: list[str]):
+        self.errors = errors
+        super().__init__("; ".join(errors))
+
+
+def load_kit_yaml(path: str | Path) -> KitDefinition:
+    """Parse a KIT.yaml file into a KitDefinition.
+
+    Validates: name required, description required, name matches dir name,
+    name matches FLOW_NAME_PATTERN.
+    """
+    path = Path(path)
+    from stepwise.flow_resolution import FLOW_NAME_PATTERN
+
+    errors: list[str] = []
+    try:
+        data = yaml.safe_load(path.read_text()) or {}
+    except Exception as e:
+        raise KitLoadError([f"Failed to parse {path}: {e}"])
+
+    if not isinstance(data, dict):
+        raise KitLoadError([f"{path}: expected a YAML mapping, got {type(data).__name__}"])
+
+    name = data.get("name", "")
+    if not name:
+        errors.append("'name' is required")
+    elif not FLOW_NAME_PATTERN.match(name):
+        errors.append(f"Invalid kit name '{name}': must match [a-zA-Z0-9_.+-]+")
+
+    if not data.get("description"):
+        errors.append("'description' is required")
+
+    # Name must match directory name
+    if name and path.parent.name != name:
+        errors.append(
+            f"Kit name '{name}' does not match directory name '{path.parent.name}'"
+        )
+
+    if errors:
+        raise KitLoadError(errors)
+
+    # Validate types for optional fields
+    include = data.get("include", [])
+    if not isinstance(include, list):
+        raise KitLoadError(["'include' must be a list"])
+
+    tags = data.get("tags", [])
+    if not isinstance(tags, list):
+        raise KitLoadError(["'tags' must be a list"])
+
+    return KitDefinition(
+        name=name,
+        description=data.get("description", ""),
+        author=data.get("author", ""),
+        category=data.get("category", ""),
+        usage=data.get("usage", ""),
+        include=[str(i) for i in include],
+        defaults=data.get("defaults", {}),
+        tags=[str(t) for t in tags],
+    )
 
 
 class _DotDict(dict):

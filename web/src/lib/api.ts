@@ -10,6 +10,8 @@ import type {
   FlowMetadata,
   JobConfig,
   AgentStreamEvent,
+  Kit,
+  KitDetail,
   LocalFlow,
   LocalFlowDetail,
   ParseResult,
@@ -402,6 +404,14 @@ export function fetchFlowJobs(flowDir: string, limit: number = 10): Promise<Flow
 
 export function fetchLocalFlows(): Promise<LocalFlow[]> {
   return request<LocalFlow[]>("/local-flows");
+}
+
+export function fetchKits(): Promise<Kit[]> {
+  return request<Kit[]>("/kits");
+}
+
+export function fetchKitDetail(kitName: string): Promise<KitDetail> {
+  return request<KitDetail>(`/kits/${encodeURIComponent(kitName)}`);
 }
 
 export function createLocalFlow(

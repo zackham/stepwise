@@ -149,3 +149,55 @@ class TestFlowsScanning:
         rc, combined = _run_flows(monkeypatch, tmp_path, capsys)
         assert rc == EXIT_SUCCESS
         assert "No flows found" in combined
+
+
+def _make_kit(project: Path, kit_name: str, flow_names: list[str]) -> Path:
+    """Create a kit with member flows."""
+    kit_dir = project / "flows" / kit_name
+    kit_dir.mkdir(parents=True, exist_ok=True)
+    (kit_dir / "KIT.yaml").write_text(
+        f"name: {kit_name}\ndescription: Test kit\n"
+    )
+    for name in flow_names:
+        fd = kit_dir / name
+        fd.mkdir(exist_ok=True)
+        (fd / "FLOW.yaml").write_text(
+            f"name: {name}\nsteps:\n  s:\n    run: echo '{{}}'\n    outputs: [x]\n"
+        )
+    return kit_dir
+
+
+class TestFlowsKitGrouping:
+    """Kit grouping in `stepwise flows` output."""
+
+    def test_kit_header_appears(self, tmp_path, capsys, monkeypatch):
+        project = _make_project(tmp_path)
+        _make_kit(project, "mykit", ["flow-a"])
+        rc, combined = _run_flows(monkeypatch, tmp_path, capsys)
+        assert rc == EXIT_SUCCESS
+        assert "mykit" in combined
+        assert "flow-a" in combined
+
+    def test_standalone_separate_from_kit(self, tmp_path, capsys, monkeypatch):
+        project = _make_project(tmp_path)
+        _make_kit(project, "mykit", ["kit-flow"])
+        _make_flow_dir(project, "solo", "name: solo\nsteps:\n  s:\n    run: echo '{}'\n    outputs: [x]\n")
+        rc, combined = _run_flows(monkeypatch, tmp_path, capsys)
+        assert rc == EXIT_SUCCESS
+        assert "mykit" in combined
+        assert "kit-flow" in combined
+        assert "solo" in combined
+
+    def test_visibility_filter_applies_to_kit_flows(self, tmp_path, capsys, monkeypatch):
+        project = _make_project(tmp_path)
+        kit_dir = project / "flows" / "mykit"
+        kit_dir.mkdir(parents=True)
+        (kit_dir / "KIT.yaml").write_text("name: mykit\ndescription: Test\n")
+        fd = kit_dir / "hidden"
+        fd.mkdir()
+        (fd / "FLOW.yaml").write_text(
+            "name: hidden\nvisibility: internal\nsteps:\n  s:\n    run: echo '{}'\n"
+        )
+        rc, combined = _run_flows(monkeypatch, tmp_path, capsys)
+        assert rc == EXIT_SUCCESS
+        assert "hidden" not in combined

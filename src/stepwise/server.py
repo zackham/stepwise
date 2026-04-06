@@ -2879,6 +2879,7 @@ def list_local_flows():
             "visibility": visibility,
             "source": "local",
             "graph": graph,
+            "kit_name": flow_info.kit_name,
         })
 
     # Also include cached registry flows
@@ -2933,6 +2934,114 @@ def list_local_flows():
         })
 
     return result
+
+
+def _build_flow_info_dict(flow_path: Path, flow_name: str, kit_name: str | None = None) -> dict:
+    """Build the standard flow info dict used by /api/local-flows and /api/kits/{name}."""
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+    try:
+        mtime = flow_path.stat().st_mtime
+        modified_at = datetime.fromtimestamp(mtime).isoformat()
+    except OSError:
+        modified_at = ""
+
+    steps_count = 0
+    description = ""
+    executor_types: list[str] = []
+    visibility = "interactive"
+    graph = None
+    try:
+        wf = load_workflow_yaml(flow_path)
+        steps_count = len(wf.steps)
+        description = wf.metadata.description or ""
+        executor_types = sorted(
+            {s.executor.type for s in wf.steps.values() if s.executor}
+        )
+        visibility = wf.metadata.visibility or "interactive"
+        raw = flow_path.read_text()
+        graph = _build_flow_graph(raw)
+    except (YAMLLoadError, Exception):
+        pass
+
+    try:
+        rel_path = str(flow_path.relative_to(_project_dir))
+    except ValueError:
+        rel_path = str(flow_path)
+
+    return {
+        "path": rel_path,
+        "name": flow_name,
+        "description": description,
+        "steps_count": steps_count,
+        "modified_at": modified_at,
+        "is_directory": True,
+        "executor_types": executor_types,
+        "visibility": visibility,
+        "source": "local",
+        "graph": graph,
+        "kit_name": kit_name,
+    }
+
+
+@app.get("/api/kits")
+def list_kits():
+    """List all discovered kits with metadata."""
+    from stepwise.flow_resolution import discover_kits
+    from stepwise.yaml_loader import load_kit_yaml, KitLoadError
+
+    kits = discover_kits(_project_dir)
+    result = []
+    for kit_info in kits:
+        kit_def = None
+        try:
+            kit_def = load_kit_yaml(kit_info.path)
+        except (KitLoadError, Exception):
+            pass
+        result.append({
+            "name": kit_info.name,
+            "description": kit_def.description if kit_def else "",
+            "author": kit_def.author if kit_def else "",
+            "category": kit_def.category if kit_def else "",
+            "usage": kit_def.usage if kit_def else "",
+            "tags": kit_def.tags if kit_def else [],
+            "flow_count": len(kit_info.flow_names),
+            "flow_names": kit_info.flow_names,
+        })
+    return result
+
+
+@app.get("/api/kits/{kit_name}")
+def get_kit_detail(kit_name: str):
+    """Get full kit detail including member flows."""
+    from stepwise.flow_resolution import discover_kits
+    from stepwise.yaml_loader import load_kit_yaml, KitLoadError
+
+    kits = discover_kits(_project_dir)
+    kit = next((k for k in kits if k.name == kit_name), None)
+    if not kit:
+        raise HTTPException(status_code=404, detail=f"Kit '{kit_name}' not found")
+
+    try:
+        kit_def = load_kit_yaml(kit.path)
+    except KitLoadError as e:
+        raise HTTPException(status_code=500, detail=f"Error parsing KIT.yaml: {e}")
+
+    flows = []
+    for flow_name, flow_path in zip(kit.flow_names, kit.flow_paths):
+        flows.append(_build_flow_info_dict(flow_path, flow_name, kit_name=kit_name))
+
+    return {
+        "name": kit_def.name,
+        "description": kit_def.description,
+        "author": kit_def.author,
+        "category": kit_def.category,
+        "usage": kit_def.usage,
+        "tags": kit_def.tags,
+        "include": kit_def.include,
+        "defaults": kit_def.defaults,
+        "flows": flows,
+    }
 
 
 class CreateFlowRequest(BaseModel):

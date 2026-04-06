@@ -10,6 +10,23 @@ export function useLocalFlows() {
   });
 }
 
+export function useKits() {
+  return useQuery({
+    queryKey: ["kits"],
+    queryFn: api.fetchKits,
+    staleTime: 10000,
+  });
+}
+
+export function useKitDetail(kitName: string | null) {
+  return useQuery({
+    queryKey: ["kitDetail", kitName],
+    queryFn: () => api.fetchKitDetail(kitName!),
+    enabled: !!kitName,
+    staleTime: 30000,
+  });
+}
+
 export function useFlowStats() {
   return useQuery({
     queryKey: ["flowStats"],

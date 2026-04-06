@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 FLOW_DIR_MARKER = "FLOW.yaml"
 FLOW_FILE_SUFFIX = ".flow.yaml"
 FLOW_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_.+-]+$")
+KIT_DIR_MARKER = "KIT.yaml"
 
 
 @dataclass
@@ -17,6 +18,16 @@ class FlowInfo:
     name: str
     path: Path          # path to the YAML file (FLOW.yaml or *.flow.yaml)
     is_directory: bool  # True if this is a directory flow
+    kit_name: str | None = None  # populated for kit member flows
+
+
+@dataclass
+class KitInfo:
+    """A discovered kit."""
+    name: str
+    path: Path              # path to KIT.yaml
+    flow_names: list[str] = field(default_factory=list)   # member flow names (bare)
+    flow_paths: list[Path] = field(default_factory=list)   # paths to member FLOW.yaml files
 
 
 class FlowResolutionError(Exception):
@@ -28,7 +39,8 @@ def resolve_flow(name_or_path: str, project_dir: Path | None = None) -> Path:
 
     Resolution order:
     1. Exact path (file or directory containing FLOW.yaml)
-    2. Search discovery directories: project root -> flows/ -> .stepwise/flows/
+    2. Kit-qualified name: "kit/flow" (exactly one slash, no yaml extension)
+    3. Search discovery directories: project root -> flows/ -> .stepwise/flows/
        Within each: check <name>/FLOW.yaml first, then <name>.flow.yaml
 
     Raises FlowResolutionError if not found.
@@ -42,9 +54,26 @@ def resolve_flow(name_or_path: str, project_dir: Path | None = None) -> Path:
         marker = candidate / FLOW_DIR_MARKER
         if marker.is_file():
             return marker
-    # If it looks like a path (contains / or ends with .yaml), don't do name resolution
-    if "/" in name_or_path or name_or_path.endswith((".yaml", ".yml")):
+        # Check if it's a kit directory
+        if (candidate / KIT_DIR_MARKER).is_file():
+            raise FlowResolutionError(
+                f"'{name_or_path}' is a kit, not a flow. "
+                f"Use '{candidate.name}/<flow-name>' to run a specific flow."
+            )
+
+    # If it looks like a filesystem path (absolute, relative, or yaml extension), reject as path
+    if name_or_path.startswith(("/", ".", "~")) or name_or_path.endswith((".yaml", ".yml")):
         raise FlowResolutionError(f"Flow not found: {name_or_path}")
+
+    # Kit-qualified name: "kit/flow" (exactly one slash, bare names only)
+    if "/" in name_or_path:
+        parts = name_or_path.split("/")
+        if len(parts) == 2:
+            return _resolve_kit_flow(parts[0], parts[1], project_dir or Path.cwd())
+        raise FlowResolutionError(
+            f"Invalid flow reference '{name_or_path}': "
+            f"use 'kit/flow' format (one level only, no nesting)"
+        )
 
     # Registry flow syntax: @author:slug
     if name_or_path.startswith("@") and ":" in name_or_path:
@@ -76,16 +105,29 @@ def resolve_flow(name_or_path: str, project_dir: Path | None = None) -> Path:
             matches.append(dir_flow)
             continue  # directory takes precedence within this search dir
 
+        # Check if it's a kit (has KIT.yaml but not FLOW.yaml)
+        kit_marker = search_dir / name_or_path / KIT_DIR_MARKER
+        if kit_marker.is_file():
+            raise FlowResolutionError(
+                f"'{name_or_path}' is a kit, not a flow. "
+                f"Use '{name_or_path}/<flow-name>' to run a specific flow. "
+                f"Available flows: {_list_kit_flows(name_or_path, project_dir)}"
+            )
+
         # Check single-file flow: <dir>/<name>.flow.yaml
         file_flow = search_dir / f"{name_or_path}{FLOW_FILE_SUFFIX}"
         if file_flow.is_file():
             matches.append(file_flow)
 
     if not matches:
-        raise FlowResolutionError(
-            f"Flow '{name_or_path}' not found. "
-            f"Searched: {', '.join(str(d) for d in search_dirs if d.is_dir())}"
-        )
+        # Check if the name exists inside any kit
+        hint = _kit_hint_for_bare_name(name_or_path, project_dir)
+        msg = f"Flow '{name_or_path}' not found."
+        if hint:
+            msg += f" {hint}"
+        else:
+            msg += f" Searched: {', '.join(str(d) for d in search_dirs if d.is_dir())}"
+        raise FlowResolutionError(msg)
 
     if len(matches) > 1:
         import logging
@@ -97,14 +139,121 @@ def resolve_flow(name_or_path: str, project_dir: Path | None = None) -> Path:
     return matches[0]
 
 
+def _resolve_kit_flow(kit_name: str, flow_name: str, project_dir: Path) -> Path:
+    """Resolve kit/flow to the FLOW.yaml path. Raises FlowResolutionError."""
+    search_dirs = _discovery_dirs(project_dir)
+    kit_found = False
+
+    for search_dir in search_dirs:
+        if not search_dir.is_dir():
+            continue
+        kit_dir = search_dir / kit_name
+        if not kit_dir.is_dir():
+            continue
+        kit_marker = kit_dir / KIT_DIR_MARKER
+        if not kit_marker.is_file():
+            continue
+        kit_found = True
+
+        flow_dir = kit_dir / flow_name
+        flow_marker = flow_dir / FLOW_DIR_MARKER
+        if flow_marker.is_file():
+            return flow_marker
+
+    if kit_found:
+        raise FlowResolutionError(
+            f"Flow '{flow_name}' not found in kit '{kit_name}'. "
+            f"Available flows: {_list_kit_flows(kit_name, project_dir)}"
+        )
+
+    # Kit dir exists but no KIT.yaml — it's a regular directory, not a kit
+    for search_dir in search_dirs:
+        kit_dir = search_dir / kit_name
+        if kit_dir.is_dir() and not (kit_dir / KIT_DIR_MARKER).is_file():
+            raise FlowResolutionError(
+                f"'{kit_name}' is a directory but not a kit (no KIT.yaml). "
+                f"Did you mean to run a flow by path?"
+            )
+
+    raise FlowResolutionError(f"Kit '{kit_name}' not found.")
+
+
+def _list_kit_flows(kit_name: str, project_dir: Path) -> str:
+    """List flow names in a kit for error messages."""
+    for search_dir in _discovery_dirs(project_dir):
+        kit_dir = search_dir / kit_name
+        if kit_dir.is_dir() and (kit_dir / KIT_DIR_MARKER).is_file():
+            names = sorted(
+                c.name for c in kit_dir.iterdir()
+                if c.is_dir() and (c / FLOW_DIR_MARKER).is_file()
+            )
+            return ", ".join(names) if names else "(empty kit)"
+    return "(unknown)"
+
+
+def _kit_hint_for_bare_name(name: str, project_dir: Path) -> str | None:
+    """If a bare flow name exists inside kits, suggest the kit-qualified form."""
+    kit_dirs = _find_kit_dirs(project_dir)
+    matches: list[str] = []
+    for resolved_dir, kit_name in kit_dirs.items():
+        flow_dir = resolved_dir / name
+        if flow_dir.is_dir() and (flow_dir / FLOW_DIR_MARKER).is_file():
+            matches.append(f"{kit_name}/{name}")
+    if len(matches) == 1:
+        return f"Did you mean '{matches[0]}'?"
+    if len(matches) > 1:
+        return f"Did you mean: {', '.join(sorted(matches))}?"
+    return None
+
+
+def _find_kit_dirs(project_dir: Path) -> dict[Path, str]:
+    """Find all kit directories across discovery paths.
+    Returns {resolved_kit_dir: kit_name}.
+    """
+    kit_dirs: dict[Path, str] = {}
+    for search_dir in _discovery_dirs(project_dir):
+        if not search_dir.is_dir():
+            continue
+        for child in search_dir.iterdir():
+            if child.is_dir() and (child / KIT_DIR_MARKER).is_file():
+                resolved = child.resolve()
+                if resolved not in kit_dirs:
+                    kit_dirs[resolved] = child.name
+    return kit_dirs
+
+
+def discover_kits(project_dir: Path) -> list[KitInfo]:
+    """Find all kits in a project directory."""
+    kit_dirs = _find_kit_dirs(project_dir)
+    kits: list[KitInfo] = []
+    for resolved_dir, kit_name in sorted(kit_dirs.items(), key=lambda x: x[1]):
+        flow_names: list[str] = []
+        flow_paths: list[Path] = []
+        for child in sorted(resolved_dir.iterdir()):
+            if child.is_dir():
+                marker = child / FLOW_DIR_MARKER
+                if marker.is_file():
+                    flow_names.append(child.name)
+                    flow_paths.append(marker)
+        kits.append(KitInfo(
+            name=kit_name,
+            path=resolved_dir / KIT_DIR_MARKER,
+            flow_names=flow_names,
+            flow_paths=flow_paths,
+        ))
+    return kits
+
+
 def discover_flows(project_dir: Path) -> list[FlowInfo]:
     """Find all flows in a project directory.
 
     Searches: project root -> flows/ -> .stepwise/flows/
     Returns deduplicated list (by resolved path).
+    Kit member flows have kit_name set.
     """
     flows: list[FlowInfo] = []
     seen: set[Path] = set()
+    kit_dir_set = set(_find_kit_dirs(project_dir).keys())
 
     search_dirs = _discovery_dirs(project_dir)
 
@@ -112,10 +261,29 @@ def discover_flows(project_dir: Path) -> list[FlowInfo]:
         if not search_dir.is_dir():
             continue
 
-        # Find directory flows (containing FLOW.yaml)
+        # Find directory flows (containing FLOW.yaml) and kit member flows
         for child in sorted(search_dir.iterdir()):
             if not child.is_dir():
                 continue
+
+            # Check if this is a kit directory
+            if (child / KIT_DIR_MARKER).is_file():
+                # It's a kit — enumerate member flows
+                for member in sorted(child.iterdir()):
+                    if member.is_dir():
+                        marker = member / FLOW_DIR_MARKER
+                        if marker.is_file():
+                            resolved = marker.resolve()
+                            if resolved not in seen:
+                                seen.add(resolved)
+                                flows.append(FlowInfo(
+                                    name=member.name,
+                                    path=marker,
+                                    is_directory=True,
+                                    kit_name=child.name,
+                                ))
+                continue  # skip the FLOW_DIR_MARKER check for the kit dir itself
+
             marker = child / FLOW_DIR_MARKER
             if marker.is_file():
                 resolved = marker.resolve()
@@ -156,13 +324,17 @@ def discover_flows(project_dir: Path) -> list[FlowInfo]:
                     ))
             for child in sorted(search_dir.rglob(FLOW_DIR_MARKER)):
                 resolved = child.resolve()
-                if resolved not in seen:
-                    seen.add(resolved)
-                    flows.append(FlowInfo(
-                        name=child.parent.name,
-                        path=child,
-                        is_directory=True,
-                    ))
+                if resolved in seen:
+                    continue
+                # Skip if this FLOW.yaml is inside a kit directory
+                if any(resolved.is_relative_to(kd) for kd in kit_dir_set):
+                    continue  # already discovered as kit member in phase 1
+                seen.add(resolved)
+                flows.append(FlowInfo(
+                    name=child.parent.name,
+                    path=child,
+                    is_directory=True,
+                ))
 
     return flows
 

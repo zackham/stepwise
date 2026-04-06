@@ -1397,78 +1397,86 @@ def cmd_templates(args: argparse.Namespace) -> int:
 def cmd_flows(args: argparse.Namespace) -> int:
     """List available flows in the current project."""
     import yaml as _yaml
+    from stepwise.flow_resolution import discover_flows, discover_kits
+    from stepwise.yaml_loader import load_kit_yaml, KitLoadError
 
     io = _io(args)
 
     # Determine the project root (for flows/ directory lookup)
     project_dir = Path(args.project_dir).resolve() if args.project_dir else Path.cwd().resolve()
 
-    found: list[dict] = []
+    flows = discover_flows(project_dir)
+    kits = discover_kits(project_dir)
 
-    # 1. Scan flows/<name>/FLOW.yaml
-    flows_dir = project_dir / "flows"
-    if flows_dir.is_dir():
-        for entry in sorted(flows_dir.iterdir()):
-            if entry.is_dir():
-                flow_yaml = entry / "FLOW.yaml"
-                if not flow_yaml.exists():
-                    flow_yaml = entry / "FLOW.yml"
-                if flow_yaml.exists():
-                    try:
-                        raw = _yaml.safe_load(flow_yaml.read_text()) or {}
-                    except Exception:
-                        raw = {}
-                    name = raw.get("name") or entry.name
-                    desc = raw.get("description", "")
-                    visibility = raw.get("visibility", "interactive")
-                    steps = raw.get("steps") or {}
-                    found.append({
-                        "name": name,
-                        "description": desc,
-                        "steps": len(steps),
-                        "visibility": visibility,
-                    })
-
-    # 2. Scan *.flow.yaml in the project root
-    for flow_file in sorted(project_dir.glob("*.flow.yaml")):
+    # Build per-flow metadata (description, step count, visibility)
+    def _flow_row(flow_info):
         try:
-            raw = _yaml.safe_load(flow_file.read_text()) or {}
+            raw = _yaml.safe_load(flow_info.path.read_text()) or {}
         except Exception:
             raw = {}
-        name = raw.get("name") or flow_file.stem.replace(".flow", "")
-        desc = raw.get("description", "")
+        name = raw.get("name") or flow_info.name
+        desc = (raw.get("description", "") or "")[:50]
         visibility = raw.get("visibility", "interactive")
-        steps = raw.get("steps") or {}
-        found.append({
-            "name": name,
-            "description": desc,
-            "steps": len(steps),
-            "visibility": visibility,
-        })
+        steps = len(raw.get("steps") or {})
+        return {"name": name, "description": desc, "steps": steps, "visibility": visibility}
 
-    # Sort alphabetically by name
-    found.sort(key=lambda f: f["name"].lower())
-
-    # Filter by visibility (default: show all except internal)
+    # Apply visibility filter
     vis_filter = getattr(args, "visibility", None)
-    if vis_filter and vis_filter != "all":
-        found = [f for f in found if f["visibility"] == vis_filter]
-    elif not vis_filter:
-        # By default hide internal flows
-        found = [f for f in found if f["visibility"] != "internal"]
+    def _vis_ok(vis):
+        if vis_filter and vis_filter != "all":
+            return vis == vis_filter
+        if not vis_filter:
+            return vis != "internal"
+        return True
 
-    if not found:
+    # Group flows by kit
+    kit_flows: dict[str, list] = {}
+    standalone: list = []
+    for f in flows:
+        row = _flow_row(f)
+        if not _vis_ok(row["visibility"]):
+            continue
+        if f.kit_name:
+            kit_flows.setdefault(f.kit_name, []).append(row)
+        else:
+            standalone.append(row)
+
+    has_output = False
+
+    # Print kit sections
+    kit_meta = {}
+    for kit in kits:
+        try:
+            kit_def = load_kit_yaml(kit.path)
+            kit_meta[kit.name] = kit_def.description
+        except (KitLoadError, Exception):
+            kit_meta[kit.name] = ""
+
+    for kit_name in sorted(kit_flows.keys()):
+        members = sorted(kit_flows[kit_name], key=lambda r: r["name"].lower())
+        desc = kit_meta.get(kit_name, "")
+        if desc:
+            io.log("info", f"\n{kit_name} — {desc} ({len(members)} flows)")
+        else:
+            io.log("info", f"\n{kit_name} ({len(members)} flows)")
+        rows = [[r["name"], r["description"], str(r["steps"]),
+                 r["visibility"] if r["visibility"] != "interactive" else ""] for r in members]
+        io.table(["NAME", "DESCRIPTION", "STEPS", "VISIBILITY"], rows)
+        has_output = True
+
+    # Print standalone section
+    if standalone:
+        standalone.sort(key=lambda r: r["name"].lower())
+        if kit_flows:
+            io.log("info", f"\nStandalone ({len(standalone)} flows)")
+        rows = [[r["name"], r["description"], str(r["steps"]),
+                 r["visibility"] if r["visibility"] != "interactive" else ""] for r in standalone]
+        io.table(["NAME", "DESCRIPTION", "STEPS", "VISIBILITY"], rows)
+        has_output = True
+
+    if not has_output:
         io.log("info", "No flows found. Create one with: stepwise new <name>")
-        return EXIT_SUCCESS
 
-    rows = []
-    for f in found:
-        desc = (f["description"] or "")[:50]
-        vis = f["visibility"]
-        vis_label = vis if vis != "interactive" else ""
-        rows.append([f["name"], desc, str(f["steps"]), vis_label])
-
-    io.table(["NAME", "DESCRIPTION", "STEPS", "VISIBILITY"], rows)
     return EXIT_SUCCESS
 
 

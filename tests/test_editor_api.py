@@ -418,3 +418,87 @@ class TestCreateFlow:
     def test_create_empty_name(self, client, project_dir):
         resp = client.post("/api/local-flows", json={"name": ""})
         assert resp.status_code == 400
+
+
+# ── Kit API Endpoints ─────────────────────────────────────────────────
+
+
+class TestKitEndpoints:
+    """Tests for /api/kits and /api/kits/{name} endpoints."""
+
+    @pytest.fixture
+    def kit_project(self, tmp_path):
+        """Project dir with a kit and a standalone flow."""
+        kit_dir = tmp_path / "flows" / "testkit"
+        kit_dir.mkdir(parents=True)
+        (kit_dir / "KIT.yaml").write_text(
+            "name: testkit\ndescription: A test kit\nauthor: tester\ncategory: testing\n"
+        )
+        for name in ("alpha", "beta"):
+            fd = kit_dir / name
+            fd.mkdir()
+            (fd / "FLOW.yaml").write_text(
+                f"name: {name}\nsteps:\n  s:\n    run: echo '{{}}'\n    outputs: [x]\n"
+            )
+        solo = tmp_path / "flows" / "solo"
+        solo.mkdir(parents=True, exist_ok=True)
+        (solo / "FLOW.yaml").write_text(
+            "name: solo\nsteps:\n  s:\n    run: echo '{}'\n    outputs: [x]\n"
+        )
+        return tmp_path
+
+    @pytest.fixture
+    def kit_client(self, kit_project):
+        old_env = os.environ.copy()
+        os.environ["STEPWISE_PROJECT_DIR"] = str(kit_project)
+        os.environ["STEPWISE_DB"] = ":memory:"
+        with TestClient(app, raise_server_exceptions=False) as c:
+            yield c
+        os.environ.clear()
+        os.environ.update(old_env)
+
+    def test_list_kits_empty(self, client):
+        """No kits → empty list."""
+        resp = client.get("/api/kits")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_list_kits_with_kit(self, kit_client):
+        resp = kit_client.get("/api/kits")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        kit = data[0]
+        assert kit["name"] == "testkit"
+        assert kit["description"] == "A test kit"
+        assert kit["author"] == "tester"
+        assert kit["category"] == "testing"
+        assert kit["flow_count"] == 2
+        assert sorted(kit["flow_names"]) == ["alpha", "beta"]
+
+    def test_kit_detail_returns_flows(self, kit_client):
+        resp = kit_client.get("/api/kits/testkit")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["name"] == "testkit"
+        assert data["usage"] == ""
+        assert len(data["flows"]) == 2
+        flow_names = sorted(f["name"] for f in data["flows"])
+        assert flow_names == ["alpha", "beta"]
+        for f in data["flows"]:
+            assert "steps_count" in f
+            assert f["kit_name"] == "testkit"
+
+    def test_kit_detail_not_found(self, kit_client):
+        resp = kit_client.get("/api/kits/nonexistent")
+        assert resp.status_code == 404
+
+    def test_local_flows_includes_kit_name(self, kit_client):
+        resp = kit_client.get("/api/local-flows")
+        assert resp.status_code == 200
+        flows = resp.json()
+        kit_flows = [f for f in flows if f.get("kit_name") == "testkit"]
+        assert len(kit_flows) == 2
+        solo_flows = [f for f in flows if f["name"] == "solo"]
+        assert len(solo_flows) == 1
+        assert solo_flows[0].get("kit_name") is None

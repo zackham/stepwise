@@ -555,6 +555,52 @@ class FlowMetadata:
 
 
 @dataclass
+class KitDefinition:
+    """Metadata parsed from KIT.yaml."""
+    name: str = ""
+    description: str = ""
+    author: str = ""
+    category: str = ""
+    usage: str = ""
+    include: list[str] = field(default_factory=list)
+    defaults: dict = field(default_factory=dict)
+    tags: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        d: dict = {}
+        if self.name:
+            d["name"] = self.name
+        if self.description:
+            d["description"] = self.description
+        if self.author:
+            d["author"] = self.author
+        if self.category:
+            d["category"] = self.category
+        if self.usage:
+            d["usage"] = self.usage
+        if self.include:
+            d["include"] = self.include
+        if self.defaults:
+            d["defaults"] = self.defaults
+        if self.tags:
+            d["tags"] = self.tags
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> KitDefinition:
+        return cls(
+            name=d.get("name", ""),
+            description=d.get("description", ""),
+            author=d.get("author", ""),
+            category=d.get("category", ""),
+            usage=d.get("usage", ""),
+            include=d.get("include", []),
+            defaults=d.get("defaults", {}),
+            tags=d.get("tags", []),
+        )
+
+
+@dataclass
 class WorkflowDefinition:
     steps: dict[str, StepDefinition] = field(default_factory=dict)
     metadata: FlowMetadata = field(default_factory=FlowMetadata)

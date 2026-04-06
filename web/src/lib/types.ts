@@ -369,6 +369,7 @@ export interface LocalFlow {
   source?: "local" | "registry";
   registry_ref?: string;
   graph?: FlowGraph | null;
+  kit_name?: string | null;
 }
 
 export interface FlowGraphNode {
@@ -399,6 +400,25 @@ export interface LocalFlowDetail {
   graph: FlowGraph;
   is_directory: boolean;
   flow_dir: string;
+}
+
+// ── Kits ─────────────────────────────────────────────────────────────
+
+export interface Kit {
+  name: string;
+  description: string;
+  author: string;
+  category: string;
+  usage: string;
+  tags: string[];
+  flow_count: number;
+  flow_names: string[];
+}
+
+export interface KitDetail extends Kit {
+  include: string[];
+  defaults: Record<string, unknown>;
+  flows: LocalFlow[];
 }
 
 export interface ParseResult {
