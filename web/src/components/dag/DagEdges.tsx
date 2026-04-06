@@ -265,9 +265,12 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
         // Check source and target status for edge state
         const sourceStatus = latestRuns?.[edge.from]?.status;
         const targetStatus = latestRuns?.[edge.to]?.status;
+        const sourceHasRun = sourceStatus === "completed" || sourceStatus === "failed";
         const isRunning = targetStatus === "running" || targetStatus === "delegated";
         const isSuspended = targetStatus === "suspended";
-        const isActive = isRunning || isSuspended;
+        // Only pulse if source has actually executed (prevents false pulse for
+        // any_of edges from unexecuted loopback sources — matches loop edge behavior)
+        const isActive = sourceHasRun && (isRunning || isSuspended);
         const isCompleted = sourceStatus === "completed" && (
           targetStatus === "completed" || targetStatus === "running" || targetStatus === "delegated"
         );

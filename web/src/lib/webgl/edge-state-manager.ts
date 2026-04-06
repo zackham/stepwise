@@ -77,8 +77,10 @@ export class EdgeStateManager {
       return EdgeState.IDLE;
     }
 
-    // Data edges
-    if (targetActive) {
+    // Data edges — only pulse if source has actually executed (prevents false
+    // pulse for any_of edges from unexecuted loopback sources)
+    const sourceHasRun = sourceStatus === "completed" || sourceStatus === "failed";
+    if (sourceHasRun && targetActive) {
       return EdgeState.SURGE;
     }
     if (sourceStatus === "completed" && targetStatus === "completed") {
