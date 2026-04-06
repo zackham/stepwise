@@ -505,7 +505,7 @@ export function JobDetailPage() {
               />
             </TabsContent>
             <TabsContent value="timeline" className={cn("flex-1 min-h-0", viewMode !== "timeline" && "hidden")}>
-              <TimelineView job={job} runs={runs} onSelectStep={handleSelectStep} />
+              <TimelineView job={job} runs={runs} onSelectStep={handleSelectStep} selectedStep={selectedStep} />
             </TabsContent>
             <TabsContent value="events" className={cn("flex-1 min-h-0", viewMode !== "events" && "hidden")}>
               <ScrollArea className="h-full">

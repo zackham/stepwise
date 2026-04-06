@@ -8,6 +8,7 @@ interface TimelineViewProps {
   job: Job;
   runs: StepRun[];
   onSelectStep?: (stepName: string) => void;
+  selectedStep?: string | null;
 }
 
 interface TimelineRow {
@@ -83,7 +84,7 @@ function executorLabel(type: string): string {
   }
 }
 
-export function TimelineView({ job, runs, onSelectStep }: TimelineViewProps) {
+export function TimelineView({ job, runs, onSelectStep, selectedStep }: TimelineViewProps) {
   const [hoveredRun, setHoveredRun] = useState<string | null>(null);
   const [hoverOffsetPx, setHoverOffsetPx] = useState(0); // mouse X offset within bar, in px
   const [now, setNow] = useState(Date.now());
@@ -192,14 +193,24 @@ export function TimelineView({ job, runs, onSelectStep }: TimelineViewProps) {
 
       {/* Rows */}
       <div className="flex-1">
-        {groups.map(({ stepName, rows }, groupIdx) => (
-          <div key={stepName} className="flex border-b border-zinc-200/50 dark:border-zinc-800/50 hover:bg-zinc-100/30 dark:hover:bg-zinc-900/30">
+        {groups.map(({ stepName, rows }, groupIdx) => {
+          const isSelected = selectedStep === stepName;
+          return (
+          <div key={stepName} className={cn(
+            "flex border-b border-zinc-200/50 dark:border-zinc-800/50 hover:bg-zinc-100/30 dark:hover:bg-zinc-900/30",
+            isSelected && "border-l-2 border-l-blue-500 bg-blue-500/5",
+          )}>
             {/* Step label */}
             <div
               className="w-40 shrink-0 px-3 py-2 border-r border-zinc-200 dark:border-zinc-800 cursor-pointer"
               onClick={() => onSelectStep?.(stepName)}
             >
-              <span className="text-xs text-zinc-700 dark:text-zinc-300 truncate block" title={stepName}>
+              <span className={cn(
+                "text-xs truncate block",
+                isSelected
+                  ? "text-blue-500 dark:text-blue-400 font-semibold"
+                  : "text-zinc-700 dark:text-zinc-300",
+              )} title={stepName}>
                 {stepName}
               </span>
               {(() => {
@@ -328,7 +339,8 @@ export function TimelineView({ job, runs, onSelectStep }: TimelineViewProps) {
               })}
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
