@@ -1818,6 +1818,7 @@ class Engine:
             objective=job.objective,
             timeout_minutes=job.config.timeout_minutes,
             injected_context=self._injected_contexts.get(job.id),
+            flow_source_dir=job.workflow.source_dir,
         )
 
         exec_ref = step_def.executor
@@ -3337,9 +3338,14 @@ class AsyncEngine(Engine):
         Also detects stuck RUNNING steps whose executor task has vanished from
         the task registry (e.g. thread pool crash without pushing to queue).
 
+        Belt-and-suspenders: also checks runs that ARE in _tasks but whose
+        subprocess PID is dead (e.g. process crashed but thread is stuck on I/O).
+
         _dispatch_ready is idempotent — it only launches steps whose deps are
         met and that don't already have a run. Safe to call unconditionally.
         """
+        from stepwise.agent import _is_pid_alive
+
         for job in self.store.active_jobs():
             # Detect stuck running steps: run is RUNNING but no task in registry.
             # Only flag if started >60s ago (avoids race with task creation).
@@ -3369,6 +3375,27 @@ class AsyncEngine(Engine):
                                 error="Executor task lost (possible thread pool crash)",
                                 error_category="infra_failure",
                             )
+                # PID liveness check: task exists but subprocess is dead
+                # (e.g. process crashed but executor thread is stuck on I/O)
+                elif run.id in self._tasks and run.pid and run.started_at:
+                    if not _is_pid_alive(run.pid):
+                        age = (_now() - run.started_at).total_seconds()
+                        if age > 30:  # 30s grace for process teardown
+                            _async_logger.warning(
+                                "Dead PID detected: %s/%s (run %s, PID %d, age %.0fs)",
+                                job.id, run.step_name, run.id, run.pid, age,
+                            )
+                            task = self._tasks.pop(run.id, None)
+                            if task:
+                                task.cancel()
+                            self._task_exec_types.pop(run.id, None)
+                            step_def = job.workflow.steps.get(run.step_name)
+                            if step_def:
+                                self._fail_run(
+                                    job, run, step_def,
+                                    error=f"Script process died (PID {run.pid} no longer alive)",
+                                    error_category="infra_failure",
+                                )
             self._dispatch_ready(job.id)
             self._check_job_terminal(job.id)
 
