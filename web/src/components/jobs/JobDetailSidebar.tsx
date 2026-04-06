@@ -1,12 +1,13 @@
-import { useJobOutput } from "@/hooks/useStepwise";
+import { useJobOutput, useJobCost, useRuns } from "@/hooks/useStepwise";
 import { JsonView } from "@/components/JsonView";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { EntityDropdownMenu } from "@/components/menus/EntityDropdownMenu";
-import { X, Package } from "lucide-react";
+import { X, Package, CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
 import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 import type { Job } from "@/lib/types";
-import { formatDuration } from "@/lib/utils";
+import { cn, formatDuration, formatCost } from "@/lib/utils";
+import { useMemo } from "react";
 
 interface JobDetailSidebarProps {
   job: Job;
@@ -18,9 +19,36 @@ export function JobDetailSidebar({ job, onClose }: JobDetailSidebarProps) {
   const isTerminal =
     job.status === "completed" || job.status === "failed" || job.status === "cancelled";
   const { data: outputs, isLoading } = useJobOutput(job.id, isTerminal);
+  const { data: costData } = useJobCost(job.id);
+  const { data: runs = [] } = useRuns(job.id);
 
   const stepCount = Object.keys(job.workflow.steps).length;
   const hasOutputs = outputs && Object.keys(outputs).length > 0;
+
+  // Compute terminal banner info
+  const terminalInfo = useMemo(() => {
+    if (!isTerminal) return null;
+
+    // Duration: created_at to latest completed_at across runs
+    const completedTimes = runs
+      .filter((r) => r.completed_at)
+      .map((r) => new Date(r.completed_at!).getTime());
+    const endTime = completedTimes.length > 0
+      ? new Date(Math.max(...completedTimes)).toISOString()
+      : job.updated_at;
+
+    const failedRun = job.status === "failed"
+      ? runs.find((r) => r.status === "failed") ?? null
+      : null;
+
+    return {
+      duration: formatDuration(job.created_at, endTime),
+      cost: costData?.cost_usd ?? null,
+      failedRun,
+      outputKeys: outputs ? Object.keys(outputs) : [],
+      outputs,
+    };
+  }, [isTerminal, runs, job, costData, outputs]);
 
   return (
     <div className="flex flex-col h-full">
@@ -54,6 +82,71 @@ export function JobDetailSidebar({ job, onClose }: JobDetailSidebarProps) {
 
       <ScrollArea className="flex-1 min-h-0">
         <div className="p-4 space-y-4">
+          {/* Terminal state banner */}
+          {terminalInfo && (
+            <div className={cn(
+              "rounded-md border p-3 space-y-2 text-xs",
+              job.status === "completed" && "border-emerald-500/30 bg-emerald-500/5",
+              job.status === "failed" && "border-red-500/30 bg-red-500/5",
+              job.status === "cancelled" && "border-zinc-500/30 bg-zinc-500/5",
+            )}>
+              <div className="flex items-center gap-2">
+                {job.status === "completed" && (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                )}
+                {job.status === "failed" && (
+                  <XCircle className="w-4 h-4 text-red-500 shrink-0" />
+                )}
+                {job.status === "cancelled" && (
+                  <AlertTriangle className="w-4 h-4 text-zinc-500 shrink-0" />
+                )}
+                <span className={cn(
+                  "font-medium",
+                  job.status === "completed" && "text-emerald-500",
+                  job.status === "failed" && "text-red-500",
+                  job.status === "cancelled" && "text-zinc-500",
+                )}>
+                  {job.status === "completed" ? "Completed" : job.status === "failed" ? "Failed" : "Cancelled"}
+                </span>
+              </div>
+              <div className="flex items-center gap-3 text-zinc-500">
+                <span>Duration: <span className="text-foreground font-mono">{terminalInfo.duration}</span></span>
+                {terminalInfo.cost != null && terminalInfo.cost > 0 && (
+                  <span>Cost: <span className="text-foreground font-mono">{formatCost(terminalInfo.cost)}</span></span>
+                )}
+              </div>
+              {job.status === "completed" && terminalInfo.outputKeys.length > 0 && (
+                <div className="text-zinc-500 space-y-0.5">
+                  {terminalInfo.outputKeys.map((key) => {
+                    const val = terminalInfo.outputs?.[key];
+                    const preview = val === undefined ? "null"
+                      : typeof val === "string" ? (val.length > 60 ? `"${val.slice(0, 57)}..."` : `"${val}"`)
+                      : typeof val === "object" ? JSON.stringify(val)?.slice(0, 60) + (JSON.stringify(val)?.length > 60 ? "..." : "")
+                      : String(val);
+                    return (
+                      <div key={key} className="truncate">
+                        <span className="text-zinc-400 font-mono">{key}</span>
+                        <span className="text-zinc-600 ml-1 font-mono">{preview}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {job.status === "failed" && terminalInfo.failedRun && (
+                <div className="text-red-400 space-y-0.5">
+                  <div>
+                    Step "<span className="font-medium">{terminalInfo.failedRun.step_name}</span>" failed
+                  </div>
+                  {terminalInfo.failedRun.error && (
+                    <div className="text-red-400/70 truncate font-mono">
+                      {terminalInfo.failedRun.error.split("\n")[0].slice(0, 120)}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Summary */}
           <div className="grid grid-cols-2 gap-2 text-xs">
             <div className="text-zinc-500">Steps</div>

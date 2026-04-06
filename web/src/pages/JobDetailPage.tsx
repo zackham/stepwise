@@ -1,5 +1,6 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useParams, useNavigate, useSearch, Link } from "@tanstack/react-router";
+import { toast } from "sonner";
 import type { JobDetailSearch } from "@/router";
 import { useJob, useRuns, useEvents, useJobTree, useJobOutput, useStepwiseMutations, useJobSessions } from "@/hooks/useStepwise";
 import { SessionTab } from "@/components/jobs/SessionTab";
@@ -140,6 +141,27 @@ export function JobDetailPage() {
     if (job?.status !== "failed") return null;
     return runs.find((r) => r.status === "failed") ?? null;
   }, [job?.status, runs]);
+
+  // Toast on job status transition to terminal state
+  const prevJobStatusRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const currentStatus = job?.status;
+    const prevStatus = prevJobStatusRef.current;
+    prevJobStatusRef.current = currentStatus;
+
+    // Only fire on a real transition (prev was non-terminal, current is terminal)
+    if (!prevStatus || !currentStatus) return;
+    const wasTerminal = prevStatus === "completed" || prevStatus === "failed" || prevStatus === "cancelled";
+    if (wasTerminal) return;
+
+    if (currentStatus === "completed") {
+      toast.success("Job completed");
+    } else if (currentStatus === "failed") {
+      toast.error("Job failed");
+    } else if (currentStatus === "cancelled") {
+      toast.info("Job cancelled");
+    }
+  }, [job?.status]);
 
   const selection: DagSelection = dataFlowSelection ?? (selectedStep ? { kind: "step", stepName: selectedStep } : null);
 
