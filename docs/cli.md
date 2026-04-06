@@ -15,7 +15,7 @@ See [Quickstart](quickstart.md) for installation and first-run instructions. See
 | [Server](#server-commands) | `server start`, `server stop`, `server restart`, `server status` |
 | [Registry](#registry-commands) | `share`, `get`, `search`, `info`, `login`, `logout` |
 | [Configuration](#configuration-commands) | `config`, `init`, `templates`, `schema`, `diagram` |
-| [Utility](#utility-commands) | `agent-help`, `flows`, `extensions`, `docs`, `cache`, `help`, `version`, `update`, `uninstall` |
+| [Utility](#utility-commands) | `agent-help`, `catalog`, `flows`, `extensions`, `docs`, `cache`, `help`, `version`, `update`, `uninstall` |
 
 ## Common Workflows
 
@@ -243,14 +243,15 @@ stepwise open job-abc123                 # open job detail page
 Create a new flow directory with a minimal `FLOW.yaml` template.
 
 ```bash
-stepwise new my-flow
+stepwise new my-flow                     # creates flows/my-flow/FLOW.yaml
+stepwise new swdev/my-flow               # creates flows/swdev/my-flow/FLOW.yaml (inside kit)
 ```
 
 ```
 Created flows/my-flow/FLOW.yaml
 ```
 
-Creates `flows/<name>/FLOW.yaml` in the current project. The name must match `[a-zA-Z0-9_-]+`. Fails if the directory already exists.
+Creates `flows/<name>/FLOW.yaml` in the current project. Use `kit/flow` syntax to create a flow inside a kit directory. The name must match `[a-zA-Z0-9_-]+`. Fails if the directory already exists.
 
 ---
 
@@ -707,37 +708,40 @@ stepwise server status
 
 ## Registry Commands
 
-Commands for sharing and discovering flows on the [stepwise.run](https://stepwise.run) registry.
+Commands for sharing and discovering flows and kits on the [stepwise.run](https://stepwise.run) registry.
 
-See [Flow Sharing](flow-sharing.md) for detailed publishing and discovery workflows.
+See [Flow and Kit Sharing](flow-sharing.md) for detailed publishing and discovery workflows.
 
 ### `stepwise share`
 
-Publish a flow to the registry.
+Publish a flow or kit to the registry. Auto-detects kits by the presence of `KIT.yaml` in the target directory.
 
 ```bash
-stepwise share my-pipeline.flow.yaml
+stepwise share my-pipeline.flow.yaml        # share a flow
+stepwise share swdev                         # share a kit (has KIT.yaml)
 ```
 
-Validates the flow, reads metadata from the YAML header, and uploads to the registry. The update token is saved locally for future updates.
+For flows: validates, reads metadata, and uploads YAML + co-located files. For kits: validates KIT.yaml and all bundled flows, collects everything, and uploads as a kit bundle.
 
 | Flag | Description |
 |------|-------------|
 | `--author NAME` | Override author (default: from YAML or git config) |
-| `--update` | Update a previously published flow (uses stored token) |
+| `--update` | Update a previously published flow or kit (uses stored token) |
 
 ---
 
 ### `stepwise get`
 
-Download a flow from the registry or a URL.
+Download a flow or kit from the registry or a URL. Tries flow lookup first, falls back to kit.
 
 ```bash
-stepwise get code-review
-stepwise get https://example.com/code-review.flow.yaml
+stepwise get code-review                     # flow (by name)
+stepwise get swdev                           # kit (auto-detected via fallback)
+stepwise get @zack:swdev                     # kit (by author:name)
+stepwise get https://example.com/flow.yaml   # flow (by URL)
 ```
 
-Saves to the current directory. Fails if a file with the same name already exists.
+Flows are saved to `.stepwise/registry/@author/slug/`. Kits install `KIT.yaml` plus all bundled flow subdirectories. Registry includes listed in the kit's `KIT.yaml` are auto-fetched.
 
 | Flag | Description |
 |------|-------------|
@@ -747,11 +751,17 @@ Saves to the current directory. Fails if a file with the same name already exist
 
 ### `stepwise search`
 
-Search the flow registry.
+Search the flow and kit registry. Results include a TYPE column distinguishing flows from kits.
 
 ```bash
 stepwise search "code review"
 stepwise search --tag agent --sort downloads
+```
+
+```
+TYPE   NAME            AUTHOR   STEPS  DOWNLOADS
+flow   code-review     zack     3      1,247
+kit    swdev           zack     5      634
 ```
 
 | Flag | Description |
@@ -948,6 +958,21 @@ The `--update` flag finds `<!-- stepwise-agent-help -->` / `<!-- /stepwise-agent
 | `--update FILE` | Update a file in-place between markers (uses `full` format) |
 | `--flows-dir DIR` | Override flow discovery directory (scan only this dir) |
 | `--format {compact,json,full}` | Output format: `compact` (default), `json`, or `full` |
+
+---
+
+### `stepwise catalog`
+
+Generate a kit/flow catalog for documentation (e.g., SKILL.md). Lists all kits and their member flows with descriptions and input/output summaries.
+
+```bash
+stepwise catalog                             # print to stdout
+stepwise catalog -o SKILL.md                 # write to file
+```
+
+| Flag | Description |
+|------|-------------|
+| `-o, --output FILE` | Write to file instead of stdout |
 
 ---
 

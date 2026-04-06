@@ -664,6 +664,34 @@ Checks that required API keys are configured, models are accessible, and script 
 
 **Treat warnings as defects.** A warning-free validate is the quality bar for production flows.
 
+## Organizing flows into kits
+
+When you have several related flows — for example, `plan`, `implement`, and `research` for a software development workflow — group them into a **kit**. A kit is a directory with a `KIT.yaml` manifest and flow subdirectories.
+
+```
+flows/swdev/
+  KIT.yaml
+  plan/FLOW.yaml
+  implement/FLOW.yaml
+  research/FLOW.yaml
+```
+
+The `KIT.yaml` declares kit metadata:
+
+```yaml
+name: swdev
+description: Software development flows — plan, implement, research
+```
+
+Kit flows are referenced as `kit/flow`:
+
+```bash
+stepwise run swdev/plan --input spec="new feature"
+stepwise run swdev/implement --input spec="build the API"
+```
+
+Use kits when flows share a common purpose and are typically installed together. Kits can be shared to the registry as a single package with `stepwise share swdev`. See [Flow and Kit Sharing](flow-sharing.md) for details.
+
 ## What's next
 
 - [YAML Format](yaml-format.md) — complete field-by-field schema for every YAML option

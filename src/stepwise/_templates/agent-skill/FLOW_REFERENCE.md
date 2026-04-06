@@ -15,7 +15,35 @@ flows/
       system.md            # prompt loaded via prompt_file
 ```
 
-Create new flows with `stepwise new <name>`. If `name` is omitted in the YAML, it defaults from the directory name.
+Create new flows with `stepwise new <name>`. Use `stepwise new kit/flow` to create a flow inside a kit. If `name` is omitted in the YAML, it defaults from the directory name.
+
+## Kit Format
+
+Kits group related flows into a single directory with a `KIT.yaml` manifest:
+
+```
+swdev/
+  KIT.yaml                 # kit manifest (required)
+  plan/FLOW.yaml           # referenced as swdev/plan
+  implement/FLOW.yaml      # referenced as swdev/implement
+  research/FLOW.yaml       # referenced as swdev/research
+```
+
+**KIT.yaml fields:**
+
+```yaml
+name: swdev                                  # required — kebab-case, must match directory name
+description: Software development flows      # required
+author: alice                                # optional
+category: development                        # optional
+tags: [agent, code]                          # optional
+include:                                     # optional — registry flows auto-fetched on install
+  - @bob:code-review
+defaults:                                    # optional — default input values for all flows
+  project_path: .
+```
+
+Kit flows run as `stepwise run kit/flow` locally or `stepwise run @author:kit/flow` from the registry. Share kits with `stepwise share <kit-name>`.
 
 ## Structure
 

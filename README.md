@@ -19,7 +19,7 @@ You gave an agent a task. It ran for 40 minutes. Did it work?
 
 You don't know, because the work happened inside a context window you can't see. You check. You re-check. You burn more time verifying than the agent saved. This isn't delegation. It's assisted anxiety.
 
-Stepwise fixes this. Define a workflow as a DAG of steps — scripts, LLM calls, agent sessions, human gates, polls — and Stepwise runs them with full observability, crash recovery, and audit trails. The 3am "did it work?" question answered as a URL.
+Stepwise fixes this. Define a workflow as a DAG of steps — scripts, LLM calls, agent sessions, human gates, polls — and Stepwise runs them with full observability, crash recovery, and audit trails. Group related flows into **kits** for organized sharing. The 3am "did it work?" question answered as a URL.
 
 This isn't another agent framework. Stepwise doesn't replace your agents — it gives them a harness. Agent steps run via [ACP](https://agentclientprotocol.com) through [acpx](https://github.com/openclaw/acpx) — one protocol surface for Claude, Codex, Gemini, and 15+ coding agents. The intelligence commoditizes. The harness does not.
 
@@ -105,6 +105,20 @@ steps:
 ```
 
 A script runs tests. Based on the output, an agent opens a PR or fixes the failures and loops back — up to 3 times. Branching, looping, mixed executors. Declared, not coded.
+
+## Kits — grouped flows
+
+Related flows live in a kit — a directory with `KIT.yaml` and flow subdirectories:
+
+```
+flows/swdev/
+  KIT.yaml            # name, description, includes
+  plan/FLOW.yaml      # stepwise run swdev/plan
+  implement/FLOW.yaml # stepwise run swdev/implement
+  research/FLOW.yaml  # stepwise run swdev/research
+```
+
+Share a kit to the registry with `stepwise share swdev`. Install with `stepwise get @author:swdev`.
 
 ## CLI
 

@@ -202,6 +202,19 @@ Any step can be replaced with an `external` executor to add an approval point:
 
 The flow suspends. With `--watch`, you see the prompt in the web UI with typed input fields. Provide your decision and the flow continues. In headless mode, it prompts at the terminal.
 
+## Running flows from kits
+
+Kits group related flows. Run a specific flow from a kit using `kit/flow` syntax:
+
+```bash
+# Run a flow from a local kit
+stepwise run swdev/plan --input spec="new auth feature" --watch
+
+# Install and run a kit from the registry
+stepwise get @zack:swdev
+stepwise run @zack:swdev/implement --input spec="build the API" --watch
+```
+
 ## Staging and batching jobs
 
 For multi-job workflows, stage jobs before running them:

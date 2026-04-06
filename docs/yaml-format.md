@@ -22,6 +22,18 @@ my-flow/
 
 Both formats work identically everywhere in the CLI and engine. Use `stepwise new <name>` to scaffold a directory flow.
 
+**Kit:** A directory containing `KIT.yaml` and multiple flow subdirectories. Kits group related flows into a single shareable package. See [KIT.yaml Format](#kityaml-format) below.
+
+```
+swdev/
+  KIT.yaml                 # kit manifest
+  plan/
+    FLOW.yaml
+  implement/
+    FLOW.yaml
+    scripts/build.sh
+```
+
 ## Minimal Example
 
 ```yaml
@@ -686,6 +698,59 @@ requires:
 | `url` | string | no | Docs link shown when check fails |
 
 Requirements are checked by `stepwise validate`, `stepwise info`, and `stepwise preflight`. They are advisory — they don't block `stepwise run`.
+
+## KIT.yaml Format
+
+A `KIT.yaml` file defines a kit — a collection of related flows that are shared and installed together.
+
+```yaml
+name: swdev                                  # required — kebab-case identifier
+description: Software development flows      # required — what this kit provides
+author: zack                                 # optional — auto from git config
+category: development                        # optional — broad grouping
+tags: [agent, code, planning]                # optional — for registry search
+usage: |                                     # optional — usage instructions
+  stepwise run swdev/plan --input spec="..."
+include:                                     # optional — registry flows to auto-fetch
+  - @alice:code-review
+  - @bob:test-runner
+defaults:                                    # optional — default values for bundled flows
+  project_path: .
+  model: anthropic/claude-sonnet-4
+```
+
+### KIT.yaml Field Reference
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | **yes** | Kit name, used as slug for registry. Must match directory name. |
+| `description` | string | **yes** | Short description of what the kit provides |
+| `author` | string | no | Author name (auto-populated from git config if absent) |
+| `category` | string | no | Broad category for grouping (e.g., `development`, `data`, `ops`) |
+| `tags` | list[string] | no | Tags for registry search |
+| `usage` | string | no | Usage instructions shown on registry page |
+| `include` | list[string] | no | Registry flow references auto-fetched on `stepwise get` |
+| `defaults` | dict | no | Default input values available to all bundled flows |
+
+### Directory Structure
+
+Each subdirectory of the kit that contains a `FLOW.yaml` is a bundled flow. Subdirectories without `FLOW.yaml` are ignored. Co-located files (scripts, prompts) within each flow subdirectory are included when sharing.
+
+```
+my-kit/
+  KIT.yaml               # kit manifest
+  flow-a/
+    FLOW.yaml             # flow-a definition
+    helper.py             # co-located file, bundled with flow-a
+  flow-b/
+    FLOW.yaml             # flow-b definition
+  docs/                   # ignored — no FLOW.yaml
+    readme.md
+```
+
+Kit flows are referenced locally as `kit/flow` (e.g., `stepwise run my-kit/flow-a`) and from the registry as `@author:kit/flow`.
+
+---
 
 ## How It Maps to the Data Model
 

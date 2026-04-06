@@ -15,6 +15,7 @@ The system has three runtime primitives (jobs, steps, executors), a dependency s
 | **Exit rule** | Decides what happens after step completion | advance, loop, escalate, abandon |
 | **For-each** | Iterates over a list with embedded sub-flows | Items execute in parallel |
 | **Branching** | Conditional activation via step-level `when` | Pull-based: each step decides when it runs |
+| **Kit** | A collection of related flows with a `KIT.yaml` manifest | Shared as a unit, referenced as `kit/flow` |
 
 ## Jobs
 
@@ -396,6 +397,24 @@ External steps + escalation rules = workflows that delegate aggressively but fai
 Every state transition, input resolution, and cost event is persisted as a structured step event. This powers the web UI's event timeline, HTML reports via `--report`, and direct queries against the SQLite store.
 
 When something goes wrong at step 4 of a 7-step pipeline, you see exactly what inputs it received, what it produced, and why the exit rule fired the way it did.
+
+## Kits
+
+A **kit** is a directory containing a `KIT.yaml` manifest and one or more flow subdirectories. Kits group related flows into a single, shareable package — for example, a software development kit might bundle `plan`, `implement`, and `research` flows.
+
+```
+swdev/
+  KIT.yaml                 # manifest: name, description, includes, defaults
+  plan/FLOW.yaml
+  implement/FLOW.yaml
+  research/FLOW.yaml
+```
+
+Locally, kit flows are referenced as `kit/flow` (e.g., `stepwise run swdev/plan`). On the registry, installed kits use `@author:kit/flow` (e.g., `stepwise run @zack:swdev/plan`).
+
+Kits can declare **includes** — references to other registry flows that are auto-fetched during `stepwise get`. This lets a kit depend on shared utility flows without bundling them.
+
+See [Flow and Kit Sharing](flow-sharing.md) for publishing and installation.
 
 ## How agents fit in
 

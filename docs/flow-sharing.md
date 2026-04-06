@@ -1,32 +1,32 @@
-# Flow Sharing
+# Flow and Kit Sharing
 
-Publish, discover, and install flows from the Stepwise registry at stepwise.run.
+Publish, discover, and install flows and kits from the Stepwise registry at stepwise.run.
 
 ---
 
-Stepwise flows can be single `.flow.yaml` files or directory flows (a directory containing `FLOW.yaml` with co-located scripts and prompts). Both formats can be shared. Directory flows are published as bundles — the YAML plus all co-located files.
+Stepwise flows can be single `.flow.yaml` files or directory flows (a directory containing `FLOW.yaml` with co-located scripts and prompts). **Kits** are directories containing a `KIT.yaml` manifest with multiple bundled flows — a way to share a collection of related flows as a single package. All formats can be shared.
 
 ## How It Works
 
 ```
 author                          stepwise.run                       consumer
 ──────                          ────────────                       ────────
-stepwise share my.flow.yaml
-  → validates flow
+stepwise share my-flow
+  → validates flow (or kit)
   → reads metadata
-  → uploads YAML            →  stores flow
+  → uploads YAML + files    →  stores flow or kit
   → prints URL                  indexes for search
                                 renders DAG preview
                                 tracks downloads
 
                                                           stepwise get code-review
-                                                            → resolves name
-                                                          ← downloads YAML
+                                                            → resolves name (flow or kit)
+                                                          ← downloads YAML + bundled flows
                                                             → saves to .stepwise/registry/
 
                                                           stepwise search "agent review"
                                                             → queries registry
-                                                          ← prints matches
+                                                          ← prints flows and kits
 ```
 
 ---
@@ -48,71 +48,90 @@ See [CLI Reference](cli.md) for details.
 
 ## CLI Commands
 
-### `stepwise share <flow>`
+### `stepwise share <flow-or-kit>`
 
-Publish a flow to the registry.
+Publish a flow or kit to the registry. The command auto-detects kits by looking for `KIT.yaml` in the target directory.
 
 ```bash
+# Share a single flow
 stepwise share my-pipeline.flow.yaml
+
+# Share a kit (directory with KIT.yaml)
+stepwise share swdev
 ```
 
 ```
-Validating my-pipeline.flow.yaml... ok (3 steps, 1 loop)
-Publishing as "my-pipeline" by zack...
+Validated kit 'swdev' (5 flows)
+  plan
+  plan-light
+  implement
+  implement-light
+  research
+Publish kit 'swdev' (5 flows)? [Y/n]
 
-Published: https://stepwise.run/flows/my-pipeline
-  Run: stepwise get my-pipeline
+Published kit 'swdev' (5 flows)
+  Get: stepwise get swdev
 ```
 
 What happens:
-1. Validates the flow (must pass `stepwise validate`)
+1. Validates the flow or kit (KIT.yaml + all bundled flows)
 2. Reads metadata from YAML header (`name`, `description`, `author`)
-3. Auto-populates `author` from `git config user.name` if not set in YAML
+3. For kits: collects all flow subdirectories with their co-located files
 4. Uploads to the registry API
 5. Returns the public URL
 
 Flags:
 - `--author <name>` — override the author name (default: from git config)
-- `--update` — update an existing published flow
+- `--update` — update an existing published flow or kit
 
 ### `stepwise get <name-or-url>`
 
-Download a flow from the registry. Flows are saved into `.stepwise/registry/@author/slug/`.
+Download a flow or kit from the registry. Saved into `.stepwise/registry/@author/slug/`.
+
+The command tries to resolve the name as a flow first. If not found, it falls back to kit lookup.
 
 ```bash
-# By name (from registry)
+# By name (flow or kit — auto-detected)
 stepwise get code-review
+stepwise get swdev
 
 # By author:name reference
 stepwise get @zack:code-review
+stepwise get @zack:swdev
 
-# By URL (direct download)
+# By URL (direct download, flows only)
 stepwise get https://stepwise.run/flows/code-review/raw
 ```
 
-Downloaded flows can be run directly by name — the CLI resolves `@author:slug` references from the local registry cache.
+Downloaded flows and kits can be run directly by name:
 
 ```bash
+# Run a single flow
 stepwise run @zack:code-review --input pr_url="..."
+
+# Run a flow from an installed kit
+stepwise run @zack:swdev/plan --input spec="new feature"
 ```
+
+When installing a kit, Stepwise also auto-fetches any registry includes listed in the kit's `KIT.yaml`.
 
 Flags:
 - `--output <path>` — save to a specific path instead of the registry cache
-- `--force` — overwrite if the flow already exists locally
+- `--force` — overwrite if the flow or kit already exists locally
 
 ### `stepwise search <query>`
 
-Search the registry.
+Search the registry. Results include both flows and kits, distinguished by a TYPE column.
 
 ```bash
 stepwise search "code review agent"
 ```
 
 ```
-NAME                 AUTHOR     STEPS  DOWNLOADS  TAGS
-code-review          zack       3      1,247      agent, external-fulfillment
-pr-review-lite       sarah      2      892        script, code-review
-security-audit       mike       5      634        agent, security
+TYPE   NAME                 AUTHOR     STEPS  DOWNLOADS
+flow   code-review          zack       3      1,247
+flow   pr-review-lite       sarah      2      892
+kit    swdev                zack       5      634
 ```
 
 Flags:
@@ -191,6 +210,46 @@ When downloading a directory flow, Stepwise writes `.origin.json` inside the flo
 ```
 
 This tracks where the flow came from. It is excluded from bundles when re-sharing.
+
+---
+
+## Kit Publishing
+
+Kits bundle multiple related flows into a single shareable package. A kit is a directory containing `KIT.yaml` and one or more flow subdirectories.
+
+### Kit directory structure
+
+```
+swdev/
+  KIT.yaml                 # kit manifest (required)
+  plan/
+    FLOW.yaml              # bundled flow
+  implement/
+    FLOW.yaml
+    scripts/build.sh       # co-located files included
+  research/
+    FLOW.yaml
+```
+
+### KIT.yaml format
+
+```yaml
+name: swdev
+description: Software development kit — plan, implement, and research flows
+author: zack
+category: development
+tags: [agent, code, planning]
+include:                       # optional — registry flows to auto-fetch on install
+  - @alice:code-review
+defaults:                      # optional — default input values for bundled flows
+  project_path: .
+```
+
+Required fields: `name`, `description`. All other fields are optional.
+
+### Namespacing
+
+Locally, kit flows are referenced as `kit/flow` (e.g., `swdev/plan`). On the registry, installed kits use `@author:kit/flow` (e.g., `@zack:swdev/plan`). Kits and flows share the same slug namespace — a kit named `swdev` and a flow named `swdev` cannot coexist.
 
 ---
 
