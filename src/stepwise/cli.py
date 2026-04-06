@@ -4079,7 +4079,8 @@ def cmd_agent_help(args: argparse.Namespace) -> int:
     if args.update and fmt == "compact":
         fmt = "full"
 
-    content = generate_agent_help(project_dir, flows_dir=flows_dir, fmt=fmt)
+    kit_name = getattr(args, "kit", None)
+    content = generate_agent_help(project_dir, flows_dir=flows_dir, fmt=fmt, kit_name=kit_name)
 
     if args.update:
         target = Path(args.update)
@@ -4805,6 +4806,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     # agent-help
     p_agent_help = sub.add_parser("agent-help", help="Generate agent instructions for available flows")
+    p_agent_help.add_argument("kit", nargs="?", default=None,
+                              help="Show detailed help for a specific kit")
     p_agent_help.add_argument("--update", metavar="FILE",
                               help="Update a file in-place between markers (uses 'full' format)")
     p_agent_help.add_argument("--flows-dir", metavar="DIR",

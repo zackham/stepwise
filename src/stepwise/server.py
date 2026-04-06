@@ -2998,6 +2998,11 @@ def list_kits():
             kit_def = load_kit_yaml(kit_info.path)
         except (KitLoadError, Exception):
             pass
+        raw_yaml = ""
+        try:
+            raw_yaml = kit_info.path.read_text()
+        except Exception:
+            pass
         result.append({
             "name": kit_info.name,
             "description": kit_def.description if kit_def else "",
@@ -3007,6 +3012,7 @@ def list_kits():
             "tags": kit_def.tags if kit_def else [],
             "flow_count": len(kit_info.flow_names),
             "flow_names": kit_info.flow_names,
+            "raw_yaml": raw_yaml,
         })
     return result
 
@@ -3031,6 +3037,12 @@ def get_kit_detail(kit_name: str):
     for flow_name, flow_path in zip(kit.flow_names, kit.flow_paths):
         flows.append(_build_flow_info_dict(flow_path, flow_name, kit_name=kit_name))
 
+    raw_yaml = ""
+    try:
+        raw_yaml = kit.path.read_text()
+    except Exception:
+        pass
+
     return {
         "name": kit_def.name,
         "description": kit_def.description,
@@ -3041,6 +3053,7 @@ def get_kit_detail(kit_name: str):
         "include": kit_def.include,
         "defaults": kit_def.defaults,
         "flows": flows,
+        "raw_yaml": raw_yaml,
     }
 
 

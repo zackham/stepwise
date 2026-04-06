@@ -10,8 +10,9 @@ import json
 import re
 from pathlib import Path
 
-from stepwise.flow_resolution import FlowInfo, RegistryFlowInfo
+from stepwise.flow_resolution import FlowInfo, KitInfo, RegistryFlowInfo
 from stepwise.flow_resolution import discover_flows as _discover_flows
+from stepwise.flow_resolution import discover_kits as _discover_kits
 from stepwise.flow_resolution import discover_registry_flows as _discover_registry_flows
 from stepwise.schema import generate_schema
 from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
@@ -80,6 +81,9 @@ def _build_flow_entries(
         except ValueError:
             rel_path = flow_path.name
 
+        # Include kit name for grouping
+        kit_name_val = item.kit_name if isinstance(item, FlowInfo) else None
+
         entry: dict = {
             "name": name,
             "file": rel_path,
@@ -87,6 +91,8 @@ def _build_flow_entries(
             "outputs": outputs,
             "run": cmd,
         }
+        if kit_name_val:
+            entry["kit_name"] = kit_name_val
         if desc:
             entry["description"] = desc
         if wf.config_vars:
@@ -163,6 +169,7 @@ def generate_agent_help(
     project_dir: Path,
     flows_dir: Path | None = None,
     fmt: str = "compact",
+    kit_name: str | None = None,
 ) -> str:
     """Generate agent instructions for all flows in a project.
 
@@ -171,6 +178,7 @@ def generate_agent_help(
         flows_dir: Override flow discovery directory.
         fmt: Output format — "compact" (default, tight markdown),
              "json" (machine-readable), or "full" (legacy verbose).
+        kit_name: If provided, show only flows in this kit (L2 detail view).
     """
     if flows_dir:
         # Legacy: raw path glob for --flows-dir override
@@ -178,6 +186,20 @@ def generate_agent_help(
         flows: list[FlowInfo | Path] = list(flow_paths)
     else:
         flows = _discover_flows(project_dir)
+
+    # Discover kits
+    kits = _discover_kits(project_dir)
+    kit_map: dict[str, KitInfo] = {k.name: k for k in kits}
+
+    # Load kit definitions for metadata
+    kit_defs: dict[str, object] = {}
+    if kits:
+        from stepwise.yaml_loader import load_kit_yaml, KitLoadError
+        for k in kits:
+            try:
+                kit_defs[k.name] = load_kit_yaml(k.path)
+            except (KitLoadError, Exception):
+                pass
 
     # Also discover registry flows
     registry_flows = _discover_registry_flows(project_dir)
@@ -192,6 +214,13 @@ def generate_agent_help(
     entries = _build_flow_entries(flows, project_dir, visibility_filter=agent_visibility)
     registry_entries = _build_registry_entries(registry_flows, project_dir)
 
+    # If requesting a specific kit, filter to just that kit's flows
+    if kit_name:
+        if kit_name not in kit_map:
+            return f"Kit '{kit_name}' not found. Available kits: {', '.join(sorted(kit_map.keys())) or 'none'}"
+        entries = [e for e in entries if e.get("kit_name") == kit_name]
+        registry_entries = []
+
     all_entries = entries + registry_entries
 
     if fmt == "json":
@@ -200,7 +229,7 @@ def generate_agent_help(
     if fmt == "full":
         return _format_full(all_entries)
 
-    return _format_compact(entries, registry_entries)
+    return _format_compact(entries, registry_entries, kit_defs=kit_defs, kit_filter=kit_name)
 
 
 def _get_doc_description(path: Path) -> str:
@@ -250,7 +279,12 @@ def _append_docs_section(lines: list[str]) -> None:
     lines.append("")
 
 
-def _format_compact(entries: list[dict], registry_entries: list[dict] | None = None) -> str:
+def _format_compact(
+    entries: list[dict],
+    registry_entries: list[dict] | None = None,
+    kit_defs: dict[str, object] | None = None,
+    kit_filter: str | None = None,
+) -> str:
     """Tight, self-sufficient output for agent consumption.
 
     Includes 5-mode interaction model, flow catalog, and CLI reference
@@ -304,32 +338,70 @@ def _format_compact(entries: list[dict], registry_entries: list[dict] | None = N
         "",
     ])
 
-    # Flow catalog
+    # Flow catalog — grouped by kit
+    def _format_flow_entry(entry: dict) -> list[str]:
+        flines: list[str] = []
+        name = entry["name"]
+        desc = entry.get("description", "")
+        header = f"**{name}**"
+        if desc:
+            header += f" — {desc}"
+        flines.append(header)
+        flines.append(f"  `{entry['run']}`")
+        parts = []
+        if entry["inputs"]:
+            parts.append(f"in: {', '.join(entry['inputs'])}")
+        if entry["outputs"]:
+            parts.append(f"out: {', '.join(entry['outputs'])}")
+        if entry.get("external_steps"):
+            step_names = [hs["step"] for hs in entry["external_steps"]]
+            parts.append(f"external: {', '.join(step_names)}")
+        if parts:
+            flines.append(f"  {' | '.join(parts)}")
+        flines.append("")
+        return flines
+
     if entries:
-        lines.extend(["## Flows", ""])
+        # Separate kit flows from standalone
+        kit_entries: dict[str, list[dict]] = {}
+        standalone_entries: list[dict] = []
         for entry in entries:
-            name = entry["name"]
-            desc = entry.get("description", "")
+            kn = entry.get("kit_name")
+            if kn:
+                kit_entries.setdefault(kn, []).append(entry)
+            else:
+                standalone_entries.append(entry)
 
-            header = f"**{name}**"
-            if desc:
-                header += f" — {desc}"
-            lines.append(header)
+        # Kit sections with usage info
+        if kit_entries:
+            lines.extend(["## Kits", ""])
+            if not kit_filter:
+                lines.append("Use `stepwise agent-help <kit>` for full flow details within a kit.")
+                lines.append("")
+            for kn in sorted(kit_entries.keys()):
+                kit_def = (kit_defs or {}).get(kn)
+                kit_desc = getattr(kit_def, "description", "") if kit_def else ""
+                kit_usage = getattr(kit_def, "usage", "") if kit_def else ""
+                flow_names = [e["name"] for e in kit_entries[kn]]
 
-            lines.append(f"  `{entry['run']}`")
+                lines.append(f"### {kn}" + (f" — {kit_desc}" if kit_desc else ""))
+                lines.append(f"Flows: {', '.join(flow_names)}")
+                lines.append("")
 
-            parts = []
-            if entry["inputs"]:
-                parts.append(f"in: {', '.join(entry['inputs'])}")
-            if entry["outputs"]:
-                parts.append(f"out: {', '.join(entry['outputs'])}")
-            if entry.get("external_steps"):
-                step_names = [hs["step"] for hs in entry["external_steps"]]
-                parts.append(f"external: {', '.join(step_names)}")
-            if parts:
-                lines.append(f"  {' | '.join(parts)}")
+                if kit_usage:
+                    lines.append(kit_usage.rstrip())
+                    lines.append("")
 
-            lines.append("")
+                # In L2 (kit_filter set) or if only one kit, show full flow details
+                if kit_filter:
+                    for entry in kit_entries[kn]:
+                        lines.extend(_format_flow_entry(entry))
+
+        # Standalone flows
+        if standalone_entries:
+            lines.extend(["## Flows", ""])
+            for entry in standalone_entries:
+                lines.extend(_format_flow_entry(entry))
 
     # Registry flows
     if registry_entries:

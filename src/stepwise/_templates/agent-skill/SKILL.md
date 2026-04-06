@@ -13,6 +13,8 @@ Run `stepwise agent-help` once per session to get the complete, always-current r
 
 **`agent-help` is the source of truth for dispatch** — it covers every flow's description, inputs, outputs, and the full CLI reference. You do not need to read FLOW.yaml files, run `--help` on subcommands, or research flows through any other means.
 
+**Kits** group related flows (e.g., `swdev` contains plan-light, plan, plan-strong, implement, fast-implement). `agent-help` shows kit names with usage/composition guidance. Use `stepwise agent-help <kit>` for full flow details within a kit. Reference kit flows as `kit/flow` — e.g., `stepwise run swdev/plan-light --wait`.
+
 ## Before You Dispatch
 
 **Read flow descriptions first.** Each flow's description (from `agent-help`) explains what the flow handles autonomously and what the caller provides. If a flow says it explores the codebase, it explores the codebase. If it says it handles research, it handles research. Match your prep work to what the flow actually needs from you.

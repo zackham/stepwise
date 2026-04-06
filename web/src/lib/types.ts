@@ -413,6 +413,7 @@ export interface Kit {
   tags: string[];
   flow_count: number;
   flow_names: string[];
+  raw_yaml?: string;
 }
 
 export interface KitDetail extends Kit {

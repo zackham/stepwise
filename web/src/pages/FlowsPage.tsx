@@ -53,6 +53,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { ContentModal } from "@/components/ui/content-modal";
 import type { Kit, LocalFlow, RegistryFlow } from "@/lib/types";
 import {
   Sheet,
@@ -135,51 +136,80 @@ function SortHeader<T extends string>({ col, label, current, asc, onSort, classN
   );
 }
 
-function KitSectionHeader({ kit, flowCount, expanded, onToggle, onInfo }: {
+function KitFolderCard({ kit, flowCount, onOpen, onInfo }: {
   kit: Kit;
   flowCount: number;
-  expanded: boolean;
-  onToggle: () => void;
+  onOpen: () => void;
   onInfo: () => void;
 }) {
   return (
-    <div className="flex items-center gap-2 w-full px-3 sm:px-4 py-2 bg-zinc-50/80 dark:bg-zinc-900/50">
-      <button
-        onClick={onToggle}
-        className="flex items-center gap-2 flex-1 min-w-0 hover:text-foreground transition-colors"
-      >
-        <ChevronRight
-          className={cn(
-            "h-3.5 w-3.5 shrink-0 transition-transform duration-200 text-zinc-400",
-            expanded && "rotate-90"
+    <button
+      onClick={onOpen}
+      className="w-full h-full text-left rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/80 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-white dark:hover:bg-zinc-900 transition-all overflow-hidden flex flex-col group"
+    >
+      <div className="px-3 pt-3 pb-2 flex items-start gap-2.5">
+        <FolderOpen className="w-5 h-5 shrink-0 text-amber-500 mt-0.5" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100 truncate leading-tight">{kit.name}</p>
+          {kit.category && (
+            <Badge variant="outline" className="text-[9px] px-1.5 py-0 mt-1">{kit.category}</Badge>
           )}
-        />
-        <Package className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
-        <span className="text-xs font-semibold text-foreground truncate">{kit.name}</span>
+        </div>
+        <button
+          onClick={(e) => { e.stopPropagation(); onInfo(); }}
+          className="p-1 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors shrink-0 opacity-0 group-hover:opacity-100"
+          title="Kit details"
+        >
+          <Info className="w-3.5 h-3.5" />
+        </button>
+      </div>
+      <div className="flex-1" />
+      <div className="px-3 pb-2.5 pt-0.5 space-y-1">
+        <p className="text-[11px] text-zinc-500 line-clamp-2">{kit.description || "No description"}</p>
+        <div className="flex items-center text-[11px] text-zinc-600 pt-1 border-t border-zinc-100 dark:border-zinc-800">
+          <span>{flowCount} flow{flowCount !== 1 ? "s" : ""}</span>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function KitFolderRow({ kit, flowCount, onOpen, onInfo, statsMap }: {
+  kit: Kit;
+  flowCount: number;
+  onOpen: () => void;
+  onInfo: () => void;
+  statsMap: Map<string, { job_count: number; last_run_at?: string | null }>;
+}) {
+  return (
+    <div
+      onClick={onOpen}
+      className="flex items-center px-3 sm:px-6 py-2 gap-3 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-900/50 transition-colors group"
+    >
+      <div className="w-4 h-4 shrink-0" />
+      <div className="flex items-center gap-2 flex-1 min-w-0">
+        <FolderOpen className="w-4 h-4 shrink-0 text-amber-500" />
+        <span className="text-sm font-medium text-foreground truncate">{kit.name}</span>
         <span className="text-[11px] text-zinc-500 truncate hidden sm:inline">{kit.description}</span>
-        {kit.category && (
-          <Badge variant="outline" className="text-[9px] px-1.5 py-0 shrink-0">
-            {kit.category}
-          </Badge>
-        )}
-      </button>
+      </div>
+      <span className="text-xs text-zinc-500 tabular-nums w-12 text-right">{flowCount}</span>
+      <span className="text-xs text-zinc-500 tabular-nums w-14 text-right" />
+      <span className="text-xs text-zinc-500 tabular-nums w-16 text-right" />
+      <span className="text-xs text-zinc-500 tabular-nums w-16 text-right" />
       <button
         onClick={(e) => { e.stopPropagation(); onInfo(); }}
-        className="p-1 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors shrink-0"
+        className="p-1 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors shrink-0 opacity-0 group-hover:opacity-100"
         title="Kit details"
       >
         <Info className="w-3.5 h-3.5" />
       </button>
-      <span className="text-[10px] text-zinc-400 shrink-0 tabular-nums">
-        {flowCount} flow{flowCount !== 1 ? "s" : ""}
-      </span>
     </div>
   );
 }
 
 function FlowGridCard({ flow, statsMap, onSelect }: {
   flow: LocalFlow;
-  statsMap: Map<string, { job_count: number; last_run_at?: string }>;
+  statsMap: Map<string, { job_count: number; last_run_at?: string | null }>;
   onSelect: (flow: LocalFlow) => void;
 }) {
   const stats = statsMap.get(flowDirKey(flow.path));
@@ -233,7 +263,7 @@ function FlowGridCard({ flow, statsMap, onSelect }: {
 
 function FlowListRow({ flow, statsMap, selected, onSelect, onToggleSelect }: {
   flow: LocalFlow;
-  statsMap: Map<string, { job_count: number; last_run_at?: string }>;
+  statsMap: Map<string, { job_count: number; last_run_at?: string | null }>;
   selected: boolean;
   onSelect: (flow: LocalFlow) => void;
   onToggleSelect: (path: string, shiftKey: boolean) => void;
@@ -357,30 +387,12 @@ export function FlowsPage() {
   const forkFlowMutation = useForkFlow();
   const mutations = useStepwiseMutations();
 
-  // Kit state
-  const [kitFilter, setKitFilter] = useState<string>("all");
-  const [expandedKits, setExpandedKits] = useState<Set<string>>(new Set());
+  // Kit state — folder navigation
+  const [activeKit, setActiveKit] = useState<string | null>(null);
   const [kitDetailName, setKitDetailName] = useState<string | null>(null);
+  const [showKitYamlModal, setShowKitYamlModal] = useState(false);
   const kitDetailData = kits.find((k) => k.name === kitDetailName) ?? null;
-
-  // Initialize all kits expanded
-  useEffect(() => {
-    if (kits.length > 0) {
-      setExpandedKits((prev) => {
-        if (prev.size > 0) return prev;
-        return new Set(kits.map((k) => k.name));
-      });
-    }
-  }, [kits]);
-
-  const toggleKit = useCallback((name: string) => {
-    setExpandedKits((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
-  }, []);
+  const activeKitData = kits.find((k) => k.name === activeKit) ?? null;
 
   // Local selection (for delete side-effect tracking)
   const { selected: selectedFlowName } = useSearch({ from: "/flows" });
@@ -454,37 +466,21 @@ export function FlowsPage() {
     [flowStats]
   );
 
-  const kitFilterOptions = useMemo(() => {
-    const opts = [{ value: "all", label: "All kits" }];
-    for (const k of kits) {
-      opts.push({ value: k.name, label: k.name });
-    }
-    opts.push({ value: "_standalone", label: "Standalone" });
-    return opts;
-  }, [kits]);
-
-  // Kit names that match the search filter (used to include all their flows)
-  const matchedKitNames = useMemo(() => {
-    if (!filter) return new Set<string>();
-    const lc = filter.toLowerCase();
-    return new Set(kits.filter((k) => k.name.toLowerCase().includes(lc)).map((k) => k.name));
-  }, [filter, kits]);
-
   const filtered = useMemo(() => {
     let result = [...flows];
 
-    // Kit filter
-    if (kitFilter === "_standalone") {
+    // When inside a kit, only show that kit's flows
+    if (activeKit) {
+      result = result.filter((f) => f.kit_name === activeKit);
+    } else {
+      // At top level, exclude kit member flows (they show via folder rows)
       result = result.filter((f) => !f.kit_name);
-    } else if (kitFilter !== "all") {
-      result = result.filter((f) => f.kit_name === kitFilter);
     }
 
-    // Text search (also matches kit names to include all their flows)
+    // Text search
     if (filter) {
       result = result.filter((f) =>
-        f.name.toLowerCase().includes(filter.toLowerCase()) ||
-        (f.kit_name && matchedKitNames.has(f.kit_name))
+        f.name.toLowerCase().includes(filter.toLowerCase())
       );
     }
 
@@ -532,36 +528,24 @@ export function FlowsPage() {
     });
 
     return result;
-  }, [flows, filter, sortCol, sortAsc, visibilityFilter, timeRange, statsMap, matchedKitNames, kitFilter]);
+  }, [flows, filter, sortCol, sortAsc, visibilityFilter, timeRange, statsMap, activeKit]);
 
-  // Group filtered flows by kit
-  const { kitGroups, standaloneFlows } = useMemo(() => {
-    if (kits.length === 0) return { kitGroups: [] as { kit: Kit; flows: LocalFlow[] }[], standaloneFlows: filtered };
+  // Kits visible at top level (filtered by search)
+  const visibleKits = useMemo(() => {
+    if (activeKit) return [];
+    if (!filter) return kits;
+    const lc = filter.toLowerCase();
+    return kits.filter((k) => k.name.toLowerCase().includes(lc) || k.description.toLowerCase().includes(lc));
+  }, [kits, activeKit, filter]);
 
-    const kitMap = new Map(kits.map((k) => [k.name, k]));
-    const groups = new Map<string, LocalFlow[]>();
-    const standalone: LocalFlow[] = [];
-
-    for (const flow of filtered) {
-      if (flow.kit_name && kitMap.has(flow.kit_name)) {
-        const arr = groups.get(flow.kit_name) ?? [];
-        arr.push(flow);
-        groups.set(flow.kit_name, arr);
-      } else {
-        standalone.push(flow);
-      }
+  // Flow counts per kit (from all flows, not just filtered)
+  const kitFlowCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const f of flows) {
+      if (f.kit_name) counts.set(f.kit_name, (counts.get(f.kit_name) ?? 0) + 1);
     }
-
-    return {
-      kitGroups: Array.from(groups.entries())
-        .map(([name, flows]) => ({ kit: kitMap.get(name)!, flows }))
-        .filter((g) => g.flows.length > 0)
-        .sort((a, b) => a.kit.name.localeCompare(b.kit.name)),
-      standaloneFlows: standalone,
-    };
-  }, [filtered, kits]);
-
-  const hasKits = kitGroups.length > 0;
+    return counts;
+  }, [flows]);
 
   // Ordered flow IDs for shift+click range selection
   const orderedFlowPaths = useMemo(() => filtered.map((f) => f.path), [filtered]);
@@ -790,16 +774,7 @@ export function FlowsPage() {
                   placeholder="All time"
                   searchPlaceholder="Time range..."
                 />
-                {kits.length > 0 && (
-                  <ComboBox
-                    value={kitFilter}
-                    onChange={(v) => setKitFilter(v)}
-                    options={kitFilterOptions}
-                    placeholder="All kits"
-                    searchPlaceholder="Kit..."
-                  />
-                )}
-                <span className="text-xs text-zinc-500 whitespace-nowrap">{filtered.length} total</span>
+                <span className="text-xs text-zinc-500 whitespace-nowrap">{filtered.length}{activeKit ? "" : ` + ${visibleKits.length} kit${visibleKits.length !== 1 ? "s" : ""}`}</span>
               </>
             ) : (
               <>
@@ -868,7 +843,7 @@ export function FlowsPage() {
               extraMutations={{ deleteFlow: deleteFlowMutation }}
             >
               <div className="flex-1 overflow-y-auto">
-                {filtered.length === 0 ? (
+                {filtered.length === 0 && visibleKits.length === 0 ? (
                   <div className="flex flex-col items-center justify-center h-full px-4 max-w-sm mx-auto text-center">
                     {flows.length === 0 ? (
                       <>
@@ -894,40 +869,47 @@ export function FlowsPage() {
                     )}
                   </div>
                 ) : viewMode === "grid" ? (
-                  <div className="p-4 sm:p-6 space-y-6">
-                    {kitGroups.map(({ kit, flows: kitFlows }) => (
-                      <div key={kit.name}>
-                        <KitSectionHeader
-                          kit={kit}
-                          flowCount={kitFlows.length}
-                          expanded={expandedKits.has(kit.name)}
-                          onToggle={() => toggleKit(kit.name)}
-                          onInfo={() => setKitDetailName(kit.name)}
-                        />
-                        {expandedKits.has(kit.name) && (
-                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 mt-2">
-                            {kitFlows.map((flow) => (
-                              <FlowGridCard key={flow.path} flow={flow} statsMap={statsMap} onSelect={handleSelectLocalFlow} />
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                    {standaloneFlows.length > 0 && (
-                      <div>
-                        {hasKits && (
-                          <div className="flex items-center gap-2 px-1 py-1.5 mb-2">
-                            <span className="text-xs font-medium text-zinc-500">Standalone</span>
-                            <span className="text-[10px] text-zinc-400">{standaloneFlows.length} flow{standaloneFlows.length !== 1 ? "s" : ""}</span>
-                          </div>
-                        )}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-                          {standaloneFlows.map((flow) => (
-                            <FlowGridCard key={flow.path} flow={flow} statsMap={statsMap} onSelect={handleSelectLocalFlow} />
-                          ))}
+                  <div className="p-4 sm:p-6 space-y-4">
+                    {activeKit && activeKitData && (
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setActiveKit(null)}
+                          className="text-xs text-zinc-500 hover:text-foreground transition-colors"
+                        >
+                          Flows
+                        </button>
+                        <ChevronRight className="w-3 h-3 text-zinc-400" />
+                        <div className="flex items-center gap-1.5">
+                          <FolderOpen className="w-3.5 h-3.5 text-amber-500" />
+                          <span className="text-xs font-medium text-foreground">{activeKitData.name}</span>
                         </div>
+                        <button
+                          onClick={() => setKitDetailName(activeKit)}
+                          className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 transition-colors"
+                          title="Kit details"
+                        >
+                          <Info className="w-3 h-3" />
+                        </button>
                       </div>
                     )}
+                    {!activeKit && visibleKits.length > 0 && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                        {visibleKits.map((kit) => (
+                          <KitFolderCard
+                            key={kit.name}
+                            kit={kit}
+                            flowCount={kitFlowCounts.get(kit.name) ?? 0}
+                            onOpen={() => setActiveKit(kit.name)}
+                            onInfo={() => setKitDetailName(kit.name)}
+                          />
+                        ))}
+                      </div>
+                    )}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                      {filtered.map((flow) => (
+                        <FlowGridCard key={flow.path} flow={flow} statsMap={statsMap} onSelect={handleSelectLocalFlow} />
+                      ))}
+                    </div>
                   </div>
                 ) : (
                   <div className="flex-1 overflow-y-auto">
@@ -961,47 +943,48 @@ export function FlowsPage() {
                         <SortHeader col="last_run" label="Last Run" current={sortCol} asc={sortAsc} onSort={handleSort} className="w-16 text-right" />
                         <SortHeader col="updated" label="Updated" current={sortCol} asc={sortAsc} onSort={handleSort} className="w-16 text-right" />
                       </div>
-                      {kitGroups.map(({ kit, flows: kitFlows }) => (
-                        <div key={kit.name} className="divide-y divide-border">
-                          <KitSectionHeader
-                            kit={kit}
-                            flowCount={kitFlows.length}
-                            expanded={expandedKits.has(kit.name)}
-                            onToggle={() => toggleKit(kit.name)}
-                            onInfo={() => setKitDetailName(kit.name)}
-                          />
-                          {expandedKits.has(kit.name) && kitFlows.map((flow) => (
-                            <FlowListRow
-                              key={flow.path}
-                              flow={flow}
-                              statsMap={statsMap}
-                              selected={selectedIds.has(flow.path)}
-                              onSelect={handleSelectLocalFlow}
-                              onToggleSelect={handleToggleSelect}
-                            />
-                          ))}
-                        </div>
-                      ))}
-                      {standaloneFlows.length > 0 && (
-                        <div className="divide-y divide-border">
-                          {hasKits && (
-                            <div className="flex items-center gap-2 px-4 sm:px-6 py-1.5 bg-zinc-50/50 dark:bg-zinc-900/30">
-                              <span className="text-xs font-medium text-zinc-500">Standalone</span>
-                              <span className="text-[10px] text-zinc-400">{standaloneFlows.length} flow{standaloneFlows.length !== 1 ? "s" : ""}</span>
-                            </div>
-                          )}
-                          {standaloneFlows.map((flow) => (
-                            <FlowListRow
-                              key={flow.path}
-                              flow={flow}
-                              statsMap={statsMap}
-                              selected={selectedIds.has(flow.path)}
-                              onSelect={handleSelectLocalFlow}
-                              onToggleSelect={handleToggleSelect}
-                            />
-                          ))}
+                      {activeKit && activeKitData && (
+                        <div className="flex items-center gap-2 px-4 sm:px-6 py-2 bg-zinc-50/50 dark:bg-zinc-900/30 border-b border-border">
+                          <button
+                            onClick={() => setActiveKit(null)}
+                            className="text-xs text-zinc-500 hover:text-foreground transition-colors"
+                          >
+                            Flows
+                          </button>
+                          <ChevronRight className="w-3 h-3 text-zinc-400" />
+                          <div className="flex items-center gap-1.5">
+                            <FolderOpen className="w-3.5 h-3.5 text-amber-500" />
+                            <span className="text-xs font-medium text-foreground">{activeKitData.name}</span>
+                          </div>
+                          <button
+                            onClick={() => setKitDetailName(activeKit)}
+                            className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 transition-colors"
+                            title="Kit details"
+                          >
+                            <Info className="w-3 h-3" />
+                          </button>
                         </div>
                       )}
+                      {!activeKit && visibleKits.map((kit) => (
+                        <KitFolderRow
+                          key={kit.name}
+                          kit={kit}
+                          flowCount={kitFlowCounts.get(kit.name) ?? 0}
+                          onOpen={() => setActiveKit(kit.name)}
+                          onInfo={() => setKitDetailName(kit.name)}
+                          statsMap={statsMap}
+                        />
+                      ))}
+                      {filtered.map((flow) => (
+                        <FlowListRow
+                          key={flow.path}
+                          flow={flow}
+                          statsMap={statsMap}
+                          selected={selectedIds.has(flow.path)}
+                          onSelect={handleSelectLocalFlow}
+                          onToggleSelect={handleToggleSelect}
+                        />
+                      ))}
                     </div>
 
                     {/* Bulk action bar for flows */}
@@ -1287,6 +1270,16 @@ export function FlowsPage() {
                     </div>
                   </div>
                 )}
+                {kitDetailData.raw_yaml && (
+                  <div className="pt-2 border-t border-border">
+                    <button
+                      onClick={() => setShowKitYamlModal(true)}
+                      className="text-xs text-blue-500 hover:text-blue-400 transition-colors"
+                    >
+                      View KIT.yaml
+                    </button>
+                  </div>
+                )}
 
                 <div className="pt-2 border-t border-border">
                   <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Flows</h4>
@@ -1310,6 +1303,15 @@ export function FlowsPage() {
           )}
         </SheetContent>
       </Sheet>
+
+      <ContentModal
+        open={showKitYamlModal}
+        onOpenChange={setShowKitYamlModal}
+        title={`${kitDetailData?.name ?? "Kit"} — KIT.yaml`}
+        copyContent={kitDetailData?.raw_yaml ?? ""}
+      >
+        <pre className="text-xs font-mono whitespace-pre-wrap">{kitDetailData?.raw_yaml}</pre>
+      </ContentModal>
     </>
   );
 }
