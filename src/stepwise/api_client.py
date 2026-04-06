@@ -124,6 +124,20 @@ class StepwiseClient:
         """Get all events for a job."""
         return self._request("GET", f"/api/jobs/{job_id}/events")
 
+    def patch_job(
+        self,
+        job_id: str,
+        notify_url: str | None = None,
+        notify_context: dict | None = None,
+    ) -> dict:
+        """Update mutable fields on an existing job."""
+        body: dict = {}
+        if notify_url is not None:
+            body["notify_url"] = notify_url
+        if notify_context is not None:
+            body["notify_context"] = notify_context
+        return self._request("PATCH", f"/api/jobs/{job_id}", body)
+
     def cancel(self, job_id: str) -> dict:
         """Cancel a job."""
         return self._request("POST", f"/api/jobs/{job_id}/cancel")

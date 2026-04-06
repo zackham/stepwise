@@ -1120,8 +1120,22 @@ async def _log_unhandled_error(request, exc):
 
 
 @app.get("/api/jobs")
-def list_jobs(request: Request, status: str | None = None, top_level: bool = False, limit: int = 50, include_archived: bool = False, include_total: bool = False):
+def list_jobs(request: Request, status: str | None = None, top_level: bool = False, limit: int = 50, include_archived: bool = False, include_total: bool = False, group: str | None = None):
     engine = _get_engine()
+    # If filtering by group, use the dedicated method
+    if group:
+        jobs = engine.store.jobs_in_group(group)
+        if status:
+            try:
+                job_status = JobStatus(status)
+            except ValueError:
+                valid = [s.value for s in JobStatus]
+                raise HTTPException(status_code=400, detail=f"Invalid status '{status}'. Valid: {valid}")
+            jobs = [j for j in jobs if j.status == job_status]
+        serialized = [_serialize_job(j, summary=True) for j in jobs]
+        if include_total:
+            return {"jobs": serialized, "total": len(serialized)}
+        return serialized
     if status:
         try:
             job_status = JobStatus(status)
@@ -1579,6 +1593,28 @@ def stage_job(job_id: str, req: StageJobRequest):
     engine.store.save_job(job)
     _notify_change(job_id)
     return {"status": "staged", "job_id": job_id}
+
+
+class PatchJobRequest(BaseModel):
+    notify_url: str | None = None
+    notify_context: dict | None = None
+
+
+@app.patch("/api/jobs/{job_id}")
+def patch_job(job_id: str, req: PatchJobRequest):
+    """Update mutable fields on an existing job (notify_url, notify_context)."""
+    engine = _get_engine()
+    try:
+        job = engine.store.load_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    if req.notify_url is not None:
+        job.notify_url = req.notify_url
+    if req.notify_context is not None:
+        job.notify_context = req.notify_context
+    job.updated_at = _now()
+    engine.store.save_job(job)
+    return {"status": "updated", "job_id": job_id}
 
 
 @app.post("/api/jobs/{job_id}/run")
