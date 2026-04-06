@@ -178,6 +178,30 @@ def _resolve_kit_flow(kit_name: str, flow_name: str, project_dir: Path) -> Path:
     raise FlowResolutionError(f"Kit '{kit_name}' not found.")
 
 
+def get_kit_defaults_for_flow(flow_path: Path) -> dict | None:
+    """If a flow is inside a kit directory, load and return the kit's defaults.
+
+    Returns None if the flow is not in a kit or the kit has no defaults.
+    """
+    flow_yaml = Path(flow_path)
+    # Expected structure: flows/<kit>/<flow>/FLOW.yaml
+    # flow_yaml.parent = flow dir, .parent = kit dir, .parent = flows dir
+    kit_dir = flow_yaml.parent.parent
+    kit_marker = kit_dir / KIT_DIR_MARKER
+    if not kit_marker.is_file():
+        return None
+
+    from stepwise.yaml_loader import load_kit_yaml, KitLoadError
+    try:
+        kit_def = load_kit_yaml(kit_marker)
+    except (KitLoadError, Exception):
+        return None
+
+    if not kit_def.defaults:
+        return None
+    return dict(kit_def.defaults)
+
+
 def _list_kit_flows(kit_name: str, project_dir: Path) -> str:
     """List flow names in a kit for error messages."""
     for search_dir in _discovery_dirs(project_dir):

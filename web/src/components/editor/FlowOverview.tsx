@@ -10,8 +10,10 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { FlowConfigPanel } from "@/components/editor/FlowConfigPanel";
-import { useFlowJobs } from "@/hooks/useEditor";
+import { useFlowJobs, useKits } from "@/hooks/useEditor";
 import { useNavigate } from "@tanstack/react-router";
+import { ContentModal } from "@/components/ui/content-modal";
+import { FolderOpen, Info } from "lucide-react";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { formatDuration } from "@/lib/utils";
 import type { LocalFlow, LocalFlowDetail, FlowMetadata } from "@/lib/types";
@@ -144,6 +146,9 @@ export function FlowOverview({
   const metadata = detail?.flow?.metadata;
   const isRegistry = flow.source === "registry";
   const navigate = useNavigate();
+  const { data: kits = [] } = useKits();
+  const kitData = flow.kit_name ? kits.find((k) => k.name === flow.kit_name) : null;
+  const [showKitYaml, setShowKitYaml] = useState(false);
 
   // Recent jobs for this flow
   const flowDir = flow.path.includes("/") ? flow.path.substring(0, flow.path.lastIndexOf("/")) : flow.path;
@@ -163,6 +168,46 @@ export function FlowOverview({
         </div>
         <p className="text-[10px] font-mono text-zinc-500 mt-0.5 truncate">{flow.path}</p>
       </div>
+
+      {/* Kit info */}
+      {kitData && (
+        <div className="px-3 py-2 border-b border-border bg-amber-50/50 dark:bg-amber-950/20">
+          <div className="flex items-center gap-1.5">
+            <FolderOpen className="w-3 h-3 text-amber-500" />
+            <span className="text-[10px] text-zinc-500">Kit:</span>
+            <button
+              onClick={() => navigate({ to: "/flows", search: {} })}
+              className="text-[11px] font-medium text-foreground hover:text-amber-600 transition-colors"
+            >
+              {kitData.name}
+            </button>
+            {kitData.raw_yaml && (
+              <button
+                onClick={() => setShowKitYaml(true)}
+                className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 transition-colors ml-auto"
+                title="View KIT.yaml"
+              >
+                <Info className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+          {kitData.description && (
+            <p className="text-[10px] text-zinc-500 mt-0.5">{kitData.description}</p>
+          )}
+        </div>
+      )}
+
+      {/* Kit YAML modal */}
+      {kitData?.raw_yaml && (
+        <ContentModal
+          open={showKitYaml}
+          onOpenChange={setShowKitYaml}
+          title={`${kitData.name} — KIT.yaml`}
+          copyContent={kitData.raw_yaml}
+        >
+          <pre className="text-xs font-mono whitespace-pre-wrap">{kitData.raw_yaml}</pre>
+        </ContentModal>
+      )}
 
       {/* Scrollable content */}
       <ScrollArea className="flex-1 min-h-0">

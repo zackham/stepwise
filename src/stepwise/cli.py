@@ -1288,16 +1288,47 @@ def _build_flow_graph(wf, fmt: str, name: str | None = None):
 def cmd_new(args: argparse.Namespace) -> int:
     """Create a new flow directory with a minimal template."""
     io = _io(args)
-    from stepwise.flow_resolution import FLOW_DIR_MARKER, FLOW_NAME_PATTERN
+    from stepwise.flow_resolution import FLOW_DIR_MARKER, FLOW_NAME_PATTERN, KIT_DIR_MARKER
 
     name = args.name
+
+    # Support kit/flow syntax: "stepwise new swdev/my-flow"
+    kit_name = None
+    if "/" in name:
+        parts = name.split("/", 1)
+        if len(parts) == 2:
+            kit_name, name = parts[0], parts[1]
+
     if not FLOW_NAME_PATTERN.match(name):
         io.log("error", f"Invalid flow name: '{name}'. Flow names must match [a-zA-Z0-9_.+-]+")
         return EXIT_USAGE_ERROR
 
     project_dir = Path(args.project_dir).resolve() if args.project_dir else Path.cwd().resolve()
     flows_dir = project_dir / "flows"
-    flow_dir = flows_dir / name
+
+    # Determine target directory — inside kit or standalone
+    if kit_name:
+        kit_dir = flows_dir / kit_name
+        if not (kit_dir / KIT_DIR_MARKER).exists():
+            io.log("error", f"Kit '{kit_name}' not found (no {KIT_DIR_MARKER} in {kit_dir})")
+            return EXIT_USAGE_ERROR
+        flow_dir = kit_dir / name
+        run_ref = f"{kit_name}/{name}"
+    else:
+        # Check if CWD is inside a kit directory
+        cwd = Path.cwd().resolve()
+        if (cwd / KIT_DIR_MARKER).exists() and cwd.parent == flows_dir:
+            kit_name = cwd.name
+            flow_dir = cwd / name
+            run_ref = f"{kit_name}/{name}"
+        elif cwd.parent.is_dir() and (cwd.parent / KIT_DIR_MARKER).exists() and cwd.parent.parent == flows_dir:
+            # CWD is inside a flow within a kit
+            kit_name = cwd.parent.name
+            flow_dir = cwd.parent / name
+            run_ref = f"{kit_name}/{name}"
+        else:
+            flow_dir = flows_dir / name
+            run_ref = name
 
     if flow_dir.exists():
         io.log("error", f"Directory already exists: {flow_dir}")
@@ -1309,7 +1340,7 @@ def cmd_new(args: argparse.Namespace) -> int:
         f'description: ""\n'
         f"\n"
         f"# A 3-step workflow: gather data → analyze with LLM → format results\n"
-        f"# Run with: stepwise run {name} --input topic=\"your topic\"\n"
+        f"# Run with: stepwise run {run_ref} --input topic=\"your topic\"\n"
         f"\n"
         f"config:\n"
         f"  topic:\n"
@@ -1349,9 +1380,84 @@ def cmd_new(args: argparse.Namespace) -> int:
     )
     (flow_dir / FLOW_DIR_MARKER).write_text(template)
 
-    io.log("success", f"Created flows/{name}/{FLOW_DIR_MARKER}")
+    rel_path = flow_dir.relative_to(project_dir)
+    io.log("success", f"Created {rel_path}/{FLOW_DIR_MARKER}")
+    if kit_name:
+        io.log("info", f"Kit: {kit_name}")
     io.log("info", f"Edit: {flow_dir / FLOW_DIR_MARKER}")
-    io.log("info", f"Run:  stepwise run {name} --input topic=\"your topic\"")
+    io.log("info", f"Run:  stepwise run {run_ref} --input topic=\"your topic\"")
+    return EXIT_SUCCESS
+
+
+def cmd_catalog(args: argparse.Namespace) -> int:
+    """Generate a kit/flow catalog section for SKILL.md."""
+    from stepwise.flow_resolution import discover_flows, discover_kits
+    from stepwise.yaml_loader import load_kit_yaml, KitLoadError
+
+    project_dir = Path(args.project_dir).resolve() if args.project_dir else Path.cwd().resolve()
+    flows = discover_flows(project_dir)
+    kits = discover_kits(project_dir)
+
+    # Load kit metadata
+    kit_defs = {}
+    for k in kits:
+        try:
+            kit_defs[k.name] = load_kit_yaml(k.path)
+        except (KitLoadError, Exception):
+            pass
+
+    # Group flows
+    kit_flow_names: dict[str, list[str]] = {k.name: k.flow_names for k in kits}
+    kit_flow_set = set()
+    for names in kit_flow_names.values():
+        kit_flow_set.update(names)
+    standalone = [f for f in flows if f.name not in kit_flow_set and not f.kit_name]
+
+    # Filter to interactive visibility
+    standalone_interactive = []
+    for f in standalone:
+        try:
+            from stepwise.yaml_loader import load_workflow_yaml
+            wf = load_workflow_yaml(str(f.path))
+            if wf.metadata.visibility == "interactive":
+                standalone_interactive.append(f.name)
+        except Exception:
+            standalone_interactive.append(f.name)
+
+    lines = ["## Available Kits & Flows", ""]
+
+    # Group kits by category
+    categorized: dict[str, list] = {}
+    for k in kits:
+        kd = kit_defs.get(k.name)
+        cat = getattr(kd, "category", "") or "Uncategorized"
+        categorized.setdefault(cat, []).append(k)
+
+    for cat in sorted(categorized.keys()):
+        lines.append(f"**{cat.title()}:**")
+        for k in sorted(categorized[cat], key=lambda x: x.name):
+            kd = kit_defs.get(k.name)
+            desc = getattr(kd, "description", "") if kd else ""
+            flow_count = len(k.flow_names)
+            line = f"- **{k.name}** — {desc} ({flow_count} flow{'s' if flow_count != 1 else ''})"
+            lines.append(line)
+        lines.append("")
+
+    if standalone_interactive:
+        lines.append(f"**Standalone flows:** {', '.join(sorted(standalone_interactive))}")
+        lines.append("")
+
+    lines.append("*Run `stepwise agent-help` for full details. Run `stepwise agent-help <kit>` for kit flow details.*")
+
+    output = "\n".join(lines)
+
+    if args.output:
+        Path(args.output).write_text(output + "\n")
+        io = _io(args)
+        io.log("success", f"Wrote catalog to {args.output}")
+    else:
+        print(output)
+
     return EXIT_SUCCESS
 
 
@@ -4484,7 +4590,7 @@ _COMMAND_GROUPS: list[tuple[str, list[str]]] = [
     ("Execution", ["run", "open", "validate", "check", "preflight", "diagram"]),
     ("Jobs", ["jobs", "status", "cancel", "tail", "logs", "output", "wait", "fulfill", "list"]),
     ("Server", ["server"]),
-    ("Project", ["init", "new", "flows", "config", "templates"]),
+    ("Project", ["init", "new", "flows", "catalog", "config", "templates"]),
     ("Registry", ["search", "get", "share", "info", "login", "logout"]),
     ("Advanced", ["job", "cache", "schema", "agent-help", "extensions", "docs"]),
     ("System", ["update", "help", "version", "uninstall"]),
@@ -4668,7 +4774,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     # new
     p_new = sub.add_parser("new", help="Create a new flow")
-    p_new.add_argument("name", help="Flow name (alphanumeric, hyphens, underscores)")
+    p_new.add_argument("name", help="Flow name or kit/name (e.g., swdev/my-flow)")
+
+    # catalog
+    p_catalog = sub.add_parser("catalog", help="Generate kit/flow catalog for SKILL.md")
+    p_catalog.add_argument("--output", "-o", metavar="FILE",
+                           help="Write to file instead of stdout")
 
     # share
     p_share = sub.add_parser("share", help="Publish a flow to the registry")
@@ -5870,6 +5981,7 @@ def main(argv: list[str] | None = None) -> int:
         "diagram": cmd_diagram,
         "templates": cmd_templates,
         "flows": cmd_flows,
+        "catalog": cmd_catalog,
         "config": cmd_config,
         "check": cmd_check,
         "login": cmd_login,

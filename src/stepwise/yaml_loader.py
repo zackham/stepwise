@@ -1359,6 +1359,7 @@ def load_workflow_yaml(
     base_dir: Path | None = None,
     loading_files: frozenset[Path] | None = None,
     project_dir: Path | None = None,
+    kit_defaults: dict | None = None,
 ) -> WorkflowDefinition:
     """Load a WorkflowDefinition from a YAML file or string.
 
@@ -1408,6 +1409,17 @@ def load_workflow_yaml(
 
     if not isinstance(data, dict):
         raise YAMLLoadError(["YAML root must be a mapping"])
+
+    # Auto-detect kit defaults if not explicitly provided
+    if kit_defaults is None and source_path is not None:
+        from stepwise.flow_resolution import get_kit_defaults_for_flow
+        kit_defaults = get_kit_defaults_for_flow(source_path)
+
+    # Apply kit defaults — kit values are used when the flow doesn't set them
+    if kit_defaults:
+        for key, val in kit_defaults.items():
+            if key not in data or data[key] in (None, "", []):
+                data[key] = val
 
     # Parse steps
     steps_data = data.get("steps")
