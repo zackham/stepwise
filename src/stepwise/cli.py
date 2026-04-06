@@ -15,7 +15,7 @@ Usage:
     stepwise info <name>                   Show flow details
     stepwise jobs [flags]                  List jobs
     stepwise status <job-id>               Show job detail
-    stepwise cancel <job-id> [--output]     Cancel running job
+    stepwise cancel <job-id> [--force] [--run RUN_ID]  Cancel running job
     stepwise list --suspended [--output]   List suspended steps across jobs
     stepwise wait <job-id> [...]           Block until job(s) complete or suspend
     stepwise wait --all <id1> <id2> ...    Wait for all jobs
@@ -2764,6 +2764,11 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_cancel(args: argparse.Namespace) -> int:
+    # Handle --run flag: cancel a specific step run by ID
+    run_id = getattr(args, "run", None)
+    if run_id:
+        return _cancel_run(args, run_id)
+
     # Server routing (JSON mode only)
     if getattr(args, "output", None) == "json":
         data, code = _try_server(args, lambda c: c.cancel(args.job_id))
@@ -2789,11 +2794,16 @@ def cmd_cancel(args: argparse.Namespace) -> int:
             return EXIT_JOB_FAILED
 
         from stepwise.models import JobStatus, StepRunStatus
+        force = getattr(args, "force", False)
+
         if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
+            if force:
+                # --force: cancel individual RUNNING step runs on a terminal job
+                return _cancel_force(args, store, job)
             if getattr(args, "output", None) == "json":
                 print(json.dumps({"status": "error", "error": f"Job already {job.status.value}"}))
             else:
-                _io(args).log("error", f"Job already {job.status.value}")
+                _io(args).log("error", f"Job already {job.status.value}. Use --force to cancel zombie runs.")
             return EXIT_USAGE_ERROR
 
         registry = create_default_registry()
@@ -2827,6 +2837,82 @@ def cmd_cancel(args: argparse.Namespace) -> int:
         else:
             engine.cancel_job(args.job_id)
             _io(args).log("success", f"Cancelled {args.job_id}")
+
+        return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def _cancel_force(args: argparse.Namespace, store, job) -> int:
+    """Force-cancel RUNNING step runs on a terminal (failed/completed/cancelled) job."""
+    from stepwise.models import StepRunStatus, _now as _models_now
+
+    runs = store.runs_for_job(job.id)
+    running_runs = [r for r in runs if r.status == StepRunStatus.RUNNING]
+
+    if not running_runs:
+        if getattr(args, "output", None) == "json":
+            print(json.dumps({"status": "ok", "message": "No running step runs to cancel", "cancelled_runs": []}))
+        else:
+            _io(args).log("info", "No running step runs to cancel")
+        return EXIT_SUCCESS
+
+    cancelled_ids = []
+    for run in running_runs:
+        run.status = StepRunStatus.FAILED
+        run.error = "Force-cancelled (zombie cleanup)"
+        run.error_category = "user_cancelled"
+        run.completed_at = _models_now()
+        store.save_run(run)
+        cancelled_ids.append(run.id)
+
+    if getattr(args, "output", None) == "json":
+        print(json.dumps({
+            "status": "ok",
+            "job_id": job.id,
+            "cancelled_runs": cancelled_ids,
+        }, indent=2, default=str))
+    else:
+        _io(args).log("success", f"Force-cancelled {len(cancelled_ids)} zombie run(s): {', '.join(cancelled_ids)}")
+
+    return EXIT_SUCCESS
+
+
+def _cancel_run(args: argparse.Namespace, run_id: str) -> int:
+    """Cancel a specific step run by ID."""
+    project = _find_project_or_exit(args)
+
+    from stepwise.store import SQLiteStore
+    from stepwise.models import StepRunStatus, _now as _models_now
+
+    store = SQLiteStore(str(project.db_path))
+    try:
+        try:
+            run = store.load_run(run_id)
+        except KeyError:
+            if getattr(args, "output", None) == "json":
+                print(json.dumps({"status": "error", "error": f"Run not found: {run_id}"}))
+            else:
+                _io(args).log("error", f"Run not found: {run_id}")
+            return EXIT_JOB_FAILED
+
+        if run.status != StepRunStatus.RUNNING:
+            if getattr(args, "output", None) == "json":
+                print(json.dumps({"status": "error", "error": f"Run is not running (status: {run.status.value})"}))
+            else:
+                _io(args).log("error", f"Run is not running (status: {run.status.value})")
+            return EXIT_USAGE_ERROR
+
+        run.status = StepRunStatus.FAILED
+        run.error = "Cancelled by user (--run)"
+        run.error_category = "user_cancelled"
+        run.completed_at = _models_now()
+        store.save_run(run)
+
+        if getattr(args, "output", None) == "json":
+            print(json.dumps({"status": "ok", "run_id": run_id, "cancelled": True}))
+        else:
+            _io(args).log("success", f"Cancelled run {run_id}")
 
         return EXIT_SUCCESS
     finally:
@@ -4985,6 +5071,10 @@ def build_parser() -> argparse.ArgumentParser:
     # cancel
     p_cancel = sub.add_parser("cancel", help="Cancel a running job")
     p_cancel.add_argument("job_id", help="Job ID")
+    p_cancel.add_argument("--force", action="store_true",
+                          help="Force-cancel zombie runs on a failed/completed job")
+    p_cancel.add_argument("--run", metavar="RUN_ID",
+                          help="Cancel a specific step run by ID")
     p_cancel.add_argument("--output", choices=["table", "json"], default="table",
                           help="Output format")
 
@@ -5152,6 +5242,11 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Max concurrent jobs in group (0=unlimited, requires --group)")
     p_job_run.add_argument("--wait", action="store_true",
                            help="Block until all released jobs complete (JSON output on stdout)")
+    p_job_run.add_argument("--async", action="store_true", dest="async_mode",
+                           help="Fire-and-forget, returns job_id(s) immediately")
+    p_job_run.add_argument("--notify", metavar="URL", help="Webhook URL for job event notifications")
+    p_job_run.add_argument("--notify-context", metavar="JSON", dest="notify_context",
+                           help="JSON context to include in webhook payloads")
     p_job_run.add_argument("--output", choices=["table", "json"], default="table")
 
     # job dep
@@ -5460,6 +5555,22 @@ def _cmd_job_run(args) -> int:
     io = _io(args)
     max_concurrent = getattr(args, "max_concurrent", None)
     do_wait = getattr(args, "wait", False)
+    do_async = getattr(args, "async_mode", False)
+    notify_url = getattr(args, "notify", None)
+    notify_context_raw = getattr(args, "notify_context", None)
+
+    # Parse --notify-context JSON
+    notify_context = None
+    if notify_context_raw:
+        try:
+            notify_context = json.loads(notify_context_raw)
+        except json.JSONDecodeError:
+            io.log("error", f"Invalid --notify-context JSON: {notify_context_raw}")
+            return EXIT_USAGE_ERROR
+
+    if do_wait and do_async:
+        io.log("error", "--wait and --async are mutually exclusive")
+        return EXIT_USAGE_ERROR
 
     if max_concurrent is not None and not getattr(args, "group", None):
         io.log("error", "--max-concurrent requires --group")
@@ -5476,14 +5587,34 @@ def _cmd_job_run(args) -> int:
         client = StepwiseClient(server_url)
         try:
             if args.job_id:
+                # Set notify on job before running
+                if notify_url:
+                    client.patch_job(args.job_id, notify_url=notify_url,
+                                     notify_context=notify_context)
                 result = client._request("POST", f"/api/jobs/{args.job_id}/run")
                 released_ids = [args.job_id]
             else:
+                # For groups, set notify on all jobs in the group before running
+                if notify_url:
+                    group_jobs = client._request("GET", "/api/jobs",
+                                                 params={"group": args.group, "top_level": "false"})
+                    for j in group_jobs:
+                        client.patch_job(j["id"], notify_url=notify_url,
+                                         notify_context=notify_context)
                 payload = {"group": args.group}
                 if max_concurrent is not None:
                     payload["max_concurrent"] = max_concurrent
                 result = client._request("POST", "/api/jobs/run-group", payload)
                 released_ids = result.get("job_ids", [])
+
+            # --async mode: print IDs and exit immediately
+            if do_async:
+                if args.job_id:
+                    print(json.dumps({"job_id": args.job_id, "status": "pending"}, default=str))
+                else:
+                    print(json.dumps({"group": args.group, "job_ids": released_ids,
+                                      "status": "pending"}, default=str))
+                return EXIT_SUCCESS
 
             if not do_wait:
                 if args.output == "json":
@@ -5506,8 +5637,21 @@ def _cmd_job_run(args) -> int:
             else:
                 io.log("info", f"Released {len(released_ids)} job(s), waiting for completion...")
 
-            from stepwise.runner import wait_for_job_ids
+            # For groups, collect ALL job IDs in the group (including dependents)
+            if getattr(args, "group", None):
+                group_jobs = client._request("GET", "/api/jobs",
+                                             params={"group": args.group, "top_level": "false"})
+                all_group_ids = [j["id"] for j in group_jobs]
+                # Include any IDs from the released set that might not be in the query yet
+                for rid in released_ids:
+                    if rid not in all_group_ids:
+                        all_group_ids.append(rid)
+                released_ids = all_group_ids
+
+            from stepwise.runner import wait_for_job_ids, wait_for_job_id
             project = _find_project_or_exit(args)
+            if len(released_ids) == 1:
+                return wait_for_job_id(server_url, released_ids[0], project_dir=project.dot_dir)
             return wait_for_job_ids(server_url, released_ids, "all", project_dir=project.dot_dir)
 
         except StepwiseAPIError as e:
@@ -5520,18 +5664,26 @@ def _cmd_job_run(args) -> int:
     try:
         released_ids = []
         if args.job_id:
+            # Set notify before transitioning
+            if notify_url:
+                job = store.load_job(args.job_id)
+                job.notify_url = notify_url
+                job.notify_context = notify_context or {}
+                store.save_job(job)
             try:
                 store.transition_job_to_pending(args.job_id)
             except (KeyError, ValueError) as e:
                 io.log("error", str(e))
                 return EXIT_JOB_FAILED
             released_ids = [args.job_id]
-            if not do_wait:
-                if args.output == "json":
-                    print(json.dumps({"job_id": args.job_id, "status": "pending"}))
-                else:
-                    io.log("success", f"Job {args.job_id} is now PENDING")
         else:
+            # For groups, set notify on all jobs before running
+            if notify_url:
+                group_jobs = store.jobs_in_group(args.group)
+                for j in group_jobs:
+                    j.notify_url = notify_url
+                    j.notify_context = notify_context or {}
+                    store.save_job(j)
             if max_concurrent is not None:
                 store.set_group_max_concurrent(args.group, max_concurrent)
             released_ids = store.transition_group_to_pending(args.group)
@@ -5548,7 +5700,23 @@ def _cmd_job_run(args) -> int:
                     except KeyError:
                         cross_group_count += 1
                         break
-            if not do_wait:
+
+        # --async mode: print IDs and exit immediately
+        if do_async:
+            if args.job_id:
+                print(json.dumps({"job_id": args.job_id, "status": "pending"}, default=str))
+            else:
+                print(json.dumps({"group": args.group, "job_ids": released_ids,
+                                  "status": "pending"}, default=str))
+            return EXIT_SUCCESS
+
+        if not do_wait:
+            if args.job_id:
+                if args.output == "json":
+                    print(json.dumps({"job_id": args.job_id, "status": "pending"}))
+                else:
+                    io.log("success", f"Job {args.job_id} is now PENDING")
+            else:
                 if args.output == "json":
                     print(json.dumps({"group": args.group, "count": len(released_ids),
                                       "job_ids": released_ids}))
@@ -5556,8 +5724,6 @@ def _cmd_job_run(args) -> int:
                     io.log("success", f"Transitioned {len(released_ids)} job(s) in group '{args.group}' to PENDING")
                     if cross_group_count:
                         io.log("info", f"{cross_group_count} job(s) have unmet dependencies outside this group")
-
-        if not do_wait:
             return EXIT_SUCCESS
 
         # --wait: block until all released jobs complete
@@ -5565,7 +5731,19 @@ def _cmd_job_run(args) -> int:
             io.log("info", "No jobs to wait for")
             return EXIT_SUCCESS
 
-        io.log("info", f"Released {len(released_ids)} job(s), waiting for completion...")
+        # For groups, collect ALL job IDs in the group (including dependents)
+        if getattr(args, "group", None):
+            all_group_jobs = store.jobs_in_group(args.group)
+            all_group_ids = [j.id for j in all_group_jobs]
+            for rid in released_ids:
+                if rid not in all_group_ids:
+                    all_group_ids.append(rid)
+            released_ids = all_group_ids
+
+        if args.job_id:
+            io.log("info", f"Job {args.job_id} released, waiting for completion...")
+        else:
+            io.log("info", f"Released {len(released_ids)} job(s), waiting for completion...")
     finally:
         store.close()
 
@@ -5578,6 +5756,12 @@ def _cmd_job_run(args) -> int:
     try:
         engine = Engine(store2, create_default_registry(), jobs_dir=str(project.jobs_dir),
                         project_dir=project.dot_dir)
+        # Start all pending jobs so the tick loop can process them
+        for jid in released_ids:
+            try:
+                engine.start_job(jid)
+            except (KeyError, ValueError):
+                pass  # already started or status changed
         return wait_for_jobs(engine, store2, released_ids, "all", project_dir=project.dot_dir)
     finally:
         store2.close()
