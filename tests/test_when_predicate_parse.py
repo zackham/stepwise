@@ -207,15 +207,16 @@ class TestParseWhen:
         with pytest.raises(ValueError, match="step 'foo'.*missing operator.*exactly one of"):
             _parse_when({"input": "x"}, "foo")
 
-    def test_is_present_rejected_with_locked_wording(self):
-        expected_msg = (
-            "step 'foo': is_present: is not yet supported — "
-            "loop-back binding runtime not yet implemented; "
-            "use legacy string form for now"
-        )
-        with pytest.raises(ValueError) as exc_info:
-            _parse_when({"input": "x", "is_present": True}, "foo")
-        assert str(exc_info.value) == expected_msg
+    def test_is_present_now_accepted_at_parse_dispatch(self):
+        """Step 7: is_present: is no longer rejected by _parse_when itself.
+        Structural validation (is_present only on loop-back bindings)
+        happens in a second pass via _validate_predicate_refs. The
+        WhenPredicate is constructed and returned cleanly here.
+        """
+        result = _parse_when({"input": "x", "is_present": True}, "foo")
+        assert isinstance(result, WhenPredicate)
+        assert result.op == "is_present"
+        assert result.value is True
 
     def test_eq_null_wrapped_with_step_name(self):
         with pytest.raises(ValueError, match="step 'foo'.*cannot be null.*is_null"):

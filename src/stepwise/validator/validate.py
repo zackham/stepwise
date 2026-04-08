@@ -12,7 +12,11 @@ will wire it into the YAML load pipeline and run it against meeting-ingest.
 from __future__ import annotations
 
 from stepwise.models import ExecutorRef, StepDefinition, WorkflowDefinition
-from stepwise.validator.back_edges import compute_back_edges, find_cycle_nodes
+from stepwise.validator.back_edges import (
+    compute_back_edges,
+    find_cycle_nodes,
+    find_cycle_nodes_excluding_back_edges,
+)
 from stepwise.validator.errors import (
     PairVerdict,
     ValidationError,
@@ -433,8 +437,12 @@ def validate(flow: WorkflowDefinition) -> ValidationResult:
     """
     result = ValidationResult(accepted=True)
 
-    # 0. Cycle detection — reject all back-edges in step 3.
-    cycle_nodes = find_cycle_nodes(flow)
+    # Step 7 (§11): residual cycle detection on the FORWARD DAG only.
+    # Loop-back bindings (InputBinding.is_back_edge=True, marked at parse
+    # time by yaml_loader._mark_back_edges) are excluded from the cycle
+    # check — by definition they're closed by an enclosing loop exit
+    # rule. Any leftover cycles in the forward graph are genuine errors.
+    cycle_nodes = find_cycle_nodes_excluding_back_edges(flow)
     if cycle_nodes:
         _emit_back_edge_errors(flow, cycle_nodes, result)
         result.accepted = False

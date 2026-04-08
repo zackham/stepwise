@@ -392,7 +392,24 @@ inputs:
 - **In script executors** (`run:`): environment variable is unset (not "None" or "null"). Use `if [ -z "$score" ]; then ...`
 - **`any_of` + `optional`:** Allowed. Means "try to get one of these, but if none are available, resolve to `None` and proceed."
 
-**Cycle detection:** A cycle in the dependency graph is valid if every cycle contains at least one `optional: true` edge.
+**Cycle detection:** A cycle in the dependency graph is valid if every cycle contains at least one `optional: true` or `any_of` edge AND the cycle is closed by an enclosing loop exit rule (`action: loop` or `action: escalate target: X`). The parser marks such edges as *loop-back bindings* (`is_back_edge=True`, `closing_loop_id=<frame_id>`) and excludes them from the forward cycle check. Unguarded back-edges (a plain binding forming a cycle with no optional / `any_of` fallback) are rejected at parse time.
+
+**Loop-back runtime semantics:** On the first pass through the enclosing loop's frame, a loop-back binding resolves to *absent* (presence = `False`). Optional bindings deliver `None`; `any_of` bindings fall through to the first non-back-edge source. On subsequent loop iterations (after the frame's `iteration_index` bumps) the binding resolves normally, carrying the previous iteration's producer output. Nested loops get independent frames — when an outer loop bumps, child frames reset, so an inner step's loop-back binding is absent on the first inner iteration of every outer iteration.
+
+**Presence predicates:** On a loop-back binding, `when:` can dispatch on presence rather than value:
+
+```yaml
+init-pass:
+  when:
+    input: prev_note
+    is_present: false              # only runs before the loop has fired (iter-1)
+  inputs:
+    prev_note:
+      from: critique.note
+      optional: true
+```
+
+Valid operators: `is_present: true/false`, `is_null: true/false`. Only meaningful on loop-back bindings; using them on a regular input is rejected at parse time.
 
 Job inputs are passed via `--input` on the CLI or in the `inputs` dict via the API:
 

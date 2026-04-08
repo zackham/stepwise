@@ -204,6 +204,195 @@ class Engine:
         if job.id not in self._session_registries:
             self._session_registries[job.id] = self._build_session_registry(job)
 
+    # ── LoopFrame stack helpers (§11.5 / step 7 decision 6) ─────────────
+
+    def _loop_owner_targets(self, job: Job) -> list[tuple[str, str]]:
+        """Return all (owner_step, target_step) loop pairs in the flow."""
+        out: list[tuple[str, str]] = []
+        for owner_name, owner_def in job.workflow.steps.items():
+            for rule in owner_def.exit_rules:
+                if rule.config.get("action") == "loop":
+                    target = rule.config.get("target")
+                    if target and target in job.workflow.steps:
+                        out.append((owner_name, target))
+        return out
+
+    def _parent_frame_for_target(
+        self, job: Job, target: str,
+    ) -> str | None:
+        """Find the parent loop frame's frame_id for a new loop on `target`.
+
+        Walks the LoopFrame stack: the parent is the loop frame whose
+        body contains `target` (i.e., target is a step that lives inside
+        an outer loop's iteration window). Determined by searching the
+        loop_owner_targets list — if there's another loop pair (outer,
+        outer_target) such that target is forward-reachable from
+        outer_target in the static workflow graph, that outer loop is a
+        candidate. Returns the innermost candidate or None.
+        """
+        from stepwise.models import collect_loop_back_edges  # lazy
+
+        loop_pairs = self._loop_owner_targets(job)
+        if not loop_pairs:
+            return None
+
+        # Build forward adjacency over the workflow steps (excluding back-edges).
+        # If target is forward-reachable from some other loop's target via
+        # non-back-edge edges, that loop is an enclosing parent.
+        steps = job.workflow.steps
+        back_edges = collect_loop_back_edges(steps)
+        fwd: dict[str, set[str]] = {n: set() for n in steps}
+        for cname, cdef in steps.items():
+            for b in cdef.inputs:
+                if b.is_back_edge:
+                    continue
+                if b.any_of_sources:
+                    for src, _f in b.any_of_sources:
+                        if src in steps and src != cname and (cname, src) not in back_edges:
+                            fwd[src].add(cname)
+                elif b.source_step and b.source_step != "$job" and b.source_step in steps:
+                    if b.source_step != cname and (cname, b.source_step) not in back_edges:
+                        fwd[b.source_step].add(cname)
+            for s in cdef.after:
+                if s in steps and s != cname:
+                    fwd[s].add(cname)
+
+        def reachable(start: str, end: str) -> bool:
+            if start == end:
+                return True
+            seen = {start}
+            stack = [start]
+            while stack:
+                cur = stack.pop()
+                for nxt in fwd.get(cur, ()):
+                    if nxt == end:
+                        return True
+                    if nxt not in seen:
+                        seen.add(nxt)
+                        stack.append(nxt)
+            return False
+
+        # Candidates: loop targets (other than `target`) such that `target`
+        # is forward-reachable from them.
+        candidates: list[str] = []
+        for (_owner, t) in loop_pairs:
+            if t == target:
+                continue
+            if reachable(t, target):
+                candidates.append(t)
+        if not candidates:
+            return None
+        # Innermost: the candidate that has the FEWEST other candidates as
+        # ancestors (i.e., it's the deepest in the nesting). For two-level
+        # nesting this is unambiguous.
+        if len(candidates) == 1:
+            return candidates[0]
+        # Pick the candidate that is reachable from every other candidate
+        # (the "deepest" one). Sort: an innermost candidate is forward-
+        # reachable from every other candidate.
+        best = candidates[0]
+        for c in candidates[1:]:
+            # If `c` is reachable from `best`, then c is deeper.
+            if reachable(best, c):
+                best = c
+        return best
+
+    def _get_or_create_loop_frame(
+        self, job: Job, frame_id: str, parent_frame_id: str | None = None,
+    ) -> "LoopFrame":
+        """Lazily allocate or look up the LoopFrame for `frame_id`.
+
+        Idempotent: repeated calls with the same frame_id return the same
+        frame. The parent_frame_id is set only on creation; calling with a
+        mismatched parent_frame_id later emits a warning but does not
+        mutate the existing frame.
+        """
+        from stepwise.models import LoopFrame
+        existing = job.loop_frames.get(frame_id)
+        if existing is not None:
+            if (
+                parent_frame_id is not None
+                and existing.parent_frame_id is not None
+                and existing.parent_frame_id != parent_frame_id
+            ):
+                _engine_logger.warning(
+                    "loop frame %r already exists with parent %r; "
+                    "ignoring requested parent %r",
+                    frame_id, existing.parent_frame_id, parent_frame_id,
+                )
+            return existing
+        frame = LoopFrame(
+            frame_id=frame_id,
+            iteration_index=0,
+            parent_frame_id=parent_frame_id,
+            presence={},
+        )
+        job.loop_frames[frame_id] = frame
+        return frame
+
+    def _invalidate_child_frames(self, job: Job, parent_frame_id: str) -> None:
+        """Remove (or reset) all loop frames whose parent is `parent_frame_id`.
+
+        Per §11.5: when an outer frame's iteration_index increments, every
+        child frame is reset because the inner loop scope is logically
+        re-entered for each outer iteration.
+        """
+        # Remove direct children. Recursive: any grandchild whose own
+        # parent is being removed should also go.
+        to_remove: set[str] = set()
+        # BFS over the parent → children relation
+        queue: list[str] = [parent_frame_id]
+        while queue:
+            cur = queue.pop(0)
+            for fid, f in list(job.loop_frames.items()):
+                if f.parent_frame_id == cur and fid not in to_remove:
+                    to_remove.add(fid)
+                    queue.append(fid)
+        for fid in to_remove:
+            job.loop_frames.pop(fid, None)
+
+    def _rebuild_loop_frames(self, job: Job) -> None:
+        """Crash recovery: rebuild Job.loop_frames from step_runs.
+
+        Walks the job's step_runs and reconstructs LoopFrame state for
+        each loop initiator step (a step that is targeted by some other
+        step's `loop` exit rule). The frame's iteration_index is set to
+        the count of completed runs of that step. Parent_frame_id is
+        derived from the static workflow nesting.
+        """
+        from stepwise.models import LoopFrame
+        loop_pairs = self._loop_owner_targets(job)
+        if not loop_pairs:
+            return
+        # Loop initiators (= the targets of the loop pairs)
+        initiators: set[str] = {target for _owner, target in loop_pairs}
+        rebuilt: dict[str, LoopFrame] = {}
+        for init in initiators:
+            count = self.store.completed_run_count(job.id, init)
+            if count <= 1:
+                # Either never run, or exactly one run = iteration 1 (no
+                # relaunches yet). Frame iteration_index is the count.
+                iteration = max(count, 0)
+            else:
+                iteration = count
+            parent = self._parent_frame_for_target(job, init)
+            rebuilt[init] = LoopFrame(
+                frame_id=init,
+                iteration_index=iteration,
+                parent_frame_id=parent,
+                presence={},  # presence is recomputed at next _resolve_inputs call
+            )
+        # Replace the in-memory frames with the rebuilt set; persist.
+        job.loop_frames = rebuilt
+        try:
+            self.store.save_job(job)
+        except Exception:
+            # Best-effort; recovery should not fail loudly here.
+            _engine_logger.warning(
+                "failed to persist rebuilt loop_frames for job %s",
+                job.id, exc_info=True,
+            )
+
     # ── Fork source / snapshot UUID lookup (§9 / step 6) ────────────────
 
     def _fork_source_step_names(self, job: Job) -> set[str]:
@@ -1356,10 +1545,14 @@ class Engine:
                 return False
 
         # Check regular deps (non-any_of, non-$job, non-optional): ALL must have current completed runs
-        # (or have failed with on_error: continue, which also unblocks downstream)
+        # (or have failed with on_error: continue, which also unblocks downstream).
+        # Step 7 (§11.7): bindings marked is_back_edge=True are treated as
+        # permanently settled — they never block readiness, even on iter-1
+        # of their closing loop.
         regular_deps: list[str] = [
             b.source_step for b in step_def.inputs
-            if not b.any_of_sources and b.source_step != "$job" and not b.optional
+            if not b.any_of_sources and b.source_step != "$job"
+            and not b.optional and not b.is_back_edge
         ]
         regular_deps.extend(step_def.after)
         if step_def.for_each:
@@ -1385,8 +1578,13 @@ class Engine:
 
         # Check any_of groups: at least ONE source per group must have current completed run
         # (or failed with on_error: continue — unless the binding is optional, in which case missing is OK)
+        # Step 7 (§11.4): if the entire any_of binding is marked is_back_edge,
+        # skip the readiness check (on iter-1 the loop body hasn't produced
+        # anything yet; the resolver will set presence=False).
         for binding in step_def.inputs:
             if binding.any_of_sources:
+                if binding.is_back_edge:
+                    continue
                 has_available = False
                 for src_step, _ in binding.any_of_sources:
                     dep_latest = self.store.latest_completed_run(job.id, src_step)
@@ -1405,10 +1603,11 @@ class Engine:
         if step_def.when is not None:
             try:
                 from stepwise.models import WhenPredicate
-                inputs, _ = self._resolve_inputs(job, step_def)
+                inputs, _, presence = self._resolve_inputs(job, step_def)
                 if isinstance(step_def.when, WhenPredicate):
                     from stepwise.validator.mutex import evaluate_when_predicate
-                    if not evaluate_when_predicate(step_def.when, inputs):
+                    # Step 7 (§11.3): pass presence map for is_present:/is_null:
+                    if not evaluate_when_predicate(step_def.when, inputs, presence):
                         return False
                 else:
                     from stepwise.yaml_loader import evaluate_when_condition
@@ -1502,10 +1701,14 @@ class Engine:
             return False
 
         # Check dependency provenance
-        # For regular deps (non-optional): check each dep step
+        # For regular deps (non-optional, non-back-edge): check each dep step.
+        # Step 7 (§11.7): bindings marked is_back_edge=True are skipped here
+        # — same as optional bindings — so the existing currentness chain
+        # doesn't incorrectly invalidate consumer runs across loop iterations.
         regular_dep_steps: list[str] = [
             b.source_step for b in step_def.inputs
-            if not b.any_of_sources and b.source_step != "$job" and not b.optional
+            if not b.any_of_sources and b.source_step != "$job"
+            and not b.optional and not b.is_back_edge
         ]
         regular_dep_steps.extend(step_def.after)
         if step_def.for_each:
@@ -1532,9 +1735,14 @@ class Engine:
             if not self._is_current(job, source_run, _checking_steps):
                 return False
 
-        # For any_of deps: only check the source that was actually used (in dep_run_ids)
+        # For any_of deps: only check the source that was actually used (in dep_run_ids).
+        # Step 7 (§11.4): if the any_of binding is itself a back-edge,
+        # skip the currentness check entirely (same rationale as regular
+        # back-edges above).
         for binding in step_def.inputs:
             if binding.any_of_sources:
+                if binding.is_back_edge:
+                    continue
                 # Find which source was used
                 found_current = False
                 any_recorded = False
@@ -1556,12 +1764,22 @@ class Engine:
         return True
 
     def _dep_steps(self, step_def: StepDefinition) -> list[str]:
-        """All dependency steps: input binding sources + after + for_each source."""
-        deps = [b.source_step for b in step_def.inputs if not b.any_of_sources]
+        """All dependency steps: input binding sources + after + for_each source.
+
+        Step 7 (§11.7): bindings marked is_back_edge=True are EXCLUDED from
+        the dependency walk used by cycle detection and currentness checks.
+        Back-edges are by construction part of a loop closed by an exit
+        rule, so they don't represent forward dependencies.
+        """
+        deps: list[str] = []
         for b in step_def.inputs:
+            if b.is_back_edge:
+                continue
             if b.any_of_sources:
                 for src_step, _ in b.any_of_sources:
                     deps.append(src_step)
+            else:
+                deps.append(b.source_step)
         deps.extend(step_def.after)
         if step_def.for_each:
             deps.append(step_def.for_each.source_step)
@@ -1929,7 +2147,7 @@ class Engine:
         """
         step_def = job.workflow.steps[step_name]
         attempt = self.store.next_attempt(job.id, step_name)
-        inputs, dep_run_ids = self._resolve_inputs(job, step_def)
+        inputs, dep_run_ids, _presence = self._resolve_inputs(job, step_def)
 
         run = StepRun(
             id=_gen_id("run"),
@@ -2378,7 +2596,7 @@ class Engine:
 
         step_name = step_def.name
         attempt = self.store.next_attempt(job.id, step_name)
-        inputs, dep_run_ids = self._resolve_inputs(job, step_def)
+        inputs, dep_run_ids, _presence = self._resolve_inputs(job, step_def)
 
         # Resolve the source list from the for_each source step
         source_run = self.store.latest_completed_run(job.id, fe.source_step)
@@ -2656,7 +2874,7 @@ class Engine:
         assert step_def.sub_flow is not None
 
         attempt = self.store.next_attempt(job.id, step_def.name)
-        inputs, dep_run_ids = self._resolve_inputs(job, step_def)
+        inputs, dep_run_ids, _presence = self._resolve_inputs(job, step_def)
 
         run = StepRun(
             id=_gen_id("run"), job_id=job.id, step_name=step_def.name,
@@ -2707,13 +2925,53 @@ class Engine:
 
     # ── Input Resolution ──────────────────────────────────────────────────
 
-    def _resolve_inputs(self, job: Job, step_def: StepDefinition) -> tuple[dict, dict]:
-        """Returns (inputs_dict, dep_run_ids_dict)."""
+    def _resolve_inputs(
+        self, job: Job, step_def: StepDefinition,
+    ) -> tuple[dict, dict, dict[str, bool]]:
+        """Returns (inputs_dict, dep_run_ids_dict, presence).
+
+        Step 7 (§11.7): the third element is a per-binding presence map
+        keyed by ``binding.local_name``. ``presence[name]`` is True iff
+        the binding has a producer-side run that resolved to a concrete
+        value (or the value was explicitly set to None via on_error:
+        continue or any_of-all-failed). False on iter-1 of a loop-back
+        binding (key absent from inputs dict in that case). The presence
+        map is consulted by ``evaluate_when_predicate`` for ``is_present:``
+        / ``is_null:`` semantics.
+
+        Loop-back bindings additionally consult the ``Job.loop_frames``
+        stack: if a frame exists for the binding's ``closing_loop_id``,
+        the resolver writes ``frame.presence[binding.local_name]`` so
+        nested-loop semantics work end-to-end (§11.5).
+        """
         inputs: dict = {}
         dep_run_ids: dict[str, str] = {}
+        presence: dict[str, bool] = {}
+
+        def _record_presence(b, value: bool) -> None:
+            presence[b.local_name] = value
+            if b.is_back_edge and b.closing_loop_id and b.closing_loop_id in job.loop_frames:
+                job.loop_frames[b.closing_loop_id].presence[b.local_name] = value
+
+        def _back_edge_frame_active(b) -> bool:
+            """Per §11.5: a back-edge resolves to a value only if its
+            closing-loop frame exists AND has fired at least once (i.e.,
+            iteration_index > 0). On iter-1 of a new (or freshly-reset)
+            loop scope, the frame doesn't exist yet — the resolver must
+            treat the binding as absent.
+            """
+            if not b.is_back_edge or not b.closing_loop_id:
+                return True  # not a loop-back binding — fall through to normal resolution
+            frame = job.loop_frames.get(b.closing_loop_id)
+            return frame is not None and frame.iteration_index > 0
 
         for binding in step_def.inputs:
             if binding.any_of_sources:
+                # Loop-back any_of: if the closing loop frame is not active,
+                # short-circuit to absent (iter-1 / fresh-iteration semantics).
+                if binding.is_back_edge and not _back_edge_frame_active(binding):
+                    _record_presence(binding, False)
+                    continue
                 # Resolve from first available completed source.
                 # Skip sources that failed with on_error: continue — prefer successful ones.
                 resolved = False
@@ -2732,6 +2990,7 @@ class Engine:
                                     break
                         inputs[binding.local_name] = value
                         dep_run_ids[src_step] = latest.id
+                        _record_presence(binding, True)
                         resolved = True
                         break  # first available wins
                 if not resolved:
@@ -2742,14 +3001,24 @@ class Engine:
                             inputs[binding.local_name] = None
                             if failed_run:
                                 dep_run_ids[src_step] = failed_run.id
+                            _record_presence(binding, True)  # opted into None
                             resolved = True
                             break
-                if not resolved and binding.optional:
+                if not resolved and binding.is_back_edge:
+                    # Loop-back any_of on iter-1: absent (key not added to inputs)
+                    _record_presence(binding, False)
+                elif not resolved and binding.optional:
                     inputs[binding.local_name] = None
+                    _record_presence(binding, False)
             elif binding.source_step == "$job":
                 inputs[binding.local_name] = job.inputs.get(binding.source_field)
                 dep_run_ids["$job"] = "$job"
+                _record_presence(binding, True)
             else:
+                # Loop-back regular binding: §11.5 frame check first.
+                if binding.is_back_edge and not _back_edge_frame_active(binding):
+                    _record_presence(binding, False)
+                    continue
                 latest = self.store.latest_completed_run(job.id, binding.source_step)
                 if latest and latest.result:
                     value = latest.result.artifact.get(binding.source_field)
@@ -2765,15 +3034,23 @@ class Engine:
                                 break
                     inputs[binding.local_name] = value
                     dep_run_ids[binding.source_step] = latest.id
+                    _record_presence(binding, True)
+                elif binding.is_back_edge:
+                    # Loop-back regular binding on iter-1: absent.
+                    # Do NOT set inputs[binding.local_name] — key absent
+                    # matches §11.7 semantics (executor sees missing key).
+                    _record_presence(binding, False)
                 elif binding.optional:
-                    # Optional dep not available — set to None
+                    # Optional non-loop-back dep not available — set to None
                     inputs[binding.local_name] = None
+                    _record_presence(binding, False)
                 elif self._is_dep_settled_on_error_continue(job, binding.source_step):
                     # Dep failed with on_error: continue — resolve input as None
                     failed_run = self.store.latest_run(job.id, binding.source_step)
                     inputs[binding.local_name] = None
                     if failed_run:
                         dep_run_ids[binding.source_step] = failed_run.id
+                    _record_presence(binding, True)  # opted into None
 
         # Record after deps
         for seq_step in step_def.after:
@@ -2781,7 +3058,7 @@ class Engine:
             if latest:
                 dep_run_ids[seq_step] = latest.id
 
-        return inputs, dep_run_ids
+        return inputs, dep_run_ids, presence
 
     # ── Exit Resolution ───────────────────────────────────────────────────
 
@@ -2848,6 +3125,25 @@ class Engine:
                             "target": target,
                             "count": self.store.completed_run_count(job.id, target),
                         })
+                        # Step 7 (§11.5): increment the loop frame for this
+                        # target. The frame's iteration_index bumps and its
+                        # presence map clears (each iteration starts fresh).
+                        # Child frames whose parent_frame_id == target are
+                        # invalidated (nested loops re-enter from scratch).
+                        parent_fid = self._parent_frame_for_target(job, target)
+                        frame = self._get_or_create_loop_frame(
+                            job, frame_id=target, parent_frame_id=parent_fid,
+                        )
+                        frame.iteration_index += 1
+                        frame.presence.clear()
+                        self._invalidate_child_frames(job, parent_frame_id=target)
+                        try:
+                            self.store.save_job(job)
+                        except Exception:
+                            _engine_logger.warning(
+                                "failed to persist loop_frames after loop fire",
+                                exc_info=True,
+                            )
                         # Explicitly launch the target step. Creating a new run
                         # supersedes the previous completed run, which makes
                         # downstream steps non-current (they'll re-execute).
@@ -3321,6 +3617,22 @@ class Engine:
                                 "step": run.step_name, "target": target,
                                 "count": self.store.run_count(job.id, target),
                             })
+                            # Step 7 (§11.5): bump loop frame iteration_index
+                            # for failure-routing loop fires too.
+                            parent_fid = self._parent_frame_for_target(job, target)
+                            frame = self._get_or_create_loop_frame(
+                                job, frame_id=target, parent_frame_id=parent_fid,
+                            )
+                            frame.iteration_index += 1
+                            frame.presence.clear()
+                            self._invalidate_child_frames(job, parent_frame_id=target)
+                            try:
+                                self.store.save_job(job)
+                            except Exception:
+                                _engine_logger.warning(
+                                    "failed to persist loop_frames after fail-loop",
+                                    exc_info=True,
+                                )
                             job = self.store.load_job(job.id)
                             if job.status == JobStatus.RUNNING:
                                 self._launch(job, target)
@@ -3690,6 +4002,15 @@ class AsyncEngine(Engine):
                 continue
             self._recover_dead_script_runs(job)
             self._recover_fork_source_steps_without_snapshot(job)
+            # Step 7 (§11.5): rebuild LoopFrame stack from step_runs in case
+            # the engine crashed mid-loop and the in-memory frames were lost.
+            try:
+                self._rebuild_loop_frames(job)
+            except Exception:
+                _async_logger.warning(
+                    "recover_jobs: failed to rebuild loop frames for job %s",
+                    job.id, exc_info=True,
+                )
             self._check_job_terminal(job.id)
         # Dispatch ready steps for RUNNING jobs — catches steps that became ready
         # while the server was down (e.g. upstream completed, downstream never launched).

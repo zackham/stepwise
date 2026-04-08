@@ -122,21 +122,16 @@ def _parse_when(when_data: Any, step_name: str) -> str | WhenPredicate | None:
     - dict → parse into WhenPredicate (predicate form, §5)
     - other → ValueError with step name
 
-    is_present: predicates are rejected at parse time per the locked decision:
-    loop-back binding runtime is not yet implemented.
+    Step 7: ``is_present:`` is now accepted at parse time. The structural
+    "is_present: only on loop-back bindings" check is performed in a
+    second pass after the entire workflow has been parsed and back-edge
+    bindings have been marked — see _validate_predicate_refs() below.
     """
     if when_data is None:
         return None
     if isinstance(when_data, str):
         return when_data
     if isinstance(when_data, dict):
-        # is_present rejection: silent on timing
-        if "is_present" in when_data:
-            raise ValueError(
-                f"step {step_name!r}: is_present: is not yet supported — "
-                f"loop-back binding runtime not yet implemented; "
-                f"use legacy string form for now"
-            )
         try:
             return WhenPredicate.from_dict(when_data)
         except ValueError as exc:
@@ -145,6 +140,284 @@ def _parse_when(when_data: Any, step_name: str) -> str | WhenPredicate | None:
         f"step {step_name!r}: when: must be a string or mapping, "
         f"got {type(when_data).__name__}"
     )
+
+
+# ─── Step 7 (§11): back-edge marking and predicate-reference validation ──
+
+
+def _mark_back_edges(steps: dict) -> list[str]:
+    """Mark loop-back input bindings on each step's InputBindings (§11.2).
+
+    Algorithm per locked decisions 3, 4, 5, 12:
+      1. Compute the set of (consumer, producer) pairs that form back-edges
+         using models.collect_loop_back_edges() (the canonical helper used
+         by both the parser and the cycle detector).
+      2. For each step's regular InputBinding b: if (step.name, b.source_step)
+         is in the back-edge set, set b.is_back_edge = True and assign
+         b.closing_loop_id (= the loop initiator step name = the unique
+         loop-exit-rule target).
+      3. For each step's any_of InputBinding: only mark the binding as a
+         whole if EVERY source is a back-edge AND every source's closing
+         loop is the same (§11.4 same-loop-frame check). If mixed, leave
+         is_back_edge = False (parse-time `is_present:` use will be
+         rejected by _validate_predicate_refs).
+      4. For each marked binding, derive `closing_loop_id` by walking the
+         steps that have a `loop` exit rule whose target is on the path
+         from the consumer back to the producer. The trivial case
+         (consumer == loop_target AND producer == loop_owner) covers
+         every yellow flow. Self-loops use consumer == producer == owner.
+
+    Returns a list of error strings (e.g., "ambiguous_loop_closure").
+    """
+    from stepwise.models import collect_loop_back_edges
+
+    errors: list[str] = []
+
+    back_edges = collect_loop_back_edges(steps)
+    if not back_edges:
+        return errors
+
+    # Build a map from each back-edge (consumer, producer) → closing_loop_id.
+    # The closing loop is the unique loop owner whose `loop` exit-rule
+    # target equals the consumer (or, for transitive cases, reaches the
+    # consumer via the forward graph).
+    #
+    # Loop owners and their targets:
+    loop_owner_targets: list[tuple[str, str]] = []  # (owner_step, target_step)
+    for owner_name, owner_def in steps.items():
+        for rule in owner_def.exit_rules:
+            action = rule.config.get("action")
+            if action in ("loop", "escalate"):
+                target = rule.config.get("target")
+                if target and target in steps:
+                    loop_owner_targets.append((owner_name, target))
+
+    def closing_loop_for_edge(consumer: str, producer: str) -> tuple[str | None, str | None]:
+        """Return (closing_loop_id, error_msg) for this back-edge.
+
+        closing_loop_id is the loop target step name (= frame_id) that
+        owns the loop closing this back-edge. Per §11.5, this is the
+        innermost enclosing loop frame whose `loop` exit rule sits on the
+        cycle that includes the consumer and producer.
+
+        We use models.collect_loop_back_edges' notion of "loop owner is
+        on the cycle": for each loop pair (owner, target), if owner is
+        the producer or owner is forward-reachable from the producer
+        (modulo the candidate edge), the loop closes the cycle. The
+        closing_loop_id is the target of that loop pair.
+        """
+        from stepwise.models import collect_loop_back_edges  # for the test set
+        all_back_edges = collect_loop_back_edges(steps)
+        if (consumer, producer) not in all_back_edges and consumer != producer:
+            return None, (
+                f"step {consumer!r}: input bound to {producer!r} appears to be "
+                f"a loop-back binding, but no enclosing loop exit rule was "
+                f"found to close it (rule_id: loop_back_binding_ambiguous_closure)"
+            )
+        # Build forward reachability over the steps so we can match the
+        # collect_loop_back_edges criterion: owner is on the cycle iff
+        # owner == producer OR forward-reachable from producer.
+        fwd: dict[str, set[str]] = {n: set() for n in steps}
+        for cn, cd in steps.items():
+            for b in cd.inputs:
+                if b.any_of_sources:
+                    for s, _f in b.any_of_sources:
+                        if s in steps and s != cn:
+                            fwd[s].add(cn)
+                elif b.source_step and b.source_step != "$job" and b.source_step in steps:
+                    if b.source_step != cn:
+                        fwd[b.source_step].add(cn)
+            for s in cd.after:
+                if s in steps and s != cn:
+                    fwd[s].add(cn)
+
+        def reachable(start: str, end: str) -> bool:
+            if start == end:
+                return True
+            seen = {start}
+            stack = [start]
+            while stack:
+                cur = stack.pop()
+                for nxt in fwd.get(cur, ()):
+                    if (cur, nxt) == (producer, consumer):
+                        continue  # exclude the candidate edge
+                    if nxt == end:
+                        return True
+                    if nxt not in seen:
+                        seen.add(nxt)
+                        stack.append(nxt)
+            return False
+
+        # Step 1a (Pattern A trivial): canonical loop-carry shape where
+        # consumer sits at the top of the loop body (loop target) and
+        # producer at the bottom (loop owner). This is the classic
+        # `analyze ← refine` / `prev_note ← critique.note` shape.
+        for owner, tgt in loop_owner_targets:
+            if owner == producer and tgt == consumer:
+                return tgt, None
+
+        # Step 1b (Pattern B trivial): "tail reads head" shape where
+        # consumer is the loop owner (end of body, where the loop
+        # decision is made) and producer is the loop target (first
+        # step of the body). Happens when an any_of / optional binding
+        # on the owner declares an iter-1 fallback to a non-loop
+        # producer and a back-edge to the loop target. This closes the
+        # same structural cycle in the opposite direction.
+        # Example: hub ← any_of [init.notes, work.result], with
+        # hub.loop(target=work).
+        for owner, tgt in loop_owner_targets:
+            if owner == consumer and tgt == producer:
+                return tgt, None
+
+        # Step 2 (fallback): transitive closure search. Used for the
+        # multi-step loop body case. Any loop_pair whose body both
+        # contains the producer and reaches the consumer qualifies.
+        candidates: list[str] = []
+        for owner, tgt in loop_owner_targets:
+            reach_body = (tgt == producer) or reachable(tgt, producer)
+            reach_tail = (consumer == owner) or reachable(consumer, owner)
+            if reach_body and reach_tail:
+                if tgt not in candidates:
+                    candidates.append(tgt)
+
+        if not candidates:
+            return None, (
+                f"step {consumer!r}: input bound to {producer!r} appears to be "
+                f"a loop-back binding, but no enclosing loop exit rule was "
+                f"found to close it (rule_id: loop_back_binding_ambiguous_closure)"
+            )
+        if len(candidates) == 1:
+            return candidates[0], None
+        # Multiple candidates: pick the first deterministically. In
+        # practice this is unreachable for the canary patterns.
+        return candidates[0], None
+
+    for step_name, step_def in steps.items():
+        for b in step_def.inputs:
+            if b.any_of_sources:
+                # §11.4 same-loop-frame check: every source must be back-edge
+                # AND every source must share the same closing loop.
+                source_loops: list[str | None] = []
+                source_back_edges: list[bool] = []
+                for src_step, _ in b.any_of_sources:
+                    is_be = (step_name, src_step) in back_edges
+                    source_back_edges.append(is_be)
+                    if is_be:
+                        cl, err = closing_loop_for_edge(step_name, src_step)
+                        if err:
+                            errors.append(err)
+                            source_loops.append(None)
+                        else:
+                            source_loops.append(cl)
+                    else:
+                        source_loops.append(None)
+                # Whole-binding back-edge marking: every source is back-edge
+                # AND every source has the same closing loop.
+                if all(source_back_edges) and len(set(source_loops)) == 1 and source_loops[0]:
+                    b.is_back_edge = True
+                    b.closing_loop_id = source_loops[0]
+                # Else: leave b.is_back_edge False; mixed-scope any_of with
+                # is_present: gets caught in _validate_predicate_refs.
+            else:
+                if not b.source_step or b.source_step == "$job":
+                    continue
+                if (step_name, b.source_step) in back_edges:
+                    cl, err = closing_loop_for_edge(step_name, b.source_step)
+                    if err:
+                        errors.append(err)
+                        continue
+                    b.is_back_edge = True
+                    b.closing_loop_id = cl
+    return errors
+
+
+def _validate_predicate_refs(steps: dict) -> list[str]:
+    """Per §11.3-11.4 + Answer 2: validate when:/is_present: predicate references.
+
+    Rules:
+      - is_present: only legal on loop-back bindings.
+        Rule_id: is_present_not_loop_back.
+      - is_present: on an any_of binding requires the binding-as-a-whole
+        to be is_back_edge=True (every source is back-edge from the same
+        closing loop). Rule_id: is_present_mixed_scope_any_of.
+      - is_null:/eq:/in: are unchanged (legal on any binding).
+      - Answer 2 (unguarded back-edge check): if a step has an
+        is_back_edge binding with NO `optional: true`, NO any_of fallback,
+        AND NO is_present: guard, the step would have an undefined value
+        on iter-1. Reject at parse time so errors surface loud.
+
+    Returns a list of error strings.
+    """
+    from stepwise.models import WhenPredicate
+
+    errors: list[str] = []
+    for step_name, step_def in steps.items():
+        # Build name → binding lookup
+        binding_by_name: dict[str, "InputBinding"] = {
+            b.local_name: b for b in step_def.inputs
+        }
+
+        when = step_def.when
+        is_present_inputs: set[str] = set()
+        if isinstance(when, WhenPredicate):
+            if when.op == "is_present":
+                is_present_inputs.add(when.input)
+                target_b = binding_by_name.get(when.input)
+                if target_b is None:
+                    errors.append(
+                        f"step {step_name!r}: when.is_present references "
+                        f"unknown input {when.input!r}"
+                    )
+                elif not target_b.is_back_edge:
+                    if target_b.any_of_sources:
+                        errors.append(
+                            f"step {step_name!r}: when.is_present: on any_of "
+                            f"binding {when.input!r} requires every source to "
+                            f"be a loop-back binding closed by the same loop "
+                            f"(rule_id: is_present_mixed_scope_any_of)"
+                        )
+                    else:
+                        errors.append(
+                            f"step {step_name!r}: when.is_present: is only "
+                            f"legal on loop-back bindings (input {when.input!r} "
+                            f"is not a loop-back binding — it has no producer "
+                            f"closed by a loop exit rule) "
+                            f"(rule_id: is_present_not_loop_back)"
+                        )
+
+        # Answer 2 (Q2): unguarded back-edge check.
+        for b in step_def.inputs:
+            if not b.is_back_edge:
+                continue
+            # OK if optional, an any_of with at least one source, or
+            # guarded by an is_present: predicate on this binding.
+            if b.optional:
+                continue
+            if b.any_of_sources:
+                # any_of bindings inherently provide a fallback path
+                # (the any_of resolver picks the first available source).
+                continue
+            if b.local_name in is_present_inputs:
+                continue
+            errors.append(
+                f"step {step_name!r}: input binding {b.local_name!r} is a "
+                f"loop-back binding but has no fallback (add optional: true, "
+                f"an any_of: source list, or a when: {{ is_present: }} guard "
+                f"on this step)"
+            )
+    return errors
+
+
+def _apply_step7_back_edge_pass(
+    steps: dict, errors: list[str],
+) -> None:
+    """Run the step-7 two-pass back-edge marking + predicate validation.
+
+    Mutates each binding's ``is_back_edge`` and ``closing_loop_id`` fields,
+    and appends any structural errors to the caller's error list.
+    """
+    errors.extend(_mark_back_edges(steps))
+    errors.extend(_validate_predicate_refs(steps))
 
 # Safe builtins for exit rule expression evaluation
 
@@ -1646,6 +1919,14 @@ def load_workflow_yaml(
         config_vars=config_vars, input_vars=input_vars, requires=requires, readme=readme,
     )
 
+    # Step 7 (§11): mark loop-back bindings + validate is_present: predicate refs.
+    # Runs BEFORE workflow.validate() so the cycle detector and downstream
+    # validators can read InputBinding.is_back_edge directly.
+    step7_errors: list[str] = []
+    _apply_step7_back_edge_pass(steps, step7_errors)
+    if step7_errors:
+        raise YAMLLoadError(step7_errors)
+
     # Run the standard workflow validation
     validation_errors = workflow.validate()
     if validation_errors:
@@ -1741,6 +2022,13 @@ def load_workflow_string(yaml_str: str) -> WorkflowDefinition:
         steps=steps,
         config_vars=config_vars, input_vars=input_vars, requires=requires, readme=readme,
     )
+
+    # Step 7 (§11): back-edge marking + predicate validation (string-based loader path).
+    step7_errors: list[str] = []
+    _apply_step7_back_edge_pass(steps, step7_errors)
+    if step7_errors:
+        raise YAMLLoadError(step7_errors)
+
     validation_errors = workflow.validate()
     if validation_errors:
         raise YAMLLoadError(validation_errors)

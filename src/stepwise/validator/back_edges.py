@@ -5,10 +5,11 @@ Uses Kahn's algorithm. Edges considered:
   - producer → consumer for each `after_any_of` group member
   - producer → consumer for each input binding (regular + any_of)
 
-Step 3 always returns an empty back_edges set from compute_back_edges()
-because loop-back binding semantics ship in step 7. Cycles are still
-detected by find_cycle_nodes() and rejected by the validator with a
-deferred message.
+Step 7 (§11): ``compute_back_edges`` reads ``InputBinding.is_back_edge``
+directly from the parsed flow. The yaml_loader pre-pass marks back-edge
+bindings during parse, and the validator simply harvests the marking
+into the (consumer, producer) tuple set used by ``mhb`` and the
+forward-DAG residual cycle check in ``validate.validate``.
 """
 
 from __future__ import annotations
@@ -18,8 +19,25 @@ from collections import defaultdict, deque
 from stepwise.models import WorkflowDefinition
 
 
-def _build_edges(flow: WorkflowDefinition) -> tuple[dict[str, set[str]], dict[str, int]]:
-    """Build the producer→consumer edge map and consumer in-degree counts."""
+def _build_edges(
+    flow: WorkflowDefinition,
+    exclude_back_edges: bool = False,
+) -> tuple[dict[str, set[str]], dict[str, int]]:
+    """Build the producer→consumer edge map and consumer in-degree counts.
+
+    If ``exclude_back_edges`` is True:
+      - bindings marked ``InputBinding.is_back_edge=True`` are skipped, AND
+      - per-source back-edges within mixed-scope any_of bindings are
+        excluded individually (computed via ``models.collect_loop_back_edges``)
+        — necessary for the §11.4 mixed-scope case where the binding-as-a-
+        whole is NOT marked but individual sources are loop-back.
+    """
+    from stepwise.models import collect_loop_back_edges
+
+    per_source_back_edges: set[tuple[str, str]] = set()
+    if exclude_back_edges:
+        per_source_back_edges = collect_loop_back_edges(flow.steps)
+
     in_degree: dict[str, int] = {name: 0 for name in flow.steps}
     edges: dict[str, set[str]] = defaultdict(set)
 
@@ -37,8 +55,15 @@ def _build_edges(flow: WorkflowDefinition) -> tuple[dict[str, set[str]], dict[st
                     in_degree[name] += 1
         # input bindings
         for binding in step.inputs:
+            if exclude_back_edges and binding.is_back_edge:
+                continue
             if binding.any_of_sources:
                 for src_step, _ in binding.any_of_sources:
+                    if (
+                        exclude_back_edges
+                        and (name, src_step) in per_source_back_edges
+                    ):
+                        continue
                     if src_step in flow.steps and name not in edges[src_step]:
                         edges[src_step].add(name)
                         in_degree[name] += 1
@@ -48,6 +73,11 @@ def _build_edges(flow: WorkflowDefinition) -> tuple[dict[str, set[str]], dict[st
                 and binding.source_step in flow.steps
                 and name not in edges[binding.source_step]
             ):
+                if (
+                    exclude_back_edges
+                    and (name, binding.source_step) in per_source_back_edges
+                ):
+                    continue
                 edges[binding.source_step].add(name)
                 in_degree[name] += 1
 
@@ -96,14 +126,54 @@ def find_cycle_nodes(flow: WorkflowDefinition) -> set[str]:
     return set(flow.steps) - processed
 
 
-def compute_back_edges(flow: WorkflowDefinition) -> set[tuple[str, str]]:
-    """For step 3: always returns empty set (loop-back binding runtime is step 7).
+def find_cycle_nodes_excluding_back_edges(flow: WorkflowDefinition) -> set[str]:
+    """Like find_cycle_nodes() but ignores InputBinding.is_back_edge=True.
 
-    Step 7 will replace this with structural detection: producer-after-
-    consumer in topological order, closed by an enclosing loop exit
-    rule.
-
-    The validator's top-level validate(flow) separately calls
-    find_cycle_nodes(flow) and rejects flows with any cycles in step 3.
+    Step 7 (§11): used by validator/validate.py to find RESIDUAL cycles
+    in the forward DAG. A flow with well-formed loop-back bindings has
+    its back-edges marked at parse time; the forward DAG (with those
+    edges removed) must be acyclic. Any leftover cycle nodes here are
+    genuine errors and get rejected with `cyclic_dependency`.
     """
-    return set()
+    edges, in_degree = _build_edges(flow, exclude_back_edges=True)
+    queue = deque(name for name, deg in in_degree.items() if deg == 0)
+    processed: set[str] = set()
+    while queue:
+        cur = queue.popleft()
+        processed.add(cur)
+        for nxt in edges[cur]:
+            in_degree[nxt] -= 1
+            if in_degree[nxt] == 0:
+                queue.append(nxt)
+    return set(flow.steps) - processed
+
+
+def compute_back_edges(flow: WorkflowDefinition) -> set[tuple[str, str]]:
+    """Return the set of (consumer_step, producer_step) back-edge pairs.
+
+    Step 7 (§11): combines two sources of back-edge truth:
+      1. Bindings marked ``InputBinding.is_back_edge=True`` by the
+         yaml_loader pre-pass (whole-binding back-edges, including
+         §11.4 same-loop-frame any_of cases).
+      2. Per-source back-edges within mixed-scope any_of bindings —
+         computed structurally via ``models.collect_loop_back_edges``
+         so the residual cycle check and mhb computation see them too.
+    """
+    from stepwise.models import collect_loop_back_edges
+
+    back_edges: set[tuple[str, str]] = set()
+    for step_name, step in flow.steps.items():
+        for binding in step.inputs:
+            if not binding.is_back_edge:
+                continue
+            if binding.any_of_sources:
+                for src_step, _ in binding.any_of_sources:
+                    if src_step and src_step != "$job":
+                        back_edges.add((step_name, src_step))
+            elif binding.source_step and binding.source_step != "$job":
+                back_edges.add((step_name, binding.source_step))
+
+    # Per-source back-edges in mixed-scope any_of bindings (§11.4):
+    # the binding-as-a-whole isn't marked, but individual sources are.
+    back_edges.update(collect_loop_back_edges(flow.steps))
+    return back_edges

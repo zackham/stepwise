@@ -7,8 +7,11 @@ import pytest
 from stepwise.yaml_loader import load_workflow_yaml
 
 
-def test_is_present_still_rejected_at_parse_time(tmp_path):
-    """R11: is_present: predicate is still rejected at parse time with locked wording."""
+def test_is_present_on_regular_binding_rejected_at_parse_time(tmp_path):
+    """Step 7 (§11.3): is_present: is now accepted on loop-back bindings,
+    but rejected on regular (non-loop-back) bindings via the second-pass
+    _validate_predicate_refs check (rule_id: is_present_not_loop_back).
+    """
     flow_yaml = """\
 name: test-is-present
 steps:
@@ -31,8 +34,7 @@ steps:
         load_workflow_yaml(f)
     msg = str(exc_info.value)
     assert "is_present" in msg
-    assert "not yet supported" in msg
-    assert "loop-back binding runtime not yet implemented" in msg
+    assert "not a loop-back binding" in msg or "is_present_not_loop_back" in msg
 
 
 def test_dynamic_session_name_rejected_at_parse_time(tmp_path):

@@ -261,9 +261,14 @@ inputs:
 - In script executors: environment variable is unset (not "None" or "null")
 - `any_of` + `optional`: allowed — "try these sources, but if none available, proceed with `None`"
 
-**Cycle detection:** A cycle in the dependency graph is valid if every cycle contains at least one `optional: true` edge.
+**Cycle detection:** A cycle in the dependency graph is valid if every cycle contains at least one `optional: true` or `any_of` edge AND the cycle is closed by an enclosing loop exit rule (`action: loop` or `action: escalate` with a `target:`). The parser marks such edges as *loop-back bindings* (`is_back_edge=True`) and excludes them from the forward cycle check. Unguarded back-edges (a plain binding forming a cycle with no optional/any_of fallback) are rejected at parse time with `rule_id: loop_back_binding_ambiguous_closure`.
 
-**Data model:** `InputBinding("x", "step", "field", optional=True)`
+**Loop-back runtime semantics (§11):**
+- On the first iteration of the enclosing loop frame, the loop-back binding resolves to *absent* (presence = False). Optional bindings deliver `None`; `any_of` falls through to the first non-back-edge source.
+- On iter-N > 1, the binding resolves normally, carrying the producer's most recent output from the previous iteration.
+- Nested loops get independent `LoopFrame` stacks — child frames reset to iteration 0 each time their parent bumps, so inner loop presence starts absent on every outer iteration.
+
+**Data model:** `InputBinding("x", "step", "field", optional=True)`. A binding marked as a back-edge additionally carries `is_back_edge=True` and `closing_loop_id=<frame_id>` (the loop target step name).
 
 #### `any_of` Inputs
 
@@ -493,6 +498,43 @@ steps:
 - At job settlement, never-started steps get SKIPPED runs for bookkeeping
 - Expression namespace: input names directly available (e.g., `category == 'trivial'`)
 - Returns false on NameError/AttributeError/TypeError (missing input treated as condition-not-met)
+
+**Presence predicates (`is_present:` / `is_null:`):**
+
+On **loop-back bindings** (an optional or `any_of` input whose source is closed by an enclosing loop exit rule), the `when` condition can route on presence rather than value. A loop-back binding is *absent* on the first pass of its enclosing loop and *present* on iter-N > 1:
+
+```yaml
+analyze:
+  when:
+    input: prev_note
+    is_present: false    # only run when the loop-back binding is absent (iter-1 init)
+  inputs:
+    prev_note:
+      from: critique.note
+      optional: true
+  outputs: [text]
+
+refine:
+  when:
+    input: prev_note
+    is_present: true     # only run when the loop-back binding has resolved (iter-N > 1)
+  inputs:
+    prev_note:
+      from: critique.note
+      optional: true
+  outputs: [text]
+```
+
+Truth table (§11.3):
+
+| Binding state              | `is_present: true` | `is_present: false` | `is_null: true` | `is_null: false` |
+|----------------------------|-------------------|---------------------|-----------------|------------------|
+| Absent (frame not active)  | false             | **true**            | true            | false            |
+| Present with non-null value| **true**           | false               | false           | **true**          |
+| Present with `None` value  | **true**           | false               | **true**         | false            |
+
+- `is_present` is only meaningful on loop-back bindings. Using it on a regular input is rejected at parse time.
+- For `any_of` loop-back bindings, all sources must share the same closing loop frame (§11.4) — otherwise the parser rejects the `is_present` use.
 
 **Settlement:**
 - When nothing is in motion and nothing is ready, the job is settled

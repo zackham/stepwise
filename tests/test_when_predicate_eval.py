@@ -115,13 +115,41 @@ class TestIsNull:
         assert evaluate_when_predicate(pred, {}) is False
 
 
-# ─── is_present: defended in depth ────────────────────────────────────────
+# ─── Step 7: is_present: now reads from presence map ─────────────────────
 
 
-class TestIsPresentDefenseInDepth:
-    def test_is_present_raises_not_implemented(self):
-        # Parse-time rejection in _parse_when should catch this, but the
-        # evaluator must also refuse to evaluate it as a safety net.
+class TestIsPresentNowSupported:
+    def test_is_present_true_with_presence_true(self):
         pred = WhenPredicate(input="x", op="is_present", value=True)
-        with pytest.raises(NotImplementedError, match="is_present"):
-            evaluate_when_predicate(pred, {"x": "anything"})
+        assert evaluate_when_predicate(pred, {"x": "v"}, presence={"x": True}) is True
+
+    def test_is_present_true_with_presence_false(self):
+        pred = WhenPredicate(input="x", op="is_present", value=True)
+        assert evaluate_when_predicate(pred, {}, presence={"x": False}) is False
+
+    def test_is_present_false_with_presence_false(self):
+        pred = WhenPredicate(input="x", op="is_present", value=False)
+        assert evaluate_when_predicate(pred, {}, presence={"x": False}) is True
+
+    def test_is_present_false_with_presence_true(self):
+        pred = WhenPredicate(input="x", op="is_present", value=False)
+        assert evaluate_when_predicate(pred, {"x": "v"}, presence={"x": True}) is False
+
+    def test_is_present_without_presence_arg_uses_inputs_keys(self):
+        # Backwards-compat: legacy callers without a presence map fall
+        # back to "presence = key in inputs".
+        pred = WhenPredicate(input="x", op="is_present", value=True)
+        assert evaluate_when_predicate(pred, {"x": "v"}) is True
+        assert evaluate_when_predicate(pred, {}) is False
+
+    def test_is_null_requires_presence(self):
+        # §11.3 truth table: is_null: true does NOT match the absent state.
+        pred_t = WhenPredicate(input="x", op="is_null", value=True)
+        assert evaluate_when_predicate(pred_t, {}, presence={"x": False}) is False
+        # Present-with-None matches
+        assert evaluate_when_predicate(pred_t, {"x": None}, presence={"x": True}) is True
+
+    def test_eq_requires_presence(self):
+        pred = WhenPredicate(input="x", op="eq", value="a")
+        assert evaluate_when_predicate(pred, {}, presence={"x": False}) is False
+        assert evaluate_when_predicate(pred, {"x": "a"}, presence={"x": True}) is True

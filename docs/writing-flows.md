@@ -471,6 +471,63 @@ Branching is **pull-based** — each step decides when it activates. When `class
 - `inputs: { f: step-x.f }` — data dependency (implies ordering)
 - `when: "expr"` — conditional gate on resolved inputs
 
+### Loop-back bindings and presence predicates
+
+Loops can carry data across iterations via **loop-back bindings**: an `optional: true` or `any_of` input whose source is closed by an enclosing `loop` (or `escalate` with a `target:`) exit rule. On iteration 1 the binding is *absent*; on iter-N > 1 it carries the previous iteration's output.
+
+```yaml
+steps:
+  analyze:
+    run: scripts/analyze.sh
+    inputs:
+      seed: $job.seed
+      prev_note:
+        from: critique.note
+        optional: true          # loop-back: absent on iter-1, carries critique.note on iter-N
+    outputs: [text]
+
+  critique:
+    run: scripts/critique.sh
+    inputs:
+      text: analyze.text
+    outputs: [note, verdict]
+    exits:
+      - when: "outputs.verdict == 'done'"
+        action: advance
+      - when: "True"
+        action: loop
+        target: analyze          # loop closes the analyze ← critique back-edge
+        max_iterations: 5
+```
+
+When you want different logic on iter-1 vs. iter-N, use the `is_present:` / `is_null:` predicates (see yaml-format.md for the full truth table):
+
+```yaml
+analyze-init:
+  when:
+    input: prev_note
+    is_present: false       # only runs on iter-1 (before any loop fires)
+  inputs:
+    prev_note:
+      from: critique.note
+      optional: true
+  outputs: [text]
+
+analyze-refine:
+  when:
+    input: prev_note
+    is_present: true        # only runs on iter-N > 1 (after loop bump)
+  inputs:
+    prev_note:
+      from: critique.note
+      optional: true
+  outputs: [text]
+```
+
+The validator accepts loops closed by `any_of` (iter-1 fallback to a non-loop producer) or `optional: true` (iter-1 resolves to `None`). Plain bindings forming a cycle without one of these escape hatches are rejected at parse time — you must declare the fallback explicitly.
+
+Nested loops get independent iteration frames: when the outer loop bumps, the inner frame resets to iteration 0, so the inner step's loop-back binding is absent on the first inner iteration of every outer iteration. See `flows/test-loop-back-nested/FLOW.yaml` in the vita repo for a worked nested canary.
+
 ## Derived outputs
 
 Compute fields deterministically from a step's executor output. Evaluated after the executor returns but before exit rules.

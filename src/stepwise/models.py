@@ -178,6 +178,8 @@ class InputBinding:
     source_field: str  # which output field; empty string for any_of
     any_of_sources: list[tuple[str, str]] | None = None  # [(step, field), ...]
     optional: bool = False  # weak reference — resolves to None if dep unavailable
+    is_back_edge: bool = False  # True iff this binding's producer is closed by a loop exit rule (§11.2)
+    closing_loop_id: str | None = None  # The frame_id (loop target step name) closing this back-edge (§11.5)
 
     def to_dict(self) -> dict:
         d: dict = {
@@ -189,6 +191,10 @@ class InputBinding:
             d["any_of_sources"] = [{"step": s, "field": f} for s, f in self.any_of_sources]
         if self.optional:
             d["optional"] = True
+        if self.is_back_edge:
+            d["is_back_edge"] = True
+        if self.closing_loop_id:
+            d["closing_loop_id"] = self.closing_loop_id
         return d
 
     @classmethod
@@ -202,6 +208,8 @@ class InputBinding:
             source_field=d["source_field"],
             any_of_sources=any_of,
             optional=d.get("optional", False),
+            is_back_edge=d.get("is_back_edge", False),
+            closing_loop_id=d.get("closing_loop_id"),
         )
 
 
@@ -779,6 +787,169 @@ class KitDefinition:
         )
 
 
+def collect_loop_back_edges(
+    steps: dict[str, "StepDefinition"],
+) -> set[tuple[str, str]]:
+    """Return the set of (consumer, producer) pairs that are loop back-edges.
+
+    Per §11.2 of the coordination doc: a back-edge is a (consumer, producer)
+    input edge where (a) the producer is later in topological order than
+    the consumer when the back-edge itself is excluded from the graph, AND
+    (b) the cycle involving (consumer, producer) is closed by an enclosing
+    `loop` exit rule whose target equals the consumer (or transitively
+    reaches the consumer via the forward DAG).
+
+    Algorithm (iterative fixed-point):
+      1. Compute all (loop_owner, loop_target) pairs from exit rules.
+      2. Identify back-edge CANDIDATES: input edges (consumer ← producer)
+         where the producer reaches the consumer via the forward graph
+         (i.e., the edge is structurally part of a cycle), AND the cycle
+         is closed by an enclosing loop. The cycle is closed iff some
+         loop owner on the forward path from consumer to producer has
+         target == consumer (or some step that reaches consumer in the
+         forward DAG).
+      3. Excluding back-edge candidates, the remaining graph is acyclic
+         and has a topological order.
+
+    The simpler subset that covers the existing yellow flows + canaries:
+    a (consumer, producer) edge is a back-edge iff
+        - producer reaches consumer via the forward graph (cycle), AND
+        - the cycle includes a step whose `loop` exit rule targets a
+          step on the forward path from consumer to producer (i.e.,
+          the loop closes the cycle).
+
+    For the trivial case (which covers every yellow flow + canary):
+    consumer == loop_owner's target AND producer == loop_owner directly.
+    Plus self-loops where consumer == producer == loop_owner.
+
+    The returned set is the canonical authority used by:
+      - yaml_loader._mark_back_edges (parse-time field marking)
+      - models.WorkflowDefinition.entry_steps (cycle exclusion)
+      - models.WorkflowDefinition._detect_cycles (Kahn exclusion)
+    """
+    # First: collect all (loop_owner, loop_target) pairs from exit rules.
+    # Both `action: loop` and `action: escalate target: X` contribute:
+    # escalate-to-target is semantically a "relaunch target, then resume"
+    # pattern and closes the same structural cycle as a plain loop when
+    # the target feeds data back into the owner via an optional binding.
+    loop_pairs: set[tuple[str, str]] = set()
+    for owner_name, owner_def in steps.items():
+        for rule in owner_def.exit_rules:
+            action = rule.config.get("action")
+            if action in ("loop", "escalate"):
+                target = rule.config.get("target")
+                if target and target in steps:
+                    loop_pairs.add((owner_name, target))
+    if not loop_pairs:
+        return set()
+
+    # Build the forward edge adjacency. We walk every input binding edge
+    # AND every after edge from consumer to producer (i.e., reverse of the
+    # data flow direction relative to the dependency: producer → consumer).
+    fwd: dict[str, set[str]] = {name: set() for name in steps}
+    # Per Answer 2 ("fail loud" on unguarded back-edges): only OPTIONAL
+    # bindings, ANY_OF bindings, and self-loops are CANDIDATES for being
+    # back-edges. Plain inputs are forward by construction — if a plain
+    # input creates a cycle, the cycle must be closed by a different
+    # (optional/any_of) edge somewhere else.
+    input_edges: set[tuple[str, str]] = set()
+    for cname, cdef in steps.items():
+        for b in cdef.inputs:
+            sources = []
+            if b.any_of_sources:
+                sources = [s for s, _ in b.any_of_sources]
+            elif b.source_step and b.source_step != "$job":
+                sources = [b.source_step]
+            for src in sources:
+                if src in steps and src != cname:
+                    fwd[src].add(cname)
+                    if b.any_of_sources or b.optional:
+                        input_edges.add((cname, src))
+                elif src == cname:
+                    # Self-edge — record but don't add to fwd
+                    if b.any_of_sources or b.optional:
+                        input_edges.add((cname, src))
+        for s in cdef.after:
+            if s in steps and s != cname:
+                fwd[s].add(cname)
+
+    # For each loop_pair (owner, target), the cycle closes some set of
+    # input edges that go BACKWARD relative to the forward graph. Build
+    # the set of nodes reachable forward from `target` (these are the
+    # nodes on the loop body's path). Any input edge (consumer, producer)
+    # where consumer is on the loop body path AND producer is later in
+    # topological order than consumer (i.e., producer is forward-reachable
+    # from consumer via non-back-edges) is a back-edge candidate IF that
+    # producer is itself on the path back to target.
+    #
+    # The trivial case: producer is in loop_pair owners (owner == producer)
+    # AND target == consumer. That covers every existing yellow flow +
+    # canary shape.
+
+    back_edges: set[tuple[str, str]] = set()
+
+    def reachable_fwd_excluding(start: str, end: str, exclude_edge: tuple[str, str]) -> bool:
+        """Forward reachability via fwd graph, EXCLUDING one (producer→consumer) edge.
+
+        exclude_edge is (producer, consumer) — the forward direction of the
+        candidate input edge being tested. We exclude it so the cycle
+        check doesn't trivially include the candidate itself.
+        """
+        if start == end:
+            return True
+        seen = {start}
+        stack = [start]
+        while stack:
+            cur = stack.pop()
+            for nxt in fwd.get(cur, ()):
+                if (cur, nxt) == exclude_edge:
+                    continue
+                if nxt == end:
+                    return True
+                if nxt not in seen:
+                    seen.add(nxt)
+                    stack.append(nxt)
+        return False
+
+    for (cname, src) in input_edges:
+        if cname == src:
+            # Self-loop — back-edge iff this step has a loop targeting itself
+            if (cname, cname) in loop_pairs:
+                back_edges.add((cname, src))
+            continue
+        # An input edge (consumer ← producer) is a back-edge iff there
+        # exists a loop_pair (owner, target) such that the edge is part
+        # of the cycle closed by the loop jump owner → target. The
+        # cycle is: cname → ... → owner → [loop jump] → target → ...
+        # → src → [this edge] → cname. Removing this edge breaks this
+        # cycle iff (a) target can still reach src via fwd (so producer
+        # is inside the body), and (b) cname can still reach owner via
+        # fwd (so consumer is inside the body or at its tail).
+        #
+        # Two common shapes covered by this test:
+        #   Pattern A (canary): consumer == target, producer == owner
+        #     "Top of body reads from end of previous iteration."
+        #     (e.g., analyze ← critique via optional prev_note)
+        #   Pattern B (report, dev): consumer == owner, producer == target
+        #     "End of body reads loop-target-produced value with an
+        #     iter-1 fallback via any_of / optional."
+        #     (e.g., hub ← work via any_of [init.notes, work.result])
+        for (owner, target) in loop_pairs:
+            reach_body = (target == src) or reachable_fwd_excluding(
+                target, src, (src, cname)
+            )
+            if not reach_body:
+                continue
+            reach_tail = (cname == owner) or reachable_fwd_excluding(
+                cname, owner, (src, cname)
+            )
+            if reach_tail:
+                back_edges.add((cname, src))
+                break
+
+    return back_edges
+
+
 @dataclass
 class WorkflowDefinition:
     steps: dict[str, StepDefinition] = field(default_factory=dict)
@@ -1285,25 +1456,22 @@ class WorkflowDefinition:
 
         Loop back-edges are excluded: if step X depends on step Y and Y has
         a loop exit targeting X, that dependency doesn't prevent X from being
-        an entry step.
+        an entry step. Reads InputBinding.is_back_edge directly when set;
+        falls back to the structural collect_loop_back_edges() helper for
+        bindings constructed without the parser (e.g., test fixtures).
         """
-        # Collect loop back-edges
-        loop_back_edges: set[tuple[str, str]] = set()
-        for sname, sdef in self.steps.items():
-            for rule in sdef.exit_rules:
-                if rule.config.get("action") == "loop" and rule.config.get("target"):
-                    loop_back_edges.add((sname, rule.config["target"]))
+        back_edges = collect_loop_back_edges(self.steps)
 
         result = []
         for name, step in self.steps.items():
             has_step_deps = any(
                 b.source_step != "$job"
-                and (b.source_step, name) not in loop_back_edges
+                and not (b.is_back_edge or (b.source_step, name) in back_edges)
                 and not b.optional
                 for b in step.inputs if not b.any_of_sources
             )
             has_any_of_deps = any(
-                b.any_of_sources and not b.optional
+                b.any_of_sources and not b.optional and not b.is_back_edge
                 for b in step.inputs
             )
             has_for_each_dep = step.for_each is not None
@@ -1431,19 +1599,16 @@ class WorkflowDefinition:
     def _detect_cycles(self) -> list[str]:
         """Detect cycles using Kahn's algorithm.
 
-        Loop back-edges are excluded: when step X depends on step Y's output
-        and Y has a loop exit rule targeting X, that edge is a valid loop
-        pattern, not a structural cycle.
+        Loop back-edges are excluded via the shared collect_loop_back_edges
+        helper (which is also the authority for InputBinding.is_back_edge
+        marking at parse time). Bindings already marked is_back_edge=True
+        are also skipped, in case the cycle detector is run on a flow that
+        was constructed by from_dict (which may carry the marking) without
+        going through the yaml_loader pre-pass.
         """
-        # Collect loop back-edges: (source_step, target_step) pairs where
-        # source has a loop exit targeting target
-        loop_back_edges: set[tuple[str, str]] = set()
-        for name, step in self.steps.items():
-            for exit_rule in step.exit_rules:
-                action = exit_rule.config.get("action")
-                target = exit_rule.config.get("target")
-                if action == "loop" and target:
-                    loop_back_edges.add((name, target))
+        # back_edges: set of (consumer, producer) pairs whose edge is a
+        # loop back-edge.
+        back_edges = collect_loop_back_edges(self.steps)
 
         adj: dict[str, list[str]] = {name: [] for name in self.steps}
         in_degree: dict[str, int] = {name: 0 for name in self.steps}
@@ -1456,21 +1621,23 @@ class WorkflowDefinition:
                     optional_edges.add((binding.source_step, name))
 
         for name, step in self.steps.items():
-            deps: set[str] = set()
+            deps: set[tuple[str, bool]] = set()  # (dep_step, is_marked_back_edge)
             for binding in step.inputs:
+                marked_be = binding.is_back_edge
                 if binding.any_of_sources:
                     for src_step, _ in binding.any_of_sources:
-                        deps.add(src_step)
+                        deps.add((src_step, marked_be))
                 elif binding.source_step != "$job":
-                    deps.add(binding.source_step)
+                    deps.add((binding.source_step, marked_be))
             for seq in step.after:
-                deps.add(seq)
+                deps.add((seq, False))
             if step.for_each:
-                deps.add(step.for_each.source_step)
-            for dep in deps:
+                deps.add((step.for_each.source_step, False))
+            for dep, marked_be in deps:
                 # Skip loop back-edges: dep → name is a back-edge if dep
-                # has a loop exit targeting name
-                if (dep, name) in loop_back_edges:
+                # has a loop exit closing the cycle through name (or if
+                # the binding was already marked is_back_edge by the parser)
+                if marked_be or (name, dep) in back_edges:
                     continue
                 # Skip optional edges — they don't create hard dependencies
                 if (dep, name) in optional_edges:
@@ -1858,6 +2025,52 @@ class JobConfig:
         )
 
 
+# ── Loop Frame (§11.5 nested-loop presence scoping) ───────────────────
+
+
+@dataclass
+class LoopFrame:
+    """A single loop frame on a Job's loop_frames stack.
+
+    Per §11.5 of the coordination doc. Each frame represents one active
+    loop scope, identified by the loop initiator step name (= the
+    `target:` of the closing `loop` exit rule). Frames track:
+
+      - frame_id: the loop initiator step name (canonical identifier)
+      - iteration_index: 1-based; 1 on first entry, increments per relaunch
+      - parent_frame_id: immediate enclosing outer frame, or None at top level
+      - presence: per-binding presence cache scoped to this frame; resets
+        on each iteration
+
+    The frame stack is the source of truth for `is_present:` semantics on
+    loop-back bindings (§11.3): the resolver looks up
+    `job.loop_frames[binding.closing_loop_id].presence[binding.local_name]`
+    to evaluate whether a back-edge binding has produced a value yet
+    inside the current iteration of its closing loop.
+    """
+    frame_id: str
+    iteration_index: int = 0
+    parent_frame_id: str | None = None
+    presence: dict[str, bool] = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "frame_id": self.frame_id,
+            "iteration_index": self.iteration_index,
+            "parent_frame_id": self.parent_frame_id,
+            "presence": dict(self.presence),
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> LoopFrame:
+        return cls(
+            frame_id=d["frame_id"],
+            iteration_index=int(d.get("iteration_index", 0)),
+            parent_frame_id=d.get("parent_frame_id"),
+            presence=dict(d.get("presence") or {}),
+        )
+
+
 # ── Job ────────────────────────────────────────────────────────────────
 
 
@@ -1883,6 +2096,7 @@ class Job:
     metadata: dict = field(default_factory=lambda: {"sys": {}, "app": {}})
     job_group: str | None = None
     depends_on: list[str] = field(default_factory=list)
+    loop_frames: dict[str, LoopFrame] = field(default_factory=dict)  # §11.5 LoopFrame stack
 
     def to_dict(self) -> dict:
         d = {
@@ -1908,10 +2122,18 @@ class Job:
         if self.notify_url:
             d["notify_url"] = self.notify_url
             d["notify_context"] = self.notify_context
+        if self.loop_frames:
+            d["loop_frames"] = {fid: f.to_dict() for fid, f in self.loop_frames.items()}
         return d
 
     @classmethod
     def from_dict(cls, d: dict) -> Job:
+        loop_frames_raw = d.get("loop_frames") or {}
+        loop_frames: dict[str, LoopFrame] = {}
+        if isinstance(loop_frames_raw, dict):
+            for fid, fd in loop_frames_raw.items():
+                if isinstance(fd, dict):
+                    loop_frames[fid] = LoopFrame.from_dict(fd)
         return cls(
             id=d["id"],
             objective=d["objective"],
@@ -1933,6 +2155,7 @@ class Job:
             metadata=d.get("metadata", {"sys": {}, "app": {}}),
             job_group=d.get("job_group"),
             depends_on=d.get("depends_on", []),
+            loop_frames=loop_frames,
         )
 
 

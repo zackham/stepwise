@@ -166,6 +166,10 @@ class SQLiteStore:
             ("name", "TEXT", None),
             ("metadata", "TEXT", "'{}'"),
             ("job_group", "TEXT", None),
+            # Step 7: §11.5 LoopFrame stack persistence (per decision 28).
+            # Existing rows materialize with empty dict; pre-step-7 jobs
+            # simply have no frames and continue to load cleanly.
+            ("loop_frames", "TEXT", "'{}'"),
         ]:
             if col not in job_columns:
                 default_clause = f" DEFAULT {default}" if default else ""
@@ -175,13 +179,18 @@ class SQLiteStore:
     # ── Jobs ──────────────────────────────────────────────────────────────
 
     def save_job(self, job: Job) -> None:
+        # Step 7 (§11.5): serialize loop_frames as JSON. Empty dict is the
+        # default for non-loop jobs.
+        loop_frames_json = _dumps(
+            {fid: f.to_dict() for fid, f in job.loop_frames.items()}
+        ) if job.loop_frames else "{}"
         self._conn.execute(
             """INSERT INTO jobs
                 (id, objective, workflow, status, inputs, parent_job_id,
                  parent_step_run_id, workspace_path, config, created_at, updated_at,
                  created_by, runner_pid, heartbeat_at, notify_url, notify_context, name,
-                 metadata, job_group)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 metadata, job_group, loop_frames)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 objective = excluded.objective,
                 workflow = excluded.workflow,
@@ -199,7 +208,8 @@ class SQLiteStore:
                 notify_context = excluded.notify_context,
                 name = excluded.name,
                 metadata = excluded.metadata,
-                job_group = excluded.job_group
+                job_group = excluded.job_group,
+                loop_frames = excluded.loop_frames
             """,
             (
                 job.id,
@@ -221,6 +231,7 @@ class SQLiteStore:
                 job.name,
                 _dumps(job.metadata),
                 job.job_group,
+                loop_frames_json,
             ),
         )
         self._conn.commit()
@@ -236,7 +247,20 @@ class SQLiteStore:
         return job
 
     def _row_to_job(self, row: sqlite3.Row) -> "Job":
-        from stepwise.models import _now
+        from stepwise.models import _now, LoopFrame
+        # Step 7 (§11.5): deserialize loop_frames JSON column. Pre-step-7
+        # rows lack the column entirely (handled via "in row.keys()") and
+        # rows with the column default to "{}".
+        loop_frames: dict = {}
+        if "loop_frames" in row.keys() and row["loop_frames"]:
+            try:
+                lf_raw = json.loads(row["loop_frames"]) or {}
+                if isinstance(lf_raw, dict):
+                    for fid, fd in lf_raw.items():
+                        if isinstance(fd, dict):
+                            loop_frames[fid] = LoopFrame.from_dict(fd)
+            except (json.JSONDecodeError, KeyError, TypeError):
+                loop_frames = {}
         return Job(
             id=row["id"],
             objective=row["objective"] or "",
@@ -257,6 +281,7 @@ class SQLiteStore:
             notify_context=json.loads(row["notify_context"]) if "notify_context" in row.keys() and row["notify_context"] else {},
             metadata=json.loads(row["metadata"]) if "metadata" in row.keys() and row["metadata"] else {"sys": {}, "app": {}},
             job_group=row["job_group"] if "job_group" in row.keys() else None,
+            loop_frames=loop_frames,
         )
 
     def active_jobs(self) -> list[Job]:

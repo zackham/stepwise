@@ -31,6 +31,10 @@ RuleId = Literal[
     "is_present_unsupported",
     "dynamic_session_name",
     "static_session_name_invalid",
+    # Step 7 (§11): loop-back binding rule_ids
+    "loop_back_binding_ambiguous_closure",
+    "is_present_not_loop_back",
+    "is_present_mixed_scope_any_of",
 ]
 
 

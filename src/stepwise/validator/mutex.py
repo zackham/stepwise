@@ -78,43 +78,57 @@ def _set_disjoint(s1: tuple, s2: tuple) -> bool:
 _SENTINEL = object()
 
 
-def evaluate_when_predicate(pred: WhenPredicate, inputs: dict) -> bool:
+def evaluate_when_predicate(
+    pred: WhenPredicate,
+    inputs: dict,
+    presence: dict[str, bool] | None = None,
+) -> bool:
     """Evaluate a predicate-form when: clause against resolved inputs.
 
-    Strict-type semantics per §5.5:
-      - eq: runtime value must be identical type AND value (rejects
-        cross-type matches like int vs float, int vs str, int vs bool).
-      - in: runtime value must match at least one tuple element by
-        strict-type equality.
-      - is_null: true → runtime value is None (key-missing → False).
-      - is_null: false → runtime value is not None AND key is present.
-      - is_present: not yet supported (parse-time rejection in §1.2).
-        Defended in depth here with NotImplementedError.
+    Strict-type semantics per §5.5 plus §11.3 presence rules (step 7):
+      - eq: presence must be True AND runtime value must match by strict
+        type and value.
+      - in: presence must be True AND runtime value must match at least
+        one tuple element by strict-type equality.
+      - is_null: true → presence True AND runtime value is None.
+      - is_null: false → presence True AND runtime value is not None.
+      - is_present: true → presence is True (binding has produced a value
+        in the current iteration of its closing loop).
+      - is_present: false → presence is False (loop-back binding on iter-1,
+        or any other absent state).
+
+    The ``presence`` parameter is a per-binding map produced by
+    ``Engine._resolve_inputs``. If the caller doesn't provide it (legacy
+    callers, or unit tests), presence defaults to ``key in inputs`` for
+    backwards compatibility.
     """
+    if presence is None:
+        # Backwards-compat fallback: derive presence from key membership.
+        presence = {k: True for k in inputs.keys()}
+
     runtime_value = inputs.get(pred.input, _SENTINEL)
     key_present = runtime_value is not _SENTINEL
+    pres = presence.get(pred.input, False)
 
     if pred.op == "eq":
-        if not key_present:
+        if not pres or not key_present:
             return False
         return type(runtime_value) is type(pred.value) and runtime_value == pred.value
 
     if pred.op == "in":
-        if not key_present:
+        if not pres or not key_present:
             return False
         return _value_in_list(runtime_value, pred.value)  # type: ignore[arg-type]
 
     if pred.op == "is_null":
         if pred.value is True:
-            # is_null: true → runtime value is None. Key-missing → False.
-            return key_present and runtime_value is None
-        # is_null: false → key present and value is not None.
-        return key_present and runtime_value is not None
+            # §11.3: is_null: true requires presence (does NOT match absent).
+            return pres and key_present and runtime_value is None
+        # is_null: false → presence True AND value is not None.
+        return pres and key_present and runtime_value is not None
 
     if pred.op == "is_present":
-        raise NotImplementedError(
-            "is_present: runtime support not yet implemented "
-            "(parse-time rejection in yaml_loader._parse_when)"
-        )
+        # §11.3: is_present: <bool> reads directly from the presence map.
+        return bool(pres) == bool(pred.value)
 
     raise ValueError(f"unknown when.op: {pred.op!r}")
