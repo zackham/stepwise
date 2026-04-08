@@ -284,7 +284,7 @@ Key distinctions:
 
 ## Coordination rules
 
-The validator enforces a set of coordination rules to prevent races between steps that share state (named sessions, forked sessions, shared workspaces). These rules are enforced both at parse time (`yaml_loader`) and by the coordination validator (`stepwise validate`). See `data/reports/2026-04-07-stepwise-coordination-and-validation-model.md` in the vita repo for the full model, derivations, and council findings.
+The validator enforces a set of coordination rules to prevent races between steps that share state (named sessions, forked sessions, shared workspaces). These rules are enforced both at parse time (`yaml_loader`) and by the coordination validator (`stepwise validate`). Run `stepwise validate <flow.yaml>` before every run to catch session-writer races, unguarded loop-back bindings, and cycle errors early.
 
 **Pair safety for session writers (§7.3).** Any two steps writing to the same named session must be provably non-concurrent. The validator proves this by showing either (a) one step's `after:`-transitive closure includes the other (linear chain), or (b) their `when:` predicates are pairwise mutex (conditional branches). If neither can be proven, the validator emits `pair_unsafe` with a fix hint pointing at adding `after:` or a mutex `when:` gate.
 

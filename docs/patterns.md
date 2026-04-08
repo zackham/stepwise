@@ -704,6 +704,57 @@ steps:
 
 ---
 
+## 10. Subagent Fan-Out (For-Each + Fork-From)
+
+**Problem:** You want multiple independent agents to start from a shared context (e.g., an architectural analysis), explore different areas in parallel, and report back. Each agent should see the parent's full conversation history but can't interfere with each other.
+
+**Pattern:** Build shared context in a session, then use `for_each` + `fork_from` to fan out parallel explorations. Each iteration forks the parent session and runs independently.
+
+```yaml
+steps:
+  build_context:
+    executor: agent
+    agent: claude
+    session: research
+    working_dir: ./myproject
+    outputs: [angles]
+    prompt: "Analyze this codebase. Propose 3 angles for deeper analysis."
+
+  explore:
+    for_each:
+      items: build_context.angles
+      item_var: angle
+    inputs:
+      context: build_context._session
+    flow:
+      steps:
+        deep_dive:
+          executor: agent
+          fork_from: $job.context
+          outputs: [result]
+          prompt: "Deep-dive into: $angle"
+
+  synthesize:
+    executor: agent
+    agent: claude
+    session: research
+    after: [explore]
+    outputs: [result]
+    inputs:
+      findings: explore.result
+    prompt: "Synthesize these parallel findings: $findings"
+```
+
+**How it works:**
+- `build_context` runs in session `research`, outputs a list of angles
+- `build_context._session` captures the session snapshot (agent: claude inferred, working_dir inherited)
+- Each `explore` iteration forks from that snapshot — gets the full architectural context, then explores its angle independently
+- `synthesize` continues the original `research` session and receives the aggregated findings from all forks
+
+**When to use:** The parent builds up valuable context (file reads, architectural understanding, codebase knowledge) and you want N parallel agents to each start from that context without repeating the setup work.
+
+---
+
 ## Summary: When to Use What
 
 | Situation | Pattern |
@@ -712,6 +763,7 @@ steps:
 | Downstream agent only needs parts of upstream output | **Selective reading** -- pass path, instruct agent to read on demand |
 | Decomposition shape unknown until runtime | **Dynamic fan-out** -- `emit_flow: true` with for_each |
 | Decomposition shape always the same | Static `for_each` in YAML |
+| Parallel agents need shared parent context | **Subagent fan-out** -- `for_each` + `fork_from` + `_session` |
 | Mechanical data transformation between steps | **Script step** -- deterministic, no LLM needed |
 | Step depends on prior step's files, not its outputs | `after: [step]` -- ordering without data transfer |
 | Agent may hit decisions outside its scope | **Escalation boundary** -- `>>>ESCALATE:` + external step + loop |

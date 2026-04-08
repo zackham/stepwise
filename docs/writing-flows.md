@@ -624,6 +624,65 @@ steps:
 
 The engine snapshots the fork target's session state atomically at its completion under an exclusive file lock, guaranteeing forks see the parent's completion-tail state even if downstream writers keep mutating the live session. **Multiple chain roots** on the same forked session are permitted when their `when:` clauses are pairwise mutex (conditional rejoin pattern).
 
+### The `_session` virtual output
+
+Any step with `session:` declared automatically exposes a `_session` virtual output. It resolves to the session's snapshot UUID — a handle you can pass to other steps or sub_flows via input bindings. Consuming `_session` triggers the engine to snapshot the source step's session at completion.
+
+Use `_session` to pass session context to `for_each` sub_flows without hardcoding step names:
+
+```yaml
+build_context:
+  executor: agent
+  agent: claude
+  session: research
+  working_dir: ./myproject
+  outputs: [angles]
+  prompt: "Analyze this codebase. Propose 3 angles."
+
+explore:
+  for_each:
+    items: build_context.angles
+    item_var: angle
+  inputs:
+    context: build_context._session    # captures the session snapshot
+  flow:
+    steps:
+      deep_dive:
+        executor: agent
+        fork_from: $job.context        # forks from the passed-in session
+        outputs: [result]
+        prompt: "Deep-dive into: $angle"
+
+synthesize:
+  executor: agent
+  agent: claude
+  session: research
+  after: [explore]
+  outputs: [result]
+  inputs:
+    findings: explore.result
+  prompt: "Synthesize: $findings"
+```
+
+The sub_flow declares `fork_from: $job.context` — the `$job.` prefix reads the session UUID from the job's inputs. For standalone flow files (not inline), declare the input with `type: session`:
+
+```yaml
+# standalone-explore.flow.yaml
+inputs:
+  angle:
+    type: str
+  context:
+    type: session
+steps:
+  deep_dive:
+    executor: agent
+    fork_from: $job.context
+    outputs: [result]
+    prompt: "Deep-dive into: $angle"
+```
+
+For embedded sub_flows (inline `flow:` blocks), the input types are inferred automatically from the parent's bindings — no explicit `inputs:` block needed.
+
 ## Caching
 
 Opt-in, content-addressable caching for step results:

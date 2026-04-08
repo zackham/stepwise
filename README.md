@@ -70,6 +70,8 @@ stepwise run nightly-analysis --async --input date="2026-03-29"
 
 **Session continuity across steps.** Agent steps can share a conversation via named sessions (`session: main`) — the model accumulates context across steps, just like sequential prompts. Fork a session (`fork_from: <step>`) to branch an independent conversation from a specific step's completion tail. The engine snapshots fork sources atomically and validates session-writer ordering at parse time.
 
+**Coordination validator.** `stepwise validate` catches session-writer races, unguarded loop-back bindings, and cycle errors before you run. Predicate-form `when:` clauses let the validator prove mutual exclusion between conditional branches sharing a session.
+
 **Crash-proof by default.** SQLite WAL mode, heartbeat-based stale detection, automatic orphan recovery. Kill the server, restart it, jobs resume. No message queue, no distributed state.
 
 ## A flow in 30 seconds

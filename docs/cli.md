@@ -257,13 +257,18 @@ Creates `flows/<name>/FLOW.yaml` in the current project. Use `kit/flow` syntax t
 
 ### `stepwise validate`
 
-Check a flow file for syntax and structural errors without running it.
+Check a flow file for syntax, structural, and coordination errors without running it.
 
 ```bash
 stepwise validate my-flow.flow.yaml
 ```
 
-Catches: YAML syntax errors, missing step references, invalid input bindings, bad exit rule targets, undeclared outputs, unbounded loops, uncovered output combinations.
+**Structural errors (fatal):** YAML syntax errors, missing step references, invalid input bindings, bad exit rule targets, undeclared outputs, unbounded loops, uncovered output combinations.
+
+**Coordination warnings:** The validator also checks session-writer safety, loop-back binding guards, and cycle detection:
+- `pair_unsafe` — two steps write to the same session without provable non-concurrency. Fix: add an `after:` chain or use predicate-form `when:` clauses to prove mutual exclusion.
+- `cyclic_dependency` — steps form a cycle with no `action: loop` exit rule to break it.
+- `loop_back_binding_ambiguous_closure` — a loop-back input has no `optional:`, `any_of`, or `is_present:` guard for iter-1.
 
 ---
 

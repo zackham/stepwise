@@ -619,7 +619,25 @@ steps:
 - `max_attempts > 1` and `cache:` are prohibited on session-writers and fork-source steps. Ephemeral one-shot agent steps (no `session:`, no `fork_from:`) may retry freely.
 - For `for_each` embedded sub_flows, the `flow.inputs:` block is **inferred** from the parent step's `inputs:` bindings + `item_var` when not declared (§9.7.5). `_session` sources infer `type: session`; all others infer `type: str`.
 
-The engine snapshots the fork target's session state at its completion tail, under a dedicated exclusive lock (`fcntl.flock`), before any downstream writer can mutate the live session. This guarantees forks see the parent's completion-tail state, not a racy live-UUID tail. See `data/reports/2026-04-07-stepwise-coordination-and-validation-model.md` §9 and §13 (in the vita repo) for the full coordination model.
+**The `_session` virtual output.** Any step with `session:` automatically exposes a `_session` output — a handle to the session's snapshot UUID. Reference it in input bindings to pass session context to other steps or sub_flows:
+
+```yaml
+explore:
+  for_each:
+    items: build_context.angles
+    item_var: angle
+  inputs:
+    context: build_context._session     # captures session snapshot
+  flow:
+    steps:
+      deep_dive:
+        executor: agent
+        fork_from: $job.context         # forks from the passed-in snapshot
+        outputs: [result]
+        prompt: "Deep-dive into: $angle"
+```
+
+Consuming `_session` triggers the engine to snapshot the source step's session at completion (ensuring forks see the completion-tail state, not a racy live tail). The snapshot is taken under an exclusive file lock (`fcntl.flock`).
 
 **Conditional fork rejoin** (§8.3 of the coordination model) is permitted when multiple chain roots on the same forked session have pairwise-mutex `when:` clauses (e.g., a routing step produces a tag, and two alternative chain roots are gated on `tag == "a"` vs `tag == "b"`). The parse-time validator allows this; the coordination validator (`stepwise validate`) verifies the mutex proof.
 

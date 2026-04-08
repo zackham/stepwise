@@ -83,6 +83,19 @@ These are advisory (the flow still runs) but should be treated as defects:
 | Uncovered output combinations | External step outputs don't all have matching exit rules | Add exit rules covering all possible output value combinations. |
 | Type coercion safety | Exit rule uses `float()` or `int()` on potentially None/non-numeric output | Add a guard: `when: "outputs.score is not None and float(outputs.score) >= 0.8"`. |
 
+### Coordination Errors
+
+Detected by `stepwise validate` when steps share named sessions or use loop-back patterns:
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `pair_unsafe: steps 'A' and 'B' both write to session 'S'` | Two session writers can run concurrently — the validator can't prove ordering or mutual exclusion | Add `after: [A]` to B to force ordering, or use predicate-form `when:` clauses (e.g., `is_null: true` vs `is_null: false` on the same input) to prove they never both run |
+| `cyclic_dependency: cycle detected` | Steps form a cycle with no loop exit rule to break it | Add an `exits: [{action: loop, target: <step>}]` rule on the cycle's tail step |
+| `loop_back_binding_ambiguous_closure` | A loop-back input binding has no guard for iter-1 (when the producer hasn't run yet) | Add `optional: true` to the binding, use `any_of` with a forward fallback source, or gate the step with `when: {input: <name>, is_present: true}` |
+| `fork_from requires session` | `fork_from` target step doesn't declare `session:` (no session to fork from) | Add `session: <name>` to the target step |
+| `fork_from: $job.<input> requires type: session` | A `fork_from` references a job input that isn't typed as `session` | Change the input declaration to `type: session` |
+| `_session on step without session:` | An input binding references `step._session` but the step has no `session:` declared | Add `session: <name>` to the source step, or use a regular output instead |
+
 ---
 
 ## Engine Runtime Errors
