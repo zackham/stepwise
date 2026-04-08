@@ -35,6 +35,9 @@ from stepwise.models import (
 )
 
 
+_SESSION_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
 def _parse_when(when_data: Any, step_name: str) -> str | WhenPredicate | None:
     """Dispatch a `when:` field into either legacy string form or predicate form.
 
@@ -1035,6 +1038,18 @@ def _parse_step(
 
     # Named sessions
     session = step_data.get("session")
+    if session is not None:
+        if not isinstance(session, str):
+            raise ValueError(
+                f"Step '{step_name}': session must be a string, "
+                f"got {type(session).__name__}"
+            )
+        if not _SESSION_NAME_PATTERN.match(session):
+            raise ValueError(
+                f"Step '{step_name}': session name '{session}' is invalid — "
+                f"must match [A-Za-z_][A-Za-z0-9_]* (static identifier, "
+                f"no templating like ${{var}})"
+            )
     fork_from = step_data.get("fork_from")
 
     # Session continuity (legacy)
