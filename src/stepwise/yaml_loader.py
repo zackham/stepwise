@@ -1086,7 +1086,15 @@ def _resolve_flow_source(
                 sub_name, sub_data, base_dir=base_dir, loading_files=loading_files,
                 project_dir=project_dir,
             )
-        return WorkflowDefinition(steps=flow_steps), None
+        # Parse inline flow's input declarations (if any) so §9.7.5
+        # inference 3 can detect explicit vs inferred inputs.
+        input_vars: list = []
+        if flow_data.get("inputs"):
+            try:
+                input_vars = _parse_input_vars(flow_data)
+            except ValueError:
+                pass  # validation errors handled elsewhere
+        return WorkflowDefinition(steps=flow_steps, input_vars=input_vars), None
 
     raise ValueError(
         f"Step '{step_name}' {context}: 'flow' must be a string or mapping"
@@ -1309,6 +1317,35 @@ def _parse_step(
 
         input_bindings = _parse_inputs(step_data.get("inputs", {}), step_name)
 
+        # §9.7.5 Inference 3: infer sub_flow input schema from parent
+        # bindings + item_var when the embedded flow has no inputs: block.
+        # Only applies to inline flow: blocks (dicts), not file references.
+        flow_data = step_data.get("flow")
+        if (
+            sub_flow is not None
+            and isinstance(flow_data, dict)
+            and not sub_flow.input_vars
+            and not flow_data.get("inputs")
+        ):
+            from stepwise.models import ConfigVar
+            inferred_inputs: list[ConfigVar] = []
+            for b in input_bindings:
+                iv_type = "str"
+                if b.source_field == "_session":
+                    iv_type = "session"
+                inferred_inputs.append(ConfigVar(
+                    name=b.local_name,
+                    type=iv_type,
+                    required=not b.optional,
+                ))
+            # Add item_var
+            inferred_inputs.append(ConfigVar(
+                name=for_each_spec.item_var,
+                type="str",
+                required=True,
+            ))
+            sub_flow.input_vars = inferred_inputs
+
         # Outputs default to ["results"] for for_each steps
         if not outputs:
             outputs = ["results"]
@@ -1396,6 +1433,13 @@ def _parse_step(
                 f"no templating like ${{var}})"
             )
     fork_from = step_data.get("fork_from")
+
+    # §9.7.5 Inference 1: agent: claude inferred from fork_from.
+    # The fork mechanism is inherently claude (--resume <uuid> --fork-session).
+    # If fork_from is set and executor is agent but no explicit agent config,
+    # auto-set agent to claude.
+    if fork_from and executor.type == "agent" and not executor.config.get("agent"):
+        executor = executor.with_config({"agent": "claude"})
 
     # Session continuity (legacy)
     continue_session = step_data.get("continue_session", False)
@@ -1555,22 +1599,28 @@ def _validate_sessions(
     # Rule 3 (rewritten): explicit agent: claude on (a) all writers of the
     # forked session AND (b) all writers of the parent session (the session
     # of the fork_from target step). Skipped for $job. fork_from references.
+    # §9.7.5 Inference 1: steps with fork_from: already have agent: claude
+    # inferred at parse time, so the check on part (a) skips them.
     for step_name, step_def in steps.items():
         if not step_def.fork_from or step_def.fork_from not in steps:
             continue
         target = steps[step_def.fork_from]
         if not target.session:
             continue
-        # (a) Forked session writers
+        # (a) Forked session writers — skip agent steps with fork_from
+        # (inference 1 ensures they have agent: claude via fork_from).
         forked_session = step_def.session
         if forked_session:
             for sn in session_steps.get(forked_session, []):
                 sd = steps[sn]
+                if sd.fork_from and sd.executor.type == "agent":
+                    continue  # §9.7.5: claude inferred from fork_from
                 if sd.executor.type != "agent" or _agent_name(sd) != "claude":
                     errors.append(
                         f"Step '{sn}': session forking requires explicit agent: claude"
                     )
-        # (b) Parent session writers
+        # (b) Parent session writers — these are NOT forking, they
+        # must still declare agent: claude explicitly.
         parent_session = target.session
         for sn in session_steps.get(parent_session, []):
             sd = steps[sn]

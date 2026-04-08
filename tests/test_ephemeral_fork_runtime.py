@@ -223,3 +223,97 @@ def test_job_ref_fork_from_not_in_fork_sources():
     job = engine.create_job("t", wf)
     sources = engine._fork_source_step_names(job)
     assert len(sources) == 0
+
+
+# ── §9.7.5 Inference 2: working_dir inherited from fork source ───────
+
+
+def test_working_dir_inherited_from_fork_source():
+    """Ephemeral fork inherits working_dir from fork source step."""
+    engine = make_engine()
+    wf = WorkflowDefinition(steps={
+        "parent": _step(
+            "parent", session="research",
+        ),
+        "child": _step("child", fn="noop", fork_from="parent", after=["parent"]),
+    })
+    # Set working_dir on parent executor config
+    wf.steps["parent"].executor = ExecutorRef("agent", {
+        "agent": "claude", "working_dir": "/home/zack/work/myproject",
+    })
+    # child has no working_dir — should inherit from parent
+    wf.steps["child"].executor = ExecutorRef("agent", {})
+
+    job = engine.create_job("t", wf)
+
+    parent_run = StepRun(
+        id="r-parent", job_id=job.id, step_name="parent", attempt=1,
+        status=StepRunStatus.COMPLETED, started_at=_now(), completed_at=_now(),
+        executor_state={"snapshot_uuid": "snap-abc"},
+        result=HandoffEnvelope(
+            artifact={"result": "done"},
+            sidecar=Sidecar(), workspace=None, timestamp=_now(),
+        ),
+    )
+    engine.store.save_run(parent_run)
+
+    register_step_fn("noop", lambda inputs: {"result": "ok"})
+
+    run, exec_ref, inputs, ctx = engine._prepare_step_run(job, "child")
+    if exec_ref is None:
+        pytest.skip("cache hit")
+    assert exec_ref.config.get("working_dir") == "/home/zack/work/myproject"
+
+
+def test_working_dir_not_inherited_when_already_set():
+    """If fork step already has working_dir, it should not be overridden."""
+    engine = make_engine()
+    wf = WorkflowDefinition(steps={
+        "parent": _step("parent", session="research"),
+        "child": _step("child", fn="noop", fork_from="parent", after=["parent"]),
+    })
+    wf.steps["parent"].executor = ExecutorRef("agent", {
+        "agent": "claude", "working_dir": "/home/zack/work/parent-project",
+    })
+    wf.steps["child"].executor = ExecutorRef("agent", {
+        "working_dir": "/home/zack/work/child-project",
+    })
+
+    job = engine.create_job("t", wf)
+
+    parent_run = StepRun(
+        id="r-parent", job_id=job.id, step_name="parent", attempt=1,
+        status=StepRunStatus.COMPLETED, started_at=_now(), completed_at=_now(),
+        executor_state={"snapshot_uuid": "snap-abc"},
+        result=HandoffEnvelope(
+            artifact={"result": "done"},
+            sidecar=Sidecar(), workspace=None, timestamp=_now(),
+        ),
+    )
+    engine.store.save_run(parent_run)
+
+    register_step_fn("noop", lambda inputs: {"result": "ok"})
+
+    run, exec_ref, inputs, ctx = engine._prepare_step_run(job, "child")
+    if exec_ref is None:
+        pytest.skip("cache hit")
+    assert exec_ref.config.get("working_dir") == "/home/zack/work/child-project"
+
+
+def test_working_dir_not_inherited_for_job_ref_fork():
+    """$job. fork_from references should not attempt working_dir inheritance."""
+    engine = make_engine()
+    wf = WorkflowDefinition(steps={
+        "worker": _step("worker", fork_from="$job.ctx"),
+    })
+    wf.steps["worker"].executor = ExecutorRef("agent", {})
+
+    job = engine.create_job("t", wf, inputs={"ctx": "snap-from-parent-456"})
+
+    register_step_fn("noop", lambda inputs: {"result": "ok"})
+
+    run, exec_ref, inputs, ctx = engine._prepare_step_run(job, "worker")
+    if exec_ref is None:
+        pytest.skip("cache hit")
+    # working_dir should NOT be set (no same-scope source to inherit from)
+    assert exec_ref.config.get("working_dir") is None

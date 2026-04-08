@@ -612,11 +612,15 @@ steps:
 ```
 
 **`fork_from` rules** (enforced by the parse-time validator):
-- `fork_from` references a **step name**, not a session name. The target step must declare its own `session:`.
-- The forking step must declare its own fresh `session:`.
-- Both the forking step AND all writers of the parent session must have explicit `agent: claude`.
+- `fork_from` references a **step name** or `$job.<input>` (where the input has `type: session`). The target step must declare its own `session:`.
+- `fork_from` without `session:` is legal — this creates an **ephemeral one-shot fork** (transient session, no downstream can continue it). Declare `session:` only when another step needs to continue the forked session.
 - The fork target must appear in the forking step's `after:` chain.
 - `max_attempts > 1` and `cache:` are prohibited on session-writers and fork sources. One-shot agent steps (no `session:`, no `fork_from:`) may retry freely.
+
+**Ergonomic inferences (§9.7.5):** Three things are auto-inferred on fork steps to reduce boilerplate:
+1. **`agent: claude`** is inferred from `fork_from:` on agent steps — the fork mechanism is inherently claude. Parent session writers still need explicit `agent: claude`.
+2. **`working_dir`** is inherited from the fork source step when not set — the fork must run in the same project context as the session snapshot.
+3. **`flow.inputs:`** on embedded `for_each` sub_flows is inferred from the parent step's `inputs:` bindings + `item_var` when not declared. `_session` sources infer `type: session`; all others infer `type: str`.
 
 The engine snapshots the fork target's session state atomically at its completion under an exclusive file lock, guaranteeing forks see the parent's completion-tail state even if downstream writers keep mutating the live session. **Multiple chain roots** on the same forked session are permitted when their `when:` clauses are pairwise mutex (conditional rejoin pattern).
 

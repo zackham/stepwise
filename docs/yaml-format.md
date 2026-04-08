@@ -610,12 +610,14 @@ steps:
 ```
 
 `fork_from` rules (enforced by the parse-time validator):
-- `fork_from` references a **step name**, not a session name. The referenced step must declare its own `session:` (you cannot fork from an ephemeral one-shot agent step).
-- The forking step must declare its own fresh `session:` — forks always start a new session.
-- Both the forking step AND every writer of the parent session must have explicit `agent: claude` in their executor config.
+- `fork_from` references a **step name** or `$job.<input>` (where the input has `type: session`). The referenced step must declare its own `session:` (you cannot fork from an ephemeral one-shot agent step).
+- `fork_from` without `session:` is legal — this creates an **ephemeral one-shot fork** (transient session, no downstream can continue it). Declare `session:` only when another step needs to continue the forked session.
+- `agent: claude` is **inferred** from `fork_from:` on agent steps (§9.7.5). You don't need to write it explicitly on forking steps. Parent session writers still require explicit `agent: claude`.
+- `working_dir` is **inherited** from the fork source step when not explicitly set (§9.7.5). The fork must run in the same project context as the session snapshot.
 - The forking step must have the fork target in its `after:` chain (or reach it via input bindings).
 - All chain roots on the same forked session must fork from steps writing to the **same** parent session (single-chain rule, §8.1 of the coordination model).
 - `max_attempts > 1` and `cache:` are prohibited on session-writers and fork-source steps. Ephemeral one-shot agent steps (no `session:`, no `fork_from:`) may retry freely.
+- For `for_each` embedded sub_flows, the `flow.inputs:` block is **inferred** from the parent step's `inputs:` bindings + `item_var` when not declared (§9.7.5). `_session` sources infer `type: session`; all others infer `type: str`.
 
 The engine snapshots the fork target's session state at its completion tail, under a dedicated exclusive lock (`fcntl.flock`), before any downstream writer can mutate the live session. This guarantees forks see the parent's completion-tail state, not a racy live-UUID tail. See `data/reports/2026-04-07-stepwise-coordination-and-validation-model.md` §9 and §13 (in the vita repo) for the full coordination model.
 

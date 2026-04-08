@@ -2350,6 +2350,18 @@ class Engine:
                 if prev_run and prev_run.executor_state and prev_run.executor_state.get("session_name"):
                     session_ctx["_prev_session_name"] = prev_run.executor_state["session_name"]
 
+            # §9.7.5 Inference 2: working_dir inherited from fork source.
+            # The session snapshot lives at ~/.claude/projects/<slug>/ where
+            # slug is derived from working_dir — the fork must run in the
+            # same project context as its source.
+            if step_def.fork_from and not exec_ref.config.get("working_dir"):
+                if not step_def.fork_from.startswith("$job."):
+                    fork_source_def = job.workflow.steps.get(step_def.fork_from)
+                    if fork_source_def and fork_source_def.executor and fork_source_def.executor.config:
+                        source_wd = fork_source_def.executor.config.get("working_dir")
+                        if source_wd:
+                            session_ctx["working_dir"] = source_wd
+
             # loop_prompt and circuit breaker (independent of session mechanism)
             if step_def.loop_prompt is not None:
                 session_ctx["loop_prompt"] = step_def.loop_prompt

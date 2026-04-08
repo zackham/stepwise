@@ -288,7 +288,7 @@ implement:
 | `session` | string | no | — | Named session. Steps with the same name share a conversation |
 | `loop_prompt` | string | no | — | Alternate prompt template used on attempt > 1 (falls back to `prompt`) |
 | `max_continuous_attempts` | int | no | — | After N iterations, force a fresh session |
-| `fork_from` | string | no | — | Fork an independent session from the completion tail of a named step |
+| `fork_from` | string | no | — | Fork an independent session from the completion tail of a named step (or `$job.<input>` with `type: session`). `agent: claude` and `working_dir` are auto-inferred (§9.7.5). `session:` is optional — omit for ephemeral one-shot forks. |
 
 **Behavior:**
 - First run (attempt 1): creates a new session, sends `prompt`
@@ -344,8 +344,9 @@ steps:
     # gets plan's tail snapshot but diverges independently
 ```
 
-- `fork_from` requires `agent: claude` (explicit) on the forking step AND on every writer of the parent session
-- `fork_from` requires the forking step to declare its own `session:` (the chain root for the new session)
+- `agent: claude` is **auto-inferred** from `fork_from:` on agent steps (§9.7.5). Parent session writers still require explicit `agent: claude`.
+- `session:` on the forking step is **optional** — omit it for ephemeral one-shot forks (§9.7.1). Declare `session:` only when another step continues the forked session.
+- `working_dir` is **inherited** from the fork source step when not explicitly set (§9.7.5).
 - The forking step must depend on the fork target via `after:` or as an input source
 - The forked session is independent — it doesn't affect the parent
 - The engine serializes concurrent access to shared sessions

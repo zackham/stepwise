@@ -177,3 +177,172 @@ def test_session_binding_on_non_session_step_rejected():
     errors: list[str] = []
     _validate_sessions(steps, errors)
     assert any("_session" in e and "no session" in e for e in errors), errors
+
+
+# ── §9.7.5 Inference 1: agent: claude inferred from fork_from ────────
+
+
+def test_inference1_fork_from_infers_agent_claude():
+    """fork_from without explicit agent: claude should auto-infer it."""
+    from stepwise.yaml_loader import load_workflow_string
+    wf = load_workflow_string("""
+steps:
+  parent:
+    executor: agent
+    agent: claude
+    session: research
+    prompt: "Build context"
+    outputs: [result]
+
+  child:
+    executor: agent
+    fork_from: parent
+    after: [parent]
+    prompt: "Review."
+    outputs: [result]
+""")
+    # child should have agent: claude inferred
+    assert wf.steps["child"].executor.config.get("agent") == "claude"
+
+
+def test_inference1_explicit_agent_preserved():
+    """If agent is explicitly set, inference should not override it."""
+    from stepwise.yaml_loader import load_workflow_string
+    wf = load_workflow_string("""
+steps:
+  parent:
+    executor: agent
+    agent: claude
+    session: research
+    prompt: "Build context"
+    outputs: [result]
+
+  child:
+    executor: agent
+    agent: claude
+    session: review
+    fork_from: parent
+    after: [parent]
+    prompt: "Review."
+    outputs: [result]
+""")
+    assert wf.steps["child"].executor.config.get("agent") == "claude"
+
+
+def test_inference1_rule3_skips_forking_step():
+    """Rule 3 should not reject the forking step for lacking agent: claude
+    since it's inferred from fork_from."""
+    steps = {
+        "parent": _step("parent", session="research"),
+        "child": _step(
+            "child",
+            session="review",
+            fork_from="parent",
+            after=["parent"],
+        ),
+    }
+    # Simulate inference 1: set agent to claude on child
+    steps["child"].executor = ExecutorRef("agent", {"agent": "claude"})
+    errors: list[str] = []
+    _validate_sessions(steps, errors)
+    # Should NOT have errors about child needing agent: claude
+    assert not any("child" in e and "agent: claude" in e for e in errors), errors
+
+
+# ── §9.7.5 Inference 3: flow.inputs inferred from parent bindings ────
+
+
+def test_inference3_embedded_flow_inputs_inferred():
+    """Embedded sub_flow without inputs: block should infer from parent."""
+    from stepwise.yaml_loader import load_workflow_string
+    wf = load_workflow_string("""
+steps:
+  source:
+    run: 'echo {"items": ["a","b"]}'
+    outputs: [items]
+
+  fan:
+    for_each: source.items
+    as: area
+    inputs:
+      ctx: source.items
+    flow:
+      steps:
+        inner:
+          run: 'echo {"result": "ok"}'
+          outputs: [result]
+    outputs: [results]
+""")
+    fan_step = wf.steps["fan"]
+    assert fan_step.sub_flow is not None
+    # Should have inferred input_vars: ctx (str) + area (str)
+    names = {iv.name for iv in fan_step.sub_flow.input_vars}
+    assert "ctx" in names
+    assert "area" in names
+
+
+def test_inference3_session_type_inferred_from_session_binding():
+    """_session bindings should infer type: session in sub_flow inputs."""
+    from stepwise.yaml_loader import load_workflow_string
+    wf = load_workflow_string("""
+steps:
+  builder:
+    executor: agent
+    agent: claude
+    session: research
+    prompt: "Build"
+    outputs: [areas]
+
+  fan:
+    for_each: builder.areas
+    as: area
+    inputs:
+      context: builder._session
+    flow:
+      steps:
+        dive:
+          run: 'echo {"result": "ok"}'
+          outputs: [result]
+    outputs: [results]
+""")
+    fan_step = wf.steps["fan"]
+    iv_map = {iv.name: iv for iv in fan_step.sub_flow.input_vars}
+    assert "context" in iv_map
+    assert iv_map["context"].type == "session"
+    assert "area" in iv_map
+    assert iv_map["area"].type == "str"
+
+
+def test_inference3_explicit_inputs_not_overridden():
+    """If the flow: block declares inputs:, inference should not apply."""
+    from stepwise.yaml_loader import load_workflow_string
+    wf = load_workflow_string("""
+steps:
+  source:
+    run: 'echo {"items": ["a","b"]}'
+    outputs: [items]
+
+  fan:
+    for_each: source.items
+    as: area
+    inputs:
+      ctx: source.items
+    flow:
+      inputs:
+        area:
+          type: str
+          description: "The area"
+      steps:
+        inner:
+          run: 'echo {"result": "ok"}'
+          inputs:
+            area: $job.area
+          outputs: [result]
+    outputs: [results]
+""")
+    fan_step = wf.steps["fan"]
+    # Explicit declaration — should have exactly what was declared
+    names = {iv.name for iv in fan_step.sub_flow.input_vars}
+    assert "area" in names
+    # ctx should NOT be inferred since inputs: was explicitly declared
+    assert "ctx" not in names
