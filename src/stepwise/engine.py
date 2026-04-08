@@ -198,6 +198,108 @@ class Engine:
         if job.id not in self._session_registries:
             self._session_registries[job.id] = self._build_session_registry(job)
 
+    # ── Fork source / snapshot UUID lookup (§9 / step 6) ────────────────
+
+    def _fork_source_step_names(self, job: Job) -> set[str]:
+        """Return the set of step names whose completion needs a snapshot.
+
+        A step is a fork source if its session is referenced as a fork_from
+        target by some other step in the flow. These steps get the §9.3
+        post-exit synchronous lifecycle: subprocess exit → lock acquire →
+        snapshot → metadata commit → lock release.
+        """
+        referenced_sessions = {
+            s.fork_from for s in job.workflow.steps.values() if s.fork_from
+        }
+        if not referenced_sessions:
+            return set()
+        return {
+            name for name, step in job.workflow.steps.items()
+            if step.session and step.session in referenced_sessions
+        }
+
+    def _lookup_snapshot_uuid(self, job: Job, parent_session_name: str) -> str | None:
+        """Look up the snapshot UUID for the chain root of a parent session.
+
+        Returns None if no completed run on any step writing to the parent
+        session has a snapshot_uuid in its executor_state. Downstream forks
+        use this UUID via `claude --resume <snap_uuid> --fork-session` to
+        avoid the §9.1 live-tail race.
+        """
+        for name, step in job.workflow.steps.items():
+            if step.session != parent_session_name:
+                continue
+            latest = self.store.latest_completed_run(job.id, name)
+            if not latest or not latest.executor_state:
+                continue
+            snap = latest.executor_state.get("snapshot_uuid")
+            if snap:
+                return snap
+        return None
+
+    def _maybe_snapshot_for_fork_source(
+        self, job: Job, run: StepRun, step_name: str,
+    ) -> None:
+        """If `step_name` is a fork source, snapshot its session inside the lock.
+
+        Per §9.3 of the coordination doc. Acquires an exclusive lock on the
+        live session UUID, copies the session JSON to a fresh snapshot
+        filename, persists the snapshot UUID on the run's executor_state,
+        and re-saves the run inside the lock so observers see the
+        snapshot_uuid landed atomically with the COMPLETED status.
+
+        On snapshot failure, logs and proceeds without raising — the lack
+        of a snapshot_uuid on a fork-source RUNNING run is what triggers
+        re-execution at recovery time. Acceptable v1.0 limitation per §9.3
+        (duplicate-turn risk on retry after crash).
+        """
+        fork_sources = self._fork_source_step_names(job)
+        if step_name not in fork_sources:
+            return
+
+        state = self._session_registries.get(job.id, {}).get(
+            run.step_name and job.workflow.steps[step_name].session or ""
+        )
+        # Robust fallback: re-fetch via step_def
+        if state is None:
+            step_def = job.workflow.steps.get(step_name)
+            if step_def and step_def.session and job.id in self._session_registries:
+                state = self._session_registries[job.id].get(step_def.session)
+
+        if state is None or not state.claude_uuid:
+            _engine_logger.warning(
+                "fork-source step %r completed without a captured claude_uuid; "
+                "snapshot skipped (fork would fall back to live UUID)",
+                step_name,
+            )
+            return
+
+        try:
+            from stepwise.snapshot import snapshot_session
+            from stepwise.session_lock import SessionLock
+            with SessionLock(state.claude_uuid, "exclusive"):
+                snap_uuid = snapshot_session(state.claude_uuid)
+                run.executor_state = {
+                    **(run.executor_state or {}),
+                    "snapshot_uuid": snap_uuid,
+                }
+                # Re-save inside the lock so observers see the snapshot
+                # uuid landed at the same instant the lock is released.
+                self.store.save_run(run)
+            _engine_logger.info(
+                "snapshotted session %s -> %s for fork-source step %r",
+                state.claude_uuid, snap_uuid, step_name,
+            )
+        except Exception as exc:
+            # Acceptable v1.0 wart per §9.3: if the snapshot fails, leave
+            # the step in a recoverable state. Re-execution on restart
+            # will retry the snapshot. The lack of a snapshot_uuid is what
+            # triggers re-exec in _recover_fork_source_steps_without_snapshot.
+            _engine_logger.error(
+                "snapshot failed for fork-source step %r: %s",
+                step_name, exc, exc_info=True,
+            )
+
     # ── Cross-Job Data Wiring ────────────────────────────────────────────
 
     def _process_job_ref_inputs(self, job: Job) -> list[str]:
@@ -1893,10 +1995,32 @@ class Engine:
                         # Continue existing session
                         session_ctx["_session_uuid"] = session_state.claude_uuid
                     elif session_state.fork_from and not session_state.created:
-                        # First step on forked session — pass parent UUID
-                        parent = self._session_registries[job.id].get(session_state.fork_from)
-                        if parent and parent.claude_uuid:
-                            session_ctx["_fork_from_session_id"] = parent.claude_uuid
+                        # First step on forked session — pass the parent's
+                        # SNAPSHOT UUID, not the live UUID. Per §9 of the
+                        # coordination doc, forking from the live UUID has
+                        # a race where the parent session may continue
+                        # writing past the intended fork point. The snapshot
+                        # UUID is created by the fork-source step's
+                        # synchronous lifecycle (see _maybe_snapshot_for_fork_source).
+                        snap_uuid = self._lookup_snapshot_uuid(
+                            job, session_state.fork_from
+                        )
+                        if snap_uuid:
+                            session_ctx["_fork_from_session_id"] = snap_uuid
+                        else:
+                            # Fallback to live UUID if no snapshot exists
+                            # (e.g., parent step hasn't completed yet —
+                            # surfaces as a noisy log so we notice).
+                            parent = self._session_registries[job.id].get(
+                                session_state.fork_from
+                            )
+                            if parent and parent.claude_uuid:
+                                _engine_logger.warning(
+                                    "fork from session %r missing snapshot_uuid; "
+                                    "falling back to live parent UUID (race risk)",
+                                    session_state.fork_from,
+                                )
+                                session_ctx["_fork_from_session_id"] = parent.claude_uuid
                         session_ctx["_backend_type"] = "claude_direct"
                     elif session_state.created:
                         # Subsequent step on forked session — continue via claude_direct
@@ -2039,6 +2163,14 @@ class Engine:
                                 state.created = True
                                 if state.fork_from:
                                     state.backend_type = "claude_direct"
+                            # §9.3 critical section: if this step is a
+                            # fork source, snapshot the session JSON inside
+                            # an exclusive lock and persist the snapshot
+                            # UUID atomically with completion. Otherwise
+                            # downstream forks would resume from the live
+                            # (potentially-mutating) tail and capture the
+                            # wrong fork point (§9.1).
+                            self._maybe_snapshot_for_fork_source(job, run, step_name)
                         self._process_completion(job, run)
 
             case "watch":
@@ -3468,19 +3600,39 @@ class AsyncEngine(Engine):
     def recover_jobs(self) -> None:
         """Re-evaluate all RUNNING server-owned jobs after startup.
 
-        Three phases:
+        Phases:
+        0. Clean up orphaned snapshot .tmp files from interrupted snapshots
+           (per §9.3).
         1. Recover dead script runs (stdout file recovery for crashed subprocesses).
-        2. Settle terminal jobs (complete or fail jobs whose steps are all done).
-        3. Dispatch ready steps (launch steps whose deps completed while server was down).
+        2. Re-execute fork-source steps in indeterminate state (RUNNING but
+           no snapshot_uuid in executor_state — per §9.3).
+        3. Settle terminal jobs (complete or fail jobs whose steps are all done).
+        4. Dispatch ready steps (launch steps whose deps completed while server was down).
 
         Also reconciles PENDING jobs whose queue deps may have completed.
 
         Safe to call multiple times — all operations are idempotent.
         """
+        # Phase 0: orphan tmp cleanup before any per-job recovery so the
+        # recovery code never trips over stale snapshot temp files.
+        try:
+            from stepwise.snapshot import cleanup_orphaned_tmps
+            removed = cleanup_orphaned_tmps()
+            if removed:
+                _async_logger.info(
+                    "recover_jobs: cleaned up %d orphaned snapshot tmp file(s)",
+                    removed,
+                )
+        except Exception:
+            _async_logger.warning(
+                "recover_jobs: orphan tmp cleanup failed", exc_info=True,
+            )
+
         for job in self.store.active_jobs():
             if job.created_by != "server":
                 continue
             self._recover_dead_script_runs(job)
+            self._recover_fork_source_steps_without_snapshot(job)
             self._check_job_terminal(job.id)
         # Dispatch ready steps for RUNNING jobs — catches steps that became ready
         # while the server was down (e.g. upstream completed, downstream never launched).
@@ -3603,6 +3755,43 @@ class AsyncEngine(Engine):
                 )
 
             self._process_launch_result(job, run, result)
+
+    def _recover_fork_source_steps_without_snapshot(self, job: Job) -> None:
+        """Re-execute RUNNING fork-source steps that crashed before snapshot persistence.
+
+        Per §9.3 of the coordination doc: if the runner crashed between
+        subprocess exit and snapshot persistence, the step run is in an
+        indeterminate state. The recovery action is to re-execute the
+        step, which carries a documented v1.0 acceptable wart: claude
+        CLI's --resume mutates the session by appending to it, so
+        re-running the subprocess may append the same turn a second
+        time. Acceptable for v1.0; flagged as a known limitation.
+
+        Idempotent: a fork-source step whose snapshot WAS persisted has
+        snapshot_uuid in executor_state and is left alone.
+        """
+        fork_sources = self._fork_source_step_names(job)
+        if not fork_sources:
+            return
+        for run in self.store.running_runs(job.id):
+            if run.step_name not in fork_sources:
+                continue
+            es = run.executor_state or {}
+            if es.get("snapshot_uuid"):
+                continue  # snapshot was persisted; recovery is a no-op
+            _async_logger.warning(
+                "fork-source step %r (run %s) is in RUNNING state without "
+                "snapshot_uuid — re-executing per §9.3 (duplicate-turn risk)",
+                run.step_name, run.id,
+            )
+            step_def = job.workflow.steps.get(run.step_name)
+            if step_def is None:
+                continue
+            self._fail_run(
+                job, run, step_def,
+                error="Crash during fork-source snapshot critical section",
+                error_category="fork_source_crash_recovery",
+            )
 
     # ── Restart resilience: reattach surviving runs ─────────────────────
 
