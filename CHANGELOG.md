@@ -3,6 +3,47 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.38.0] — 2026-04-08
+
+### Added
+- **Coordination validator** — `stepwise validate` statically analyzes flow coordination rules. Catches session-writer collisions, fork ordering violations, unguarded loop-back bindings, and genuine cycles vs intentional loops
+- **Predicate-form `when:` clauses** — `is_present:`, `is_null:`, `eq:`, `in:` predicates. The validator proves mutual exclusion between predicate-form branches, enabling safe session sharing across conditional paths (e.g., an escalation branch vs a normal branch writing to the same session)
+- **Must-happen-before analysis** — the validator computes ordering over the flow DAG, including universal-prefix rules for `after.any_of` groups, so it can prove two session writers never run concurrently
+- **`fork_from:` step-name semantics** — `fork_from` now references a step name (not a session name). The engine snapshots the fork source's session at completion and each fork gets an independent copy. Atomic snapshot via file lock
+- **Loop-back binding runtime** — loops declared via `exits: [{action: loop}]` are now first-class. The validator distinguishes intentional loops from genuine cycles. New `is_present:` / `is_null:` predicates let steps branch on whether a loop-back input exists yet (iter-1 vs iter-N)
+- **Nested loop support** — explicit loop-frame state on `Job` tracks iteration indices for nested loops. Child frames automatically reset when the outer loop iterates. Persisted to SQLite, rebuilt on crash recovery
+- **Ephemeral `fork_from:`** — `fork_from` no longer requires `session:`. One-shot forks are transient — no session tracking, retries allowed. Use when you just need context from a parent step without maintaining a named session
+- **`type: session` flow inputs** — new input type for passing session snapshots to sub_flows. Enables composable `for_each` + fork patterns where the sub_flow doesn't hardcode parent step names
+- **`_session` virtual output** — any step with `session:` auto-exposes `_session` (resolves to the session snapshot). Combined with `fork_from: $job.<input>`, enables passing session context across scope boundaries (e.g., parent flow to for_each sub_flow)
+- **`for_each` + `fork_from`** — for_each iterations can fork from a parent session. Each iteration gets an independent fork via `type: session` inputs. The canonical subagent fan-out pattern:
+  ```yaml
+  explore:
+    for_each:
+      items: build_context.angles
+      item_var: angle
+    inputs:
+      context: build_context._session
+    flow:
+      steps:
+        deep_dive:
+          executor: agent
+          fork_from: $job.context
+          outputs: [result]
+          prompt: "Deep-dive into: $angle"
+  ```
+- **Ergonomic inferences** — `agent: claude` inferred from `fork_from:` (forks are always claude), `working_dir` inherited from fork source, `flow.inputs:` inferred from parent step bindings for embedded sub_flows. Eliminates boilerplate on fork steps
+- **Parse-time back-edge validation** — unguarded back-edge bindings (no `optional:`, `any_of`, or `is_present:` guard) are rejected with a clear fix suggestion
+
+### Changed
+- **Cycle detection** — now distinguishes intentional loops (closed by `exits: [{action: loop}]`) from genuine cycles. Loop-back edges are excluded from the forward-DAG cycle check, so flows with score/refine loops validate clean
+- **Input resolution** — `_resolve_inputs` returns a presence side-table alongside inputs, enabling `is_present:` / `is_null:` predicates to distinguish "not yet produced" from "produced with null value"
+- **Readiness check** — steps with loop-back-only dependencies become ready immediately on iter-1 (don't wait for the producer that hasn't run yet)
+- **Schema migration** — `ALTER TABLE jobs ADD COLUMN loop_frames TEXT DEFAULT '{}'` (idempotent, backwards compatible)
+- **README** — session example updated from `continue_session: true` to `session: main` + `fork_from`
+
+### Documentation
+- Updated `yaml-format.md`, `writing-flows.md`, `concepts.md`, `flow-reference.md`, `README.md` with fork rules, loop-back runtime semantics, `is_present`/`is_null` truth table, session inputs, and ergonomic inference documentation
+
 ## [0.37.0] — 2026-04-06
 
 ### Added
