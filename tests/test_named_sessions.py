@@ -117,11 +117,11 @@ steps:
 
 
 class TestValidationRule1:
-    """fork_from without session -> error."""
+    """fork_from without session — now allowed per §9.7.1 (ephemeral fork)."""
 
-    def test_fork_from_without_session(self):
-        with pytest.raises(YAMLLoadError, match="fork_from requires a session name"):
-            load_workflow_string("""
+    def test_fork_from_without_session_accepted(self):
+        """Ephemeral fork: fork_from + no session is now legal."""
+        wf = load_workflow_string("""
 steps:
   plan:
     executor: agent
@@ -138,6 +138,8 @@ steps:
     after: [plan]
     outputs: [issues]
 """)
+        assert wf.steps["review"].fork_from == "plan"
+        assert wf.steps["review"].session is None
 
 
 class TestValidationRule2:

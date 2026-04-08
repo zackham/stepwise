@@ -1474,29 +1474,38 @@ def _agent_name(sd: StepDefinition) -> str | None:
     return None
 
 
-def _validate_sessions(steps: dict[str, StepDefinition], errors: list[str]) -> None:
+def _validate_sessions(
+    steps: dict[str, StepDefinition],
+    errors: list[str],
+    input_vars: list | None = None,
+) -> None:
     """Validate named session and fork_from constraints across all steps.
 
     Under step-name fork_from semantics (design doc §8.2), ``fork_from``
     references a STEP NAME, not a session name. The forking step is the
     chain root for a new session and inherits the parent step's
     completion-tail snapshot.
+
+    Per §9.7, ``fork_from`` also accepts ``$job.<input>`` references
+    where the input has ``type: session``, and ``_session`` is a virtual
+    output on any session-bearing step.
     """
     # Build session → step mapping
     session_steps: dict[str, list[str]] = {}
 
     for step_name, step_def in steps.items():
-        # Rule 1: fork_from requires session
-        if step_def.fork_from and not step_def.session:
-            errors.append(
-                f"Step '{step_name}': fork_from requires a session name"
-            )
-            continue
+        # Rule 1 (relaxed per §9.7.1): fork_from WITHOUT session is now
+        # allowed — ephemeral one-shot forks need no session name.
+        # fork_from requires session ONLY IF another step in the flow
+        # also writes to that session (chain continuation). That check
+        # is deferred to Rule 3/4 which already handle chain roots.
 
         if step_def.session:
             session_steps.setdefault(step_def.session, []).append(step_name)
 
-        # Rule 6: for_each + session incompatible
+        # Rule 6 (relaxed per §9.7.1): for_each + session is still
+        # banned, but for_each + fork_from WITHOUT session is now legal
+        # (ephemeral forking in sub_flows).
         if step_def.session and step_def.for_each:
             errors.append(
                 f"Step '{step_name}': session is not compatible with for_each"
@@ -1514,16 +1523,24 @@ def _validate_sessions(steps: dict[str, StepDefinition], errors: list[str]) -> N
                         f"Step '{step_name}': _session_id input is deprecated, use session: <name>"
                     )
 
-    # Rule 1b (NEW): fork_from must reference a known step
+    # Rule 1b (NEW): fork_from must reference a known step OR $job.<input>.
+    # Per §9.7.3, fork_from: $job.<input> is legal when the referenced
+    # input has type: session.
     for step_name, step_def in steps.items():
-        if step_def.fork_from and step_def.fork_from not in steps:
+        if not step_def.fork_from:
+            continue
+        if step_def.fork_from.startswith("$job."):
+            # $job. references are validated separately below
+            continue
+        if step_def.fork_from not in steps:
             errors.append(
                 f"Step '{step_name}': fork_from references unknown step "
                 f"'{step_def.fork_from}' (in v1.0, fork_from takes a step "
                 f"name, not a session name — see §8.2 of the coordination doc)"
             )
 
-    # Rule 2 (rewritten): fork_from target step must declare session
+    # Rule 2 (rewritten): fork_from target step must declare session.
+    # Skipped for $job. references (those resolve at runtime).
     for step_name, step_def in steps.items():
         if not step_def.fork_from or step_def.fork_from not in steps:
             continue
@@ -1537,7 +1554,7 @@ def _validate_sessions(steps: dict[str, StepDefinition], errors: list[str]) -> N
 
     # Rule 3 (rewritten): explicit agent: claude on (a) all writers of the
     # forked session AND (b) all writers of the parent session (the session
-    # of the fork_from target step).
+    # of the fork_from target step). Skipped for $job. fork_from references.
     for step_name, step_def in steps.items():
         if not step_def.fork_from or step_def.fork_from not in steps:
             continue
@@ -1589,6 +1606,7 @@ def _validate_sessions(steps: dict[str, StepDefinition], errors: list[str]) -> N
     # Rule 5 (rewritten): each chain root must declare a dependency on its
     # fork target step (in `after:` or as an input source). Stronger
     # transitive checks are the step 3 validator's job.
+    # Skipped for $job. fork_from references (no same-scope step to depend on).
     for step_name, step_def in steps.items():
         if not step_def.fork_from:
             continue
@@ -1604,6 +1622,47 @@ def _validate_sessions(steps: dict[str, StepDefinition], errors: list[str]) -> N
                 f"'{step_def.fork_from}' must appear in 'after:' or as "
                 f"an input source"
             )
+
+    # §9.7.3: fork_from: $job.<input> requires the input to have type: session.
+    input_var_types: dict[str, str] = {}
+    if input_vars:
+        for iv in input_vars:
+            input_var_types[iv.name] = iv.type
+    for step_name, step_def in steps.items():
+        if not step_def.fork_from:
+            continue
+        if not step_def.fork_from.startswith("$job."):
+            continue
+        input_name = step_def.fork_from[len("$job."):]
+        iv_type = input_var_types.get(input_name)
+        if iv_type != "session":
+            errors.append(
+                f"Step '{step_name}': fork_from: {step_def.fork_from} "
+                f"requires the input '{input_name}' to have type: session"
+                + (f" (got type: {iv_type})" if iv_type else
+                   " (input not declared)")
+            )
+
+    # §9.7.3: _session virtual output is only valid on session-bearing steps.
+    for step_name, step_def in steps.items():
+        for inp in step_def.inputs:
+            src_field = inp.source_field
+            if inp.any_of_sources:
+                for src_step, sf in inp.any_of_sources:
+                    if sf == "_session" and src_step in steps:
+                        if not steps[src_step].session:
+                            errors.append(
+                                f"Step '{step_name}': input '{inp.local_name}' "
+                                f"references '{src_step}._session' but step "
+                                f"'{src_step}' has no session: declared"
+                            )
+            elif src_field == "_session" and inp.source_step and inp.source_step != "$job":
+                if inp.source_step in steps and not steps[inp.source_step].session:
+                    errors.append(
+                        f"Step '{step_name}': input '{inp.local_name}' "
+                        f"references '{inp.source_step}._session' but step "
+                        f"'{inp.source_step}' has no session: declared"
+                    )
 
 
 def _parse_metadata(data: dict, source_path: Path | None = None) -> FlowMetadata:
@@ -1934,7 +1993,7 @@ def load_workflow_yaml(
 
     # Validate named sessions and fork constraints
     session_errors: list[str] = []
-    _validate_sessions(steps, session_errors)
+    _validate_sessions(steps, session_errors, input_vars=input_vars)
     if session_errors:
         raise YAMLLoadError(session_errors)
 
@@ -2035,7 +2094,7 @@ def load_workflow_string(yaml_str: str) -> WorkflowDefinition:
 
     # Validate named sessions and fork constraints
     session_errors: list[str] = []
-    _validate_sessions(steps, session_errors)
+    _validate_sessions(steps, session_errors, input_vars=input_vars)
     if session_errors:
         raise YAMLLoadError(session_errors)
 

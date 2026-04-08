@@ -245,7 +245,7 @@ class ForEachSpec:
 # ── Output Field Spec ─────────────────────────────────────────────────
 
 
-VALID_FIELD_TYPES = {"str", "text", "number", "bool", "choice"}
+VALID_FIELD_TYPES = {"str", "text", "number", "bool", "choice", "session"}
 
 
 @dataclass

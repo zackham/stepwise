@@ -396,15 +396,33 @@ class Engine:
     # ── Fork source / snapshot UUID lookup (§9 / step 6) ────────────────
 
     def _fork_source_step_names(self, job: Job) -> set[str]:
-        """Return the set of step names directly named as a fork_from target.
+        """Return the set of step names that are fork sources.
 
         Under step-name fork_from semantics (design doc §8.2), a step is a
         fork source iff some other step in the flow declares
         ``fork_from: <this step name>``. These steps get the §9.3
         post-exit synchronous lifecycle: subprocess exit → lock acquire →
         snapshot → metadata commit → lock release.
+
+        Per §9.7.3, steps whose ``_session`` virtual output is consumed
+        by any input binding are also fork sources (the ``_session``
+        reference implies the consumer will fork from the snapshot).
         """
-        return {s.fork_from for s in job.workflow.steps.values() if s.fork_from}
+        sources: set[str] = set()
+        for s in job.workflow.steps.values():
+            if s.fork_from and not s.fork_from.startswith("$job."):
+                sources.add(s.fork_from)
+        # §9.7.3: steps whose _session output is consumed by input bindings
+        for s in job.workflow.steps.values():
+            for b in s.inputs:
+                if b.any_of_sources:
+                    for src_step, src_field in b.any_of_sources:
+                        if src_field == "_session" and src_step in job.workflow.steps:
+                            sources.add(src_step)
+                elif b.source_field == "_session" and b.source_step and b.source_step != "$job":
+                    if b.source_step in job.workflow.steps:
+                        sources.add(b.source_step)
+        return sources
 
     def _lookup_snapshot_uuid(self, job: Job, parent_step_name: str) -> str | None:
         """Look up the snapshot UUID persisted on a parent step's run.
@@ -2293,6 +2311,37 @@ class Engine:
                         if session_state.is_forked:
                             session_ctx["_backend_type"] = "claude_direct"
 
+            # §9.7.1: Ephemeral fork — fork_from set but NO session declared.
+            # Look up the fork source's snapshot UUID and pass it directly
+            # without touching the session registry. The forked session is
+            # transient — no downstream step can continue it.
+            elif step_def.fork_from and not step_def.session:
+                if step_def.fork_from.startswith("$job."):
+                    # §9.7.3: fork_from: $job.<input> — read UUID from job inputs
+                    input_name = step_def.fork_from[len("$job."):]
+                    uuid_from_input = job.inputs.get(input_name)
+                    if uuid_from_input:
+                        session_ctx["_fork_from_session_id"] = uuid_from_input
+                        session_ctx["_backend_type"] = "claude_direct"
+                else:
+                    # Ephemeral fork from a same-scope step name
+                    snap_uuid = self._lookup_snapshot_uuid(
+                        job, step_def.fork_from
+                    )
+                    if snap_uuid:
+                        session_ctx["_fork_from_session_id"] = snap_uuid
+                        session_ctx["_backend_type"] = "claude_direct"
+                    else:
+                        # Fallback: try live session UUID from executor_state
+                        parent_run = self.store.latest_completed_run(
+                            job.id, step_def.fork_from
+                        )
+                        if parent_run and parent_run.executor_state:
+                            live_uuid = parent_run.executor_state.get("session_id")
+                            if live_uuid:
+                                session_ctx["_fork_from_session_id"] = live_uuid
+                                session_ctx["_backend_type"] = "claude_direct"
+
             # Legacy continue_session support
             elif step_def.continue_session:
                 session_ctx["continue_session"] = True
@@ -2978,16 +3027,21 @@ class Engine:
                 for src_step, src_field in binding.any_of_sources:
                     latest = self.store.latest_completed_run(job.id, src_step)
                     if latest and latest.result:
-                        value = latest.result.artifact.get(src_field)
-                        if value is None and "." in src_field:
-                            parts = src_field.split(".")
-                            value = latest.result.artifact
-                            for part in parts:
-                                if isinstance(value, dict):
-                                    value = value.get(part)
-                                else:
-                                    value = None
-                                    break
+                        # §9.7.3: _session virtual output resolves from executor_state
+                        if src_field == "_session":
+                            es = latest.executor_state or {}
+                            value = es.get("snapshot_uuid") or es.get("session_id")
+                        else:
+                            value = latest.result.artifact.get(src_field)
+                            if value is None and "." in src_field:
+                                parts = src_field.split(".")
+                                value = latest.result.artifact
+                                for part in parts:
+                                    if isinstance(value, dict):
+                                        value = value.get(part)
+                                    else:
+                                        value = None
+                                        break
                         inputs[binding.local_name] = value
                         dep_run_ids[src_step] = latest.id
                         _record_presence(binding, True)
@@ -3021,17 +3075,22 @@ class Engine:
                     continue
                 latest = self.store.latest_completed_run(job.id, binding.source_step)
                 if latest and latest.result:
-                    value = latest.result.artifact.get(binding.source_field)
-                    # Support nested field access: "hero.headline" → artifact["hero"]["headline"]
-                    if value is None and "." in binding.source_field:
-                        parts = binding.source_field.split(".")
-                        value = latest.result.artifact
-                        for part in parts:
-                            if isinstance(value, dict):
-                                value = value.get(part)
-                            else:
-                                value = None
-                                break
+                    # §9.7.3: _session virtual output resolves from executor_state
+                    if binding.source_field == "_session":
+                        es = latest.executor_state or {}
+                        value = es.get("snapshot_uuid") or es.get("session_id")
+                    else:
+                        value = latest.result.artifact.get(binding.source_field)
+                        # Support nested field access: "hero.headline" → artifact["hero"]["headline"]
+                        if value is None and "." in binding.source_field:
+                            parts = binding.source_field.split(".")
+                            value = latest.result.artifact
+                            for part in parts:
+                                if isinstance(value, dict):
+                                    value = value.get(part)
+                                else:
+                                    value = None
+                                    break
                     inputs[binding.local_name] = value
                     dep_run_ids[binding.source_step] = latest.id
                     _record_presence(binding, True)
