@@ -545,6 +545,35 @@ class WhenPredicate:
 # ── Step Definition ────────────────────────────────────────────────────
 
 
+def _split_after_field(after_data: Any) -> tuple[list[str], list[list[str]]]:
+    """Split a serialized 'after' field into (regular, any_of_groups).
+
+    Mirrors yaml_loader._parse_after's structure but does NOT validate —
+    serialized data is trusted (validation happens at YAML parse time).
+
+    Accepts:
+      - None / "" / [] → ([], [])
+      - str "X" → (["X"], [])
+      - list of (str | dict with single 'any_of' key) → split per element
+    """
+    if after_data is None or after_data == "":
+        return [], []
+    if isinstance(after_data, str):
+        return [after_data], []
+    if not isinstance(after_data, list):
+        return [], []
+    regular: list[str] = []
+    any_of_groups: list[list[str]] = []
+    for item in after_data:
+        if isinstance(item, str):
+            regular.append(item)
+        elif isinstance(item, dict) and "any_of" in item:
+            members = item.get("any_of", [])
+            if isinstance(members, list):
+                any_of_groups.append([str(m) for m in members])
+    return regular, any_of_groups
+
+
 @dataclass
 class StepDefinition:
     name: str
@@ -571,12 +600,18 @@ class StepDefinition:
     derived_outputs: dict[str, str] = field(default_factory=dict)  # computed fields from artifact
 
     def to_dict(self) -> dict:
+        # after is serialized as a mixed list: regular string deps followed
+        # by {any_of: [...]} dict entries for each after_any_of group. This
+        # mirrors the YAML surface and round-trips through from_dict.
+        after_serialized: list = list(self.after)
+        for group in self.after_any_of:
+            after_serialized.append({"any_of": list(group)})
         d = {
             "name": self.name,
             "outputs": self.outputs,
             "executor": self.executor.to_dict(),
             "inputs": [b.to_dict() for b in self.inputs],
-            "after": self.after,
+            "after": after_serialized,
             "exit_rules": [r.to_dict() for r in self.exit_rules],
             "idempotency": self.idempotency,
         }
@@ -609,18 +644,28 @@ class StepDefinition:
             d["on_error"] = self.on_error
         if self.derived_outputs:
             d["derived_outputs"] = self.derived_outputs
-        if self.after_any_of:
-            d["after_any_of"] = [list(g) for g in self.after_any_of]
         return d
 
     @classmethod
     def from_dict(cls, d: dict) -> StepDefinition:
+        # Split mixed `after` list into (regular, any_of_groups). The
+        # serialized form mirrors the YAML surface: a list of strings
+        # interleaved with {any_of: [...]} dicts. Falls back to the
+        # 'sequencing' alias for legacy serialized flows.
+        raw_after = d.get("after") if "after" in d else d.get("sequencing", [])
+        after_split, after_any_of_split = _split_after_field(raw_after)
+        # Legacy step-2 format: top-level 'after_any_of' key. Merge with
+        # whatever we parsed from the mixed list (typically empty if
+        # legacy was used).
+        legacy_any_of = d.get("after_any_of", [])
+        if legacy_any_of and not after_any_of_split:
+            after_any_of_split = [list(g) for g in legacy_any_of]
         return cls(
             name=d["name"],
             outputs=d["outputs"],
             executor=ExecutorRef.from_dict(d["executor"]),
             inputs=[InputBinding.from_dict(b) for b in d.get("inputs", [])],
-            after=d.get("after") if "after" in d else d.get("sequencing", []),
+            after=after_split,
             exit_rules=[ExitRule.from_dict(r) for r in d.get("exit_rules", [])],
             idempotency=d.get("idempotency", "idempotent"),
             when=(
@@ -640,7 +685,7 @@ class StepDefinition:
             cache=CacheConfig.from_dict(d["cache"]) if d.get("cache") else None,
             on_error=d.get("on_error", "fail"),
             derived_outputs=d.get("derived_outputs", {}),
-            after_any_of=[list(g) for g in d.get("after_any_of", [])],
+            after_any_of=after_any_of_split,
         )
 
 
@@ -828,6 +873,14 @@ class WorkflowDefinition:
                     errors.append(
                         f"Step '{name}': after references unknown step '{seq_step}'"
                     )
+
+            # Check after_any_of references
+            for group in step.after_any_of:
+                for member in group:
+                    if member not in step_names:
+                        errors.append(
+                            f"Step '{name}': after.any_of references unknown step '{member}'"
+                        )
 
             # Check duplicate local names and identifier validity
             import re

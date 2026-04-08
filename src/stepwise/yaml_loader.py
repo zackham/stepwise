@@ -38,6 +38,82 @@ from stepwise.models import (
 _SESSION_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
+def _parse_after(after_data: Any, step_name: str) -> tuple[list[str], list[list[str]]]:
+    """Parse the `after:` field into (regular_deps, any_of_groups).
+
+    Accepts:
+      - None or empty list → ([], [])
+      - String "X" → (["X"], [])  (singleton convenience)
+      - List of strings ["X", "Y"] → (["X", "Y"], [])
+      - List with mixed elements ["X", {"any_of": ["A", "B"]}] →
+            (["X"], [["A", "B"]])
+      - List of any_of groups [{"any_of": ["A","B"]}, {"any_of": ["C","D"]}] →
+            ([], [["A", "B"], ["C", "D"]])
+
+    Rejects (ValueError with step name):
+      - Pure dict form: `after: {any_of: [...]}` (must use list form)
+      - Empty any_of: `after: [{any_of: []}]`
+      - Single-member any_of: `after: [{any_of: [X]}]`
+      - Self-reference: `after: [{any_of: [step_name, ...]}]`
+      - Non-string members in any_of
+      - Unknown dict keys (only `any_of` is supported)
+    """
+    if after_data is None or after_data == []:
+        return [], []
+    if isinstance(after_data, str):
+        return [after_data], []
+    if not isinstance(after_data, list):
+        raise ValueError(
+            f"step {step_name!r}: 'after' must be a string, list, or list with "
+            f"any_of dicts, got {type(after_data).__name__}"
+        )
+
+    regular: list[str] = []
+    any_of_groups: list[list[str]] = []
+    for item in after_data:
+        if isinstance(item, str):
+            regular.append(item)
+        elif isinstance(item, dict):
+            if set(item.keys()) != {"any_of"}:
+                extra = sorted(set(item.keys()) - {"any_of"})
+                raise ValueError(
+                    f"step {step_name!r}: after entry has unsupported keys "
+                    f"{extra}; only 'any_of' is allowed"
+                )
+            members = item["any_of"]
+            if not isinstance(members, list):
+                raise ValueError(
+                    f"step {step_name!r}: after.any_of must be a list of step "
+                    f"names, got {type(members).__name__}"
+                )
+            if len(members) == 0:
+                raise ValueError(
+                    f"step {step_name!r}: after.any_of must be non-empty"
+                )
+            if len(members) == 1:
+                raise ValueError(
+                    f"step {step_name!r}: after.any_of with a single member "
+                    f"is not allowed — use plain 'after: [{members[0]!r}]' instead"
+                )
+            for m in members:
+                if not isinstance(m, str):
+                    raise ValueError(
+                        f"step {step_name!r}: after.any_of members must be "
+                        f"strings (step names), got {type(m).__name__}"
+                    )
+                if m == step_name:
+                    raise ValueError(
+                        f"step {step_name!r}: cannot reference self in after.any_of"
+                    )
+            any_of_groups.append(list(members))
+        else:
+            raise ValueError(
+                f"step {step_name!r}: after entry must be a string or "
+                f"{{any_of: [...]}} dict, got {type(item).__name__}"
+            )
+    return regular, any_of_groups
+
+
 def _parse_when(when_data: Any, step_name: str) -> str | WhenPredicate | None:
     """Dispatch a `when:` field into either legacy string form or predicate form.
 
@@ -930,13 +1006,11 @@ def _parse_step(
                 f"(use 'after' — 'sequencing' is deprecated)"
             )
         if "after" in step_data:
-            after = step_data["after"] or []
+            after, after_any_of = _parse_after(step_data["after"], step_name)
         elif "sequencing" in step_data:
-            after = step_data["sequencing"] or []
+            after, after_any_of = _parse_after(step_data["sequencing"], step_name)
         else:
-            after = []
-        if isinstance(after, str):
-            after = [after]
+            after, after_any_of = [], []
 
         return StepDefinition(
             name=step_name,
@@ -946,6 +1020,7 @@ def _parse_step(
             executor=ExecutorRef("sub_flow", {"flow_ref": flow_ref} if flow_ref else {}),
             inputs=input_bindings,
             after=after,
+            after_any_of=after_any_of,
             sub_flow=sub_flow,
             when=_parse_when(step_data.get("when"), step_name),
         )
@@ -971,13 +1046,11 @@ def _parse_step(
                 f"(use 'after' — 'sequencing' is deprecated)"
             )
         if "after" in step_data:
-            after = step_data["after"] or []
+            after, after_any_of = _parse_after(step_data["after"], step_name)
         elif "sequencing" in step_data:
-            after = step_data["sequencing"] or []
+            after, after_any_of = _parse_after(step_data["sequencing"], step_name)
         else:
-            after = []
-        if isinstance(after, str):
-            after = [after]
+            after, after_any_of = [], []
 
         return StepDefinition(
             name=step_name,
@@ -987,6 +1060,7 @@ def _parse_step(
             executor=executor,
             inputs=input_bindings,
             after=after,
+            after_any_of=after_any_of,
             for_each=for_each_spec,
             sub_flow=sub_flow,
             when=_parse_when(step_data.get("when"), step_name),
@@ -1006,13 +1080,11 @@ def _parse_step(
             f"(use 'after' — 'sequencing' is deprecated)"
         )
     if "after" in step_data:
-        after = step_data["after"] or []
+        after, after_any_of = _parse_after(step_data["after"], step_name)
     elif "sequencing" in step_data:
-        after = step_data["sequencing"] or []
+        after, after_any_of = _parse_after(step_data["sequencing"], step_name)
     else:
-        after = []
-    if isinstance(after, str):
-        after = [after]
+        after, after_any_of = [], []
 
     # Exit rules
     exits_data = step_data.get("exits", [])
@@ -1106,6 +1178,7 @@ def _parse_step(
         executor=executor,
         inputs=input_bindings,
         after=after,
+        after_any_of=after_any_of,
         exit_rules=exit_rules,
         idempotency=idempotency,
         when=when_condition,

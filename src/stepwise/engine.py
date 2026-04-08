@@ -1251,6 +1251,20 @@ class Engine:
             if not self._is_dep_settled(job, dep_step):
                 return False
 
+        # Check after_any_of groups: at least ONE member per group must be settled
+        # (per §10.2 first-success-wins eligibility, no cancellation).
+        for group in step_def.after_any_of:
+            has_settled = False
+            for member in group:
+                if self._is_dep_settled(job, member):
+                    has_settled = True
+                    break
+                if self._is_dep_settled_on_error_continue(job, member):
+                    has_settled = True
+                    break
+            if not has_settled:
+                return False
+
         # Check any_of groups: at least ONE source per group must have current completed run
         # (or failed with on_error: continue — unless the binding is optional, in which case missing is OK)
         for binding in step_def.inputs:

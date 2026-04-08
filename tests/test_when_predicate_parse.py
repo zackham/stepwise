@@ -135,7 +135,7 @@ class TestWhenPredicateRoundTrip:
         assert step2.when == step.when
 
     def test_step_definition_after_any_of_round_trip(self):
-        """after_any_of field round-trips through to_dict / from_dict."""
+        """after_any_of round-trips through to_dict / from_dict via inline list form."""
         from stepwise.models import ExecutorRef
         step = StepDefinition(
             name="rejoin",
@@ -144,9 +144,16 @@ class TestWhenPredicateRoundTrip:
             after_any_of=[["branch_a", "branch_b"], ["worker_x", "worker_y"]],
         )
         d = step.to_dict()
-        assert d["after_any_of"] == [["branch_a", "branch_b"], ["worker_x", "worker_y"]]
+        # Step 4 changed the canonical surface to inline list form: any_of
+        # groups are emitted as {any_of: [...]} dicts in the after list.
+        assert d["after"] == [
+            {"any_of": ["branch_a", "branch_b"]},
+            {"any_of": ["worker_x", "worker_y"]},
+        ]
+        assert "after_any_of" not in d
         step2 = StepDefinition.from_dict(d)
         assert step2.after_any_of == step.after_any_of
+        assert step2.after == []
 
     def test_step_definition_empty_after_any_of_omitted(self):
         """Empty after_any_of is omitted from to_dict (default behavior)."""
