@@ -1272,10 +1272,16 @@ class Engine:
         # Evaluate step-level `when` condition against resolved inputs
         if step_def.when is not None:
             try:
-                from stepwise.yaml_loader import evaluate_when_condition
+                from stepwise.models import WhenPredicate
                 inputs, _ = self._resolve_inputs(job, step_def)
-                if not evaluate_when_condition(step_def.when, inputs):
-                    return False
+                if isinstance(step_def.when, WhenPredicate):
+                    from stepwise.validator.mutex import evaluate_when_predicate
+                    if not evaluate_when_predicate(step_def.when, inputs):
+                        return False
+                else:
+                    from stepwise.yaml_loader import evaluate_when_condition
+                    if not evaluate_when_condition(step_def.when, inputs):
+                        return False
             except Exception:
                 import logging
                 logging.getLogger("stepwise.engine").warning(

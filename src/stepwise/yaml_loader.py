@@ -29,9 +29,43 @@ from stepwise.models import (
     StepLimits,
     VALID_FIELD_TYPES,
     VALID_VISIBILITY,
+    WhenPredicate,
     WorkflowDefinition,
     parse_duration,
 )
+
+
+def _parse_when(when_data: Any, step_name: str) -> str | WhenPredicate | None:
+    """Dispatch a `when:` field into either legacy string form or predicate form.
+
+    - None → None
+    - str → return as-is (legacy expression form, opaque to mutex algebra)
+    - dict → parse into WhenPredicate (predicate form, §5)
+    - other → ValueError with step name
+
+    is_present: predicates are rejected at parse time per the locked decision:
+    loop-back binding runtime is not yet implemented.
+    """
+    if when_data is None:
+        return None
+    if isinstance(when_data, str):
+        return when_data
+    if isinstance(when_data, dict):
+        # is_present rejection: silent on timing
+        if "is_present" in when_data:
+            raise ValueError(
+                f"step {step_name!r}: is_present: is not yet supported — "
+                f"loop-back binding runtime not yet implemented; "
+                f"use legacy string form for now"
+            )
+        try:
+            return WhenPredicate.from_dict(when_data)
+        except ValueError as exc:
+            raise ValueError(f"step {step_name!r}: {exc}") from exc
+    raise ValueError(
+        f"step {step_name!r}: when: must be a string or mapping, "
+        f"got {type(when_data).__name__}"
+    )
 
 # Safe builtins for exit rule expression evaluation
 
@@ -910,7 +944,7 @@ def _parse_step(
             inputs=input_bindings,
             after=after,
             sub_flow=sub_flow,
-            when=step_data.get("when"),
+            when=_parse_when(step_data.get("when"), step_name),
         )
 
     # Check for for_each (changes how the step is parsed)
@@ -952,7 +986,7 @@ def _parse_step(
             after=after,
             for_each=for_each_spec,
             sub_flow=sub_flow,
-            when=step_data.get("when"),
+            when=_parse_when(step_data.get("when"), step_name),
         )
 
     # Normal step parsing
@@ -997,7 +1031,7 @@ def _parse_step(
         limits = StepLimits.from_dict(limits_data)
 
     # Step-level when condition (pure-pull branching)
-    when_condition = step_data.get("when")
+    when_condition = _parse_when(step_data.get("when"), step_name)
 
     # Named sessions
     session = step_data.get("session")

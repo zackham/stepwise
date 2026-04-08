@@ -13,7 +13,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 logger = logging.getLogger("stepwise.models")
 
@@ -419,6 +419,129 @@ class CacheConfig:
         )
 
 
+# ── Predicate-form `when:` clause ──────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class WhenPredicate:
+    """A YAML-native predicate-form when: clause.
+
+    Per §5: input is the local input name, op is one of four comparators,
+    value is the literal (str|int for eq/in, bool for is_null/is_present).
+
+    The four §5.4 bans are enforced in __post_init__:
+      - eq: null  (use is_null: true instead)
+      - eq: true / eq: false (booleans not comparable as eq values)
+      - eq: 5.0 (float literals banned — use a derived label upstream)
+      - in: [] (empty)
+      - in: with bool/float/None members
+      - is_null / is_present with non-bool value
+    """
+    input: str
+    op: Literal["eq", "in", "is_null", "is_present"]
+    value: Any  # str | int | tuple | bool
+
+    def __post_init__(self) -> None:
+        if self.op == "eq":
+            if self.value is None:
+                raise ValueError(
+                    "when.eq cannot be null — use 'is_null: true' instead"
+                )
+            # Booleans first: bool is a subclass of int in Python.
+            if isinstance(self.value, bool):
+                raise ValueError(
+                    "when.eq cannot be a bool — booleans are not comparable as eq values"
+                )
+            if isinstance(self.value, float):
+                raise ValueError(
+                    "when.eq float literals banned per §5.4; "
+                    "use an upstream `derived:` label"
+                )
+            if not isinstance(self.value, (str, int)):
+                raise ValueError(
+                    f"when.eq value must be str or int, got {type(self.value).__name__}"
+                )
+        elif self.op == "in":
+            if not isinstance(self.value, tuple):
+                raise ValueError(
+                    f"when.in value must be a tuple, got {type(self.value).__name__}"
+                )
+            if len(self.value) == 0:
+                raise ValueError("when.in list cannot be empty")
+            for v in self.value:
+                if v is None:
+                    raise ValueError(
+                        "when.in list members cannot be null"
+                    )
+                if isinstance(v, bool):
+                    raise ValueError(
+                        "when.in list members cannot be bool"
+                    )
+                if isinstance(v, float):
+                    raise ValueError(
+                        "when.in float literals banned per §5.4; "
+                        "use an upstream `derived:` label"
+                    )
+                if not isinstance(v, (str, int)):
+                    raise ValueError(
+                        f"when.in list members must be str or int, "
+                        f"got {type(v).__name__}"
+                    )
+        elif self.op in ("is_null", "is_present"):
+            if not isinstance(self.value, bool):
+                raise ValueError(
+                    f"when.{self.op} value must be bool, got {type(self.value).__name__}"
+                )
+        else:
+            raise ValueError(
+                f"when.op must be one of 'eq','in','is_null','is_present', got {self.op!r}"
+            )
+
+    def to_dict(self) -> dict:
+        """Serialize to YAML-native dict form: {input, <op>: value}."""
+        d: dict = {"input": self.input}
+        if self.op == "in":
+            # tuple → list for YAML
+            d["in"] = list(self.value)
+        else:
+            d[self.op] = self.value
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> WhenPredicate:
+        """Parse from YAML-native dict form. Caller adds step-name context."""
+        if not isinstance(d, dict):
+            raise ValueError(
+                f"when predicate must be a mapping, got {type(d).__name__}"
+            )
+        if "input" not in d:
+            raise ValueError("when predicate missing required 'input' key")
+        input_name = d["input"]
+        op_keys = [k for k in ("eq", "in", "is_null", "is_present") if k in d]
+        if len(op_keys) == 0:
+            raise ValueError(
+                "when predicate missing operator: use exactly one of "
+                "eq, in, is_null, is_present"
+            )
+        if len(op_keys) > 1:
+            raise ValueError(
+                f"when predicate has multiple operators ({', '.join(op_keys)}); "
+                f"use exactly one of eq, in, is_null, is_present"
+            )
+        op = op_keys[0]
+        raw_value = d[op]
+        # Convert YAML list → tuple for `in`
+        if op == "in":
+            if not isinstance(raw_value, (list, tuple)):
+                raise ValueError(
+                    f"when.in value must be a list, got {type(raw_value).__name__}"
+                )
+            value: Any = tuple(raw_value)
+        else:
+            value = raw_value
+        return cls(input=input_name, op=op, value=value)
+
+
 # ── Step Definition ────────────────────────────────────────────────────
 
 
@@ -432,7 +555,7 @@ class StepDefinition:
     exit_rules: list[ExitRule] = field(default_factory=list)
     idempotency: str = "idempotent"  # "idempotent" | "retriable_with_guard" | "non_retriable"
     description: str = ""  # optional human-readable description
-    when: str | None = None  # activation condition evaluated against resolved inputs
+    when: str | WhenPredicate | None = None  # activation condition: legacy expr string OR predicate-form
     limits: StepLimits | None = None  # M4: cost/time/iteration limits
     for_each: ForEachSpec | None = None  # iteration over upstream list
     sub_flow: WorkflowDefinition | None = None  # embedded flow for for_each
@@ -457,7 +580,10 @@ class StepDefinition:
             "idempotency": self.idempotency,
         }
         if self.when is not None:
-            d["when"] = self.when
+            if isinstance(self.when, WhenPredicate):
+                d["when"] = self.when.to_dict()
+            else:
+                d["when"] = self.when
         if self.output_schema:
             d["output_schema"] = {k: v.to_dict() for k, v in self.output_schema.items()}
         if self.limits:
@@ -494,7 +620,11 @@ class StepDefinition:
             after=d.get("after") if "after" in d else d.get("sequencing", []),
             exit_rules=[ExitRule.from_dict(r) for r in d.get("exit_rules", [])],
             idempotency=d.get("idempotency", "idempotent"),
-            when=d.get("when"),
+            when=(
+                WhenPredicate.from_dict(d["when"])
+                if isinstance(d.get("when"), dict)
+                else d.get("when")
+            ),
             output_schema={k: OutputFieldSpec.from_dict(v) for k, v in d.get("output_schema", {}).items()},
             limits=StepLimits.from_dict(d["limits"]) if d.get("limits") else None,
             for_each=ForEachSpec.from_dict(d["for_each"]) if d.get("for_each") else None,
