@@ -288,7 +288,7 @@ implement:
 | `session` | string | no | — | Named session. Steps with the same name share a conversation |
 | `loop_prompt` | string | no | — | Alternate prompt template used on attempt > 1 (falls back to `prompt`) |
 | `max_continuous_attempts` | int | no | — | After N iterations, force a fresh session |
-| `fork_from` | string | no | — | Fork an independent session from a named parent session |
+| `fork_from` | string | no | — | Fork an independent session from the completion tail of a named step |
 
 **Behavior:**
 - First run (attempt 1): creates a new session, sends `prompt`
@@ -320,7 +320,7 @@ steps:
 
 **Forking sessions:**
 
-Use `fork_from` to create an independent session that starts with a copy of the parent session's history. The fork diverges — further messages in either session don't affect the other.
+Use `fork_from` to create an independent session that starts from the completion tail of a named step. The fork diverges — further messages in either session don't affect the other. `fork_from` references a STEP NAME (the parent step whose snapshot anchors the fork), not a session name.
 
 ```yaml
 steps:
@@ -334,15 +334,19 @@ steps:
   review:
     executor: agent
     agent: claude
-    fork_from: main
+    session: critic
+    fork_from: plan          # step name — the snapshot anchor
+    after: [plan]            # must depend on the fork target
     prompt: "Review the plan critically."
     inputs:
       plan: plan.plan
     outputs: [feedback]
-    # gets main's history but diverges independently
+    # gets plan's tail snapshot but diverges independently
 ```
 
-- `fork_from` requires `agent: claude` (explicit) on the forking step
+- `fork_from` requires `agent: claude` (explicit) on the forking step AND on every writer of the parent session
+- `fork_from` requires the forking step to declare its own `session:` (the chain root for the new session)
+- The forking step must depend on the fork target via `after:` or as an input source
 - The forked session is independent — it doesn't affect the parent
 - The engine serializes concurrent access to shared sessions
 
@@ -727,7 +731,7 @@ decorators:
 14. **Directory flow `run:` paths resolve relative to the flow directory**, not the current working directory.
 15. **Optional inputs use dict syntax.** `score: {from: "review.score", optional: true}` — not `score: review.score?` or similar shorthand.
 16. **Exit rules with `advance` actions fail on no-match.** When you define explicit `advance` rules, the step fails if none match. Add a catch-all `advance` rule or handle all cases.
-17. **Named sessions use `session:`, not input bindings.** Steps share a conversation by using the same `session: <name>` value. Use `fork_from: <session>` (with `agent: claude`) to branch an independent session from a parent.
+17. **Named sessions use `session:`, not input bindings.** Steps share a conversation by using the same `session: <name>` value. Use `fork_from: <step>` (with `agent: claude`) to branch an independent session from the completion tail of a named step.
 
 ## Validation Checklist
 

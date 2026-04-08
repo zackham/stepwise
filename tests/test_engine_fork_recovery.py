@@ -78,7 +78,7 @@ def _make_fork_flow_job(engine):
     wf = WorkflowDefinition(steps={
         "parent_root": _agent_step("parent_root", session="parent"),
         "child": _agent_step(
-            "child", session="forked", fork_from="parent", after=["parent_root"],
+            "child", session="forked", fork_from="parent_root", after=["parent_root"],
         ),
     })
     job = engine.create_job("t", wf)

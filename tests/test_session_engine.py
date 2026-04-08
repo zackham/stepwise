@@ -102,12 +102,12 @@ class TestBuildSessionRegistry:
         assert state.name == "planning"
         assert state.agent == "claude"
         assert state.backend_type == "acpx"
-        assert state.fork_from is None
+        assert state.is_forked is False
         assert state.claude_uuid is None
         assert state.created is False
 
     def test_fork_session_registry(self, engine):
-        """Fork session gets correct backend_type and fork_from."""
+        """Fork session gets correct backend_type and is_forked flag."""
         wf = WorkflowDefinition(steps={
             "plan": StepDefinition(
                 name="plan", outputs=["plan"],
@@ -118,7 +118,7 @@ class TestBuildSessionRegistry:
                 name="review", outputs=["issues"],
                 executor=ExecutorRef("agent", {"prompt": "Review", "agent": "claude"}),
                 session="critic",
-                fork_from="planning",
+                fork_from="plan",
                 after=["plan"],
             ),
         })
@@ -127,9 +127,9 @@ class TestBuildSessionRegistry:
 
         assert len(registry) == 2
         assert registry["planning"].backend_type == "acpx"
-        assert registry["planning"].fork_from is None
+        assert registry["planning"].is_forked is False
         assert registry["critic"].backend_type == "claude_direct"
-        assert registry["critic"].fork_from == "planning"
+        assert registry["critic"].is_forked is True
 
     def test_no_sessions_empty_registry(self, engine):
         """Workflow without session fields produces empty registry."""
@@ -249,7 +249,7 @@ class TestSessionContextInjection:
                 name="review", outputs=["issues"],
                 executor=ExecutorRef("agent", {"prompt": "Review", "agent": "claude"}),
                 session="critic",
-                fork_from="planning",
+                fork_from="plan",
                 after=["plan"],
             ),
         })
@@ -264,6 +264,8 @@ class TestSessionContextInjection:
         run, exec_ref, inputs, ctx = engine._prepare_step_run(job, "review")
 
         assert exec_ref.config.get("_session_name") == "critic"
+        # No snapshot_uuid persisted on the parent step's run, so the
+        # fallback path supplies the live parent UUID via the registry.
         assert exec_ref.config.get("_fork_from_session_id") == "parent-uuid-456"
         assert exec_ref.config.get("_backend_type") == "claude_direct"
 
@@ -378,13 +380,13 @@ class TestSessionUUIDCapture:
         """Forked sessions keep backend_type=claude_direct after creation."""
         state = SessionState(
             name="critic",
-            fork_from="planning",
+            is_forked=True,
             backend_type="claude_direct",
         )
         # Simulate creation
         state.created = True
         state.claude_uuid = "fork-uuid-abc"
-        if state.fork_from:
+        if state.is_forked:
             state.backend_type = "claude_direct"
         assert state.backend_type == "claude_direct"
 
@@ -601,17 +603,17 @@ class TestSessionState:
         assert state.name == "main"
         assert state.claude_uuid is None
         assert state.backend_type == "acpx"
-        assert state.fork_from is None
+        assert state.is_forked is False
         assert state.agent == "claude"
         assert state.created is False
 
     def test_fork_state(self):
         state = SessionState(
             name="critic",
-            fork_from="planning",
+            is_forked=True,
             backend_type="claude_direct",
         )
-        assert state.fork_from == "planning"
+        assert state.is_forked is True
         assert state.backend_type == "claude_direct"
 
 

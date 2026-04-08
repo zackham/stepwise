@@ -86,7 +86,7 @@ class SessionState:
     name: str
     claude_uuid: str | None = None
     backend_type: str = "acpx"
-    fork_from: str | None = None
+    is_forked: bool = False
     agent: str = "claude"
     created: bool = False
 
@@ -178,7 +178,13 @@ class Engine:
     # ── Named Session Registry ──────────────────────────────────────────
 
     def _build_session_registry(self, job: Job) -> dict[str, SessionState]:
-        """Build named session registry from workflow step definitions."""
+        """Build named session registry from workflow step definitions.
+
+        Under step-name fork_from semantics, the session-level state only
+        tracks whether *any* writer on the session declares fork_from
+        (the per-step "fork from which step" is read from
+        ``step_def.fork_from`` directly at the launch site).
+        """
         registry: dict[str, SessionState] = {}
         for step_name, step_def in job.workflow.steps.items():
             if not step_def.session:
@@ -190,7 +196,7 @@ class Engine:
                     agent = step_def.executor.config.get("agent", "claude")
                 registry[session_name] = SessionState(name=session_name, agent=agent)
             if step_def.fork_from:
-                registry[session_name].fork_from = step_def.fork_from
+                registry[session_name].is_forked = True
                 registry[session_name].backend_type = "claude_direct"
         return registry
 
@@ -201,41 +207,33 @@ class Engine:
     # ── Fork source / snapshot UUID lookup (§9 / step 6) ────────────────
 
     def _fork_source_step_names(self, job: Job) -> set[str]:
-        """Return the set of step names whose completion needs a snapshot.
+        """Return the set of step names directly named as a fork_from target.
 
-        A step is a fork source if its session is referenced as a fork_from
-        target by some other step in the flow. These steps get the §9.3
+        Under step-name fork_from semantics (design doc §8.2), a step is a
+        fork source iff some other step in the flow declares
+        ``fork_from: <this step name>``. These steps get the §9.3
         post-exit synchronous lifecycle: subprocess exit → lock acquire →
         snapshot → metadata commit → lock release.
         """
-        referenced_sessions = {
-            s.fork_from for s in job.workflow.steps.values() if s.fork_from
-        }
-        if not referenced_sessions:
-            return set()
-        return {
-            name for name, step in job.workflow.steps.items()
-            if step.session and step.session in referenced_sessions
-        }
+        return {s.fork_from for s in job.workflow.steps.values() if s.fork_from}
 
-    def _lookup_snapshot_uuid(self, job: Job, parent_session_name: str) -> str | None:
-        """Look up the snapshot UUID for the chain root of a parent session.
+    def _lookup_snapshot_uuid(self, job: Job, parent_step_name: str) -> str | None:
+        """Look up the snapshot UUID persisted on a parent step's run.
 
-        Returns None if no completed run on any step writing to the parent
-        session has a snapshot_uuid in its executor_state. Downstream forks
-        use this UUID via `claude --resume <snap_uuid> --fork-session` to
-        avoid the §9.1 live-tail race.
+        Under step-name fork_from semantics (§8.2), the parameter is the
+        STEP name named in some downstream step's ``fork_from``. The
+        snapshot UUID lives on the parent step's latest completed run's
+        ``executor_state["snapshot_uuid"]``. Downstream forks use this
+        UUID via ``claude --resume <snap_uuid> --fork-session`` to avoid
+        the §9.1 live-tail race.
+
+        Returns None if no completed run exists or no snapshot_uuid was
+        persisted on it.
         """
-        for name, step in job.workflow.steps.items():
-            if step.session != parent_session_name:
-                continue
-            latest = self.store.latest_completed_run(job.id, name)
-            if not latest or not latest.executor_state:
-                continue
-            snap = latest.executor_state.get("snapshot_uuid")
-            if snap:
-                return snap
-        return None
+        latest = self.store.latest_completed_run(job.id, parent_step_name)
+        if not latest or not latest.executor_state:
+            return None
+        return latest.executor_state.get("snapshot_uuid")
 
     def _maybe_snapshot_for_fork_source(
         self, job: Job, run: StepRun, step_name: str,
@@ -2009,41 +2007,72 @@ class Engine:
                     session_ctx["_backend_type"] = session_state.backend_type
                     session_ctx["_agent"] = session_state.agent
 
-                    if session_state.claude_uuid and not session_state.fork_from:
+                    if session_state.claude_uuid and not step_def.fork_from:
                         # Continue existing session
                         session_ctx["_session_uuid"] = session_state.claude_uuid
-                    elif session_state.fork_from and not session_state.created:
-                        # First step on forked session — pass the parent's
-                        # SNAPSHOT UUID, not the live UUID. Per §9 of the
-                        # coordination doc, forking from the live UUID has
-                        # a race where the parent session may continue
-                        # writing past the intended fork point. The snapshot
-                        # UUID is created by the fork-source step's
-                        # synchronous lifecycle (see _maybe_snapshot_for_fork_source).
+                    elif step_def.fork_from and not session_state.created:
+                        # First (chain-root) step on a forked session — pass
+                        # the parent step's SNAPSHOT UUID, not the live UUID.
+                        # Per §9 of the coordination doc, forking from the
+                        # live UUID has a race where the parent session may
+                        # continue writing past the intended fork point. The
+                        # snapshot UUID is created by the fork-source step's
+                        # synchronous lifecycle
+                        # (see _maybe_snapshot_for_fork_source).
+                        #
+                        # Under step-name fork_from semantics (§8.2),
+                        # ``step_def.fork_from`` names the parent STEP whose
+                        # completion-tail is the fork anchor.
                         snap_uuid = self._lookup_snapshot_uuid(
-                            job, session_state.fork_from
+                            job, step_def.fork_from
                         )
                         if snap_uuid:
                             session_ctx["_fork_from_session_id"] = snap_uuid
                         else:
                             # Fallback to live UUID if no snapshot exists
                             # (e.g., parent step hasn't completed yet —
-                            # surfaces as a noisy log so we notice).
-                            parent = self._session_registries[job.id].get(
-                                session_state.fork_from
+                            # surfaces as a noisy log so we notice). Read
+                            # the parent step's completed run directly; if
+                            # the step's executor_state recorded a live
+                            # session UUID (the acpx backend stores it under
+                            # ``session_id``), use that. Otherwise fall back
+                            # to the parent step's session-state claude_uuid
+                            # via the registry.
+                            live_uuid: str | None = None
+                            parent_run = self.store.latest_completed_run(
+                                job.id, step_def.fork_from
                             )
-                            if parent and parent.claude_uuid:
-                                _engine_logger.warning(
-                                    "fork from session %r missing snapshot_uuid; "
-                                    "falling back to live parent UUID (race risk)",
-                                    session_state.fork_from,
+                            if parent_run and parent_run.executor_state:
+                                live_uuid = parent_run.executor_state.get(
+                                    "session_id"
                                 )
-                                session_ctx["_fork_from_session_id"] = parent.claude_uuid
+                            if not live_uuid:
+                                parent_step_def = job.workflow.steps.get(
+                                    step_def.fork_from
+                                )
+                                parent_session_name = (
+                                    parent_step_def.session
+                                    if parent_step_def else None
+                                )
+                                if parent_session_name:
+                                    parent_state = (
+                                        self._session_registries[job.id]
+                                        .get(parent_session_name)
+                                    )
+                                    if parent_state and parent_state.claude_uuid:
+                                        live_uuid = parent_state.claude_uuid
+                            if live_uuid:
+                                _engine_logger.warning(
+                                    "fork from step %r missing snapshot_uuid; "
+                                    "falling back to live parent UUID (race risk)",
+                                    step_def.fork_from,
+                                )
+                                session_ctx["_fork_from_session_id"] = live_uuid
                         session_ctx["_backend_type"] = "claude_direct"
                     elif session_state.created:
                         # Subsequent step on forked session — continue via claude_direct
                         session_ctx["_session_uuid"] = session_state.claude_uuid
-                        if session_state.fork_from:
+                        if session_state.is_forked:
                             session_ctx["_backend_type"] = "claude_direct"
 
             # Legacy continue_session support
@@ -2189,7 +2218,7 @@ class Engine:
                                 if not state.claude_uuid:
                                     state.claude_uuid = (run.executor_state or {}).get("session_id")
                                 state.created = True
-                                if state.fork_from:
+                                if state.is_forked:
                                     state.backend_type = "claude_direct"
                             # §9.3 critical section: if this step is a
                             # fork source, snapshot the session JSON inside

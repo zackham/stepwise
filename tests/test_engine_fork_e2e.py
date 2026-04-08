@@ -72,12 +72,12 @@ def test_e2e_fork_flow_uses_snapshot(engine, fake_sessions_dir):
     """Walks the fork lifecycle end-to-end with mocked snapshot.
 
     Flow shape:
-      parent_root (session=parent) → child (session=forked, fork_from=parent)
+      parent_root (session=parent) → child (session=forked, fork_from=parent_root)
     """
     wf = WorkflowDefinition(steps={
         "parent_root": _agent("parent_root", session="parent"),
         "child": _agent(
-            "child", session="forked", fork_from="parent", after=["parent_root"],
+            "child", session="forked", fork_from="parent_root", after=["parent_root"],
         ),
     })
     job = engine.create_job("e2e fork", wf)
@@ -115,7 +115,7 @@ def test_e2e_fork_flow_uses_snapshot(engine, fake_sessions_dir):
     assert refreshed.executor_state["snapshot_uuid"] == "snap-of-live-parent-uuid-001"
 
     # Step 2 acceptance: _lookup_snapshot_uuid finds it.
-    snap = engine._lookup_snapshot_uuid(job, "parent")
+    snap = engine._lookup_snapshot_uuid(job, "parent_root")
     assert snap == "snap-of-live-parent-uuid-001"
 
     # Step 3 acceptance: the snapshot UUID is distinct from the live UUID.

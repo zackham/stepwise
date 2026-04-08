@@ -25,15 +25,15 @@ class TestModelRoundTrip:
             outputs=["issues"],
             executor=ExecutorRef("agent", {"prompt": "Review", "agent": "claude"}),
             session="critic",
-            fork_from="planning",
+            fork_from="plan",
         )
         d = step.to_dict()
         assert d["session"] == "critic"
-        assert d["fork_from"] == "planning"
+        assert d["fork_from"] == "plan"
 
         restored = StepDefinition.from_dict(d)
         assert restored.session == "critic"
-        assert restored.fork_from == "planning"
+        assert restored.fork_from == "plan"
 
     def test_session_only_round_trip(self):
         """Session without fork_from serializes correctly."""
@@ -90,7 +90,7 @@ steps:
     executor: agent
     agent: claude
     session: critic
-    fork_from: planning
+    fork_from: implement
     prompt: "Review."
     after: [implement]
     outputs: [issues]
@@ -99,7 +99,7 @@ steps:
         assert wf.steps["plan"].fork_from is None
         assert wf.steps["implement"].session == "planning"
         assert wf.steps["review"].session == "critic"
-        assert wf.steps["review"].fork_from == "planning"
+        assert wf.steps["review"].fork_from == "implement"
 
     def test_no_session_fields_default_none(self):
         """Steps without session/fork_from default to None."""
@@ -133,7 +133,7 @@ steps:
   review:
     executor: agent
     agent: claude
-    fork_from: planning
+    fork_from: plan
     prompt: "Review."
     after: [plan]
     outputs: [issues]
@@ -141,10 +141,14 @@ steps:
 
 
 class TestValidationRule2:
-    """fork_from references unknown session -> error."""
+    """fork_from references unknown step -> error.
 
-    def test_fork_from_unknown_session(self):
-        with pytest.raises(YAMLLoadError, match="references unknown session"):
+    Under step-name fork_from semantics (§8.2), the target must be a
+    real step in the workflow.
+    """
+
+    def test_fork_from_unknown_step(self):
+        with pytest.raises(YAMLLoadError, match="references unknown step"):
             load_workflow_string("""
 steps:
   plan:
@@ -159,6 +163,54 @@ steps:
     agent: claude
     session: critic
     fork_from: nonexistent
+    prompt: "Review."
+    after: [plan]
+    outputs: [issues]
+""")
+
+    def test_fork_from_with_session_name_form_raises_v1_clear_error(self):
+        """A flow using the OLD session-name form (where fork_from value
+        matches a known SESSION but not any STEP) gets a clear v1.0 migration
+        hint in the error message."""
+        with pytest.raises(YAMLLoadError) as excinfo:
+            load_workflow_string("""
+steps:
+  plan:
+    executor: agent
+    agent: claude
+    session: planning
+    prompt: "Plan."
+    outputs: [plan]
+
+  review:
+    executor: agent
+    agent: claude
+    session: critic
+    fork_from: planning
+    prompt: "Review."
+    after: [plan]
+    outputs: [issues]
+""")
+        msg = str(excinfo.value)
+        assert "v1.0" in msg
+        assert "step name" in msg
+
+    def test_fork_from_target_has_no_session(self):
+        """Cannot fork from an ephemeral one-shot step (no session declared)."""
+        with pytest.raises(YAMLLoadError, match="has no session: declared"):
+            load_workflow_string("""
+steps:
+  plan:
+    executor: agent
+    agent: claude
+    prompt: "Plan."
+    outputs: [plan]
+
+  review:
+    executor: agent
+    agent: claude
+    session: critic
+    fork_from: plan
     prompt: "Review."
     after: [plan]
     outputs: [issues]
@@ -183,7 +235,7 @@ steps:
   review:
     run: echo review
     session: critic
-    fork_from: planning
+    fork_from: plan
     after: [plan]
     outputs: [issues]
 """)
@@ -202,7 +254,7 @@ steps:
     executor: agent
     agent: claude
     session: critic
-    fork_from: planning
+    fork_from: plan
     prompt: "Review."
     after: [plan]
     outputs: [issues]
@@ -210,10 +262,18 @@ steps:
 
 
 class TestValidationRule4:
-    """Conflicting fork_from on same session -> error."""
+    """Chain roots on a forked session must agree on parent session.
 
-    def test_conflicting_fork_from(self):
-        with pytest.raises(YAMLLoadError, match="conflicting fork_from values"):
+    Under step-name semantics, the rule checks that all chain roots on
+    a session named ``S`` fork from steps that all write to the SAME
+    parent session. The conditional-rejoin pattern (multiple chain roots
+    into the same parent session, gated by mutex) is permitted at this
+    rule level — the mutex check is delegated to the step 3 coordination
+    validator.
+    """
+
+    def test_validate_chain_roots_different_parent_sessions_rejected(self):
+        with pytest.raises(YAMLLoadError, match="different parent sessions"):
             load_workflow_string("""
 steps:
   plan:
@@ -234,7 +294,7 @@ steps:
     executor: agent
     agent: claude
     session: critic
-    fork_from: planning
+    fork_from: plan
     prompt: "Review A."
     after: [plan]
     outputs: [issues_a]
@@ -243,7 +303,7 @@ steps:
     executor: agent
     agent: claude
     session: critic
-    fork_from: coding
+    fork_from: code
     prompt: "Review B."
     after: [code]
     outputs: [issues_b]
@@ -251,11 +311,11 @@ steps:
 
 
 class TestValidationRule5:
-    """Forked session with no dependency on parent -> error."""
+    """Forked session chain root with no dep on its fork target -> error."""
 
     def test_forked_session_no_dep_on_parent(self):
         with pytest.raises(
-            YAMLLoadError, match="has no dependency on parent session"
+            YAMLLoadError, match="must appear in 'after:' or as an input source"
         ):
             load_workflow_string("""
 steps:
@@ -270,7 +330,7 @@ steps:
     executor: agent
     agent: claude
     session: critic
-    fork_from: planning
+    fork_from: plan
     prompt: "Review."
     outputs: [issues]
 """)
@@ -368,7 +428,7 @@ steps:
     executor: agent
     agent: claude
     session: critic
-    fork_from: planning
+    fork_from: implement
     prompt: "Review."
     after: [implement]
     outputs: [issues]
@@ -384,7 +444,7 @@ steps:
 """)
         assert len(wf.steps) == 4
         assert wf.steps["plan"].session == "planning"
-        assert wf.steps["review"].fork_from == "planning"
+        assert wf.steps["review"].fork_from == "implement"
         assert wf.steps["fix"].session == "planning"
         assert wf.steps["fix"].fork_from is None
 
@@ -443,10 +503,10 @@ steps:
     executor: agent
     agent: claude
     session: critic
-    fork_from: planning
+    fork_from: plan
     prompt: "Review: $plan_text"
     inputs:
       plan_text: plan.plan
     outputs: [issues]
 """)
-        assert wf.steps["review"].fork_from == "planning"
+        assert wf.steps["review"].fork_from == "plan"

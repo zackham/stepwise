@@ -76,11 +76,12 @@ def test_fork_source_step_names_empty_when_no_fork_from(engine):
 
 def test_fork_source_step_names_finds_chain_root(engine):
     """Step 'parent_root' writes to session 'parent', and 'child' forks from
-    'parent'. The fork source is 'parent_root'."""
+    'parent_root'. The fork source is 'parent_root' (the directly-named
+    step under §8.2 step-name semantics)."""
     wf = WorkflowDefinition(steps={
         "parent_root": _agent_step("parent_root", session="parent"),
         "child": _agent_step(
-            "child", session="forked", fork_from="parent",
+            "child", session="forked", fork_from="parent_root",
             after=["parent_root"],
         ),
     })
@@ -92,13 +93,14 @@ def test_fork_source_step_names_finds_chain_root(engine):
     assert sources == {"parent_root"}
 
 
-def test_fork_source_step_names_multiple_writers_on_parent_session(engine):
-    """All writers on the parent session are fork sources."""
+def test_fork_source_step_names_only_directly_named_step(engine):
+    """Under step-name semantics, only the step directly named by fork_from
+    is a fork source — not all writers on the parent session."""
     wf = WorkflowDefinition(steps={
         "p1": _agent_step("p1", session="parent"),
         "p2": _agent_step("p2", session="parent", after=["p1"]),
         "child": _agent_step(
-            "child", session="forked", fork_from="parent", after=["p2"],
+            "child", session="forked", fork_from="p2", after=["p2"],
         ),
     })
     job = Job(
@@ -106,7 +108,7 @@ def test_fork_source_step_names_multiple_writers_on_parent_session(engine):
         created_at=_now(), updated_at=_now(),
     )
     sources = engine._fork_source_step_names(job)
-    assert sources == {"p1", "p2"}
+    assert sources == {"p2"}
 
 
 # ─── _lookup_snapshot_uuid ────────────────────────────────────────────────
@@ -117,7 +119,8 @@ def test_lookup_snapshot_uuid_returns_none_when_no_run(engine):
         "p": _agent_step("p", session="parent"),
     })
     job = engine.create_job("t", wf)
-    assert engine._lookup_snapshot_uuid(job, "parent") is None
+    # Lookup parameter is a STEP NAME under §8.2 step-name semantics.
+    assert engine._lookup_snapshot_uuid(job, "p") is None
 
 
 def test_lookup_snapshot_uuid_returns_persisted_value(engine):
@@ -136,7 +139,7 @@ def test_lookup_snapshot_uuid_returns_persisted_value(engine):
         ),
     )
     engine.store.save_run(run)
-    assert engine._lookup_snapshot_uuid(job, "parent") == "snap-abc"
+    assert engine._lookup_snapshot_uuid(job, "p") == "snap-abc"
 
 
 def test_lookup_snapshot_uuid_skips_runs_without_snapshot(engine):
@@ -154,7 +157,7 @@ def test_lookup_snapshot_uuid_skips_runs_without_snapshot(engine):
         ),
     )
     engine.store.save_run(run)
-    assert engine._lookup_snapshot_uuid(job, "parent") is None
+    assert engine._lookup_snapshot_uuid(job, "p") is None
 
 
 # ─── _maybe_snapshot_for_fork_source ──────────────────────────────────────
@@ -199,7 +202,7 @@ def test_maybe_snapshot_creates_snapshot_for_fork_source(engine, fake_sessions_d
     wf = WorkflowDefinition(steps={
         "parent_root": _agent_step("parent_root", session="parent"),
         "child": _agent_step(
-            "child", session="forked", fork_from="parent",
+            "child", session="forked", fork_from="parent_root",
             after=["parent_root"],
         ),
     })
@@ -243,7 +246,7 @@ def test_maybe_snapshot_failure_leaves_step_in_recoverable_state(
     wf = WorkflowDefinition(steps={
         "parent_root": _agent_step("parent_root", session="parent"),
         "child": _agent_step(
-            "child", session="forked", fork_from="parent", after=["parent_root"],
+            "child", session="forked", fork_from="parent_root", after=["parent_root"],
         ),
     })
     job = engine.create_job("t", wf)
@@ -280,7 +283,7 @@ def test_maybe_snapshot_called_within_lock_critical_section(
     wf = WorkflowDefinition(steps={
         "parent_root": _agent_step("parent_root", session="parent"),
         "child": _agent_step(
-            "child", session="forked", fork_from="parent", after=["parent_root"],
+            "child", session="forked", fork_from="parent_root", after=["parent_root"],
         ),
     })
     job = engine.create_job("t", wf)
@@ -339,7 +342,7 @@ def test_session_context_uses_snapshot_uuid_not_live_uuid(engine, fake_sessions_
     wf = WorkflowDefinition(steps={
         "parent_root": _agent_step("parent_root", session="parent"),
         "child": _agent_step(
-            "child", session="forked", fork_from="parent", after=["parent_root"],
+            "child", session="forked", fork_from="parent_root", after=["parent_root"],
         ),
     })
     job = engine.create_job("t", wf)
@@ -362,6 +365,6 @@ def test_session_context_uses_snapshot_uuid_not_live_uuid(engine, fake_sessions_
     engine.store.save_run(parent_run)
 
     # Snapshot lookup returns the snapshot uuid
-    assert engine._lookup_snapshot_uuid(job, "parent") == "snap-parent-uuid"
+    assert engine._lookup_snapshot_uuid(job, "parent_root") == "snap-parent-uuid"
     # And the snapshot uuid is distinct from the live uuid
     assert "snap-parent-uuid" != parent_state.claude_uuid

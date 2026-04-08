@@ -1194,11 +1194,23 @@ def _parse_step(
     )
 
 
+def _agent_name(sd: StepDefinition) -> str | None:
+    """Return the explicit ``agent`` config value on a step (or None)."""
+    if sd.executor and sd.executor.config:
+        return sd.executor.config.get("agent")
+    return None
+
+
 def _validate_sessions(steps: dict[str, StepDefinition], errors: list[str]) -> None:
-    """Validate named session and fork_from constraints across all steps."""
+    """Validate named session and fork_from constraints across all steps.
+
+    Under step-name fork_from semantics (design doc §8.2), ``fork_from``
+    references a STEP NAME, not a session name. The forking step is the
+    chain root for a new session and inherits the parent step's
+    completion-tail snapshot.
+    """
     # Build session → step mapping
-    session_steps: dict[str, list[str]] = {}  # session_name -> [step_names in order]
-    session_fork_from: dict[str, set[str]] = {}  # session_name -> set of fork_from values
+    session_steps: dict[str, list[str]] = {}
 
     for step_name, step_def in steps.items():
         # Rule 1: fork_from requires session
@@ -1210,10 +1222,6 @@ def _validate_sessions(steps: dict[str, StepDefinition], errors: list[str]) -> N
 
         if step_def.session:
             session_steps.setdefault(step_def.session, []).append(step_name)
-            if step_def.fork_from:
-                session_fork_from.setdefault(step_def.session, set()).add(
-                    step_def.fork_from
-                )
 
         # Rule 6: for_each + session incompatible
         if step_def.session and step_def.for_each:
@@ -1233,68 +1241,95 @@ def _validate_sessions(steps: dict[str, StepDefinition], errors: list[str]) -> N
                         f"Step '{step_name}': _session_id input is deprecated, use session: <name>"
                     )
 
-    for session_name, step_names in session_steps.items():
-        fork_values = session_fork_from.get(session_name, set())
-
-        # Rule 2: fork_from references known session
-        for fv in fork_values:
-            if fv not in session_steps:
-                for sn in step_names:
-                    if steps[sn].fork_from == fv:
-                        errors.append(
-                            f"Step '{sn}': fork_from '{fv}' references unknown session"
-                        )
-
-        # Rule 4: Consistent fork_from within a session
-        if len(fork_values) > 1:
+    # Rule 1b (NEW): fork_from must reference a known step
+    for step_name, step_def in steps.items():
+        if step_def.fork_from and step_def.fork_from not in steps:
             errors.append(
-                f"Steps on session '{session_name}' have conflicting fork_from values"
+                f"Step '{step_name}': fork_from references unknown step "
+                f"'{step_def.fork_from}' (in v1.0, fork_from takes a step "
+                f"name, not a session name — see §8.2 of the coordination doc)"
             )
 
-    # Rule 3: Fork steps require EXPLICIT agent: claude
-    # Default agent is configurable, so we must require explicit declaration
-    for session_name, step_names in session_steps.items():
-        fork_values = session_fork_from.get(session_name, set())
-        if fork_values:
-            # This session is forked — all steps on it need explicit agent: claude
-            for sn in step_names:
+    # Rule 2 (rewritten): fork_from target step must declare session
+    for step_name, step_def in steps.items():
+        if not step_def.fork_from or step_def.fork_from not in steps:
+            continue
+        target = steps[step_def.fork_from]
+        if not target.session:
+            errors.append(
+                f"Step '{step_name}': fork_from target "
+                f"'{step_def.fork_from}' has no session: declared "
+                f"(cannot fork from an ephemeral one-shot agent step)"
+            )
+
+    # Rule 3 (rewritten): explicit agent: claude on (a) all writers of the
+    # forked session AND (b) all writers of the parent session (the session
+    # of the fork_from target step).
+    for step_name, step_def in steps.items():
+        if not step_def.fork_from or step_def.fork_from not in steps:
+            continue
+        target = steps[step_def.fork_from]
+        if not target.session:
+            continue
+        # (a) Forked session writers
+        forked_session = step_def.session
+        if forked_session:
+            for sn in session_steps.get(forked_session, []):
                 sd = steps[sn]
-                agent = sd.executor.config.get("agent") if sd.executor and sd.executor.config else None
-                if sd.executor.type != "agent" or agent != "claude":
+                if sd.executor.type != "agent" or _agent_name(sd) != "claude":
                     errors.append(
                         f"Step '{sn}': session forking requires explicit agent: claude"
                     )
-            # Parent session steps also need explicit agent: claude
-            for parent_session in fork_values:
-                if parent_session in session_steps:
-                    for sn in session_steps[parent_session]:
-                        sd = steps[sn]
-                        agent = sd.executor.config.get("agent") if sd.executor and sd.executor.config else None
-                        if sd.executor.type != "agent" or agent != "claude":
-                            errors.append(
-                                f"Step '{sn}': session forking requires explicit agent: claude"
-                            )
+        # (b) Parent session writers
+        parent_session = target.session
+        for sn in session_steps.get(parent_session, []):
+            sd = steps[sn]
+            if sd.executor.type != "agent" or _agent_name(sd) != "claude":
+                errors.append(
+                    f"Step '{sn}': session forking requires explicit agent: claude"
+                )
 
-    # Rule 5: DAG ordering — first step on forked session must depend on parent session
-    for session_name, step_names in session_steps.items():
-        fork_values = session_fork_from.get(session_name, set())
-        if not fork_values:
+    # Rule 4 (rewritten — single-chain rule per §8.1):
+    # all chain roots on a forked session must point at steps writing
+    # to the same parent session. The conditional-rejoin pattern
+    # (multiple chain roots into the same parent session, gated by mutex)
+    # is permitted at this rule level — the mutex check belongs to the
+    # step 3 coordination validator.
+    chain_roots_by_session: dict[str, list[tuple[str, str]]] = {}
+    for step_name, step_def in steps.items():
+        if not (step_def.fork_from and step_def.session):
             continue
-        parent_session = next(iter(fork_values))
-        if parent_session not in session_steps:
-            continue
-
-        parent_step_names = set(session_steps[parent_session])
-        first_step = steps[step_names[0]]
-        # Check after deps and input deps
-        all_deps = set(first_step.after)
-        for inp in first_step.inputs:
-            if inp.source_step and inp.source_step != "$job":
-                all_deps.add(inp.source_step)
-        if not all_deps.intersection(parent_step_names):
+        target = steps.get(step_def.fork_from)
+        if target and target.session:
+            chain_roots_by_session.setdefault(
+                step_def.session, []
+            ).append((step_name, target.session))
+    for sess, roots in chain_roots_by_session.items():
+        parent_sessions = {ps for _, ps in roots}
+        if len(parent_sessions) > 1:
+            roots_str = ", ".join(f"{r}->{ps}" for r, ps in sorted(roots))
             errors.append(
-                f"Step '{step_names[0]}': forked session '{session_name}' "
-                f"has no dependency on parent session '{parent_session}'"
+                f"Session '{sess}' has chain roots forking from "
+                f"different parent sessions: {roots_str}"
+            )
+
+    # Rule 5 (rewritten): each chain root must declare a dependency on its
+    # fork target step (in `after:` or as an input source). Stronger
+    # transitive checks are the step 3 validator's job.
+    for step_name, step_def in steps.items():
+        if not step_def.fork_from:
+            continue
+        if step_def.fork_from not in steps:
+            continue
+        deps = set(step_def.after)
+        for inp in step_def.inputs:
+            if inp.source_step and inp.source_step != "$job":
+                deps.add(inp.source_step)
+        if step_def.fork_from not in deps:
+            errors.append(
+                f"Step '{step_name}': fork target "
+                f"'{step_def.fork_from}' must appear in 'after:' or as "
+                f"an input source"
             )
 
 
