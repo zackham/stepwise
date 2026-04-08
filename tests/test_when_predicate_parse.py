@@ -134,6 +134,33 @@ class TestWhenPredicateRoundTrip:
         assert isinstance(step2.when, WhenPredicate)
         assert step2.when == step.when
 
+    def test_step_definition_after_any_of_round_trip(self):
+        """after_any_of field round-trips through to_dict / from_dict."""
+        from stepwise.models import ExecutorRef
+        step = StepDefinition(
+            name="rejoin",
+            outputs=["result"],
+            executor=ExecutorRef("script", {"command": "echo"}),
+            after_any_of=[["branch_a", "branch_b"], ["worker_x", "worker_y"]],
+        )
+        d = step.to_dict()
+        assert d["after_any_of"] == [["branch_a", "branch_b"], ["worker_x", "worker_y"]]
+        step2 = StepDefinition.from_dict(d)
+        assert step2.after_any_of == step.after_any_of
+
+    def test_step_definition_empty_after_any_of_omitted(self):
+        """Empty after_any_of is omitted from to_dict (default behavior)."""
+        from stepwise.models import ExecutorRef
+        step = StepDefinition(
+            name="x",
+            outputs=["o"],
+            executor=ExecutorRef("script", {}),
+        )
+        d = step.to_dict()
+        assert "after_any_of" not in d
+        step2 = StepDefinition.from_dict(d)
+        assert step2.after_any_of == []
+
 
 # ─── _parse_when dispatcher ───────────────────────────────────────────────
 

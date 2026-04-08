@@ -552,6 +552,7 @@ class StepDefinition:
     executor: ExecutorRef
     inputs: list[InputBinding] = field(default_factory=list)
     after: list[str] = field(default_factory=list)  # wait-for-completion deps
+    after_any_of: list[list[str]] = field(default_factory=list)  # wait-for any of N step groups (universal-prefix any_of, §7.2.b/d)
     exit_rules: list[ExitRule] = field(default_factory=list)
     idempotency: str = "idempotent"  # "idempotent" | "retriable_with_guard" | "non_retriable"
     description: str = ""  # optional human-readable description
@@ -608,6 +609,8 @@ class StepDefinition:
             d["on_error"] = self.on_error
         if self.derived_outputs:
             d["derived_outputs"] = self.derived_outputs
+        if self.after_any_of:
+            d["after_any_of"] = [list(g) for g in self.after_any_of]
         return d
 
     @classmethod
@@ -637,6 +640,7 @@ class StepDefinition:
             cache=CacheConfig.from_dict(d["cache"]) if d.get("cache") else None,
             on_error=d.get("on_error", "fail"),
             derived_outputs=d.get("derived_outputs", {}),
+            after_any_of=[list(g) for g in d.get("after_any_of", [])],
         )
 
 
