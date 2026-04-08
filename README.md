@@ -68,7 +68,7 @@ stepwise run nightly-analysis --async --input date="2026-03-29"
 
 **External steps — not just human gates.** The `external` executor suspends a step and waits for fulfillment from *anyone* — a human in the web UI, a webhook from another service, or another agent via the API. Schema-driven typed inputs with escalation rules for stuck jobs.
 
-**Session continuity across steps.** Agent steps can share a persistent session (`continue_session: true`) — the model accumulates context across steps, just like sequential prompts in a conversation. Or start fresh per step. Your choice, per step, in the same flow.
+**Session continuity across steps.** Agent steps can share a conversation via named sessions (`session: main`) — the model accumulates context across steps, just like sequential prompts. Fork a session (`fork_from: <step>`) to branch an independent conversation from a specific step's completion tail. The engine snapshots fork sources atomically and validates session-writer ordering at parse time.
 
 **Crash-proof by default.** SQLite WAL mode, heartbeat-based stale detection, automatic orphan recovery. Kill the server, restart it, jobs resume. No message queue, no distributed state.
 
