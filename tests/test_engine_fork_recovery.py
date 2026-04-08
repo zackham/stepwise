@@ -24,12 +24,17 @@ from stepwise.models import (
 from stepwise.store import SQLiteStore
 
 
+FAKE_WORKING_DIR = "/fake/work/test-project"
+
+
 @pytest.fixture
 def fake_sessions_dir(tmp_path, monkeypatch):
-    sessions = tmp_path / "sessions"
-    sessions.mkdir()
-    monkeypatch.setattr(snapshot_mod, "SESSIONS_DIR", sessions)
-    monkeypatch.setattr(lock_mod, "SESSIONS_DIR", sessions)
+    """Project-scoped sessions dir under a tmp CLAUDE_PROJECTS_DIR."""
+    projects_root = tmp_path / "projects"
+    projects_root.mkdir()
+    monkeypatch.setattr(snapshot_mod, "CLAUDE_PROJECTS_DIR", projects_root)
+    sessions = projects_root / snapshot_mod.project_slug(FAKE_WORKING_DIR)
+    sessions.mkdir(parents=True)
     return sessions
 
 
@@ -44,7 +49,7 @@ def _agent_step(name: str, **kwargs) -> StepDefinition:
     return StepDefinition(
         name=name,
         outputs=kwargs.pop("outputs", ["result"]),
-        executor=ExecutorRef("agent", {}),
+        executor=ExecutorRef("agent", {"working_dir": FAKE_WORKING_DIR}),
         **kwargs,
     )
 

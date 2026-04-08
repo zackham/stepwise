@@ -896,6 +896,13 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 io.log("info", f"  - {err}")
             return EXIT_JOB_FAILED
 
+        # Coordination validator (§7.3 pair_safe + §7.4 auxiliary rules).
+        # Additive to wf.validate() above. Reports errors but does not
+        # fail the command unless --strict is set (TODO step 8).
+        from stepwise.validator import validate as coord_validate
+        coord_result = coord_validate(wf)
+        coord_errors = list(coord_result.errors)
+
         step_count = len(wf.steps)
         loop_count = sum(
             1 for s in wf.steps.values()
@@ -912,6 +919,17 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 io.log("info", f"  {w}")
             else:
                 io.log("warn", f"  {w}")
+
+        # Surface coordination validator findings
+        if coord_errors:
+            io.log("warn", f"  ⚠ coordination validator: {len(coord_errors)} issue(s)")
+            for err in coord_errors:
+                tag = f"[{err.rule_id}]"
+                io.log("warn", f"    {tag} {err.message}")
+                if err.fix_suggestion:
+                    io.log("info", f"      fix: {err.fix_suggestion}")
+        else:
+            io.log("success", "  ✓ coordination validator: no issues")
 
         # Auto-fix mode
         if getattr(args, "fix", False):

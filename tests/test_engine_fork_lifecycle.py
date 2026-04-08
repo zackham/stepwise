@@ -27,11 +27,20 @@ from stepwise.store import SQLiteStore
 
 @pytest.fixture
 def fake_sessions_dir(tmp_path, monkeypatch):
-    sessions = tmp_path / "sessions"
-    sessions.mkdir()
-    monkeypatch.setattr(snapshot_mod, "SESSIONS_DIR", sessions)
-    monkeypatch.setattr(lock_mod, "SESSIONS_DIR", sessions)
+    """Project-scoped sessions dir under a tmp CLAUDE_PROJECTS_DIR.
+
+    Returns the sessions directory path. Tests get a known working_dir
+    via the FAKE_WORKING_DIR module-level constant.
+    """
+    projects_root = tmp_path / "projects"
+    projects_root.mkdir()
+    monkeypatch.setattr(snapshot_mod, "CLAUDE_PROJECTS_DIR", projects_root)
+    sessions = projects_root / snapshot_mod.project_slug(FAKE_WORKING_DIR)
+    sessions.mkdir(parents=True)
     return sessions
+
+
+FAKE_WORKING_DIR = "/fake/work/test-project"
 
 
 @pytest.fixture
@@ -45,7 +54,7 @@ def _agent_step(name: str, **kwargs) -> StepDefinition:
     return StepDefinition(
         name=name,
         outputs=kwargs.pop("outputs", ["result"]),
-        executor=ExecutorRef("agent", {}),
+        executor=ExecutorRef("agent", {"working_dir": FAKE_WORKING_DIR}),
         **kwargs,
     )
 
@@ -212,8 +221,9 @@ def test_maybe_snapshot_creates_snapshot_for_fork_source(engine, fake_sessions_d
     engine.store.save_run(run)
 
     captured = {}
-    def fake_snapshot(uuid, **kw):
+    def fake_snapshot(uuid, working_dir, **kw):
         captured["src"] = uuid
+        captured["working_dir"] = working_dir
         return "snap-xyz"
 
     with patch("stepwise.engine.snapshot_session", create=True, side_effect=fake_snapshot), \
@@ -223,6 +233,7 @@ def test_maybe_snapshot_creates_snapshot_for_fork_source(engine, fake_sessions_d
     # The snapshot_uuid is persisted on the run's executor_state.
     assert run.executor_state.get("snapshot_uuid") == "snap-xyz"
     assert captured.get("src") == "live-uuid-123"
+    assert captured.get("working_dir") == FAKE_WORKING_DIR
 
 
 def test_maybe_snapshot_failure_leaves_step_in_recoverable_state(
@@ -292,8 +303,9 @@ def test_maybe_snapshot_called_within_lock_critical_section(
     events: list[str] = []
 
     class TrackingLock:
-        def __init__(self, uuid, mode):
+        def __init__(self, uuid, working_dir, mode):
             self.uuid = uuid
+            self.working_dir = working_dir
             self.mode = mode
 
         def __enter__(self):
@@ -303,7 +315,7 @@ def test_maybe_snapshot_called_within_lock_critical_section(
         def __exit__(self, *exc):
             events.append("lock_released")
 
-    def fake_snapshot(uuid, **kw):
+    def fake_snapshot(uuid, working_dir, **kw):
         events.append("snapshot_called")
         return "snap-xyz"
 

@@ -2,8 +2,12 @@
 
 Defense in depth against runtime bugs that could in principle interleave
 session JSON writes. The lock target is a dedicated .lock file (not the
-JSON file directly) per §13's recommendation: cleaner debugging surface
+JSONL file directly) per §13's recommendation: cleaner debugging surface
 and avoids POSIX edge cases when locking actively-written files.
+
+PATH LAYOUT (corrected post-canary 2026-04-07): the .lock files live
+alongside the session JSONL files in the per-project Claude sessions
+directory. See snapshot.py for the path computation.
 
 Lock semantics:
   - exclusive (LOCK_EX): writers and snapshotters
@@ -21,9 +25,10 @@ from __future__ import annotations
 import fcntl
 import logging
 import os
+from pathlib import Path
 from typing import Literal
 
-from stepwise.snapshot import SESSIONS_DIR
+from stepwise.snapshot import project_sessions_dir
 
 logger = logging.getLogger("stepwise.session_lock")
 
@@ -34,19 +39,21 @@ class SessionLock:
     """Context manager wrapping fcntl.flock on a per-session .lock file.
 
     Usage:
-        with SessionLock(uuid, "exclusive"):
+        with SessionLock(uuid, working_dir, "exclusive"):
             # critical section: only one exclusive holder at a time
             ...
     """
 
-    def __init__(self, uuid: str, mode: LockMode):
+    def __init__(self, uuid: str, working_dir: str | Path, mode: LockMode):
         self.uuid = uuid
+        self.working_dir = working_dir
         self.mode = mode
-        self.lock_path = SESSIONS_DIR / f"{uuid}.lock"
+        sessions_dir = project_sessions_dir(working_dir)
+        self.lock_path = sessions_dir / f"{uuid}.lock"
         self._fd: int | None = None
 
     def __enter__(self) -> "SessionLock":
-        SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
         # Use os.open with O_CREAT so we don't leak Python file objects.
         self._fd = os.open(
             str(self.lock_path),

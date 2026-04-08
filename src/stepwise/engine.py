@@ -274,14 +274,32 @@ class Engine:
             )
             return
 
+        # Resolve the working_dir for this step. Claude stores sessions per
+        # project under ~/.claude/projects/<slug>/, so the snapshot path
+        # depends on which project this step ran against.
+        step_def = job.workflow.steps.get(step_name)
+        working_dir = None
+        if step_def and step_def.executor and step_def.executor.config:
+            working_dir = step_def.executor.config.get("working_dir")
+        if not working_dir:
+            working_dir = (run.executor_state or {}).get("working_dir")
+        if not working_dir:
+            _engine_logger.warning(
+                "fork-source step %r has no resolvable working_dir; "
+                "snapshot skipped (fork would fall back to live UUID)",
+                step_name,
+            )
+            return
+
         try:
             from stepwise.snapshot import snapshot_session
             from stepwise.session_lock import SessionLock
-            with SessionLock(state.claude_uuid, "exclusive"):
-                snap_uuid = snapshot_session(state.claude_uuid)
+            with SessionLock(state.claude_uuid, working_dir, "exclusive"):
+                snap_uuid = snapshot_session(state.claude_uuid, working_dir)
                 run.executor_state = {
                     **(run.executor_state or {}),
                     "snapshot_uuid": snap_uuid,
+                    "snapshot_working_dir": str(working_dir),
                 }
                 # Re-save inside the lock so observers see the snapshot
                 # uuid landed at the same instant the lock is released.
@@ -2160,6 +2178,16 @@ class Engine:
                                         state.claude_uuid = _extract_claude_session_id(output_path)
                                     except Exception:
                                         pass
+                                # Fallback: the acpx backend's `sessions ensure` call
+                                # captures the claude session UUID directly from its
+                                # stdout and stashes it on executor_state["session_id"].
+                                # When a named session is reused across jobs the ACP
+                                # NDJSON has no `session/new` event to parse from, so
+                                # _extract_claude_session_id returns None. Use the
+                                # backend-captured value in that case — it is the
+                                # same UUID as the on-disk session JSONL filename.
+                                if not state.claude_uuid:
+                                    state.claude_uuid = (run.executor_state or {}).get("session_id")
                                 state.created = True
                                 if state.fork_from:
                                     state.backend_type = "claude_direct"
