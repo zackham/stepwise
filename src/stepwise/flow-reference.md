@@ -669,7 +669,7 @@ expensive_step:
 ```
 
 - `max_cost_usd` — engine cancels the executor if cost exceeds this
-- `max_duration_minutes` — engine cancels the executor if wall-clock exceeds this
+- `max_duration_minutes` — engine cancels the executor if wall-clock exceeds this. This is the per-step timeout mechanism. By default there is no global process TTL — agent steps run until done. To set a global safety net, configure `agent_process_ttl` in config (seconds, 0 = disabled)
 - `max_iterations` — when exit rules loop back to this step, after N completions the loop escalates (pauses the job)
 
 ## Idempotency Modes

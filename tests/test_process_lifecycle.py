@@ -317,6 +317,29 @@ class TestReapExpiredProcesses:
         assert updated.status == StepRunStatus.FAILED
         assert "expired" in updated.error
 
+    def test_disabled_when_ttl_zero(self):
+        """TTL=0 disables expiration — no runs killed regardless of age."""
+        store = _make_store()
+        job = Job(
+            id=_gen_id("job"),
+            objective="test",
+            workflow=_make_simple_workflow(),
+            status=JobStatus.RUNNING,
+            inputs={},
+        )
+        store.save_job(job)
+
+        old_start = datetime.now(timezone.utc) - timedelta(hours=100)
+        run = _make_run(job.id, pid=99999999, started_at=old_start)
+        store.save_run(run)
+
+        killed = reap_expired_processes(store, ttl_seconds=0)
+        assert killed == []
+
+        # Run should still be RUNNING
+        updated = store.load_run(run.id)
+        assert updated.status == StepRunStatus.RUNNING
+
     def test_spares_young_run(self):
         """Does not touch runs within TTL."""
         store = _make_store()

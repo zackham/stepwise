@@ -3,6 +3,12 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.38.1] — 2026-04-08
+
+### Changed
+- **Agent process TTL disabled by default** — agent steps now run without a time limit. The previous 2-hour hard TTL silently killed long-running agent steps (e.g., deep research). Use per-step `limits.max_duration_minutes` in FLOW.yaml for intentional timeouts
+- **`agent_process_ttl` config setting** — configurable in `config.yaml` (seconds, 0 = disabled). Overridable via `STEPWISE_AGENT_TTL` env var. Acts as a global safety net for zombie processes when enabled
+
 ## [0.38.0] — 2026-04-08
 
 ### Added

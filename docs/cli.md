@@ -844,7 +844,14 @@ Creates a flow-specific configuration file for overriding settings per-flow.
 | Key | Description |
 |-----|-------------|
 | `openrouter_api_key` | API key for LLM and agent steps (via OpenRouter) |
+| `anthropic_api_key` | API key for Anthropic direct access |
 | `default_model` | Default model for LLM steps when not specified in the flow |
+| `default_agent` | Default agent runtime (`claude`, `codex`, etc.) |
+| `billing` | `subscription` (default) or `api_key` |
+| `max_concurrent_jobs` | Max simultaneous running jobs (default: 10) |
+| `max_concurrent_agents` | Max simultaneous agent processes (default: 3) |
+| `agent_process_ttl` | Global safety-net timeout for agent processes in seconds. `0` = disabled (default). Agent steps run until done. Use per-step `limits.max_duration_minutes` for intentional timeouts |
+| `agent_permissions` | `approve_all` (default), `prompt`, or `deny` |
 
 | Flag | Description |
 |------|-------------|

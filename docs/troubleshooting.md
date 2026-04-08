@@ -200,6 +200,13 @@ Errors that occur during job execution.
 | `Error: Invalid --meta format: '<arg>' (expected KEY=VALUE)` | Malformed `--meta` flag | Use `--meta sys.key=value` or `--meta app.key=value`. |
 | `Error: notify_context must be valid JSON` | `--notify-context` is not valid JSON | Pass valid JSON: `--notify-context '{"key": "value"}'`. |
 
+### Process Lifecycle
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `Runner process expired (TTL Ns, ran for Ns)` | Agent step exceeded the configured process TTL | The global `agent_process_ttl` in config killed a long-running step. Set it to `0` (disabled) or increase the value. For per-step control, use `limits.max_duration_minutes` instead. |
+| `Runner process died (PID N no longer alive)` | The agent subprocess crashed or was killed externally | Check system logs, OOM killer, or manual kills. Re-run the step with `stepwise step restart`. |
+
 ---
 
 ## Quick Diagnostic Commands

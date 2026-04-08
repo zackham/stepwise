@@ -542,12 +542,13 @@ async def _process_health_check() -> None:
     """
     from stepwise.process_lifecycle import (
         HEALTH_CHECK_INTERVAL_SECONDS,
-        DEFAULT_AGENT_TTL_SECONDS,
         run_health_check,
     )
 
     engine = _get_engine()
-    ttl = int(os.environ.get("STEPWISE_AGENT_TTL", str(DEFAULT_AGENT_TTL_SECONDS)))
+    # Config > env var > default (0 = disabled)
+    config_ttl = engine.config.agent_process_ttl if engine.config else 0
+    ttl = int(os.environ.get("STEPWISE_AGENT_TTL", str(config_ttl)))
     interval = int(os.environ.get("STEPWISE_HEALTH_CHECK_INTERVAL", str(HEALTH_CHECK_INTERVAL_SECONDS)))
     logger.info("Process health check started (interval=%ds, agent_ttl=%ds)", interval, ttl)
 

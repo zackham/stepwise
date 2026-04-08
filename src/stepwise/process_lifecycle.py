@@ -15,8 +15,11 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger("stepwise.process_lifecycle")
 
-# Default TTL for agent processes: 2 hours
-DEFAULT_AGENT_TTL_SECONDS = 2 * 60 * 60
+# Default TTL for agent processes: 0 = disabled (no limit).
+# Agent steps can run as long as they need. Use per-step
+# limits.max_duration_minutes in FLOW.yaml for intentional timeouts.
+# Override globally via config (agent_process_ttl) or env (STEPWISE_AGENT_TTL).
+DEFAULT_AGENT_TTL_SECONDS = 0
 
 # Health check interval: 60 seconds
 HEALTH_CHECK_INTERVAL_SECONDS = 60
@@ -265,6 +268,9 @@ def reap_expired_processes(
         List of run IDs that were killed.
     """
     from stepwise.models import StepRunStatus, _now
+
+    if ttl_seconds <= 0:
+        return []  # TTL disabled — agent steps run without time limit
 
     now = datetime.now(timezone.utc)
     killed = []
