@@ -282,6 +282,24 @@ Key distinctions:
 - `inputs: { field: step-x.field }` = data dependency (implies ordering)
 - `when: "expr"` = conditional gate on resolved inputs
 
+## Coordination rules
+
+The validator enforces a set of coordination rules to prevent races between steps that share state (named sessions, forked sessions, shared workspaces). These rules are enforced both at parse time (`yaml_loader`) and by the coordination validator (`stepwise validate`). See `data/reports/2026-04-07-stepwise-coordination-and-validation-model.md` in the vita repo for the full model, derivations, and council findings.
+
+**Pair safety for session writers (§7.3).** Any two steps writing to the same named session must be provably non-concurrent. The validator proves this by showing either (a) one step's `after:`-transitive closure includes the other (linear chain), or (b) their `when:` predicates are pairwise mutex (conditional branches). If neither can be proven, the validator emits `pair_unsafe` with a fix hint pointing at adding `after:` or a mutex `when:` gate.
+
+**`after.any_of` and the universal-prefix rule (§7.2, §10).** When a step declares `after: [{any_of: [a, b, c]}]`, the "first success wins" eligibility model allows the step to launch as soon as any of the branches completes. Losing branches keep running (no cancellation in v1.0). For ordering proofs, only the **intersection** of mhb-ancestors across all `any_of` branches carries — i.e., a step that appears before EVERY branch of an `any_of` group is an mhb-ancestor of the joined step.
+
+**Fork from step name (§8.2).** `fork_from: <step_name>` anchors a new session at a specific step's completion tail. The target step must declare its own `session:` (you cannot fork from an ephemeral one-shot agent step). The forking step must declare its own fresh `session:` and have the target in its `after:` chain. Both the forking step and all writers of the parent session must use explicit `agent: claude`.
+
+**Conditional fork rejoin (§8.3).** Multiple chain roots on the same forked session are permitted when their `when:` clauses are pairwise mutex (e.g., two alternative chain roots gated on a routing step's output tag). The parse-time validator allows this structurally; the coordination validator verifies the mutex proof.
+
+**Retries and cache are prohibited on session-writing and fork-source steps (§7.4).** The validator rejects flows that combine `session:` or `fork_from:` with `max_attempts > 1` or `cache:`. For crash recovery, re-executing a session-writing step carries documented duplicate-turn risk (§9.3); this is the acceptable v1.0 limitation. Authors who need retry semantics should use ephemeral one-shot agent steps (no `session:`), which can be retried freely because they don't accumulate session state.
+
+**Eager snapshot via filesystem copy (§9).** When a step is a fork source (some downstream step declares `fork_from: <this_step>`), the engine serializes its post-exit lifecycle inside an exclusive `fcntl.flock`, copies its session JSONL file to a new UUID via `temp → os.replace → fsync(parent_dir)`, persists the snapshot UUID atomically with the completion record, then releases the lock. Downstream forks resume from the snapshot UUID (via `claude --resume <snap_uuid> --fork-session`), not from the live session tail. This eliminates the race where the parent session keeps mutating past the intended fork point.
+
+**Running the coordination validator.** `stepwise validate <flow.yaml>` runs both the structural parse-time checks and the coordination validator. Parse-time errors are fatal; coordination validator findings are currently surfaced as warnings (will become fatal once the loop-back binding runtime lands in step 7).
+
 ## Job staging
 
 Create jobs in a **STAGED** state, build up a batch with dependencies, review, then release:

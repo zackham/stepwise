@@ -208,7 +208,7 @@ step_name:
   session: impl                    # named session — matching names share a conversation
   loop_prompt: "Fix: $errors"      # alternate prompt on attempt > 1
   max_continuous_attempts: 5       # force fresh session after N iterations
-  fork_from: main                  # fork independent session from parent (requires agent: claude)
+  fork_from: plan                  # fork from named STEP's completion tail (requires agent: claude; target step must declare session:)
 
   # Caching (optional)
   cache: true                      # enable with default TTL
@@ -523,7 +523,7 @@ implement:
 | `session` | string | --- | Named session. Steps with the same name share a conversation |
 | `loop_prompt` | string | --- | Alternate prompt template on attempt > 1 (falls back to `prompt`) |
 | `max_continuous_attempts` | int | --- | After N iterations, force a fresh session |
-| `fork_from` | string | --- | Fork an independent session from a named parent session |
+| `fork_from` | string | --- | Fork an independent session from the completion tail of a named **step** (not a session name — see note below) |
 
 **Behavior:**
 - First run: creates session, sends `prompt`
@@ -536,6 +536,7 @@ implement:
 steps:
   plan:
     executor: agent
+    agent: claude
     session: main
     prompt: "Plan: $spec"
     inputs: { spec: $job.spec }
@@ -543,7 +544,9 @@ steps:
 
   implement:
     executor: agent
+    agent: claude
     session: main
+    after: [plan]
     prompt: "Implement the plan."
     inputs:
       plan: plan.plan
@@ -551,18 +554,30 @@ steps:
     # continues plan's session — same session name
 ```
 
-**Forking sessions:** Use `fork_from` to create an independent session that starts with the parent's history but diverges from that point:
+**Forking sessions:** Use `fork_from: <step_name>` to create an independent session that starts with a **specific step's completion tail** and diverges from that point:
 
 ```yaml
   review:
     executor: agent
     agent: claude
-    fork_from: main
+    session: review_session    # fresh session name — forks MUST declare their own
+    fork_from: plan            # STEP name — the snapshot anchor (not a session name)
+    after: [plan]              # fork target must be in after: chain
     prompt: "Review the plan critically."
     outputs: [feedback]
 ```
 
-`fork_from` requires `agent: claude` (explicit) on the forking step. The engine serializes concurrent access to shared sessions.
+`fork_from` rules (enforced by the parse-time validator):
+- `fork_from` references a **step name**, not a session name. The referenced step must declare its own `session:` (you cannot fork from an ephemeral one-shot agent step).
+- The forking step must declare its own fresh `session:` — forks always start a new session.
+- Both the forking step AND every writer of the parent session must have explicit `agent: claude` in their executor config.
+- The forking step must have the fork target in its `after:` chain (or reach it via input bindings).
+- All chain roots on the same forked session must fork from steps writing to the **same** parent session (single-chain rule, §8.1 of the coordination model).
+- `max_attempts > 1` and `cache:` are prohibited on session-writers and fork-source steps. Ephemeral one-shot agent steps (no `session:`, no `fork_from:`) may retry freely.
+
+The engine snapshots the fork target's session state at its completion tail, under a dedicated exclusive lock (`fcntl.flock`), before any downstream writer can mutate the live session. This guarantees forks see the parent's completion-tail state, not a racy live-UUID tail. See `data/reports/2026-04-07-stepwise-coordination-and-validation-model.md` §9 and §13 (in the vita repo) for the full coordination model.
+
+**Conditional fork rejoin** (§8.3 of the coordination model) is permitted when multiple chain roots on the same forked session have pairwise-mutex `when:` clauses (e.g., a routing step produces a tag, and two alternative chain roots are gated on `tag == "a"` vs `tag == "b"`). The parse-time validator allows this; the coordination validator (`stepwise validate`) verifies the mutex proof.
 
 ### Agent Output Modes
 

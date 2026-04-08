@@ -516,7 +516,7 @@ implement:
 | `session` | string | --- | Named session. Steps with the same name share a conversation |
 | `loop_prompt` | string | --- | Alternate prompt template on attempt > 1 (falls back to `prompt`) |
 | `max_continuous_attempts` | int | --- | After N iterations, force a fresh session |
-| `fork_from` | string | --- | Fork an independent session from a named parent session |
+| `fork_from` | string | --- | Fork an independent session from the completion tail of a named **step** (see below) |
 
 **Cross-step session sharing:** Steps with the same `session` name share a conversation — no special input bindings needed:
 
@@ -524,6 +524,7 @@ implement:
 steps:
   plan:
     executor: agent
+    agent: claude
     session: main
     prompt: "Plan: $spec"
     inputs: { spec: $job.spec }
@@ -531,14 +532,36 @@ steps:
 
   implement:
     executor: agent
+    agent: claude
     session: main
+    after: [plan]
     prompt: "Implement the plan."
     inputs:
       plan: plan.plan
     outputs: [result]
 ```
 
-**Forking sessions:** Use `fork_from` to create an independent session from a parent's history. Requires `agent: claude` on the forking step.
+**Forking sessions:** Use `fork_from: <step_name>` to create an independent session from a specific step's completion tail:
+
+```yaml
+  review:
+    executor: agent
+    agent: claude
+    session: review_session    # forks MUST declare their own fresh session
+    fork_from: plan            # STEP name (not a session name) — the snapshot anchor
+    after: [plan]              # fork target must be in after: chain
+    prompt: "Review the plan critically."
+    outputs: [feedback]
+```
+
+**`fork_from` rules** (enforced by the parse-time validator):
+- `fork_from` references a **step name**, not a session name. The target step must declare its own `session:`.
+- The forking step must declare its own fresh `session:`.
+- Both the forking step AND all writers of the parent session must have explicit `agent: claude`.
+- The fork target must appear in the forking step's `after:` chain.
+- `max_attempts > 1` and `cache:` are prohibited on session-writers and fork sources. One-shot agent steps (no `session:`, no `fork_from:`) may retry freely.
+
+The engine snapshots the fork target's session state atomically at its completion under an exclusive file lock, guaranteeing forks see the parent's completion-tail state even if downstream writers keep mutating the live session. **Multiple chain roots** on the same forked session are permitted when their `when:` clauses are pairwise mutex (conditional rejoin pattern).
 
 ## Caching
 
