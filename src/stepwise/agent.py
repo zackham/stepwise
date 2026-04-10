@@ -43,29 +43,10 @@ ACPX_QUEUES_DIR = os.path.expanduser("~/.acpx/queues")
 def _detect_usage_limit_in_line(line: str, parse_json: bool) -> str | None:
     """Check a single line for usage limit patterns.
 
-    parse_json=True for NDJSON stdout, False for plain stderr.
-    Returns the matching message string, or None.
+    Delegates to :func:`stepwise.acp_ndjson.detect_usage_limit_in_line`.
     """
-    if parse_json:
-        try:
-            data = json.loads(line)
-            error = data.get("error", {})
-            if isinstance(error, dict):
-                msg = error.get("message", "")
-                if _USAGE_RESET_RE.search(msg):
-                    return msg
-            params = data.get("params", {})
-            update = params.get("update", {})
-            if update.get("sessionUpdate") == "agent_message_chunk":
-                text = update.get("content", {}).get("text", "")
-                if _USAGE_RESET_RE.search(text):
-                    return text
-        except (json.JSONDecodeError, AttributeError):
-            pass
-    else:
-        if _USAGE_RESET_RE.search(line):
-            return line.strip()
-    return None
+    from stepwise.acp_ndjson import detect_usage_limit_in_line
+    return detect_usage_limit_in_line(line, parse_json)
 
 
 # ── Agent Backend Protocol ────────────────────────────────────────────
@@ -829,121 +810,35 @@ class AcpxBackend:
         return None
 
     def _extract_session_id(self, output_path: str) -> str | None:
-        """Extract sessionId from ACP NDJSON output."""
-        try:
-            with open(output_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        data = json.loads(line)
-                        # ACP session/new result
-                        result = data.get("result", {})
-                        if isinstance(result, dict) and result.get("sessionId"):
-                            return result["sessionId"]
-                        # ACP session/update notifications
-                        params = data.get("params", {})
-                        if params.get("sessionId"):
-                            return params["sessionId"]
-                    except json.JSONDecodeError:
-                        continue
-        except FileNotFoundError:
-            pass
-        return None
+        """Extract sessionId from ACP NDJSON output.
+
+        Delegates to :func:`stepwise.acp_ndjson.extract_session_id` with
+        ``result_only=False`` (reads both result and params).
+        """
+        from stepwise.acp_ndjson import extract_session_id
+        return extract_session_id(output_path, result_only=False)
 
     def _extract_cost(self, output_path: str) -> float | None:
-        """Extract cost from ACP usage_update events."""
-        last_cost = None
-        try:
-            with open(output_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        data = json.loads(line)
-                        params = data.get("params", {})
-                        update = params.get("update", {})
-                        if update.get("sessionUpdate") == "usage_update":
-                            cost = update.get("cost", {})
-                            if isinstance(cost, dict) and "amount" in cost:
-                                last_cost = cost["amount"]
-                    except json.JSONDecodeError:
-                        continue
-        except FileNotFoundError:
-            pass
-        return last_cost
+        """Delegates to :func:`stepwise.acp_ndjson.extract_cost`."""
+        from stepwise.acp_ndjson import extract_cost
+        return extract_cost(output_path)
 
     def _read_last_error(self, output_path: str) -> str | None:
-        """Extract last error from ACP NDJSON output."""
-        try:
-            with open(output_path) as f:
-                last_error = None
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        data = json.loads(line)
-                        error = data.get("error", {})
-                        if isinstance(error, dict) and error.get("message"):
-                            last_error = error["message"]
-                    except json.JSONDecodeError:
-                        continue
-                return last_error
-        except FileNotFoundError:
-            return None
+        """Delegates to :func:`stepwise.acp_ndjson.read_last_error`."""
+        from stepwise.acp_ndjson import read_last_error
+        return read_last_error(output_path)
 
     @staticmethod
     def _tail_for_usage_limit(path: str, offset: int,
                                parse_json: bool) -> tuple[int, str | None]:
-        """Read new content from file starting at offset, check for usage limit.
-
-        Returns (new_offset, matching_message_or_None).
-        """
-        try:
-            with open(path) as f:
-                f.seek(offset)
-                new_data = f.read()
-                if not new_data:
-                    return offset, None
-                new_offset = f.tell()
-                for line in new_data.split("\n"):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    hit = _detect_usage_limit_in_line(line, parse_json)
-                    if hit:
-                        return new_offset, hit
-                return new_offset, None
-        except FileNotFoundError:
-            return offset, None
+        """Delegates to :func:`stepwise.acp_ndjson.tail_for_usage_limit`."""
+        from stepwise.acp_ndjson import tail_for_usage_limit
+        return tail_for_usage_limit(path, offset, parse_json)
 
     def _extract_final_text(self, output_path: str) -> str:
-        """Extract the final assistant text from ACP NDJSON output."""
-        chunks: list[str] = []
-        try:
-            with open(output_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        data = json.loads(line)
-                        params = data.get("params", {})
-                        update = params.get("update", {})
-                        if update.get("sessionUpdate") == "agent_message_chunk":
-                            content = update.get("content", {})
-                            if content.get("type") == "text":
-                                text = content.get("text", "")
-                                if text:
-                                    chunks.append(text)
-                    except json.JSONDecodeError:
-                        continue
-        except FileNotFoundError:
-            pass
-        return "".join(chunks)
+        """Delegates to :func:`stepwise.acp_ndjson.extract_final_text`."""
+        from stepwise.acp_ndjson import extract_final_text
+        return extract_final_text(output_path)
 
 
 # ── Mock Agent Backend (for testing) ──────────────────────────────────

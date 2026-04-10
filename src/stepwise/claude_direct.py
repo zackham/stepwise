@@ -21,11 +21,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO
 
+from stepwise.acp_ndjson import (
+    detect_usage_limit_in_line as _detect_usage_limit_in_line,
+    extract_cost as _extract_cost,
+    extract_final_text as _extract_final_text,
+    extract_session_id as _extract_session_id_shared,
+    read_last_error as _read_last_error,
+    tail_for_usage_limit as _tail_for_usage_limit,
+)
 from stepwise.agent import (
     AgentProcess,
     AgentStatus,
     _build_agent_env,
-    _detect_usage_limit_in_line,
 )
 from stepwise.executors import ExecutionContext, parse_usage_reset_time
 
@@ -208,131 +215,22 @@ def translate_stream(lines: list[str]) -> list[str]:
 
 # ── Extraction helpers (ACP NDJSON format) ───────────────────────────
 #
-# These duplicate the logic from AcpxBackend methods but operate as
-# module-level functions.  We will deduplicate into a shared module in
-# a later phase.
+# All extraction logic now lives in stepwise.acp_ndjson.
+# The imports at the top of this file bring them in as:
+#   _extract_cost, _extract_final_text, _read_last_error,
+#   _tail_for_usage_limit, _detect_usage_limit_in_line
+#
+# _extract_claude_session_id is a thin wrapper that calls
+# extract_session_id with result_only=True.
 
 
 def _extract_claude_session_id(output_path: str) -> str | None:
     """Extract Claude session UUID from ACP NDJSON output.
 
-    Only reads ``result.sessionId`` (from session/new or session/load
-    responses), **never** ``params.sessionId`` (which may contain
-    acpx_record_id in acpx output).
+    Only reads ``result.sessionId``, never ``params.sessionId``.
+    Delegates to :func:`stepwise.acp_ndjson.extract_session_id`.
     """
-    try:
-        with open(output_path) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                    result = data.get("result", {})
-                    if isinstance(result, dict) and result.get("sessionId"):
-                        return result["sessionId"]
-                except json.JSONDecodeError:
-                    continue
-    except FileNotFoundError:
-        pass
-    return None
-
-
-def _extract_cost(output_path: str) -> float | None:
-    """Extract cost from ACP usage_update events."""
-    last_cost = None
-    try:
-        with open(output_path) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                    params = data.get("params", {})
-                    update = params.get("update", {})
-                    if update.get("sessionUpdate") == "usage_update":
-                        cost = update.get("cost", {})
-                        if isinstance(cost, dict) and "amount" in cost:
-                            last_cost = cost["amount"]
-                except json.JSONDecodeError:
-                    continue
-    except FileNotFoundError:
-        pass
-    return last_cost
-
-
-def _extract_final_text(output_path: str) -> str:
-    """Extract the final assistant text from ACP NDJSON output."""
-    chunks: list[str] = []
-    try:
-        with open(output_path) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                    params = data.get("params", {})
-                    update = params.get("update", {})
-                    if update.get("sessionUpdate") == "agent_message_chunk":
-                        content = update.get("content", {})
-                        if content.get("type") == "text":
-                            text = content.get("text", "")
-                            if text:
-                                chunks.append(text)
-                except json.JSONDecodeError:
-                    continue
-    except FileNotFoundError:
-        pass
-    return "".join(chunks)
-
-
-def _read_last_error(output_path: str) -> str | None:
-    """Extract last error from ACP NDJSON output."""
-    try:
-        with open(output_path) as f:
-            last_error = None
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                    error = data.get("error", {})
-                    if isinstance(error, dict) and error.get("message"):
-                        last_error = error["message"]
-                except json.JSONDecodeError:
-                    continue
-            return last_error
-    except FileNotFoundError:
-        return None
-
-
-def _tail_for_usage_limit(
-    path: str, offset: int, parse_json: bool,
-) -> tuple[int, str | None]:
-    """Read new content from file starting at offset, check for usage limit.
-
-    Returns (new_offset, matching_message_or_None).
-    """
-    try:
-        with open(path) as f:
-            f.seek(offset)
-            new_data = f.read()
-            if not new_data:
-                return offset, None
-            new_offset = f.tell()
-            for line in new_data.split("\n"):
-                line = line.strip()
-                if not line:
-                    continue
-                hit = _detect_usage_limit_in_line(line, parse_json)
-                if hit:
-                    return new_offset, hit
-            return new_offset, None
-    except FileNotFoundError:
-        return offset, None
+    return _extract_session_id_shared(output_path, result_only=True)
 
 
 # ── Translation Thread ───────────────────────────────────────────────
