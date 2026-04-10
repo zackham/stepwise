@@ -125,7 +125,15 @@ class MockAcpServer:
 
     def _handle_session_prompt(self, msg_id: Any, params: dict) -> None:
         session_id = params.get("sessionId", "")
-        prompt_text = params.get("prompt", "")
+        raw_prompt = params.get("prompt", "")
+        # ACP prompt can be a string or a list of content blocks
+        if isinstance(raw_prompt, list):
+            prompt_text = " ".join(
+                block.get("text", "") for block in raw_prompt
+                if isinstance(block, dict) and block.get("type") == "text"
+            )
+        else:
+            prompt_text = str(raw_prompt)
 
         if session_id not in self.sessions:
             self._send_error(msg_id, -32000, f"Session not found: {session_id}")
