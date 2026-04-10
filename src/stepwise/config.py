@@ -316,6 +316,27 @@ def _ensure_defaults_in_registry(registry: list[ModelEntry]) -> list[ModelEntry]
     return registry
 
 
+def _load_user_agents(project_dir: Path | None = None) -> None:
+    """Load user-defined agents from all config levels and register them."""
+    from stepwise.agent_registry import load_user_agents_from_config, set_user_agents
+
+    merged: dict = {}
+    # User level
+    user_data = _load_yaml_or_json(CONFIG_FILE_YAML, CONFIG_FILE)
+    merged.update(load_user_agents_from_config(user_data))
+    # Project + local levels
+    if project_dir:
+        proj_path = project_dir / ".stepwise" / "config.yaml"
+        if proj_path.exists():
+            proj_data = yaml.safe_load(proj_path.read_text()) or {}
+            merged.update(load_user_agents_from_config(proj_data))
+        local_path = project_dir / ".stepwise" / "config.local.yaml"
+        if local_path.exists():
+            local_data = yaml.safe_load(local_path.read_text()) or {}
+            merged.update(load_user_agents_from_config(local_data))
+    set_user_agents(merged)
+
+
 def load_config(project_dir: Path | None = None) -> StepwiseConfig:
     """Load merged config from all levels.
 
@@ -325,6 +346,9 @@ def load_config(project_dir: Path | None = None) -> StepwiseConfig:
     Returns:
         Merged StepwiseConfig with defaults < user < project < local.
     """
+    # Load user-defined agents into the agent registry
+    _load_user_agents(project_dir)
+
     user = _load_user_config()
     project = _load_project_config(project_dir) if project_dir else StepwiseConfig()
     local = _load_project_local_config(project_dir) if project_dir else StepwiseConfig()
