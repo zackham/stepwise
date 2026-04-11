@@ -220,8 +220,24 @@ class ACPBackend:
         if fork_from:
             session_id = acp_proc.client.fork_session(fork_from, working_dir)
         elif session_uuid:
-            acp_proc.client.load_session(session_uuid, working_dir)
-            session_id = session_uuid
+            # Try direct prompt first (session may still be in ACP process memory).
+            # Only fall back to load_session (which triggers expensive resume-from-disk)
+            # if the session was lost (e.g., subprocess crash mid-step).
+            try:
+                # Probe: check if session is alive by sending a lightweight RPC.
+                # If the session exists in-memory, this succeeds instantly.
+                # If not, it throws and we fall back to load_session.
+                future = acp_proc.client.transport.send_request(
+                    "session/update",
+                    {"sessionId": session_uuid, "update": {}},
+                )
+                future.result(timeout=5)
+                session_id = session_uuid
+                logger.info("[%s] session %s still alive in-process, skipping load", step_id, session_uuid[:8])
+            except Exception:
+                logger.info("[%s] session %s not in process memory, loading from disk", step_id, session_uuid[:8])
+                acp_proc.client.load_session(session_uuid, working_dir)
+                session_id = session_uuid
         else:
             session_id = acp_proc.client.new_session(working_dir, session_name)
 
