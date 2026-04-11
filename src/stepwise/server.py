@@ -33,7 +33,13 @@ from stepwise.models import (
     JobStatus,
     StepRunStatus,
     WorkflowDefinition,
+    _gen_id,
     _now,
+    Schedule,
+    ScheduleStatus,
+    ScheduleType,
+    OverlapPolicy,
+    RecoveryPolicy,
 )
 from stepwise.store import SQLiteStore
 from stepwise.events import JOB_AWAITING_APPROVAL
@@ -142,6 +148,42 @@ class SaveTemplateRequest(BaseModel):
     workflow: dict
 
 
+class CreateScheduleRequest(BaseModel):
+    name: str
+    type: str  # "cron" or "poll"
+    flow_path: str
+    cron_expr: str
+    poll_command: str | None = None
+    poll_timeout_seconds: int = 30
+    cooldown_seconds: int | None = None
+    job_inputs: dict | None = None
+    job_name_template: str | None = None
+    overlap_policy: str = "skip"
+    recovery_policy: str = "skip"
+    timezone: str = "America/Los_Angeles"
+    max_consecutive_errors: int = 10
+    metadata: dict | None = None
+
+
+class UpdateScheduleRequest(BaseModel):
+    name: str | None = None
+    cron_expr: str | None = None
+    poll_command: str | None = None
+    poll_timeout_seconds: int | None = None
+    cooldown_seconds: int | None = None
+    job_inputs: dict | None = None
+    job_name_template: str | None = None
+    overlap_policy: str | None = None
+    recovery_policy: str | None = None
+    timezone: str | None = None
+    max_consecutive_errors: int | None = None
+    metadata: dict | None = None
+
+
+class PauseScheduleRequest(BaseModel):
+    reason: str | None = None
+
+
 # ── Global state ──────────────────────────────────────────────────────
 
 _engine: AsyncEngine | None = None
@@ -154,6 +196,9 @@ _stream_tasks: dict[str, asyncio.Task] = {}
 _script_stream_tasks: dict[str, asyncio.Task] = {}
 _script_monitor_task: asyncio.Task | None = None
 _flow_mtimes: dict[str, float] = {}  # flow source_path → last known mtime
+
+# Scheduler service (initialized in lifespan)
+_scheduler = None  # SchedulerService | None
 
 
 # ── Event stream client registry ─────────────────────────────────────
@@ -4170,6 +4215,370 @@ async def websocket_endpoint(ws: WebSocket):
         pass
     finally:
         _ws_clients.discard(ws)
+
+
+# ── Schedules ────────────────────────────────────────────────────────
+
+
+def _cron_description(expr: str) -> str:
+    """Human-readable cron description, with graceful fallback."""
+    try:
+        from cron_descriptor import get_description
+        return get_description(expr)
+    except Exception:
+        return expr
+
+
+def _serialize_schedule(sched: Schedule, stats: dict | None = None) -> dict:
+    """Convert a Schedule to a JSON-serializable dict with optional stats."""
+    d = sched.to_dict()
+    d["cron_description"] = _cron_description(sched.cron_expr)
+    if stats:
+        d["stats"] = stats
+    return d
+
+
+def _resolve_schedule(schedule_id: str) -> Schedule:
+    """Look up a schedule by ID or name. Raises HTTPException on not found."""
+    engine = _get_engine()
+    sched = engine.store.get_schedule(schedule_id)
+    if not sched:
+        sched = engine.store.get_schedule_by_name(schedule_id)
+    if not sched:
+        raise HTTPException(status_code=404, detail=f"Schedule not found: {schedule_id}")
+    return sched
+
+
+@app.get("/api/schedules")
+def list_schedules(status: str | None = None, type: str | None = None):
+    engine = _get_engine()
+    schedules = engine.store.list_schedules(status=status, schedule_type=type)
+    return [_serialize_schedule(s) for s in schedules]
+
+
+@app.post("/api/schedules")
+def create_schedule(req: CreateScheduleRequest):
+    engine = _get_engine()
+
+    # Validate type
+    try:
+        sched_type = ScheduleType(req.type)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid type '{req.type}'. Valid: cron, poll")
+
+    # Validate overlap_policy
+    try:
+        overlap = OverlapPolicy(req.overlap_policy)
+    except ValueError:
+        valid = [p.value for p in OverlapPolicy]
+        raise HTTPException(status_code=400, detail=f"Invalid overlap_policy '{req.overlap_policy}'. Valid: {valid}")
+
+    # Validate recovery_policy
+    try:
+        recovery = RecoveryPolicy(req.recovery_policy)
+    except ValueError:
+        valid = [p.value for p in RecoveryPolicy]
+        raise HTTPException(status_code=400, detail=f"Invalid recovery_policy '{req.recovery_policy}'. Valid: {valid}")
+
+    # Validate cron expression
+    try:
+        from croniter import croniter
+        croniter(req.cron_expr)
+    except (ValueError, KeyError) as e:
+        raise HTTPException(status_code=400, detail=f"Invalid cron expression: {e}")
+
+    # Validate poll type has poll_command
+    if sched_type == ScheduleType.POLL and not req.poll_command:
+        raise HTTPException(status_code=400, detail="poll_command is required for poll-type schedules")
+
+    # Check for duplicate name
+    existing = engine.store.get_schedule_by_name(req.name)
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Schedule with name '{req.name}' already exists")
+
+    # Validate flow exists
+    flow_abs = (_project_dir / req.flow_path).resolve()
+    if not flow_abs.is_file():
+        raise HTTPException(status_code=400, detail=f"Flow not found: {req.flow_path}")
+
+    sched = Schedule(
+        id=_gen_id("sched"),
+        name=req.name,
+        type=sched_type,
+        flow_path=req.flow_path,
+        cron_expr=req.cron_expr,
+        poll_command=req.poll_command,
+        poll_timeout_seconds=req.poll_timeout_seconds,
+        cooldown_seconds=req.cooldown_seconds,
+        job_inputs=req.job_inputs or {},
+        job_name_template=req.job_name_template,
+        overlap_policy=overlap,
+        recovery_policy=recovery,
+        timezone=req.timezone,
+        max_consecutive_errors=req.max_consecutive_errors,
+        metadata=req.metadata or {},
+    )
+    engine.store.save_schedule(sched)
+
+    # Notify scheduler to pick up the new schedule
+    if _scheduler:
+        _scheduler.reload_schedule(sched.id)
+
+    return _serialize_schedule(sched)
+
+
+@app.get("/api/schedules/{schedule_id}")
+def get_schedule(schedule_id: str):
+    sched = _resolve_schedule(schedule_id)
+    engine = _get_engine()
+    stats = engine.store.tick_stats(sched.id)
+    return _serialize_schedule(sched, stats=stats)
+
+
+@app.patch("/api/schedules/{schedule_id}")
+def update_schedule(schedule_id: str, req: UpdateScheduleRequest):
+    sched = _resolve_schedule(schedule_id)
+    engine = _get_engine()
+
+    updates = {}
+    if req.name is not None:
+        # Check for duplicate name
+        existing = engine.store.get_schedule_by_name(req.name)
+        if existing and existing.id != sched.id:
+            raise HTTPException(status_code=409, detail=f"Schedule with name '{req.name}' already exists")
+        updates["name"] = req.name
+    if req.cron_expr is not None:
+        try:
+            from croniter import croniter
+            croniter(req.cron_expr)
+        except (ValueError, KeyError) as e:
+            raise HTTPException(status_code=400, detail=f"Invalid cron expression: {e}")
+        updates["cron_expr"] = req.cron_expr
+    if req.poll_command is not None:
+        updates["poll_command"] = req.poll_command
+    if req.poll_timeout_seconds is not None:
+        updates["poll_timeout_seconds"] = req.poll_timeout_seconds
+    if req.cooldown_seconds is not None:
+        updates["cooldown_seconds"] = req.cooldown_seconds
+    if req.job_inputs is not None:
+        updates["job_inputs"] = req.job_inputs
+    if req.job_name_template is not None:
+        updates["job_name_template"] = req.job_name_template
+    if req.overlap_policy is not None:
+        try:
+            OverlapPolicy(req.overlap_policy)
+        except ValueError:
+            valid = [p.value for p in OverlapPolicy]
+            raise HTTPException(status_code=400, detail=f"Invalid overlap_policy. Valid: {valid}")
+        updates["overlap_policy"] = req.overlap_policy
+    if req.recovery_policy is not None:
+        try:
+            RecoveryPolicy(req.recovery_policy)
+        except ValueError:
+            valid = [p.value for p in RecoveryPolicy]
+            raise HTTPException(status_code=400, detail=f"Invalid recovery_policy. Valid: {valid}")
+        updates["recovery_policy"] = req.recovery_policy
+    if req.timezone is not None:
+        updates["timezone"] = req.timezone
+    if req.max_consecutive_errors is not None:
+        updates["max_consecutive_errors"] = req.max_consecutive_errors
+    if req.metadata is not None:
+        updates["metadata"] = req.metadata
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    engine.store.update_schedule(sched.id, **updates)
+
+    # Reload in scheduler
+    if _scheduler:
+        _scheduler.reload_schedule(sched.id)
+
+    updated = engine.store.get_schedule(sched.id)
+    return _serialize_schedule(updated)
+
+
+@app.delete("/api/schedules/{schedule_id}")
+def delete_schedule(schedule_id: str):
+    sched = _resolve_schedule(schedule_id)
+    engine = _get_engine()
+    engine.store.delete_schedule(sched.id)
+
+    # Remove from scheduler
+    if _scheduler:
+        _scheduler.reload_schedule(sched.id)
+
+    return {"status": "deleted", "schedule_id": sched.id}
+
+
+@app.post("/api/schedules/{schedule_id}/pause")
+def pause_schedule(schedule_id: str, req: PauseScheduleRequest | None = None):
+    sched = _resolve_schedule(schedule_id)
+    engine = _get_engine()
+
+    if sched.status == ScheduleStatus.PAUSED:
+        return {"status": "already_paused", "schedule_id": sched.id}
+
+    updates = {
+        "status": ScheduleStatus.PAUSED.value,
+        "paused_at": _now(),
+    }
+    if req and req.reason:
+        meta = dict(sched.metadata)
+        meta["pause_reason"] = req.reason
+        updates["metadata"] = meta
+
+    engine.store.update_schedule(sched.id, **updates)
+
+    if _scheduler:
+        _scheduler.reload_schedule(sched.id)
+
+    return {"status": "paused", "schedule_id": sched.id}
+
+
+@app.post("/api/schedules/{schedule_id}/resume")
+def resume_schedule(schedule_id: str):
+    sched = _resolve_schedule(schedule_id)
+    engine = _get_engine()
+
+    if sched.status == ScheduleStatus.ACTIVE:
+        return {"status": "already_active", "schedule_id": sched.id}
+
+    updates = {
+        "status": ScheduleStatus.ACTIVE.value,
+        "paused_at": None,
+    }
+    # Clear pause reason from metadata
+    if sched.metadata.get("pause_reason"):
+        meta = dict(sched.metadata)
+        meta.pop("pause_reason", None)
+        updates["metadata"] = meta
+
+    engine.store.update_schedule(sched.id, **updates)
+
+    if _scheduler:
+        _scheduler.reload_schedule(sched.id)
+
+    return {"status": "resumed", "schedule_id": sched.id}
+
+
+@app.post("/api/schedules/{schedule_id}/trigger")
+async def trigger_schedule(schedule_id: str):
+    """Manually fire a schedule now, bypassing cron timing."""
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+    sched = _resolve_schedule(schedule_id)
+    engine = _get_engine()
+
+    flow_abs = (_project_dir / sched.flow_path).resolve()
+    if not flow_abs.is_file():
+        raise HTTPException(status_code=400, detail=f"Flow not found: {sched.flow_path}")
+
+    if sched.type == ScheduleType.POLL and sched.poll_command:
+        # For poll type, run the poll command first
+        from stepwise.poll_eval import evaluate_poll_command
+        result = await evaluate_poll_command(
+            command=sched.poll_command,
+            cwd=str(_project_dir),
+            timeout_seconds=sched.poll_timeout_seconds,
+        )
+        if result.error:
+            raise HTTPException(status_code=500, detail=f"Poll command failed: {result.error}")
+        if not result.ready:
+            return {"status": "not_ready", "schedule_id": sched.id, "message": "Poll command returned not-ready"}
+        poll_output = result.output
+    else:
+        poll_output = None
+
+    # Build inputs
+    inputs = {**sched.job_inputs}
+    if poll_output:
+        inputs.update(poll_output)
+
+    # Render job name
+    job_name = f"sched: {sched.name} (manual)"
+    if sched.job_name_template and poll_output:
+        try:
+            job_name = sched.job_name_template.format(**poll_output)
+        except (KeyError, ValueError):
+            pass
+
+    metadata = {
+        "sys": {
+            "schedule_id": sched.id,
+            "schedule_name": sched.name,
+            "trigger": "manual",
+        }
+    }
+
+    try:
+        wf = load_workflow_yaml(flow_abs)
+    except YAMLLoadError as e:
+        raise HTTPException(status_code=400, detail=f"Failed to load flow: {e}")
+
+    job = engine.create_job(
+        objective=f"Scheduled: {sched.name}",
+        workflow=wf,
+        inputs=inputs if inputs else None,
+        name=job_name,
+        metadata=metadata,
+    )
+    try:
+        engine.start_job(job.id)
+    except (KeyError, ValueError):
+        pass
+
+    # Update last_fired_at
+    engine.store.update_schedule(sched.id, last_fired_at=_now())
+
+    _notify_change(job.id)
+    return {"status": "triggered", "schedule_id": sched.id, "job_id": job.id}
+
+
+@app.get("/api/schedules/{schedule_id}/ticks")
+def list_schedule_ticks(
+    schedule_id: str,
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    outcome: str | None = None,
+):
+    sched = _resolve_schedule(schedule_id)
+    engine = _get_engine()
+    ticks = engine.store.list_ticks(sched.id, limit=limit, offset=offset, outcome=outcome)
+    return [t.to_dict() for t in ticks]
+
+
+@app.get("/api/schedules/{schedule_id}/stats")
+def get_schedule_stats(schedule_id: str):
+    sched = _resolve_schedule(schedule_id)
+    engine = _get_engine()
+    stats = engine.store.tick_stats(sched.id)
+    stats["consecutive_errors"] = engine.store.consecutive_errors(sched.id)
+    stats["queue_depth"] = engine.store.schedule_queue_depth(sched.id)
+    return stats
+
+
+@app.get("/api/schedules/{schedule_id}/jobs")
+def list_schedule_jobs(
+    schedule_id: str,
+    limit: int = Query(default=50, ge=1, le=500),
+    status: str | None = None,
+):
+    sched = _resolve_schedule(schedule_id)
+    engine = _get_engine()
+
+    # Query jobs where metadata contains schedule_id
+    query = "SELECT * FROM jobs WHERE json_extract(metadata, '$.sys.schedule_id') = ?"
+    params: list = [sched.id]
+    if status:
+        query += " AND status = ?"
+        params.append(status)
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+
+    rows = engine.store._conn.execute(query, params).fetchall()
+    jobs = [engine.store._row_to_job(r) for r in rows]
+    return [_serialize_job(j, summary=True) for j in jobs]
 
 
 # ── Static files (production) ─────────────────────────────────────────

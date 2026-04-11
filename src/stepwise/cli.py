@@ -5108,6 +5108,7 @@ def _open_browser_when_ready(host: str, port: int) -> None:
 _COMMAND_GROUPS: list[tuple[str, list[str]]] = [
     ("Execution", ["run", "open", "validate", "check", "preflight", "diagram"]),
     ("Jobs", ["jobs", "status", "cancel", "tail", "logs", "output", "wait", "fulfill", "list"]),
+    ("Scheduling", ["schedule"]),
     ("Server", ["server"]),
     ("Project", ["init", "new", "flows", "catalog", "config", "templates"]),
     ("Registry", ["search", "get", "share", "info", "login", "logout"]),
@@ -5573,6 +5574,75 @@ def build_parser() -> argparse.ArgumentParser:
     p_job_rm = job_sub.add_parser("rm", help="Remove a staged job")
     p_job_rm.add_argument("job_id", help="Job ID")
     p_job_rm.add_argument("--output", choices=["table", "json"], default="table")
+
+    # schedule
+    p_sched = sub.add_parser("schedule", help="Manage scheduled flow execution")
+    sched_sub = p_sched.add_subparsers(dest="schedule_command")
+
+    # schedule create
+    p_sched_create = sched_sub.add_parser("create", help="Create a new schedule")
+    p_sched_create.add_argument("flow", help="Flow name or path to .flow.yaml file")
+    p_sched_create.add_argument("--cron", required=True, help="Cron expression (e.g., '0 9 * * *')")
+    p_sched_create.add_argument("--name", help="Schedule name (defaults to flow name)")
+    p_sched_create.add_argument("--poll-command", help="Poll command for conditional firing")
+    p_sched_create.add_argument("--cooldown", type=int, help="Cooldown seconds between poll fires")
+    p_sched_create.add_argument("--overlap", choices=["skip", "queue", "allow"], default="skip",
+                                help="Overlap policy (default: skip)")
+    p_sched_create.add_argument("--recovery", choices=["skip", "catch_up_once"], default="skip",
+                                help="Recovery policy (default: skip)")
+    p_sched_create.add_argument("--input", "-i", action="append", default=[], dest="inputs",
+                                metavar="KEY=VALUE", help="Job input parameter (repeatable)")
+    p_sched_create.add_argument("--timezone", default="America/Los_Angeles",
+                                help="Timezone (default: America/Los_Angeles)")
+    p_sched_create.add_argument("--output", choices=["json"], help="Output format")
+
+    # schedule list
+    p_sched_list = sched_sub.add_parser("list", help="List schedules")
+    p_sched_list.add_argument("--status", choices=["active", "paused"], help="Filter by status")
+    p_sched_list.add_argument("--type", choices=["cron", "poll"], help="Filter by type")
+    p_sched_list.add_argument("--output", choices=["json"], help="Output format")
+
+    # schedule describe
+    p_sched_desc = sched_sub.add_parser("describe", help="Show schedule details")
+    p_sched_desc.add_argument("name_or_id", help="Schedule name or ID")
+    p_sched_desc.add_argument("--output", choices=["json"], help="Output format")
+
+    # schedule pause
+    p_sched_pause = sched_sub.add_parser("pause", help="Pause a schedule")
+    p_sched_pause.add_argument("name_or_id", help="Schedule name or ID")
+    p_sched_pause.add_argument("--reason", help="Reason for pausing")
+
+    # schedule resume
+    p_sched_resume = sched_sub.add_parser("resume", help="Resume a paused schedule")
+    p_sched_resume.add_argument("name_or_id", help="Schedule name or ID")
+
+    # schedule delete
+    p_sched_delete = sched_sub.add_parser("delete", help="Delete a schedule")
+    p_sched_delete.add_argument("name_or_id", help="Schedule name or ID")
+
+    # schedule update
+    p_sched_update = sched_sub.add_parser("update", help="Update schedule configuration")
+    p_sched_update.add_argument("name_or_id", help="Schedule name or ID")
+    p_sched_update.add_argument("--cron", help="New cron expression")
+    p_sched_update.add_argument("--poll-command", help="New poll command")
+    p_sched_update.add_argument("--cooldown", type=int, help="New cooldown seconds")
+    p_sched_update.add_argument("--overlap", choices=["skip", "queue", "allow"], help="Overlap policy")
+    p_sched_update.add_argument("--recovery", choices=["skip", "catch_up_once"], help="Recovery policy")
+    p_sched_update.add_argument("--timezone", help="Timezone")
+    p_sched_update.add_argument("--name", dest="set_name", help="New schedule name")
+    p_sched_update.add_argument("--output", choices=["json"], help="Output format")
+
+    # schedule trigger
+    p_sched_trigger = sched_sub.add_parser("trigger", help="Manually fire a schedule now")
+    p_sched_trigger.add_argument("name_or_id", help="Schedule name or ID")
+    p_sched_trigger.add_argument("--output", choices=["json"], help="Output format")
+
+    # schedule history
+    p_sched_history = sched_sub.add_parser("history", help="Show tick history")
+    p_sched_history.add_argument("name_or_id", help="Schedule name or ID")
+    p_sched_history.add_argument("--limit", type=int, default=50, help="Number of ticks to show (default: 50)")
+    p_sched_history.add_argument("--outcome", choices=["fired", "skipped", "error"], help="Filter by outcome")
+    p_sched_history.add_argument("--output", choices=["json"], help="Output format")
 
     # login
     sub.add_parser("login", help="Log in to the Stepwise registry via GitHub")
@@ -6389,6 +6459,559 @@ def cmd_job(args: argparse.Namespace) -> int:
     return EXIT_USAGE_ERROR
 
 
+def _schedule_relative_time(dt_str: str | None) -> str:
+    """Format an ISO datetime string as a relative time string."""
+    if not dt_str:
+        return "never"
+    from datetime import datetime, timezone
+    try:
+        dt = datetime.fromisoformat(dt_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        diff = now - dt
+        seconds = diff.total_seconds()
+        if seconds < 0:
+            return "just now"
+        if seconds < 60:
+            return "just now"
+        elif seconds < 3600:
+            mins = int(seconds / 60)
+            return f"{mins}m ago"
+        elif seconds < 86400:
+            hours = int(seconds / 3600)
+            return f"{hours}h ago"
+        else:
+            days = int(seconds / 86400)
+            return f"{days}d ago"
+    except (ValueError, TypeError):
+        return "unknown"
+
+
+def _cmd_schedule_create(args: argparse.Namespace) -> int:
+    """Create a new schedule."""
+    io = _io(args)
+
+    # Build the request body
+    body = {
+        "name": args.name or Path(args.flow).stem,
+        "type": "poll" if getattr(args, "poll_command", None) else "cron",
+        "flow_path": args.flow,
+        "cron_expr": args.cron,
+        "overlap_policy": getattr(args, "overlap", "skip"),
+        "recovery_policy": getattr(args, "recovery", "skip"),
+        "timezone": getattr(args, "timezone", "America/Los_Angeles"),
+    }
+    if getattr(args, "poll_command", None):
+        body["poll_command"] = args.poll_command
+    if getattr(args, "cooldown", None) is not None:
+        body["cooldown_seconds"] = args.cooldown
+    if getattr(args, "inputs", None):
+        inputs = {}
+        for item in args.inputs:
+            if "=" not in item:
+                io.log("error", f"Invalid --input: '{item}' (expected KEY=VALUE)")
+                return EXIT_USAGE_ERROR
+            key, value = item.split("=", 1)
+            inputs[key] = value
+        body["job_inputs"] = inputs
+
+    # Try server first
+    data, code = _try_server(args, lambda c: c.create_schedule(body))
+    if code is not None:
+        if code == EXIT_SUCCESS:
+            if getattr(args, "output", None) == "json":
+                print(json.dumps(data, indent=2, default=str))
+            else:
+                io.log("success", f"Created schedule '{data.get('name', '')}' ({data.get('id', '')})")
+                io.log("info", f"  Flow: {data.get('flow_path', '')}")
+                io.log("info", f"  Cron: {data.get('cron_expr', '')} ({data.get('cron_description', '')})")
+        return code
+
+    # Direct mode: create schedule locally
+    project = _find_project_or_exit(args)
+    from stepwise.store import SQLiteStore
+    from stepwise.models import Schedule, ScheduleType, OverlapPolicy, RecoveryPolicy, _gen_id
+
+    store = SQLiteStore(str(project.db_path))
+    try:
+        sched_type = ScheduleType(body["type"])
+        # Validate cron expression
+        try:
+            from croniter import croniter
+            croniter(body["cron_expr"])
+        except (ValueError, KeyError) as e:
+            io.log("error", f"Invalid cron expression: {e}")
+            return EXIT_USAGE_ERROR
+
+        # Check for duplicate name
+        existing = store.get_schedule_by_name(body["name"])
+        if existing:
+            io.log("error", f"Schedule with name '{body['name']}' already exists")
+            return EXIT_USAGE_ERROR
+
+        sched = Schedule(
+            id=_gen_id("sched"),
+            name=body["name"],
+            type=sched_type,
+            flow_path=body["flow_path"],
+            cron_expr=body["cron_expr"],
+            poll_command=body.get("poll_command"),
+            cooldown_seconds=body.get("cooldown_seconds"),
+            job_inputs=body.get("job_inputs", {}),
+            overlap_policy=OverlapPolicy(body.get("overlap_policy", "skip")),
+            recovery_policy=RecoveryPolicy(body.get("recovery_policy", "skip")),
+            timezone=body.get("timezone", "America/Los_Angeles"),
+        )
+        store.save_schedule(sched)
+
+        if getattr(args, "output", None) == "json":
+            print(json.dumps(sched.to_dict(), indent=2, default=str))
+        else:
+            io.log("success", f"Created schedule '{sched.name}' ({sched.id})")
+            io.log("info", f"  Flow: {sched.flow_path}")
+            try:
+                from cron_descriptor import get_description
+                desc = get_description(sched.cron_expr)
+            except Exception:
+                desc = sched.cron_expr
+            io.log("info", f"  Cron: {sched.cron_expr} ({desc})")
+        return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def _cmd_schedule_list(args: argparse.Namespace) -> int:
+    """List schedules."""
+    io = _io(args)
+
+    # Try server first
+    status_filter = getattr(args, "status", None)
+    type_filter = getattr(args, "type", None)
+    data, code = _try_server(
+        args,
+        lambda c: c.list_schedules(status=status_filter, schedule_type=type_filter),
+    )
+    if code is not None:
+        if code == EXIT_SUCCESS:
+            if getattr(args, "output", None) == "json":
+                print(json.dumps(data, indent=2, default=str))
+            else:
+                _render_schedule_table(io, data)
+        return code
+
+    # Direct mode
+    project = _find_project_or_exit(args)
+    from stepwise.store import SQLiteStore
+    store = SQLiteStore(str(project.db_path))
+    try:
+        schedules = store.list_schedules(status=status_filter, schedule_type=type_filter)
+        if getattr(args, "output", None) == "json":
+            print(json.dumps([s.to_dict() for s in schedules], indent=2, default=str))
+        else:
+            # Convert to dicts with cron_description for the table renderer
+            sched_dicts = []
+            for s in schedules:
+                d = s.to_dict()
+                try:
+                    from cron_descriptor import get_description
+                    d["cron_description"] = get_description(s.cron_expr)
+                except Exception:
+                    d["cron_description"] = s.cron_expr
+                stats = store.tick_stats(s.id)
+                d["stats"] = stats
+                sched_dicts.append(d)
+            _render_schedule_table(io, sched_dicts)
+        return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def _render_schedule_table(io, schedules: list[dict]) -> None:
+    """Render schedules as a rich table."""
+    if not schedules:
+        io.log("info", "No schedules found.")
+        return
+
+    rows = []
+    for s in schedules:
+        name = s.get("name", "")[:25]
+        stype = s.get("type", "")
+        flow = s.get("flow_path", "")[:25]
+        cron_desc = s.get("cron_description", s.get("cron_expr", ""))
+        if len(cron_desc) > 25:
+            cron_desc = cron_desc[:22] + "..."
+        status = s.get("status", "")
+        last_fired = _schedule_relative_time(
+            s.get("last_fired_at")
+            or (s.get("stats", {}) or {}).get("last_fired_at")
+        )
+        total_fires = str((s.get("stats", {}) or {}).get("total_fires", 0))
+        rows.append([name, stype, flow, cron_desc, status, last_fired, total_fires])
+
+    io.table(
+        ["NAME", "TYPE", "FLOW", "SCHEDULE", "STATUS", "LAST FIRED", "FIRES"],
+        rows,
+    )
+
+
+def _cmd_schedule_describe(args: argparse.Namespace) -> int:
+    """Show detailed schedule info."""
+    io = _io(args)
+    name_or_id = args.name_or_id
+
+    # Try server first
+    data, code = _try_server(args, lambda c: c.get_schedule(name_or_id))
+    if code is not None:
+        if code == EXIT_SUCCESS:
+            if getattr(args, "output", None) == "json":
+                print(json.dumps(data, indent=2, default=str))
+            else:
+                _render_schedule_detail(io, data, args)
+        return code
+
+    # Direct mode
+    project = _find_project_or_exit(args)
+    from stepwise.store import SQLiteStore
+    store = SQLiteStore(str(project.db_path))
+    try:
+        sched = store.get_schedule(name_or_id)
+        if not sched:
+            sched = store.get_schedule_by_name(name_or_id)
+        if not sched:
+            io.log("error", f"Schedule not found: {name_or_id}")
+            return EXIT_JOB_FAILED
+
+        d = sched.to_dict()
+        try:
+            from cron_descriptor import get_description
+            d["cron_description"] = get_description(sched.cron_expr)
+        except Exception:
+            d["cron_description"] = sched.cron_expr
+        d["stats"] = store.tick_stats(sched.id)
+        d["stats"]["consecutive_errors"] = store.consecutive_errors(sched.id)
+        d["stats"]["queue_depth"] = store.schedule_queue_depth(sched.id)
+
+        if getattr(args, "output", None) == "json":
+            print(json.dumps(d, indent=2, default=str))
+        else:
+            _render_schedule_detail(io, d, args)
+        return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def _render_schedule_detail(io, data: dict, args) -> None:
+    """Render detailed schedule view."""
+    info = f"Schedule: {data.get('id', '')}"
+    info += f"\nName: {data.get('name', '')}"
+    info += f"\nType: {data.get('type', '')}"
+    info += f"\nFlow: {data.get('flow_path', '')}"
+    info += f"\nCron: {data.get('cron_expr', '')} ({data.get('cron_description', '')})"
+    info += f"\nStatus: {data.get('status', '')}"
+    info += f"\nTimezone: {data.get('timezone', '')}"
+    info += f"\nOverlap: {data.get('overlap_policy', '')}"
+    info += f"\nRecovery: {data.get('recovery_policy', '')}"
+    if data.get("poll_command"):
+        info += f"\nPoll Command: {data['poll_command']}"
+    if data.get("cooldown_seconds"):
+        info += f"\nCooldown: {data['cooldown_seconds']}s"
+    info += f"\nCreated: {_schedule_relative_time(data.get('created_at'))}"
+    info += f"\nLast Fired: {_schedule_relative_time(data.get('last_fired_at'))}"
+    if data.get("paused_at"):
+        info += f"\nPaused: {_schedule_relative_time(data.get('paused_at'))}"
+    io.note(info, title="Schedule Details")
+
+    stats = data.get("stats", {})
+    if stats:
+        stats_info = f"Total Ticks: {stats.get('total_ticks', 0)}"
+        stats_info += f"\nTotal Fires: {stats.get('total_fires', 0)}"
+        fire_rate = stats.get('fire_rate', 0)
+        stats_info += f"\nFire Rate: {fire_rate:.1%}"
+        if stats.get("avg_check_duration_ms"):
+            stats_info += f"\nAvg Duration: {stats['avg_check_duration_ms']}ms"
+        stats_info += f"\nConsecutive Errors: {stats.get('consecutive_errors', 0)}"
+        stats_info += f"\nQueue Depth: {stats.get('queue_depth', 0)}"
+        io.note(stats_info, title="Stats")
+
+    if data.get("job_inputs"):
+        io.note(json.dumps(data["job_inputs"], indent=2), title="Job Inputs")
+    if data.get("metadata") and data["metadata"] != {}:
+        io.note(json.dumps(data["metadata"], indent=2), title="Metadata")
+
+
+def _cmd_schedule_pause(args: argparse.Namespace) -> int:
+    """Pause a schedule."""
+    io = _io(args)
+    name_or_id = args.name_or_id
+    reason = getattr(args, "reason", None)
+
+    data, code = _try_server(args, lambda c: c.pause_schedule(name_or_id, reason=reason))
+    if code is not None:
+        if code == EXIT_SUCCESS:
+            io.log("success", f"Schedule paused: {data.get('schedule_id', name_or_id)}")
+        return code
+
+    # Direct mode
+    project = _find_project_or_exit(args)
+    from stepwise.store import SQLiteStore
+    from stepwise.models import ScheduleStatus, _now as models_now
+    store = SQLiteStore(str(project.db_path))
+    try:
+        sched = store.get_schedule(name_or_id)
+        if not sched:
+            sched = store.get_schedule_by_name(name_or_id)
+        if not sched:
+            io.log("error", f"Schedule not found: {name_or_id}")
+            return EXIT_JOB_FAILED
+
+        updates = {"status": ScheduleStatus.PAUSED.value, "paused_at": models_now()}
+        if reason:
+            meta = dict(sched.metadata)
+            meta["pause_reason"] = reason
+            updates["metadata"] = meta
+        store.update_schedule(sched.id, **updates)
+        io.log("success", f"Schedule paused: {sched.name} ({sched.id})")
+        return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def _cmd_schedule_resume(args: argparse.Namespace) -> int:
+    """Resume a paused schedule."""
+    io = _io(args)
+    name_or_id = args.name_or_id
+
+    data, code = _try_server(args, lambda c: c.resume_schedule(name_or_id))
+    if code is not None:
+        if code == EXIT_SUCCESS:
+            io.log("success", f"Schedule resumed: {data.get('schedule_id', name_or_id)}")
+        return code
+
+    # Direct mode
+    project = _find_project_or_exit(args)
+    from stepwise.store import SQLiteStore
+    from stepwise.models import ScheduleStatus
+    store = SQLiteStore(str(project.db_path))
+    try:
+        sched = store.get_schedule(name_or_id)
+        if not sched:
+            sched = store.get_schedule_by_name(name_or_id)
+        if not sched:
+            io.log("error", f"Schedule not found: {name_or_id}")
+            return EXIT_JOB_FAILED
+
+        updates = {"status": ScheduleStatus.ACTIVE.value, "paused_at": None}
+        if sched.metadata.get("pause_reason"):
+            meta = dict(sched.metadata)
+            meta.pop("pause_reason", None)
+            updates["metadata"] = meta
+        store.update_schedule(sched.id, **updates)
+        io.log("success", f"Schedule resumed: {sched.name} ({sched.id})")
+        return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def _cmd_schedule_delete(args: argparse.Namespace) -> int:
+    """Delete a schedule."""
+    io = _io(args)
+    name_or_id = args.name_or_id
+
+    data, code = _try_server(args, lambda c: c.delete_schedule(name_or_id))
+    if code is not None:
+        if code == EXIT_SUCCESS:
+            io.log("success", f"Schedule deleted: {data.get('schedule_id', name_or_id)}")
+        return code
+
+    # Direct mode
+    project = _find_project_or_exit(args)
+    from stepwise.store import SQLiteStore
+    store = SQLiteStore(str(project.db_path))
+    try:
+        sched = store.get_schedule(name_or_id)
+        if not sched:
+            sched = store.get_schedule_by_name(name_or_id)
+        if not sched:
+            io.log("error", f"Schedule not found: {name_or_id}")
+            return EXIT_JOB_FAILED
+
+        store.delete_schedule(sched.id)
+        io.log("success", f"Schedule deleted: {sched.name} ({sched.id})")
+        return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def _cmd_schedule_update(args: argparse.Namespace) -> int:
+    """Update schedule fields."""
+    io = _io(args)
+    name_or_id = args.name_or_id
+
+    body = {}
+    if getattr(args, "cron", None):
+        body["cron_expr"] = args.cron
+    if getattr(args, "poll_command", None):
+        body["poll_command"] = args.poll_command
+    if getattr(args, "cooldown", None) is not None:
+        body["cooldown_seconds"] = args.cooldown
+    if getattr(args, "overlap", None):
+        body["overlap_policy"] = args.overlap
+    if getattr(args, "recovery", None):
+        body["recovery_policy"] = args.recovery
+    if getattr(args, "timezone", None):
+        body["timezone"] = args.timezone
+    if getattr(args, "set_name", None):
+        body["name"] = args.set_name
+
+    if not body:
+        io.log("error", "No fields to update. Use --cron, --poll-command, --cooldown, --overlap, --recovery, --timezone, or --name.")
+        return EXIT_USAGE_ERROR
+
+    data, code = _try_server(args, lambda c: c.update_schedule(name_or_id, body))
+    if code is not None:
+        if code == EXIT_SUCCESS:
+            if getattr(args, "output", None) == "json":
+                print(json.dumps(data, indent=2, default=str))
+            else:
+                io.log("success", f"Schedule updated: {data.get('name', name_or_id)}")
+        return code
+
+    # Direct mode
+    project = _find_project_or_exit(args)
+    from stepwise.store import SQLiteStore
+    store = SQLiteStore(str(project.db_path))
+    try:
+        sched = store.get_schedule(name_or_id)
+        if not sched:
+            sched = store.get_schedule_by_name(name_or_id)
+        if not sched:
+            io.log("error", f"Schedule not found: {name_or_id}")
+            return EXIT_JOB_FAILED
+
+        if "cron_expr" in body:
+            try:
+                from croniter import croniter
+                croniter(body["cron_expr"])
+            except (ValueError, KeyError) as e:
+                io.log("error", f"Invalid cron expression: {e}")
+                return EXIT_USAGE_ERROR
+
+        store.update_schedule(sched.id, **body)
+        io.log("success", f"Schedule updated: {sched.name} ({sched.id})")
+        return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def _cmd_schedule_trigger(args: argparse.Namespace) -> int:
+    """Manually trigger a schedule."""
+    io = _io(args)
+    name_or_id = args.name_or_id
+
+    data, code = _try_server(args, lambda c: c.trigger_schedule(name_or_id))
+    if code is not None:
+        if code == EXIT_SUCCESS:
+            if getattr(args, "output", None) == "json":
+                print(json.dumps(data, indent=2, default=str))
+            else:
+                status = data.get("status", "")
+                if status == "triggered":
+                    io.log("success", f"Schedule triggered: {name_or_id} -> job {data.get('job_id', '')}")
+                elif status == "not_ready":
+                    io.log("info", f"Poll returned not-ready: {data.get('message', '')}")
+                else:
+                    io.log("info", f"Trigger result: {status}")
+        return code
+
+    # Trigger requires the server (needs engine to create/start job)
+    io.log("error", "Trigger requires a running server. Start with 'stepwise server start'.")
+    return EXIT_JOB_FAILED
+
+
+def _cmd_schedule_history(args: argparse.Namespace) -> int:
+    """Show tick history for a schedule."""
+    io = _io(args)
+    name_or_id = args.name_or_id
+    limit = getattr(args, "limit", 50)
+    outcome_filter = getattr(args, "outcome", None)
+
+    data, code = _try_server(
+        args,
+        lambda c: c.schedule_ticks(name_or_id, limit=limit, outcome=outcome_filter),
+    )
+    if code is not None:
+        if code == EXIT_SUCCESS:
+            if getattr(args, "output", None) == "json":
+                print(json.dumps(data, indent=2, default=str))
+            else:
+                _render_tick_table(io, data)
+        return code
+
+    # Direct mode
+    project = _find_project_or_exit(args)
+    from stepwise.store import SQLiteStore
+    store = SQLiteStore(str(project.db_path))
+    try:
+        sched = store.get_schedule(name_or_id)
+        if not sched:
+            sched = store.get_schedule_by_name(name_or_id)
+        if not sched:
+            io.log("error", f"Schedule not found: {name_or_id}")
+            return EXIT_JOB_FAILED
+
+        ticks = store.list_ticks(sched.id, limit=limit, outcome=outcome_filter)
+        if getattr(args, "output", None) == "json":
+            print(json.dumps([t.to_dict() for t in ticks], indent=2, default=str))
+        else:
+            _render_tick_table(io, [t.to_dict() for t in ticks])
+        return EXIT_SUCCESS
+    finally:
+        store.close()
+
+
+def _render_tick_table(io, ticks: list[dict]) -> None:
+    """Render tick history as a table."""
+    if not ticks:
+        io.log("info", "No ticks found.")
+        return
+
+    rows = []
+    for t in ticks:
+        evaluated = _schedule_relative_time(t.get("evaluated_at"))
+        outcome = t.get("outcome", "")
+        job_id = t.get("job_id", "") or ""
+        if len(job_id) > 15:
+            job_id = job_id[:15]
+        reason = (t.get("reason") or "")[:30]
+        duration = str(t.get("duration_ms", "")) if t.get("duration_ms") else ""
+        rows.append([evaluated, outcome, job_id, reason, duration])
+
+    io.table(["EVALUATED", "OUTCOME", "JOB", "REASON", "DURATION(ms)"], rows)
+
+
+def cmd_schedule(args: argparse.Namespace) -> int:
+    """Schedule management commands."""
+    action = getattr(args, "schedule_command", None)
+    handlers = {
+        "create": _cmd_schedule_create,
+        "list": _cmd_schedule_list,
+        "describe": _cmd_schedule_describe,
+        "pause": _cmd_schedule_pause,
+        "resume": _cmd_schedule_resume,
+        "delete": _cmd_schedule_delete,
+        "update": _cmd_schedule_update,
+        "trigger": _cmd_schedule_trigger,
+        "history": _cmd_schedule_history,
+    }
+    handler = handlers.get(action)
+    if handler:
+        return handler(args)
+    # No subcommand — show help
+    _io(args).log("error", "Usage: stepwise schedule {create|list|describe|pause|resume|delete|update|trigger|history}")
+    return EXIT_USAGE_ERROR
+
+
 def cmd_cache(args: argparse.Namespace) -> int:
     """Manage step result cache."""
     from stepwise.cache import StepResultCache
@@ -6660,6 +7283,7 @@ def main(argv: list[str] | None = None) -> int:
         "docs": cmd_docs,
         "cache": cmd_cache,
         "job": cmd_job,
+        "schedule": cmd_schedule,
         "update": cmd_self_update,
         "version": lambda args: (print(f"stepwise {_get_version()}"), EXIT_SUCCESS)[1],
         "uninstall": cmd_uninstall,

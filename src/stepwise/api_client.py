@@ -278,3 +278,70 @@ class StepwiseClient:
             overall = "completed"
 
         return {"mode": mode, "status": overall, "jobs": results, "summary": summary}
+
+    # ── Schedules ───────────────────────────────────────────────────
+
+    def list_schedules(
+        self,
+        status: str | None = None,
+        schedule_type: str | None = None,
+    ) -> list[dict]:
+        """List schedules."""
+        params = {}
+        if status:
+            params["status"] = status
+        if schedule_type:
+            params["type"] = schedule_type
+        return self._request("GET", "/api/schedules", params=params)
+
+    def create_schedule(self, body: dict) -> dict:
+        """Create a schedule."""
+        return self._request("POST", "/api/schedules", body)
+
+    def get_schedule(self, schedule_id: str) -> dict:
+        """Get schedule detail + stats."""
+        return self._request("GET", f"/api/schedules/{schedule_id}")
+
+    def update_schedule(self, schedule_id: str, body: dict) -> dict:
+        """Update schedule fields."""
+        return self._request("PATCH", f"/api/schedules/{schedule_id}", body)
+
+    def delete_schedule(self, schedule_id: str) -> dict:
+        """Delete a schedule."""
+        return self._request("DELETE", f"/api/schedules/{schedule_id}")
+
+    def pause_schedule(self, schedule_id: str, reason: str | None = None) -> dict:
+        """Pause a schedule."""
+        body = {}
+        if reason:
+            body["reason"] = reason
+        return self._request("POST", f"/api/schedules/{schedule_id}/pause", body or None)
+
+    def resume_schedule(self, schedule_id: str) -> dict:
+        """Resume a paused schedule."""
+        return self._request("POST", f"/api/schedules/{schedule_id}/resume")
+
+    def trigger_schedule(self, schedule_id: str) -> dict:
+        """Manually trigger a schedule."""
+        return self._request("POST", f"/api/schedules/{schedule_id}/trigger")
+
+    def schedule_ticks(
+        self,
+        schedule_id: str,
+        limit: int = 50,
+        offset: int = 0,
+        outcome: str | None = None,
+    ) -> list[dict]:
+        """Get tick history for a schedule."""
+        params: dict = {"limit": str(limit), "offset": str(offset)}
+        if outcome:
+            params["outcome"] = outcome
+        return self._request("GET", f"/api/schedules/{schedule_id}/ticks", params=params)
+
+    def schedule_stats(self, schedule_id: str) -> dict:
+        """Get aggregated stats for a schedule."""
+        return self._request("GET", f"/api/schedules/{schedule_id}/stats")
+
+    def schedule_jobs(self, schedule_id: str, limit: int = 50) -> list[dict]:
+        """Get jobs launched by a schedule."""
+        return self._request("GET", f"/api/schedules/{schedule_id}/jobs", params={"limit": str(limit)})
