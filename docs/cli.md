@@ -12,6 +12,7 @@ See [Quickstart](quickstart.md) for installation and first-run instructions. See
 | [Jobs](#job-commands) | `jobs`, `status`, `output`, `tail`, `logs`, `wait`, `cancel`, `fulfill`, `list` |
 | [Job Lifecycle](#job-lifecycle-commands) | `archive`, `unarchive`, `rm` |
 | [Job Staging](#job-staging-commands) | `job create`, `job show`, `job run`, `job dep`, `job approve`, `job cancel`, `job rm` |
+| [Scheduling](#scheduling-commands) | `schedule create`, `schedule list`, `schedule describe`, `schedule pause`, `schedule resume`, `schedule delete`, `schedule update`, `schedule trigger`, `schedule history` |
 | [Server](#server-commands) | `server start`, `server stop`, `server restart`, `server status` |
 | [Registry](#registry-commands) | `share`, `get`, `search`, `info`, `login`, `logout` |
 | [Configuration](#configuration-commands) | `config`, `init`, `templates`, `schema`, `diagram` |
@@ -653,6 +654,74 @@ Delete a staged job. Cascade-deletes its dependency edges.
 
 ```bash
 stepwise job rm job-def456
+```
+
+---
+
+## Scheduling Commands
+
+### `stepwise schedule create`
+
+Create a new schedule. Two types: **cron** (always fire) and **poll** (conditional fire via shell command gate).
+
+```bash
+# Cron schedule — fires flow every weekday at 9am
+stepwise schedule create research/deep --cron "0 9 * * MON-FRI" --name "weekday-research" --input topic="market trends"
+
+# Poll schedule — checks every 5 minutes, fires only when condition met
+stepwise schedule create fix-issue --cron "*/5 * * * *" --poll-command './check-issues.sh' --cooldown 1800 --name "gh-watcher"
+```
+
+Options: `--overlap skip|queue|allow`, `--recovery skip|catch_up_once`, `--cooldown <seconds>`, `--timezone <tz>`, `--input key=value`.
+
+Poll commands: exit 0 + JSON dict on stdout = fire (JSON becomes job inputs). Exit 0 + empty = skip. Non-zero = error. `STEPWISE_POLL_CURSOR` env var carries last fired tick's output.
+
+### `stepwise schedule list`
+
+List all schedules with human-readable cron descriptions.
+
+```bash
+stepwise schedule list
+stepwise schedule list --status active --type poll
+stepwise schedule list --output json
+```
+
+### `stepwise schedule describe`
+
+Show full config, stats, and recent ticks for a schedule.
+
+```bash
+stepwise schedule describe my-schedule
+```
+
+### `stepwise schedule pause` / `resume`
+
+```bash
+stepwise schedule pause my-schedule --reason "deploying changes"
+stepwise schedule resume my-schedule
+```
+
+### `stepwise schedule trigger`
+
+Fire a schedule immediately, bypassing cron timing. For poll type, runs the poll command and only fires if ready.
+
+```bash
+stepwise schedule trigger my-schedule
+```
+
+### `stepwise schedule history`
+
+Show tick evaluation history.
+
+```bash
+stepwise schedule history my-schedule --limit 20 --outcome fired
+```
+
+### `stepwise schedule update` / `delete`
+
+```bash
+stepwise schedule update my-schedule --cron "0 10 * * *"
+stepwise schedule delete my-schedule
 ```
 
 ---

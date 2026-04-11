@@ -107,6 +107,7 @@ class SchedulerService:
 
     async def _tick_loop(self) -> None:
         """Main loop: sleep until next due schedule, evaluate, repeat."""
+        last_prune = _now()
         while True:
             try:
                 next_time = self._earliest_due()
@@ -117,6 +118,11 @@ class SchedulerService:
                 # Wake at least every 60s to pick up newly added schedules
                 await asyncio.sleep(min(sleep_for, 60))
                 await self._evaluate_due()
+
+                # Daily tick pruning (runs once per 24h cycle)
+                if (_now() - last_prune).total_seconds() > 86400:
+                    await self.prune_old_ticks()
+                    last_prune = _now()
             except asyncio.CancelledError:
                 raise
             except Exception:

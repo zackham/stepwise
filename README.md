@@ -74,6 +74,8 @@ stepwise run nightly-analysis --async --input date="2026-03-29"
 
 **Containment for agent isolation.** Agent steps can run inside hardware-isolated [Cloud-Hypervisor](https://www.cloudhypervisor.org/) microVMs, bounding the blast radius of autonomous sessions. Each VM gets only the filesystem paths, credentials, and network endpoints declared in its config — a research agent can never access a deploy agent's AWS keys because they run in separate hardware boundaries. Opt-in, transparent to the ACP protocol, near-native filesystem performance via virtiofs. See [Containment](docs/containment.md).
 
+**Built-in scheduling.** Cron schedules fire flows on a time pattern. Poll triggers check a condition (shell command) on a cadence and only launch when the condition passes — no junk jobs from early-exit hacks. Cursor mechanism carries state between evaluations. Overlap policies (skip, queue, allow), cooldown windows, auto-pause on errors. Every tick logged for full auditability. Manage via CLI (`stepwise schedule`) or web UI.
+
 **Crash-proof by default.** SQLite WAL mode, heartbeat-based stale detection, automatic orphan recovery. Kill the server, restart it, jobs resume. No message queue, no distributed state.
 
 ## A flow in 30 seconds
@@ -137,6 +139,8 @@ stepwise doctor --containment                  Check containment prerequisites
 stepwise build-rootfs                          Build VM rootfs image
 sudo stepwise vmmd start --detach              Start VM manager daemon
 stepwise vmmd status                           Check VM manager status
+stepwise schedule create <flow> --cron '...'    Schedule recurring jobs
+stepwise schedule list                         Show all schedules
 stepwise jobs                                  List all jobs
 stepwise status <job-id>                       Step-by-step detail
 stepwise fulfill <run-id> '{...}'              Fulfill a suspended external step

@@ -953,6 +953,15 @@ async def lifespan(app: FastAPI):
     _scheduler = SchedulerService(store=store, project_dir=str(_project_dir))
     await _scheduler.start(_create_and_start_scheduled_job)
 
+    # Wire engine → scheduler completion hook (for queue overlap policy)
+    def _on_job_completed(job_id: str) -> None:
+        if _scheduler and _event_loop:
+            _event_loop.call_soon_threadsafe(
+                _event_loop.create_task,
+                _scheduler.on_job_completed(job_id),
+            )
+    _engine.on_job_completed = _on_job_completed
+
     yield
 
     # Stop scheduler
@@ -4339,8 +4348,10 @@ def create_schedule(req: CreateScheduleRequest):
         raise HTTPException(status_code=409, detail=f"Schedule with name '{req.name}' already exists")
 
     # Validate flow exists
-    flow_abs = (_project_dir / req.flow_path).resolve()
-    if not flow_abs.is_file():
+    from stepwise.flow_resolution import resolve_flow, FlowResolutionError
+    try:
+        resolve_flow(req.flow_path, _project_dir)
+    except FlowResolutionError:
         raise HTTPException(status_code=400, detail=f"Flow not found: {req.flow_path}")
 
     sched = Schedule(

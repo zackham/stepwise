@@ -508,6 +508,35 @@ def _format_compact(
         "",
     ])
 
+    # Schedule management
+    lines.extend([
+        "## Schedule Management",
+        "",
+        "Stepwise has built-in scheduling for automated job launches.",
+        "",
+        "**Cron schedules** fire a flow on a time pattern (always launch):",
+        "`stepwise schedule create <flow> --cron '0 9 * * *' --name 'daily-report'`",
+        "",
+        "**Poll schedules** check a condition, only launch when it passes:",
+        "`stepwise schedule create <flow> --cron '*/5 * * * *' --poll-command './check.sh' --name 'watcher'`",
+        "",
+        "**Management:**",
+        "`stepwise schedule list` — show all schedules with status and stats.",
+        "`stepwise schedule describe <name>` — full config, stats, recent ticks.",
+        "`stepwise schedule pause <name>` — pause a schedule.",
+        "`stepwise schedule resume <name>` — resume a paused schedule.",
+        "`stepwise schedule trigger <name>` — fire immediately (bypass timing).",
+        "`stepwise schedule history <name>` — tick evaluation history.",
+        "`stepwise schedule delete <name>` — remove a schedule.",
+        "",
+        "**Options:** `--overlap skip|queue|allow`, `--cooldown <seconds>`, `--recovery skip|catch_up_once`,",
+        "`--input key=value` (static job inputs), `--timezone <tz>`.",
+        "",
+        "Poll commands: exit 0 + JSON dict on stdout = fire (JSON becomes job inputs).",
+        "Exit 0 + empty = skip. Non-zero = error. `STEPWISE_POLL_CURSOR` env var carries last fired output.",
+        "",
+    ])
+
     # Orchestration guidance (O4)
     lines.extend([
         "## Orchestrating Multiple Jobs",

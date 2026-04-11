@@ -169,6 +169,7 @@ class Engine:
         self.config = config  # StepwiseConfig — used for emit_flow instructions
         self.cache = cache  # step result cache (optional)
         self.on_event: Callable[[dict], None] | None = None
+        self.on_job_completed: Callable[[str], None] | None = None  # callback(job_id)
         self._injected_contexts: dict[str, list[str]] = {}  # job_id -> contexts
         self._rerun_steps: dict[str, set[str]] = {}  # job_id -> step names to bypass cache
         self._session_registries: dict[str, dict[str, SessionState]] = {}
@@ -3645,6 +3646,13 @@ class Engine:
         # Dispatch to event stream subscribers
         if self.on_event is not None:
             self.on_event(envelope)
+
+        # Notify scheduler of job completions (for queue overlap policy)
+        if event_type == JOB_COMPLETED and self.on_job_completed is not None:
+            try:
+                self.on_job_completed(job_id)
+            except Exception:
+                _engine_logger.warning("on_job_completed callback failed for %s", job_id, exc_info=True)
 
         # Fire project hooks for relevant events
         fire_hook_for_event(event_type, event.data, job_id, self.project_dir, envelope=envelope)

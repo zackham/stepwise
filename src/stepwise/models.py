@@ -1960,6 +1960,10 @@ VALID_SYS_KEYS: dict[str, type] = {
     "depth": int,
     "notify_url": str,
     "created_by": str,
+    "schedule_id": str,
+    "schedule_name": str,
+    "tick_id": str,
+    "trigger": str,
 }
 
 METADATA_MAX_BYTES = 8192
