@@ -10,6 +10,7 @@ import { useEngineStatus, useJobs, useJob, useServers } from "@/hooks/useStepwis
 import {
   LayoutGrid,
   FileCode,
+  Clock,
   Settings2,
   FolderOpen,
   AlertTriangle,
@@ -89,6 +90,7 @@ function ErrorFallback({ error, resetErrorBoundary }: FallbackProps) {
 const SHORTCUTS = [
   { keys: ["g", "j"], description: "Go to Jobs" },
   { keys: ["g", "f"], description: "Go to Flows" },
+  { keys: ["g", "c"], description: "Go to Schedules" },
   { keys: ["g", "s"], description: "Go to Settings" },
   { keys: ["/"], description: "Focus search" },
   { keys: ["?"], description: "Show keyboard shortcuts" },
@@ -378,6 +380,7 @@ export function AppLayout() {
   const currentPath = location.pathname;
   const isJobsActive = currentPath === "/jobs" || currentPath.startsWith("/jobs/");
   const isFlowsActive = currentPath.startsWith("/flows");
+  const isSchedulesActive = currentPath.startsWith("/schedules");
   const isSettingsActive = currentPath.startsWith("/settings");
 
   // Derive a route key for page transition animation - changes on top-level route switches
@@ -385,9 +388,11 @@ export function AppLayout() {
     ? "jobs"
     : isFlowsActive
       ? "flows"
-      : isSettingsActive
-        ? "settings"
-        : currentPath;
+      : isSchedulesActive
+        ? "schedules"
+        : isSettingsActive
+          ? "settings"
+          : currentPath;
 
   // Dynamic tab title
   const { data: jobsResponse } = useJobs(undefined, true);
@@ -426,6 +431,10 @@ export function AppLayout() {
       onTrigger: () => navigate({ to: "/flows" }),
     },
     {
+      keys: ["g", "c"],
+      onTrigger: () => navigate({ to: "/schedules" }),
+    },
+    {
       keys: ["g", "s"],
       onTrigger: () => navigate({ to: "/settings" }),
     },
@@ -449,6 +458,8 @@ export function AppLayout() {
       title = "Jobs — Stepwise";
     } else if (isFlowsActive) {
       title = "Flows — Stepwise";
+    } else if (isSchedulesActive) {
+      title = "Schedules — Stepwise";
     } else if (isSettingsActive) {
       title = "Settings — Stepwise";
     }
@@ -462,6 +473,7 @@ export function AppLayout() {
     currentPath,
     isJobsActive,
     isFlowsActive,
+    isSchedulesActive,
     isSettingsActive,
     detailJobId,
     detailJob,
@@ -567,6 +579,10 @@ export function AppLayout() {
             <Link to="/flows" className={navItemClass(isFlowsActive)}>
               <FileCode className="h-4 w-4 md:mr-1.5 md:h-3.5 md:w-3.5" />
               <span className="hidden md:inline">Flows</span>
+            </Link>
+            <Link to="/schedules" className={navItemClass(isSchedulesActive)}>
+              <Clock className="h-4 w-4 md:mr-1.5 md:h-3.5 md:w-3.5" />
+              <span className="hidden md:inline">Schedules</span>
             </Link>
             <Link to="/settings" className={navItemClass(isSettingsActive)}>
               <Settings2 className="h-4 w-4 md:mr-1.5 md:h-3.5 md:w-3.5" />

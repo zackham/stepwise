@@ -27,6 +27,7 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "codemirror": "^6.0.2",
+    "cronstrue": "^3.14.0",
     "dagre": "^0.8.5",
     "diff": "^8.0.4",
     "html-to-image": "^1.11.13",

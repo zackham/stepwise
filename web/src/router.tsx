@@ -9,6 +9,8 @@ import { JobsPage } from "@/pages/JobsPage";
 import { JobDetailPage } from "@/pages/JobDetailPage";
 import { FlowsPage } from "@/pages/FlowsPage";
 import { EditorPage } from "@/pages/EditorPage";
+import { SchedulesPage } from "@/pages/SchedulesPage";
+import { ScheduleDetailPage } from "@/pages/ScheduleDetailPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
 
@@ -167,6 +169,20 @@ const canvasRoute = createRoute({
   },
 });
 
+// Schedules list
+const schedulesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/schedules",
+  component: SchedulesPage,
+});
+
+// Schedule detail
+const scheduleDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/schedules/$scheduleId",
+  component: ScheduleDetailPage,
+});
+
 // Settings
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -181,6 +197,8 @@ const routeTree = rootRoute.addChildren([
   jobDetailRoute,
   flowsRoute,
   flowEditorRoute,
+  schedulesRoute,
+  scheduleDetailRoute,
   editorRedirectRoute,
   editorFlowRedirectRoute,
   canvasRoute,
