@@ -409,10 +409,10 @@ function JobListView({ jobs }: { jobs: Job[] }) {
   const [sortCol, setSortCol] = useState<SortCol | null>(null);
   const [sortAsc, setSortAsc] = useState(false);
 
-  // Group collapse state
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  // Group expand state — tracks which collapsed groups user has manually expanded
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const toggleGroup = useCallback((group: string) => {
-    setCollapsedGroups((prev) => {
+    setExpandedGroups((prev) => {
       const next = new Set(prev);
       if (next.has(group)) next.delete(group);
       else next.add(group);
@@ -698,7 +698,7 @@ function JobListView({ jobs }: { jobs: Job[] }) {
           <SortHeader col="time" label="Updated" current={sortCol} asc={sortAsc} onSort={handleSort} className="w-14 text-right" />
         </div>
         {(() => {
-          // Group jobs by job_group, preserving sort order
+          // Build unified interleaved list: each item is a group or a standalone job
           const allSorted = [...activeJobs, ...terminalJobs];
           const groups = new Map<string, Job[]>();
           const ungrouped: Job[] = [];
@@ -711,57 +711,100 @@ function JobListView({ jobs }: { jobs: Job[] }) {
             }
           }
 
-          // Sort groups: by name when sorting by name, otherwise by first job's sort position
-          const sortedGroupEntries = [...groups.entries()].sort(([aName, aJobs], [bName, bJobs]) => {
-            if (sortCol === "name") {
-              const dir = sortAsc ? 1 : -1;
+          // Build interleaved list sorted by most recent updated_at
+          type ListItem = { type: "group"; name: string; jobs: Job[]; sortKey: number } | { type: "job"; job: Job; sortKey: number };
+          const items: ListItem[] = [];
+
+          for (const [groupName, groupJobs] of groups.entries()) {
+            const sortKey = Math.max(...groupJobs.map((j) => new Date(j.updated_at).getTime()));
+            items.push({ type: "group", name: groupName, jobs: groupJobs, sortKey });
+          }
+          for (const job of ungrouped) {
+            items.push({ type: "job", job, sortKey: new Date(job.updated_at).getTime() });
+          }
+
+          // Sort descending by recency (or by name if name sort active)
+          if (sortCol === "name") {
+            const dir = sortAsc ? 1 : -1;
+            items.sort((a, b) => {
+              const aName = a.type === "group" ? a.name : (a.job.name || a.job.objective || "");
+              const bName = b.type === "group" ? b.name : (b.job.name || b.job.objective || "");
               return dir * aName.localeCompare(bName);
-            }
-            // For other sorts (or default), compare the first item in each group
-            // Since jobs within groups are already sorted, the first item represents the group
-            const aIdx = allSorted.indexOf(aJobs[0]);
-            const bIdx = allSorted.indexOf(bJobs[0]);
-            return aIdx - bIdx;
-          });
+            });
+          } else {
+            items.sort((a, b) => b.sortKey - a.sortKey);
+          }
 
           return (
             <>
-              {/* Grouped sections */}
-              {sortedGroupEntries.map(([groupName, groupJobs]) => {
-                const isCollapsed = collapsedGroups.has(groupName);
+              {items.map((item) => {
+                if (item.type === "job") {
+                  return renderRow(item.job);
+                }
+                // Group rendering
+                const groupJobs = item.jobs;
+                const groupName = item.name;
+                const isTerminal = groupJobs.every((j) => TERMINAL_STATUSES.has(j.status));
+                const isExpanded = isTerminal ? expandedGroups.has(groupName) : !expandedGroups.has(groupName);
+
+                // Rolled-up status
+                const hasRunning = groupJobs.some((j) => j.status === "running");
+                const hasFailed = groupJobs.some((j) => j.status === "failed");
+                const allCompleted = groupJobs.every((j) => j.status === "completed");
+                const rolledStatus: JobStatus = hasRunning ? "running" : hasFailed ? "failed" : allCompleted ? "completed" : "completed";
+
+                // Rolled-up duration (total)
+                const totalDurationMs = groupJobs.reduce((sum, j) => {
+                  if (j.status === "staged" || j.status === "pending") return sum;
+                  return sum + (new Date(j.updated_at).getTime() - new Date(j.created_at).getTime());
+                }, 0);
+                const durationStr = totalDurationMs < 1000 ? "—" : totalDurationMs < 60000 ? `${(totalDurationMs / 1000).toFixed(1)}s` : totalDurationMs < 3600000 ? `${(totalDurationMs / 60000).toFixed(1)}m` : `${(totalDurationMs / 3600000).toFixed(1)}h`;
+
+                // Jobs summary
                 const completedCount = groupJobs.filter((j) => TERMINAL_STATUSES.has(j.status)).length;
+                const jobsSummary = `${completedCount} of ${groupJobs.length} done`;
+
+                // Most recent updated_at
+                const mostRecent = groupJobs.reduce((latest, j) => j.updated_at > latest ? j.updated_at : latest, groupJobs[0].updated_at);
+
                 return (
-                  <div key={groupName}>
+                  <div key={`group-${groupName}`}>
                     <button
                       onClick={() => toggleGroup(groupName)}
-                      className="w-full flex items-center gap-2 px-4 sm:px-6 py-2 bg-zinc-50/30 dark:bg-zinc-900/20 hover:bg-zinc-100/50 dark:hover:bg-zinc-800/30 transition-colors text-left"
+                      className="w-full flex items-center gap-3 px-4 sm:px-6 py-3 bg-zinc-50/30 dark:bg-zinc-900/20 hover:bg-zinc-100/50 dark:hover:bg-zinc-800/30 transition-colors text-left"
                     >
+                      {/* Checkbox placeholder for alignment */}
+                      <span className="w-4 shrink-0" />
                       <ChevronRight
                         className={cn(
-                          "w-3.5 h-3.5 text-zinc-400 transition-transform",
-                          !isCollapsed && "rotate-90",
+                          "w-3.5 h-3.5 text-zinc-400 transition-transform shrink-0",
+                          isExpanded && "rotate-90",
                         )}
                       />
-                      <span className="text-xs font-medium text-zinc-400 dark:text-zinc-400">{groupName}</span>
-                      <span className="text-[10px] text-zinc-500 dark:text-zinc-600">
-                        {completedCount}/{groupJobs.length}
-                      </span>
+                      {/* Name */}
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm font-medium text-zinc-400 dark:text-zinc-400 truncate">{groupName}</span>
+                      </div>
+                      {/* Right columns — match job row layout */}
+                      <div className="hidden sm:flex items-center gap-4 shrink-0 text-[11px] text-zinc-500 tabular-nums">
+                        <span className="w-14 text-right">{jobsSummary}</span>
+                        <span className="w-16 text-right"></span>
+                        <span className="w-16 text-right">{durationStr}</span>
+                        <span className="w-20 text-right">
+                          <JobStatusBadge status={rolledStatus} />
+                        </span>
+                        <span className="w-14 text-right">{timeAgo(mostRecent)}</span>
+                      </div>
+                      {/* Mobile meta */}
+                      <div className="flex items-center gap-2 sm:hidden text-[10px] text-zinc-500">
+                        <JobStatusBadge status={rolledStatus} />
+                        <span>{jobsSummary}</span>
+                      </div>
                     </button>
-                    {!isCollapsed && groupJobs.map(renderRow)}
+                    {isExpanded && groupJobs.map(renderRow)}
                   </div>
                 );
               })}
-              {/* Ungrouped jobs */}
-              {groups.size > 0 && ungrouped.length > 0 && (
-                <div className="flex items-center gap-3 px-4 sm:px-6 py-2 bg-zinc-50/50 dark:bg-zinc-900/30">
-                  <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
-                  <span className="text-[10px] uppercase tracking-wider text-zinc-400 dark:text-zinc-600 font-medium">
-                    Ungrouped
-                  </span>
-                  <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
-                </div>
-              )}
-              {ungrouped.map(renderRow)}
             </>
           );
         })()}

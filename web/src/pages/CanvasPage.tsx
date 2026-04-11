@@ -5,7 +5,8 @@ import { JobCard } from "@/components/canvas/JobCard";
 import { fetchRuns } from "@/lib/api";
 import { Archive, ChevronRight, Minus, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { Job, StepRun } from "@/lib/types";
+import { JobStatusBadge } from "@/components/StatusBadge";
+import type { Job, JobStatus, StepRun } from "@/lib/types";
 
 const STATUS_PRIORITY: Record<string, number> = {
   running: 0,
@@ -19,6 +20,7 @@ const STATUS_PRIORITY: Record<string, number> = {
 };
 
 const ACTIVE_STATUSES = new Set(["running", "paused", "pending", "staged", "awaiting_input", "awaiting_approval"]);
+const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "archived"]);
 
 export interface CanvasPageProps {
   jobs: Job[];
@@ -27,11 +29,11 @@ export interface CanvasPageProps {
 export function CanvasPage({ jobs: visibleJobs }: CanvasPageProps) {
   const { data: groups = [] } = useGroups();
   const { updateGroupLimit, archiveJobs } = useStepwiseMutations();
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [hoveredJobId, setHoveredJobId] = useState<string | null>(null);
 
   const toggleGroup = useCallback((group: string) => {
-    setCollapsedGroups((prev) => {
+    setExpandedGroups((prev) => {
       const next = new Set(prev);
       if (next.has(group)) {
         next.delete(group);
@@ -171,37 +173,33 @@ export function CanvasPage({ jobs: visibleJobs }: CanvasPageProps) {
     return result;
   }, [visibleJobs]);
 
-  // Group ALL jobs by job_group
-  const { grouped, ungrouped } = useMemo(() => {
+  // Build unified interleaved list: groups and standalone jobs sorted by recency
+  type GridItem = { type: "group"; name: string; jobs: Job[]; sortKey: number } | { type: "job"; job: Job; sortKey: number };
+  const interleavedItems = useMemo(() => {
     const groupMap = new Map<string, Job[]>();
-    const ungrouped: Job[] = [];
+    const ungroupedJobs: Job[] = [];
     for (const job of sortedJobs) {
       if (job.job_group) {
         if (!groupMap.has(job.job_group)) groupMap.set(job.job_group, []);
         groupMap.get(job.job_group)!.push(job);
       } else {
-        ungrouped.push(job);
+        ungroupedJobs.push(job);
       }
     }
-    return {
-      grouped: Array.from(groupMap.entries()),
-      ungrouped,
-    };
-  }, [sortedJobs]);
 
-  // Separate ungrouped into active and terminal for visual separator
-  const { ungroupedActive, ungroupedTerminal } = useMemo(() => {
-    const active: Job[] = [];
-    const terminal: Job[] = [];
-    for (const job of ungrouped) {
-      if (ACTIVE_STATUSES.has(job.status)) {
-        active.push(job);
-      } else {
-        terminal.push(job);
-      }
+    const items: GridItem[] = [];
+    for (const [groupName, groupJobs] of groupMap.entries()) {
+      const sortKey = Math.max(...groupJobs.map((j) => new Date(j.updated_at).getTime()));
+      items.push({ type: "group", name: groupName, jobs: groupJobs, sortKey });
     }
-    return { ungroupedActive: active, ungroupedTerminal: terminal };
-  }, [ungrouped]);
+    for (const job of ungroupedJobs) {
+      items.push({ type: "job", job, sortKey: new Date(job.updated_at).getTime() });
+    }
+
+    // Sort descending by recency
+    items.sort((a, b) => b.sortKey - a.sortKey);
+    return items;
+  }, [sortedJobs]);
 
   if (visibleJobs.length === 0) {
     return (
@@ -237,11 +235,24 @@ export function CanvasPage({ jobs: visibleJobs }: CanvasPageProps) {
   return (
     <div className="h-full overflow-y-auto">
       <div className="p-6 space-y-6">
-        {/* Grouped job sections */}
-        {grouped.map(([groupLabel, groupJobs]) => {
-          const completedCount = groupJobs.filter((j) => j.status === "completed").length;
+        {interleavedItems.map((item) => {
+          if (item.type === "job") {
+            return renderCard(item.job);
+          }
+
+          const groupLabel = item.name;
+          const groupJobs = item.jobs;
           const gInfo = groupInfoMap.get(groupLabel);
-          const isCollapsed = collapsedGroups.has(groupLabel);
+          const isTerminal = groupJobs.every((j) => TERMINAL_STATUSES.has(j.status));
+          const isExpanded = isTerminal ? expandedGroups.has(groupLabel) : !expandedGroups.has(groupLabel);
+          const completedCount = groupJobs.filter((j) => TERMINAL_STATUSES.has(j.status)).length;
+
+          // Rolled-up status for compact card
+          const hasRunning = groupJobs.some((j) => j.status === "running");
+          const hasFailed = groupJobs.some((j) => j.status === "failed");
+          const allCompleted = groupJobs.every((j) => j.status === "completed");
+          const rolledStatus: JobStatus = hasRunning ? "running" : hasFailed ? "failed" : allCompleted ? "completed" : "completed";
+
           return (
             <section key={groupLabel}>
               <button
@@ -251,13 +262,16 @@ export function CanvasPage({ jobs: visibleJobs }: CanvasPageProps) {
                 <ChevronRight
                   className={cn(
                     "w-4 h-4 text-zinc-400 transition-transform",
-                    !isCollapsed && "rotate-90",
+                    isExpanded && "rotate-90",
                   )}
                 />
                 <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{groupLabel}</h2>
                 <span className="text-xs text-zinc-400 dark:text-zinc-600">
-                  {completedCount}/{groupJobs.length} complete
+                  {completedCount}/{groupJobs.length} done
                 </span>
+                {!isExpanded && (
+                  <JobStatusBadge status={rolledStatus} />
+                )}
                 {gInfo && gInfo.max_concurrent > 0 && (
                   <span className="text-xs text-zinc-400 dark:text-zinc-600">
                     · {gInfo.active_count}/{gInfo.max_concurrent} running
@@ -315,7 +329,7 @@ export function CanvasPage({ jobs: visibleJobs }: CanvasPageProps) {
                   </button>
                 </div>
               </button>
-              {!isCollapsed && (
+              {isExpanded && (
                 <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
                   {groupJobs.map(renderCard)}
                 </div>
@@ -323,57 +337,6 @@ export function CanvasPage({ jobs: visibleJobs }: CanvasPageProps) {
             </section>
           );
         })}
-
-        {/* Ungrouped jobs: "Other jobs" section */}
-        {ungrouped.length > 0 && (
-          <section>
-            {grouped.length > 0 && (
-              <button
-                onClick={() => toggleGroup("__ungrouped__")}
-                className="w-full mb-3 flex items-center gap-2 text-left group"
-              >
-                <ChevronRight
-                  className={cn(
-                    "w-4 h-4 text-zinc-400 transition-transform",
-                    !collapsedGroups.has("__ungrouped__") && "rotate-90",
-                  )}
-                />
-                <h2 className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
-                  Other jobs
-                </h2>
-                <span className="text-xs text-zinc-400 dark:text-zinc-600">
-                  {ungroupedTerminal.length}/{ungrouped.length} complete
-                </span>
-              </button>
-            )}
-            {!collapsedGroups.has("__ungrouped__") && (
-              <>
-                {/* Active ungrouped */}
-                {ungroupedActive.length > 0 && (
-                  <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
-                    {ungroupedActive.map(renderCard)}
-                  </div>
-                )}
-                {/* Separator between active and terminal */}
-                {ungroupedActive.length > 0 && ungroupedTerminal.length > 0 && (
-                  <div className="flex items-center gap-3 my-4">
-                    <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
-                    <span className="text-[10px] uppercase tracking-wider text-zinc-400 dark:text-zinc-600 font-medium">
-                      Completed
-                    </span>
-                    <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
-                  </div>
-                )}
-                {/* Terminal ungrouped */}
-                {ungroupedTerminal.length > 0 && (
-                  <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
-                    {ungroupedTerminal.map(renderCard)}
-                  </div>
-                )}
-              </>
-            )}
-          </section>
-        )}
       </div>
     </div>
   );
