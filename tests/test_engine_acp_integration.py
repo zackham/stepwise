@@ -207,5 +207,5 @@ class TestBackendSelection:
         """_select_backend always returns the primary backend."""
         executor = AgentExecutor(backend=mock_backend, prompt="test")
         assert executor._select_backend({}) is mock_backend
-        assert executor._select_backend({"_backend_type": "claude_direct"}) is mock_backend
+        assert executor._select_backend({"_backend_type": "any_value"}) is mock_backend
         assert executor._select_backend({"_session_name": "fork"}) is mock_backend

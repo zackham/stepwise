@@ -1,6 +1,6 @@
 """End-to-end test that the fork lifecycle plumbs the snapshot UUID correctly.
 
-This is the R13 acceptance test. It does NOT exercise real claude_direct
+This is the R13 acceptance test. It does NOT exercise real ACP agent
 invocations — instead, it constructs a small flow with fork_from, sets up
 session state by hand, and walks through the engine's fork-source helper
 chain to assert that:

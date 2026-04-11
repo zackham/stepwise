@@ -395,7 +395,7 @@ class TestBackendSelection:
             backend=mock_backend,
             prompt="test",
         )
-        config = {"_backend_type": "claude_direct", "_session_name": "fork"}
+        config = {"_backend_type": "ignored", "_session_name": "fork"}
         assert executor._select_backend(config) is mock_backend
 
 

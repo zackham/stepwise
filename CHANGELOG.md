@@ -3,6 +3,28 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.39.0] — 2026-04-10
+
+### Added
+- **Native ACP client** — stepwise speaks Agent Client Protocol (ACP) JSON-RPC 2.0 directly over stdio to agent server processes. No middleware dependency. Hand-rolled transport with Future-based request/response multiplexing, notification streaming, and non-JSON line filtering
+- **Agent registry** — settings-based configuration for ACP agents. Three builtins: `claude` (via `@agentclientprotocol/claude-agent-acp`), `codex` (via `@zed-industries/codex-acp`), `aloop` (native). User-defined agents via stepwise settings. Config keys support flag, env var, and ACP method delivery with defaults, overrides, and required validation
+- **Resource lifecycle manager** — generic reactive lifecycle: lazy allocation on first step need, backward-looking reuse when config matches (`is_eq`), deterministic cleanup when no future steps remain. Shared foundation for ACP process management and future containment VM lifecycle
+- **Shared NDJSON extraction module** (`acp_ndjson.py`) — canonical implementations of session ID, cost, text, and error extraction from ACP output. Replaces duplicated parsers across backends
+- **Mock ACP server** — configurable test server with scripted responses, multi-session support, and capability toggling for comprehensive unit testing
+
+### Changed
+- **Agent executor backend** — `ACPBackend` replaces both `AcpxBackend` and `ClaudeDirectBackend` as a single unified backend. One process per config group hosts multiple sessions (validated: claude-agent-acp and aloop both support multi-session)
+- **Engine session state** — `SessionState.claude_uuid` renamed to `session_id`, `backend_type` field removed. Fork logic uses ACP `session/fork` directly instead of Claude-specific snapshots
+- **CLI LLM client** — rewritten to use native ACP transport instead of `acpx exec` subprocess
+- **Flow editor agent** — `_acpx_agent_loop` replaced with `_acp_agent_loop` using native ACP transport with adaptive timeout streaming
+- **Session cleanup** — engine session cleanup simplified to lifecycle manager teardown, replacing `acpx sessions close` subprocess calls
+
+### Removed
+- **acpx dependency** — zero references remain in source, tests, docs, or install scripts. All agent communication uses native ACP
+- **`AcpxBackend`** class and all queue owner detection/cleanup/heartbeat code (~724 LOC)
+- **`ClaudeDirectBackend`** and `claude_direct.py` (~596 LOC) — ACP adapters handle translation
+- **acpx installation** from `install.sh` and `selfupdate` command
+
 ## [0.38.1] — 2026-04-08
 
 ### Changed
