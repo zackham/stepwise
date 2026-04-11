@@ -19,22 +19,50 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 // ── Schedules ──────────────────────────────────────────────────────────
 
-export interface SchedulesResponse {
-  schedules: Schedule[];
-  total: number;
-}
-
-export function fetchSchedules(status?: string, type?: string): Promise<SchedulesResponse> {
+export function fetchSchedules(status?: string, type?: string): Promise<Schedule[]> {
   const params = new URLSearchParams();
   if (status) params.set("status", status);
   if (type) params.set("type", type);
-  params.set("include_total", "true");
   const qs = params.toString();
-  return request<SchedulesResponse>(`/schedules${qs ? `?${qs}` : ""}`);
+  return request<Schedule[]>(`/schedules${qs ? `?${qs}` : ""}`);
 }
 
 export function fetchSchedule(scheduleId: string): Promise<Schedule> {
   return request<Schedule>(`/schedules/${scheduleId}`);
+}
+
+export interface CreateSchedulePayload {
+  name: string;
+  type: "cron" | "poll";
+  flow_path: string;
+  cron_expr?: string;
+  poll_command?: string;
+  poll_timeout_seconds?: number;
+  cooldown_seconds?: number;
+  job_inputs?: Record<string, unknown>;
+  job_name_template?: string;
+  overlap_policy?: string;
+  recovery_policy?: string;
+  timezone?: string;
+  max_consecutive_errors?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export function createSchedule(payload: CreateSchedulePayload): Promise<Schedule> {
+  return request<Schedule>("/schedules", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateSchedule(
+  scheduleId: string,
+  payload: Partial<CreateSchedulePayload>,
+): Promise<Schedule> {
+  return request<Schedule>(`/schedules/${scheduleId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function pauseSchedule(scheduleId: string): Promise<{ status: string }> {

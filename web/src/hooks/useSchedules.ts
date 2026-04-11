@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import * as scheduleApi from "@/lib/schedule-api";
+import type { CreateSchedulePayload } from "@/lib/schedule-api";
 
 // ── Query hooks ──────────────────────────────────────────────────────
 
@@ -56,6 +57,29 @@ export function useScheduleMutations() {
     queryClient.invalidateQueries({ queryKey: ["scheduleJobs"] });
   };
 
+  const createScheduleMutation = useMutation({
+    mutationFn: (payload: CreateSchedulePayload) => scheduleApi.createSchedule(payload),
+    onSuccess: () => {
+      invalidateAll();
+      toast.success("Schedule created");
+    },
+    onError: (error) => {
+      toast.error("Failed to create schedule", { description: error.message });
+    },
+  });
+
+  const updateScheduleMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: Partial<CreateSchedulePayload> }) =>
+      scheduleApi.updateSchedule(id, payload),
+    onSuccess: () => {
+      invalidateAll();
+      toast.success("Schedule updated");
+    },
+    onError: (error) => {
+      toast.error("Failed to update schedule", { description: error.message });
+    },
+  });
+
   const pauseScheduleMutation = useMutation({
     mutationFn: scheduleApi.pauseSchedule,
     onSuccess: () => {
@@ -101,6 +125,8 @@ export function useScheduleMutations() {
   });
 
   return {
+    createSchedule: createScheduleMutation,
+    updateSchedule: updateScheduleMutation,
     pauseSchedule: pauseScheduleMutation,
     resumeSchedule: resumeScheduleMutation,
     triggerSchedule: triggerScheduleMutation,
