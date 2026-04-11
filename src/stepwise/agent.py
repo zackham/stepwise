@@ -430,21 +430,6 @@ class AgentExecutor(Executor):
         step_id = f"{context.step_name}@{context.job_id or 'local'}" if context else "reattach"
         workspace_path = context.workspace_path if context else process.working_dir
 
-        # Clean up lingering queue owner process for this completed session.
-        # Skip cleanup when continue_session or named session is set — the queue
-        # owner and session must stay alive for downstream steps that reuse this session.
-        if (hasattr(self.backend, 'cleanup_session_queue_owner')
-                and not self.continue_session
-                and not self._session_name):
-            try:
-                self.backend.cleanup_session_queue_owner(
-                    agent_status.session_id,
-                    session_name=process.session_name,
-                    agent=process.agent,
-                )
-            except Exception as e:
-                logger.warning(f"[{step_id}] cleanup_session_queue_owner failed: {e}")
-
         state = {
             "pid": process.pid,
             "pgid": process.pgid,

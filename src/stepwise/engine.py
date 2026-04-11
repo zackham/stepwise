@@ -8,7 +8,6 @@ import json
 import logging
 import os
 import shlex
-import shutil
 import signal
 import subprocess
 import threading
@@ -1916,73 +1915,11 @@ class Engine:
                 self._emit(job.id, STEP_SKIPPED, {"step": step_name, "reason": "settlement"})
 
     def _cleanup_job_sessions(self, job_id: str, job: Job | None = None) -> None:
-        """Close acpx queue owners for all agent sessions used by this job.
+        """Clean up in-memory session registry for a completed/failed job.
 
-        Runs in a daemon thread so it doesn't block the engine.
-        Also cleans up the in-memory session registry.
+        Process cleanup is handled by ACPBackend's lifecycle manager.
         """
-        # Clean up session registry
         self._session_registries.pop(job_id, None)
-
-        if job is None:
-            try:
-                job = self.store.load_job(job_id)
-            except Exception:
-                return
-
-        runs = self.store.runs_for_job(job_id)
-        # Collect (session_name, agent_name, session_id) tuples, deduped by name
-        sessions: dict[str, tuple[str, str | None]] = {}  # name → (agent, session_id)
-        for run in runs:
-            es = run.executor_state or {}
-            name = es.get("session_name")
-            if name and name not in sessions:
-                step_def = job.workflow.steps.get(run.step_name)
-                agent = (
-                    es.get("agent")
-                    or (
-                        step_def.executor.config.get("agent")
-                        if step_def and step_def.executor and step_def.executor.config
-                        else None
-                    )
-                    or getattr(self.config, "default_agent", None)
-                    or "claude"
-                )
-                session_id = es.get("session_id")
-                sessions[name] = (agent, session_id)
-
-        if not sessions:
-            return
-
-        acpx_path = shutil.which("acpx") or "acpx"
-        env = {k: v for k, v in os.environ.items()
-               if k not in ("CLAUDECODE", "STEPWISE_OUTPUT_FILE")}
-
-        def _close_sessions(
-            sess: dict[str, tuple[str, str | None]],
-            acpx: str,
-            clean_env: dict[str, str],
-        ) -> None:
-            for name, (agent, session_id) in sess.items():
-                try:
-                    result = subprocess.run(
-                        [acpx, agent, "sessions", "close", "--name", name],
-                        capture_output=True, timeout=10, env=clean_env,
-                    )
-                    if result.returncode == 0:
-                        _engine_logger.debug("Closed session queue owner: %s", name)
-                    else:
-                        _engine_logger.debug(
-                            "acpx sessions close failed (rc=%d) for %s",
-                            result.returncode, name,
-                        )
-                except Exception as exc:
-                    _engine_logger.debug("acpx sessions close failed for %s: %s", name, exc)
-
-        t = threading.Thread(
-            target=_close_sessions, args=(sessions, acpx_path, env), daemon=True,
-        )
-        t.start()
 
     # ── Launching ─────────────────────────────────────────────────────────
 

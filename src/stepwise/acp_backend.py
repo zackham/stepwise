@@ -1,6 +1,6 @@
 """ACPBackend: native ACP agent backend using stdio transport.
 
-Replaces both AcpxBackend and ClaudeDirectBackend. Manages process
+Native ACP agent backend using stdio transport. Manages process
 lifecycle via ResourceLifecycleManager with backward-looking reuse.
 """
 
@@ -42,7 +42,7 @@ class ACPProcess:
 class ACPBackend:
     """Agent backend using native ACP over stdio.
 
-    Replaces both AcpxBackend and ClaudeDirectBackend. Manages process
+    Native ACP agent backend using stdio transport. Manages process
     lifecycle via ResourceLifecycleManager with backward-looking reuse.
     """
 

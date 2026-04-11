@@ -769,70 +769,6 @@ def _job_looks_complete(store: ThreadSafeStore, job: Job) -> bool:
     return True
 
 
-def _cleanup_stale_queue_owners(store: ThreadSafeStore) -> None:
-    """No-op: acpx queue owner cleanup removed with AcpxBackend."""
-    pass
-
-
-def _cleanup_orphaned_acpx_processes(store: ThreadSafeStore) -> None:
-    """No-op: acpx process cleanup removed with AcpxBackend."""
-    pass
-
-
-def _collect_active_agent_info(store: ThreadSafeStore) -> tuple[set[str], set[int]]:
-    """Collect ACP session IDs/names AND PIDs from running AND recently completed step runs.
-
-    Returns (active_session_ids, active_pids) — both are used to protect
-    running agents from the periodic cleanup.
-
-    Protects:
-    - Running step runs (regardless of parent job status)
-    - Recently completed step runs with continue_session=True (their queue
-      owners may still be needed by downstream steps in the chain)
-    """
-    from datetime import datetime, timezone, timedelta
-    active_ids: set[str] = set()
-    active_pids: set[int] = set()
-
-    # Protect running steps
-    for run in store.all_running_runs():
-        if run.executor_state:
-            if run.executor_state.get("session_id"):
-                active_ids.add(run.executor_state["session_id"])
-            if run.executor_state.get("session_name"):
-                active_ids.add(run.executor_state["session_name"])
-            if run.executor_state.get("pid"):
-                active_pids.add(run.executor_state["pid"])
-            if run.executor_state.get("pgid"):
-                active_pids.add(run.executor_state["pgid"])
-
-    # Protect recently completed continue_session steps (within 5 min)
-    # Their queue owners may still be needed by downstream steps
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
-    for job in store.active_jobs():
-        for run in store.completed_runs(job.id):
-            if (run.executor_state
-                    and run.executor_state.get("capture_transcript") is not None  # was an agent step
-                    and run.completed_at
-                    and run.completed_at > cutoff):
-                if run.executor_state.get("session_name"):
-                    active_ids.add(run.executor_state["session_name"])
-                if run.executor_state.get("session_id"):
-                    active_ids.add(run.executor_state["session_id"])
-
-    return active_ids, active_pids
-
-
-async def _periodic_queue_owner_cleanup() -> None:
-    """No-op: acpx queue owner cleanup removed with AcpxBackend."""
-    # Kept as a no-op so callers don't need updating; the task just sleeps forever.
-    try:
-        while True:
-            await asyncio.sleep(3600)
-    except asyncio.CancelledError:
-        pass
-
-
 def _setup_file_logging(dot_dir: Path) -> None:
     """Add a RotatingFileHandler to the root logger for server.log.
 
@@ -912,15 +848,6 @@ async def lifespan(app: FastAPI):
     # jobs are dispatched with full knowledge of the engine's actual state.
     _engine._start_queued_jobs()
 
-    # NOTE: Queue owner cleanup disabled. Queue owners manage their own lifecycle
-    # via TTL (--ttl 0 = stay alive forever). Stepwise's cleanup routines were
-    # killing queue owners that belonged to running steps, causing
-    # "Queue owner disconnected" failures. The cleanup code had multiple bugs:
-    # session-ID mismatches, PGID mismatches for setsid processes, and race
-    # conditions with concurrent jobs. Rather than maintain fragile heuristics,
-    # let acpx manage its own processes. Stale queue owners are harmless (they
-    # idle and eventually exit when their TTL expires on non-zero TTL sessions).
-
     # Register in global server registry
     from stepwise.server_detect import register_server, unregister_server
     register_server(
@@ -942,8 +869,6 @@ async def lifespan(app: FastAPI):
     _observer = asyncio.create_task(_observe_external_jobs())
     _source_watcher = asyncio.create_task(_flow_source_watcher())
     _health_checker = asyncio.create_task(_process_health_check())
-    # Periodic queue owner cleanup disabled — see note above
-    _queue_cleanup = None
 
     yield
 
@@ -962,13 +887,6 @@ async def lifespan(app: FastAPI):
         _script_monitor_task.cancel()
         try:
             await _script_monitor_task
-        except asyncio.CancelledError:
-            pass
-
-    if _queue_cleanup:
-        _queue_cleanup.cancel()
-        try:
-            await _queue_cleanup
         except asyncio.CancelledError:
             pass
 

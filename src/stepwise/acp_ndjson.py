@@ -18,7 +18,7 @@ def extract_session_id(output_path: str, result_only: bool = False) -> str | Non
     Args:
         output_path: Path to the NDJSON output file.
         result_only: If True, only read result.sessionId (for fork/resume).
-                     If False, also check params.sessionId (legacy acpx compat).
+                     If False, also check params.sessionId (params-based extraction).
     """
     try:
         with open(output_path) as f:
@@ -32,7 +32,7 @@ def extract_session_id(output_path: str, result_only: bool = False) -> str | Non
                     result = data.get("result", {})
                     if isinstance(result, dict) and result.get("sessionId"):
                         return result["sessionId"]
-                    # ACP session/update notifications (legacy acpx compat)
+                    # ACP session/update notifications (params-based extraction)
                     if not result_only:
                         params = data.get("params", {})
                         if params.get("sessionId"):

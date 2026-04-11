@@ -1,6 +1,6 @@
-"""CLI LLM client: uses acpx exec for one-shot LLM completions.
+"""CLI LLM client: uses native ACP transport for one-shot LLM completions.
 
-Fallback when no OpenRouter API key is configured but acpx is available.
+Fallback when no OpenRouter API key is configured but an ACP agent is available.
 Implements the LLMClient protocol from llm_client.py.
 
 Limitations:
@@ -10,7 +10,6 @@ Limitations:
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import shutil
@@ -24,28 +23,41 @@ from stepwise.llm_client import LLMResponse
 logger = logging.getLogger("stepwise.cli_llm")
 
 
-def detect_cli_backend() -> tuple[str, str] | None:
-    """Detect if acpx is available for CLI-based LLM calls.
+def detect_cli_backend() -> tuple[str] | None:
+    """Detect if an ACP agent command is available on PATH.
 
     Returns:
-        (acpx_path, agent_name) if available, None otherwise.
+        (agent_name,) tuple if available, None otherwise.
     """
-    acpx_path = shutil.which(os.environ.get("ACPX_PATH", "acpx"))
-    if acpx_path is None:
-        return None
     agent = os.environ.get("STEPWISE_DEFAULT_AGENT", "claude")
-    return (acpx_path, agent)
+    try:
+        from stepwise.agent_registry import get_agent
+        config = get_agent(agent)
+        # Check if the base command is available on PATH
+        base_cmd = config.command[0] if config.command else None
+        if base_cmd and shutil.which(base_cmd):
+            return (agent,)
+    except (ValueError, ImportError):
+        pass
+
+    # Check other known agents if default wasn't found
+    for fallback_agent, base_cmd in [("claude", "npx"), ("codex", "npx"), ("aloop", "aloop")]:
+        if fallback_agent == agent:
+            continue
+        if shutil.which(base_cmd):
+            return (fallback_agent,)
+
+    return None
 
 
 class CliLLMClient:
-    """LLM client that delegates to acpx exec for one-shot completions.
+    """LLM client that delegates to a native ACP agent for one-shot completions.
 
-    Uses `acpx --format json --approve-all <agent> exec -f <prompt_file>`
-    which outputs NDJSON on stderr with agent_message_chunk events.
+    Spawns an ACP subprocess, sends a prompt via JSON-RPC, and collects
+    the response from session/update notifications.
     """
 
-    def __init__(self, acpx_path: str = "acpx", agent: str = "claude") -> None:
-        self.acpx_path = acpx_path
+    def __init__(self, agent: str = "claude") -> None:
         self.agent = agent
 
     def chat_completion(
@@ -56,78 +68,122 @@ class CliLLMClient:
         temperature: float = 0.0,
         max_tokens: int = 4096,
     ) -> LLMResponse:
-        """Send a completion request via acpx exec."""
+        """Send a completion request via native ACP transport."""
         start = time.monotonic()
 
         # Combine messages into a single prompt
         prompt = self._build_prompt(messages, tools)
 
-        # Write prompt to tempfile
+        # Write NDJSON output to tempfile for extraction
         tmpdir = tempfile.mkdtemp(prefix="stepwise-cli-llm-")
         try:
-            return self._run_acpx(tmpdir, prompt, start)
+            return self._run_acp(tmpdir, prompt, start)
         finally:
-            shutil.rmtree(tmpdir, ignore_errors=True)
+            import shutil as _shutil
+            _shutil.rmtree(tmpdir, ignore_errors=True)
 
-    def _run_acpx(
+    def _run_acp(
         self, tmpdir: str, prompt: str, start: float,
     ) -> LLMResponse:
-        prompt_file = os.path.join(tmpdir, "prompt.md")
-        Path(prompt_file).write_text(prompt)
+        from stepwise.acp_client import ACPClient
+        from stepwise.acp_ndjson import extract_cost, extract_final_text
+        from stepwise.acp_transport import JsonRpcTransport
+        from stepwise.agent_registry import resolve_config
 
-        # Build command
-        cmd = [
-            self.acpx_path, "--format", "json", "--approve-all",
-            "--cwd", tmpdir,
-            self.agent, "exec", "-f", prompt_file,
-        ]
+        output_path = os.path.join(tmpdir, "output.jsonl")
 
-        # Remove CLAUDECODE from env (required for nested sessions)
+        # Resolve agent config
+        resolved = resolve_config(self.agent, {}, tmpdir)
+
+        # Build env: clear CLAUDECODE, add agent env vars
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        env.update(resolved.env_vars)
+
+        proc = None
+        transport = None
 
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
+            # Spawn ACP server subprocess
+            proc = subprocess.Popen(
+                resolved.command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=900,
+                bufsize=1,
                 env=env,
             )
-        except subprocess.TimeoutExpired as e:
-            raise RuntimeError(f"CLI LLM call timed out after 900s: {e}") from e
-        except FileNotFoundError as e:
-            raise RuntimeError(
-                f"acpx not found at '{self.acpx_path}'. "
-                f"Install it or set ACPX_PATH: {e}"
-            ) from e
 
-        elapsed_ms = int((time.monotonic() - start) * 1000)
+            transport = JsonRpcTransport(proc)
+            transport.start()
+            client = ACPClient(transport)
 
-        # Parse NDJSON from stdout (exec mode outputs JSON-RPC stream to stdout)
-        ndjson = result.stdout or ""
+            # ACP handshake
+            client.initialize()
 
-        if result.returncode != 0:
-            logger.warning(
-                "acpx exec exited with code %d, attempting to extract partial response",
-                result.returncode,
+            # Create session
+            session_id = client.new_session(tmpdir, f"cli-llm-{os.getpid()}")
+
+            # Collect NDJSON output by registering notification handler
+            ndjson_lines: list[str] = []
+
+            def _on_session_update(params: dict) -> None:
+                import json
+                ndjson_lines.append(json.dumps({"params": params}))
+
+            transport.on_notification("session/update", _on_session_update)
+
+            # Send prompt and wait for completion
+            future = transport.send_request("session/prompt", {
+                "sessionId": session_id,
+                "prompt": [{"type": "text", "text": prompt}],
+            })
+
+            # Wait for prompt to complete (with timeout)
+            result = future.result(timeout=900)
+
+            # Write collected NDJSON to file for extraction helpers
+            Path(output_path).write_text("\n".join(ndjson_lines) + "\n")
+
+            elapsed_ms = int((time.monotonic() - start) * 1000)
+
+            text = extract_final_text(output_path)
+            cost = extract_cost(output_path)
+
+            if not text:
+                raise RuntimeError(
+                    "CLI LLM call returned no text content"
+                )
+
+            return LLMResponse(
+                content=text or None,
+                tool_calls=None,
+                model=f"cli:{self.agent}",
+                cost_usd=cost,
+                latency_ms=elapsed_ms,
             )
 
-        text = self._extract_text(ndjson)
-        cost = self._extract_cost(ndjson)
-
-        if not text and result.returncode != 0:
-            raise RuntimeError(
-                f"CLI LLM call failed (exit code {result.returncode}): "
-                f"{result.stderr[:500] if result.stderr else 'no output'}"
-            )
-
-        return LLMResponse(
-            content=text or None,
-            tool_calls=None,
-            model=f"cli:{self.agent}",
-            cost_usd=cost,
-            latency_ms=elapsed_ms,
-        )
+        except Exception as e:
+            elapsed_ms = int((time.monotonic() - start) * 1000)
+            # If we got a timeout from the future
+            if "timed out" in str(e).lower() or isinstance(e, TimeoutError):
+                raise RuntimeError(f"CLI LLM call timed out after 900s: {e}") from e
+            raise
+        finally:
+            if transport:
+                try:
+                    transport.close()
+                except Exception:
+                    pass
+            if proc:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=5)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
 
     def _build_prompt(
         self,
@@ -170,45 +226,3 @@ class CliLLMClient:
                 props = params.get("properties", {})
                 return list(props.keys())
         return []
-
-    @staticmethod
-    def _extract_text(ndjson: str) -> str:
-        """Extract text from agent_message_chunk events in NDJSON."""
-        chunks: list[str] = []
-        for line in ndjson.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                data = json.loads(line)
-                params = data.get("params", {})
-                update = params.get("update", {})
-                if update.get("sessionUpdate") == "agent_message_chunk":
-                    content = update.get("content", {})
-                    if content.get("type") == "text":
-                        text = content.get("text", "")
-                        if text:
-                            chunks.append(text)
-            except json.JSONDecodeError:
-                continue
-        return "".join(chunks)
-
-    @staticmethod
-    def _extract_cost(ndjson: str) -> float | None:
-        """Extract cost from the last usage_update event in NDJSON."""
-        last_cost = None
-        for line in ndjson.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                data = json.loads(line)
-                params = data.get("params", {})
-                update = params.get("update", {})
-                if update.get("sessionUpdate") == "usage_update":
-                    cost = update.get("cost", {})
-                    if isinstance(cost, dict) and "amount" in cost:
-                        last_cost = cost["amount"]
-            except json.JSONDecodeError:
-                continue
-        return last_cost

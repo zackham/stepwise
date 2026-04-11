@@ -1,5 +1,7 @@
 # Named Sessions + Fork Support — Implementation Plan
 
+> **Historical note:** This document was written when Stepwise used acpx for agent communication. The project has since migrated to native ACP stdio transport. Session and fork concepts still apply but the transport layer is different.
+
 **Date**: 2026-04-02
 **Status**: Approved design, ready for implementation
 **Supersedes**: `agent-session-continuity-proposal.md` (chains + `_session_id` mechanism)

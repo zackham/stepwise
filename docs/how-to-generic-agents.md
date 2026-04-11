@@ -4,7 +4,7 @@ How to run agent steps with Codex, Gemini, or any ACP-compatible agent — and w
 
 ---
 
-Stepwise agent steps use [acpx](https://agentclientprotocol.com) — a headless client for the Agent Client Protocol (ACP). Any ACP-compatible agent works: Claude, Codex, Gemini, and others as acpx adds support.
+Stepwise agent steps use the [Agent Client Protocol (ACP)](https://agentclientprotocol.com) via native stdio transport. Any ACP-compatible agent works: Claude, Codex, Gemini, and others as ACP adapters are added.
 
 ## Specifying the Agent
 
@@ -22,7 +22,7 @@ steps:
     outputs: [result]
 ```
 
-If you omit `agent`, it defaults to `claude`. The value maps directly to what acpx accepts.
+If you omit `agent`, it defaults to `claude`. The value maps to a registered agent in the agent registry.
 
 ## Why Use Different Agents?
 
@@ -140,7 +140,7 @@ steps:
     outputs: [result]
 ```
 
-Cost limits, duration limits, `working_dir`, `session`, exit rules — all work identically across agent backends. The `agent` field only controls which agent binary acpx launches.
+Cost limits, duration limits, `working_dir`, `session`, exit rules — all work identically across agent backends. The `agent` field controls which ACP agent subprocess is spawned.
 
 ## Mixing LLM and Agent Steps
 

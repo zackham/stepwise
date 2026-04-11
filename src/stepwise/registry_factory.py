@@ -75,7 +75,7 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
            if k not in ("prompt", "output_mode", "output_path")},
     ))
 
-    # LLM executor — OpenRouter if key configured, else CLI fallback via acpx
+    # LLM executor — OpenRouter if key configured, else CLI fallback via native ACP
     llm_client = None
     llm_backend = None  # "openrouter" | "cli" | None
 
@@ -90,8 +90,8 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
         from stepwise.cli_llm_client import CliLLMClient, detect_cli_backend
         cli_info = detect_cli_backend()
         if cli_info:
-            acpx_path, agent = cli_info
-            llm_client = CliLLMClient(acpx_path=acpx_path, agent=agent)
+            (agent,) = cli_info
+            llm_client = CliLLMClient(agent=agent)
             llm_backend = "cli"
 
     if llm_client:
@@ -135,7 +135,7 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
     if llm_backend == "openrouter":
         logger.debug("LLM executor: OpenRouter")
     elif llm_backend == "cli":
-        logger.debug("LLM executor: CLI fallback (%s via %s)", agent, acpx_path)
+        logger.debug("LLM executor: CLI fallback (agent=%s)", agent)
     else:
         logger.debug("LLM executor: not available (no OpenRouter key or CLI)")
 

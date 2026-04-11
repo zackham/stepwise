@@ -44,21 +44,6 @@ STEPWISE_PKG="stepwise-run@git+https://github.com/zackham/stepwise.git"
 info "Installing stepwise..."
 uv tool install --force --reinstall "$STEPWISE_PKG"
 
-# ── Install acpx (agent protocol CLI, needed for agent/LLM steps) ────
-if command -v npm >/dev/null 2>&1; then
-    if ! command -v acpx >/dev/null 2>&1; then
-        info "Installing acpx..."
-        npm install -g acpx
-    else
-        dim "acpx already installed at $(command -v acpx)"
-    fi
-else
-    echo ""
-    echo "  Warning: npm not found — skipping acpx install."
-    echo "  Agent and LLM steps require acpx. Install Node.js, then run:"
-    echo "    npm install -g acpx"
-fi
-
 # ── Done ──────────────────────────────────────────────────────────────
 echo ""
 info "Stepwise installed successfully!"

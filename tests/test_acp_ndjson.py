@@ -41,7 +41,7 @@ def _session_update(session_id: str, update: dict) -> dict:
 
 # ── NDJSON samples ───────────────────────────────────────────────────
 
-# Simulates acpx output (has both result.sessionId and params.sessionId)
+# Simulates ACP output (has both result.sessionId and params.sessionId)
 ACPX_SESSION_RESULT = {"jsonrpc": "2.0", "id": 2, "result": {"sessionId": "sess-abc-123"}}
 ACPX_SESSION_UPDATE = _session_update("sess-abc-123", {
     "sessionUpdate": "agent_message_chunk",
@@ -362,8 +362,8 @@ class TestTailForUsageLimit:
 
 
 class TestFullScenario:
-    def test_acpx_style_output(self, tmp_path):
-        """Full acpx-style NDJSON output parses correctly."""
+    def test_acp_style_output(self, tmp_path):
+        """Full ACP-style NDJSON output parses correctly."""
         lines = [
             ACPX_SESSION_RESULT,
             TEXT_CHUNK_1,

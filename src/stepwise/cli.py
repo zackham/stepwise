@@ -620,7 +620,7 @@ def _server_start(args: argparse.Namespace) -> int:
         io.log("warn", f"Port 8340 in use, using {port}")
 
     # Default to detached mode — spawns server in its own session, required
-    # for acpx agent sessions when started from Claude Code.
+    # for agent sessions when started from Claude Code.
     if not getattr(args, 'no_detach', False):
         return _server_start_detached(project, host, port, io, args)
 
@@ -702,7 +702,7 @@ def _server_start_detached(
     ]
 
     # start_new_session gives the server its own clean session. Required for
-    # acpx agent sessions to work when started from Claude Code or similar
+    # agent sessions to work when started from Claude Code or similar
     # tools that create sessions per command.
     subprocess.Popen(
         cmd,
@@ -4661,20 +4661,6 @@ def cmd_self_update(args: argparse.Namespace) -> int:
             cache_file.unlink()
     except Exception:
         pass
-
-    # Also update acpx if npm is available
-    import shutil as _shutil
-    if _shutil.which("npm"):
-        acpx_result = subprocess.run(
-            ["npm", "install", "-g", "acpx"],
-            capture_output=True, text=True,
-        )
-        if acpx_result.returncode == 0:
-            io.log("info", "Updated acpx (agent protocol CLI).")
-        else:
-            io.log("warn", "Failed to update acpx — agent/LLM steps may not work.")
-    elif not _shutil.which("acpx"):
-        io.log("warn", "acpx not found. Install Node.js and run: npm install -g acpx")
 
     if new_version == old_version:
         io.log("success", f"Already up to date (v{old_version}).")

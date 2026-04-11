@@ -21,7 +21,7 @@ You don't know, because the work happened inside a context window you can't see.
 
 Stepwise fixes this. Define a workflow as a DAG of steps — scripts, LLM calls, agent sessions, human gates, polls — and Stepwise runs them with full observability, crash recovery, and audit trails. Group related flows into **kits** for organized sharing. The 3am "did it work?" question answered as a URL.
 
-This isn't another agent framework. Stepwise doesn't replace your agents — it gives them a harness. Agent steps run via [ACP](https://agentclientprotocol.com) through [acpx](https://github.com/openclaw/acpx) — one protocol surface for Claude, Codex, Gemini, and 15+ coding agents. The intelligence commoditizes. The harness does not.
+This isn't another agent framework. Stepwise doesn't replace your agents — it gives them a harness. Agent steps run via [ACP](https://agentclientprotocol.com) over native stdio transport — one protocol surface for Claude, Codex, Gemini, and 15+ coding agents. The intelligence commoditizes. The harness does not.
 
 ## Install
 
