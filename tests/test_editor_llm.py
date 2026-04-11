@@ -1,6 +1,7 @@
-"""Tests for the editor LLM agent (acpx-based flow builder)."""
+"""Tests for the editor LLM agent (ACP-based flow builder)."""
 
 import json
+from concurrent.futures import Future
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -198,18 +199,18 @@ class TestSessionManagement:
 
 class TestChatStreamRouting:
 
-    def test_uses_acpx_when_available(self, tmp_path):
-        with patch("stepwise.editor_llm.shutil.which", return_value="/usr/bin/acpx"), \
-             patch("stepwise.editor_llm._acpx_agent_loop") as mock_acpx:
-            mock_acpx.return_value = iter([{"type": "done"}])
+    def test_uses_acp_when_agent_available(self, tmp_path):
+        with patch("stepwise.editor_llm._is_agent_available", return_value=True), \
+             patch("stepwise.editor_llm._acp_agent_loop") as mock_acp:
+            mock_acp.return_value = iter([{"type": "done"}])
             chunks = list(chat_stream("hello", project_dir=tmp_path))
-            mock_acpx.assert_called_once()
+            mock_acp.assert_called_once()
 
-    def test_simple_mode_skips_acpx(self, tmp_path):
+    def test_simple_mode_skips_acp(self, tmp_path):
         mock_config = MagicMock()
         mock_config.openrouter_api_key = "sk-test"
 
-        with patch("stepwise.editor_llm.shutil.which", return_value="/usr/bin/acpx"), \
+        with patch("stepwise.editor_llm._is_agent_available", return_value=True), \
              patch("stepwise.editor_llm.load_config", return_value=mock_config), \
              patch("stepwise.editor_llm._openrouter_fallback") as mock_or:
             mock_or.return_value = iter([{"type": "done"}])
@@ -220,87 +221,129 @@ class TestChatStreamRouting:
         mock_config = MagicMock()
         mock_config.openrouter_api_key = None
 
-        with patch("stepwise.editor_llm.shutil.which", return_value=None), \
+        with patch("stepwise.editor_llm._is_agent_available", return_value=False), \
              patch("stepwise.editor_llm.load_config", return_value=mock_config):
             chunks = list(chat_stream("hello", project_dir=tmp_path))
             assert chunks[0]["type"] == "error"
+            assert "claude-agent-acp" in chunks[0]["content"]
 
 
-# ── NDJSON event parsing ─────────────────────────────────────────
+# ── ACP event parsing ────────────────────────────────────────────
 
 
-class TestAcpxEventParsing:
+class TestAcpEventParsing:
 
-    def _make_event(self, session_update: str, **kwargs) -> bytes:
-        event = {"params": {"update": {"sessionUpdate": session_update, **kwargs}}}
-        return (json.dumps(event) + "\n").encode()
+    def _make_update(self, session_update: str, **kwargs) -> dict:
+        """Build an ACP session/update notification params dict."""
+        return {"update": {"sessionUpdate": session_update, **kwargs}}
 
     def test_text_chunks_streamed(self, tmp_path):
-        lines = [
-            self._make_event("agent_message_chunk", content={"type": "text", "text": "Hello "}),
-            self._make_event("agent_message_chunk", content={"type": "text", "text": "world"}),
+        updates = [
+            self._make_update("agent_message_chunk", content={"type": "text", "text": "Hello "}),
+            self._make_update("agent_message_chunk", content={"type": "text", "text": "world"}),
         ]
-        chunks = self._run(tmp_path, lines)
+        chunks = self._run(tmp_path, updates)
         text = "".join(c["content"] for c in chunks if c["type"] == "text")
         assert text == "Hello world"
 
     def test_tool_use_events(self, tmp_path):
-        lines = [
-            self._make_event("tool_call", title="Read file", toolCallId="tc-1"),
-            self._make_event("tool_call_update", toolCallId="tc-1", status="completed"),
+        updates = [
+            self._make_update("tool_call", title="Read file", toolCallId="tc-1"),
+            self._make_update("tool_call_update", toolCallId="tc-1", status="completed"),
         ]
-        chunks = self._run(tmp_path, lines)
+        chunks = self._run(tmp_path, updates)
         assert any(c["type"] == "tool_use" and c["tool_name"] == "Read file" for c in chunks)
         assert any(c["type"] == "tool_result" and c["tool_use_id"] == "tc-1" for c in chunks)
 
     def test_files_changed_tracked(self, tmp_path):
         """Verify file writes are tracked via tool_call_update with kind=edit."""
-        lines = [
-            self._make_event("tool_call", title="Write file", toolCallId="tc-1", kind="edit"),
-            self._make_event(
+        updates = [
+            self._make_update("tool_call", title="Write file", toolCallId="tc-1", kind="edit"),
+            self._make_update(
                 "tool_call_update", toolCallId="tc-1", status="completed",
                 kind="edit", title="Write file",
                 locations=[{"path": "/tmp/flow/FLOW.yaml"}],
             ),
         ]
-        chunks = self._run(tmp_path, lines)
+        chunks = self._run(tmp_path, updates)
         fc = [c for c in chunks if c["type"] == "files_changed"]
         assert len(fc) == 1
         assert "/tmp/flow/FLOW.yaml" in fc[0]["paths"]
 
     def test_session_id_emitted(self, tmp_path):
-        lines = [self._make_event("agent_message_chunk", content={"type": "text", "text": "hi"})]
-        chunks = self._run(tmp_path, lines)
+        updates = [self._make_update("agent_message_chunk", content={"type": "text", "text": "hi"})]
+        chunks = self._run(tmp_path, updates)
         sessions = [c for c in chunks if c["type"] == "session"]
         assert len(sessions) == 1
         assert sessions[0]["session_id"]
 
-    def test_approve_all_in_args(self, tmp_path):
-        """Verify --approve-all is used for direct file writing."""
-        lines = [self._make_event("agent_message_chunk", content={"type": "text", "text": "hi"})]
+    def test_done_event_uses_acp_prefix(self, tmp_path):
+        """Verify done event model field uses acp/ prefix."""
+        updates = [self._make_update("agent_message_chunk", content={"type": "text", "text": "hi"})]
+        chunks = self._run(tmp_path, updates)
+        done = [c for c in chunks if c["type"] == "done"]
+        assert len(done) == 1
+        assert done[0]["model"] == "acp/claude"
+
+    def _run(self, tmp_path, updates: list[dict]) -> list[dict]:
+        """Run _acp_agent_loop with mocked ACP transport and client.
+
+        Feeds the given notification updates through the transport's
+        notification handler, then completes the prompt future.
+        """
+        from stepwise.editor_llm import _acp_agent_loop
+        from stepwise.agent_registry import ResolvedAgentConfig
+
+        mock_resolved = ResolvedAgentConfig(
+            name="claude",
+            command=["echo", "mock"],
+            env_vars={},
+        )
+
+        # Capture the notification handler registered by _acp_agent_loop
+        captured_handlers = {}
+
+        class MockTransport:
+            def __init__(self, *args, **kwargs):
+                self._closed = False
+
+            def start(self):
+                pass
+
+            def on_notification(self, method, handler):
+                captured_handlers[method] = handler
+
+            def send_request(self, method, params=None):
+                future = Future()
+                if method == "session/prompt":
+                    # Deliver all updates via the notification handler,
+                    # then mark the future done
+                    handler = captured_handlers.get("session/update")
+                    if handler:
+                        for u in updates:
+                            handler(u)
+                    future.set_result({"stopReason": "end_turn"})
+                else:
+                    future.set_result({})
+                return future
+
+            def close(self):
+                self._closed = True
 
         mock_proc = MagicMock()
-        mock_proc.stdout = lines
+        mock_proc.terminate.return_value = None
         mock_proc.wait.return_value = 0
+        mock_proc.kill.return_value = None
 
-        with patch("subprocess.run"), \
-             patch("subprocess.Popen", return_value=mock_proc) as mock_popen:
-            from stepwise.editor_llm import _acpx_agent_loop
-            list(_acpx_agent_loop("/usr/bin/acpx", "claude", "test", None, None, None, tmp_path))
-            args = mock_popen.call_args[0][0]
-            assert "--approve-all" in args
-            assert "--approve-reads" not in args
+        mock_client = MagicMock()
+        mock_client.initialize.return_value = {"capabilities": {}}
+        mock_client.new_session.return_value = "test-session-123"
 
-    def _run(self, tmp_path, lines: list[bytes]) -> list[dict]:
-        from stepwise.editor_llm import _acpx_agent_loop
-
-        mock_proc = MagicMock()
-        mock_proc.stdout = lines
-        mock_proc.wait.return_value = 0
-
-        with patch("subprocess.run"), \
-             patch("subprocess.Popen", return_value=mock_proc):
-            return list(_acpx_agent_loop(
-                "/usr/bin/acpx", "claude", "test",
+        with patch("stepwise.agent_registry.resolve_config", return_value=mock_resolved), \
+             patch("stepwise.editor_llm.subprocess.Popen", return_value=mock_proc), \
+             patch("stepwise.acp_transport.JsonRpcTransport", side_effect=MockTransport), \
+             patch("stepwise.acp_client.ACPClient", return_value=mock_client):
+            return list(_acp_agent_loop(
+                "claude", "test",
                 None, None, None, tmp_path,
             ))

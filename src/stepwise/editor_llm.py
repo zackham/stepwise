@@ -1,14 +1,13 @@
-"""Agent-based flow editor for Stepwise — uses acpx to piggyback on local Claude."""
+"""Agent-based flow editor for Stepwise — uses ACP agents for flow building."""
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import queue
 import re
-import shutil
 import subprocess
-import threading
 import uuid
 from pathlib import Path
 from typing import Any, Generator
@@ -16,6 +15,8 @@ from typing import Any, Generator
 import httpx
 
 from stepwise.config import load_config
+
+logger = logging.getLogger("stepwise.editor_llm")
 
 
 # ── System Prompt ────────────────────────────────────────────────────
@@ -220,7 +221,17 @@ def _tree_walk(base: Path, current: Path, lines: list[str], depth: int, max_dept
             lines.append(f"{indent}{entry.name}")
 
 
-# ── acpx Agent Loop ─────────────────────────────────────────────────
+# ── ACP Agent Loop ──────────────────────────────────────────────────
+
+
+def _is_agent_available(agent_name: str) -> bool:
+    """Check if an ACP agent can be resolved (has a config entry)."""
+    try:
+        from stepwise.agent_registry import get_agent
+        get_agent(agent_name)
+        return True
+    except (ValueError, ImportError):
+        return False
 
 
 def chat_stream(
@@ -235,14 +246,13 @@ def chat_stream(
 ) -> Generator[dict[str, Any], None, None]:
     """Stream an agent chat response as NDJSON chunks.
 
-    Uses acpx (local Claude/Codex) if available, falls back to OpenRouter.
+    Uses ACP agent (native protocol) if available, falls back to OpenRouter.
     """
     project_dir = project_dir or Path(".")
 
-    acpx_path = shutil.which("acpx")
-    if acpx_path and agent != "simple":
-        yield from _acpx_agent_loop(
-            acpx_path, agent, user_message, history, current_yaml,
+    if agent != "simple" and _is_agent_available(agent):
+        yield from _acp_agent_loop(
+            agent, user_message, history, current_yaml,
             selected_step, project_dir, session_id, flow_path,
         )
     else:
@@ -254,12 +264,11 @@ def chat_stream(
         else:
             yield {
                 "type": "error",
-                "content": "No agent available. Install Claude Code (acpx) or configure an OpenRouter API key.",
+                "content": "No agent available. Install claude-agent-acp or configure an OpenRouter API key.",
             }
 
 
-def _acpx_agent_loop(
-    acpx_path: str,
+def _acp_agent_loop(
     agent: str,
     user_message: str,
     history: list[dict[str, str]] | None,
@@ -269,7 +278,11 @@ def _acpx_agent_loop(
     session_id: str | None = None,
     flow_path: str | None = None,
 ) -> Generator[dict[str, Any], None, None]:
-    """Run a flow-builder agent via acpx with streaming NDJSON output."""
+    """Run a flow-builder agent via native ACP with streaming events."""
+    from stepwise.acp_client import ACPClient
+    from stepwise.acp_transport import JsonRpcTransport
+    from stepwise.agent_registry import resolve_config
+
     # Get or create persistent session
     sid, session_name = get_or_create_session(session_id)
 
@@ -291,87 +304,80 @@ def _acpx_agent_loop(
         flow_listing, flow_dir_path=flow_dir_abs,
     )
 
-    # Write prompt to file (avoids shell escaping issues)
-    io_dir = project_dir / ".stepwise" / "editor-io"
-    io_dir.mkdir(parents=True, exist_ok=True)
-    prompt_file = io_dir / f"{session_name}.md"
-    prompt_file.write_text(prompt)
+    proc = None
+    transport = None
 
     try:
-        # Clear CLAUDECODE env to allow nested agent sessions
+        # Resolve agent config
+        resolved = resolve_config(agent, {}, str(project_dir))
+
+        # Build env: clear CLAUDECODE, add agent env vars
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        env.update(resolved.env_vars)
 
-        # Ensure session exists
-        subprocess.run(
-            [acpx_path, "--cwd", str(project_dir),
-             agent, "sessions", "ensure", "--name", session_name],
-            capture_output=True, timeout=30, env=env,
-        )
-
-        # Spawn acpx — approve-all so the agent can write directly to
-        # the flow directory using Claude's native Write/Edit tools.
-        # The system prompt constrains writes to the flow dir, but
-        # --approve-all means the agent CAN write elsewhere.
-        args = [
-            acpx_path, "--format", "json",
-            "--approve-all",
-            "--cwd", str(project_dir),
-            agent, "-s", session_name,
-            "--file", str(prompt_file),
-        ]
-
+        # Spawn ACP server subprocess
         proc = subprocess.Popen(
-            args,
+            resolved.command,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
             env=env,
         )
+
+        transport = JsonRpcTransport(proc)
+        transport.start()
+        client = ACPClient(transport)
+
+        # ACP handshake
+        client.initialize()
+
+        # Create session
+        acp_session_id = client.new_session(str(project_dir), session_name)
 
         # Emit session_id so frontend can persist it
         yield {"type": "session", "session_id": sid}
 
-        # Stream NDJSON events from stdout with keepalive support.
-        # acpx goes silent during long thinking phases — without
-        # periodic keepalives the HTTP stream goes idle and browsers
-        # or reverse proxies close the connection.
+        # Stream ACP events via notification handler with keepalive support.
+        # Agent goes silent during long thinking phases — without periodic
+        # keepalives the HTTP stream goes idle and browsers or reverse
+        # proxies close the connection.
         total_tokens = 0
         files_written: list[str] = []
         tool_kinds: dict[str, str] = {}  # tool_id -> kind
         _KEEPALIVE_INTERVAL = 15  # seconds
 
-        event_queue: queue.Queue[bytes | None] = queue.Queue()
+        event_queue: queue.Queue[dict | None] = queue.Queue()
 
-        def _reader() -> None:
-            """Read stdout lines into a queue, then signal EOF."""
-            try:
-                for raw_line in proc.stdout:
-                    event_queue.put(raw_line)
-            finally:
-                event_queue.put(None)  # sentinel
+        def _on_session_update(params: dict) -> None:
+            """Notification handler: push ACP events into the queue."""
+            event_queue.put(params)
 
-        reader_thread = threading.Thread(target=_reader, daemon=True)
-        reader_thread.start()
+        transport.on_notification("session/update", _on_session_update)
+
+        # Send prompt (non-blocking — use the future to detect completion)
+        prompt_future = transport.send_request("session/prompt", {
+            "sessionId": acp_session_id,
+            "prompt": [{"type": "text", "text": prompt}],
+        })
 
         while True:
+            # Use short timeout when prompt is done (just drain remaining),
+            # full keepalive interval otherwise.
+            wait_timeout = 0.1 if prompt_future.done() else _KEEPALIVE_INTERVAL
             try:
-                raw_line = event_queue.get(timeout=_KEEPALIVE_INTERVAL)
+                params = event_queue.get(timeout=wait_timeout)
             except queue.Empty:
-                # No output for KEEPALIVE_INTERVAL seconds — send ping
+                if prompt_future.done():
+                    break  # Prompt completed and queue drained
                 yield {"type": "keepalive"}
                 continue
 
-            if raw_line is None:
-                break  # EOF
+            if params is None:
+                break
 
-            line = raw_line.decode("utf-8", errors="replace").strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-            update = event.get("params", {}).get("update", {})
+            update = params.get("update", {})
             event_type = update.get("sessionUpdate")
 
             if event_type == "agent_message_chunk":
@@ -424,16 +430,13 @@ def _acpx_agent_loop(
             elif event_type == "usage_update":
                 total_tokens = update.get("used", total_tokens)
 
-        reader_thread.join(timeout=5)
-        proc.wait()
-
         # Always tell the frontend to refresh — the agent likely modified files
-        # even if we couldn't extract paths from ACPX events
+        # even if we couldn't extract paths from ACP events
         yield {"type": "files_changed", "paths": files_written or []}
 
         yield {
             "type": "done",
-            "model": f"acpx/{agent}",
+            "model": f"acp/{agent}",
             "cost_usd": None,
             "input_tokens": total_tokens,
             "output_tokens": 0,
@@ -442,7 +445,17 @@ def _acpx_agent_loop(
     except Exception as e:
         yield {"type": "error", "content": str(e)}
     finally:
-        prompt_file.unlink(missing_ok=True)
+        if transport:
+            transport.close()
+        if proc:
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
 
 
 # ── OpenRouter Fallback ──────────────────────────────────────────────
