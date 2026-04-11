@@ -98,7 +98,7 @@ class TestDeadPIDDetection:
         async def run_test():
             engine_task = asyncio.create_task(engine.run())
             try:
-                with patch("stepwise.agent._is_pid_alive", return_value=False):
+                with patch("stepwise.process_lifecycle._is_pid_alive", return_value=False):
                     engine._poll_external_changes()
                 await asyncio.sleep(0.1)
             finally:
@@ -140,7 +140,7 @@ class TestDeadPIDDetection:
         async def run_test():
             engine_task = asyncio.create_task(engine.run())
             try:
-                with patch("stepwise.agent._is_pid_alive", return_value=True):
+                with patch("stepwise.process_lifecycle._is_pid_alive", return_value=True):
                     engine._poll_external_changes()
                 await asyncio.sleep(0.1)
             finally:
@@ -179,7 +179,7 @@ class TestDeadPIDDetection:
         async def run_test():
             engine_task = asyncio.create_task(engine.run())
             try:
-                with patch("stepwise.agent._is_pid_alive", return_value=False):
+                with patch("stepwise.process_lifecycle._is_pid_alive", return_value=False):
                     engine._poll_external_changes()
                 await asyncio.sleep(0.1)
             finally:
@@ -217,7 +217,7 @@ class TestDeadPIDDetection:
         async def run_test():
             engine_task = asyncio.create_task(engine.run())
             try:
-                with patch("stepwise.agent._is_pid_alive", return_value=False) as mock_alive:
+                with patch("stepwise.process_lifecycle._is_pid_alive", return_value=False) as mock_alive:
                     engine._poll_external_changes()
                     mock_alive.assert_not_called()
                 await asyncio.sleep(0.1)

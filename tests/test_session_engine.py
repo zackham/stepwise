@@ -49,20 +49,13 @@ def mock_backend():
 
 
 @pytest.fixture
-def mock_claude_direct():
-    """A second mock backend (legacy, kept for backward-compat tests)."""
-    return MockAgentBackend()
-
-
-@pytest.fixture
-def engine(mock_backend, mock_claude_direct):
+def engine(mock_backend):
     store = SQLiteStore(":memory:")
     reg = ExecutorRegistry()
     from tests.conftest import CallableExecutor
     reg.register("callable", lambda cfg: CallableExecutor(fn_name=cfg.get("fn_name", "default")))
     reg.register("agent", lambda cfg: AgentExecutor(
         backend=mock_backend,
-        claude_direct_backend=mock_claude_direct,
         prompt=cfg.get("prompt", ""),
         output_mode=cfg.get("output_mode", "effect"),
         output_path=cfg.get("output_path"),
@@ -387,7 +380,7 @@ class TestSessionUUIDCapture:
 
 
 class TestBackendSelection:
-    def test_select_always_returns_backend(self, mock_backend, mock_claude_direct):
+    def test_select_always_returns_backend(self, mock_backend):
         """ACPBackend handles all operations — always returns primary backend."""
         executor = AgentExecutor(
             backend=mock_backend,
@@ -410,11 +403,10 @@ class TestBackendSelection:
 
 
 class TestCircuitBreaker:
-    def test_circuit_breaker_with_named_session(self, mock_backend, mock_claude_direct):
+    def test_circuit_breaker_with_named_session(self, mock_backend):
         """Circuit breaker fires on named session after max_continuous_attempts."""
         executor = AgentExecutor(
             backend=mock_backend,
-            claude_direct_backend=mock_claude_direct,
             prompt="test",
             _session_name="planning",
             max_continuous_attempts=2,
@@ -432,12 +424,11 @@ class TestCircuitBreaker:
         assert "Circuit breaker" in result.executor_state["error"]
         assert result.executor_state["error_category"] == "circuit_breaker"
 
-    def test_no_circuit_breaker_on_first_attempt(self, mock_backend, mock_claude_direct):
+    def test_no_circuit_breaker_on_first_attempt(self, mock_backend):
         """Circuit breaker does not fire on attempt 1."""
         mock_backend.set_auto_complete(result={"out": "ok"})
         executor = AgentExecutor(
             backend=mock_backend,
-            claude_direct_backend=mock_claude_direct,
             prompt="test",
             _session_name="planning",
             max_continuous_attempts=2,

@@ -326,10 +326,10 @@ class TestSessionCleanupEnvStripping:
 
 
 class TestCloseSessionsFallback:
-    """SIGTERM fallback when acpx sessions close fails."""
+    """Acpx sessions close handles failures gracefully."""
 
-    def test_sigterm_fallback_on_acpx_failure(self):
-        """When acpx close returns non-zero, falls back to SIGTERM via lock file."""
+    def test_close_failure_logged_without_crash(self):
+        """When acpx close returns non-zero, error is logged without crashing."""
         from stepwise.engine import Engine
         from stepwise.store import SQLiteStore
 
@@ -367,22 +367,11 @@ class TestCloseSessionsFallback:
         acpx_path = captured["args"][1]
         clean_env = captured["args"][2]
 
-        # Now call close_fn with mocked subprocess and agent helpers
+        # Simulate acpx close failure — should not crash
         mock_result = MagicMock()
-        mock_result.returncode = 1  # simulate failure
+        mock_result.returncode = 1
 
-        mock_queue_owner = MagicMock()
-        mock_queue_owner.session_id = "sid-fb"
-        mock_queue_owner.pid = 12345
-
-        import signal
-        with (
-            patch("subprocess.run", return_value=mock_result),
-            patch("stepwise.agent._find_queue_owners", return_value=[mock_queue_owner]),
-            patch("stepwise.agent._is_pid_alive", return_value=True),
-            patch("os.kill") as mock_kill,
-        ):
-            close_fn(sessions, acpx_path, clean_env)
-            mock_kill.assert_called_once_with(12345, signal.SIGTERM)
+        with patch("subprocess.run", return_value=mock_result):
+            close_fn(sessions, acpx_path, clean_env)  # should not raise
 
         store.close()

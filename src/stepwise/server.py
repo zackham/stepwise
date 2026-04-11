@@ -36,7 +36,6 @@ from stepwise.models import (
     _now,
 )
 from stepwise.store import SQLiteStore
-from stepwise.agent import verify_agent_pid
 from stepwise.events import JOB_AWAITING_APPROVAL
 from stepwise.hooks import build_event_envelope
 
@@ -702,10 +701,14 @@ def _cleanup_zombie_jobs(store: ThreadSafeStore) -> None:
         # Kill orphaned agent processes and fail running step runs
         running_runs = store.running_runs(job.id)
         for run in running_runs:
-            # Check if the agent process is still alive and belongs to an agent
+            # Check if the agent process is still alive
             if run.pid:
-                expected_pgid = (run.executor_state or {}).get("pgid")
-                if verify_agent_pid(run.pid, expected_pgid=expected_pgid):
+                try:
+                    os.kill(run.pid, 0)
+                    pid_alive = True
+                except (ProcessLookupError, PermissionError):
+                    pid_alive = False
+                if pid_alive:
                     logger.info(
                         "Step run %s (job %s step %s) PID %d verified alive, leaving for reattach",
                         run.id, job.id, run.step_name, run.pid,
@@ -767,62 +770,13 @@ def _job_looks_complete(store: ThreadSafeStore, job: Job) -> bool:
 
 
 def _cleanup_stale_queue_owners(store: ThreadSafeStore) -> None:
-    """Terminate acpx queue owner processes not associated with any running step.
-
-    Collects ACP session IDs from all currently running step runs, then kills
-    any queue owner process whose session is not in that active set.
-    """
-    import logging
-    logger = logging.getLogger("stepwise.server")
-
-    from stepwise.agent import cleanup_orphaned_queue_owners
-
-    active_ids, active_pids = _collect_active_agent_info(store)
-
-    orphaned = cleanup_orphaned_queue_owners(active_ids, active_pids, kill=True)
-    if orphaned:
-        logger.info(
-            "Cleaned up %d orphaned acpx queue owner(s) on startup", len(orphaned),
-        )
-
-    # Also scan process table for zombie queue owners without lock files
-    from stepwise.agent import find_zombie_queue_owners
-    zombies = find_zombie_queue_owners(active_ids, active_pids)
-    for pid, cmdline in zombies:
-        logger.info("Zombie acpx queue owner (no lock file): pid=%d cmd=%s", pid, cmdline[:120])
-        try:
-            os.kill(pid, signal.SIGTERM)
-            logger.info("Terminated zombie queue owner pid=%d", pid)
-        except (ProcessLookupError, PermissionError):
-            pass
-    if zombies:
-        logger.info("Cleaned up %d zombie acpx queue owner(s) via process scan on startup", len(zombies))
+    """No-op: acpx queue owner cleanup removed with AcpxBackend."""
+    pass
 
 
 def _cleanup_orphaned_acpx_processes(store: ThreadSafeStore) -> None:
-    """Kill acpx/claude processes not belonging to any running step.
-
-    Collects PIDs from all currently running step runs, then scans the process
-    table for claude-agent-acp and acpx __queue-owner processes. Any process
-    not in the process group of a running step is terminated.
-    """
-    import logging
-    logger = logging.getLogger("stepwise.server")
-
-    from stepwise.agent import cleanup_orphaned_acpx
-
-    # Collect PIDs from running steps (executor_state.pid)
-    active_pids: set[int] = set()
-    for job in store.active_jobs():
-        for run in store.running_runs(job.id):
-            if run.executor_state and run.executor_state.get("pid"):
-                active_pids.add(run.executor_state["pid"])
-
-    killed = cleanup_orphaned_acpx(active_pids)
-    if killed:
-        logger.info(
-            "Cleaned up %d orphaned acpx/claude process(es) on startup", len(killed),
-        )
+    """No-op: acpx process cleanup removed with AcpxBackend."""
+    pass
 
 
 def _collect_active_agent_info(store: ThreadSafeStore) -> tuple[set[str], set[int]]:
@@ -870,45 +824,13 @@ def _collect_active_agent_info(store: ThreadSafeStore) -> tuple[set[str], set[in
 
 
 async def _periodic_queue_owner_cleanup() -> None:
-    """Periodically scan for and clean up orphaned acpx queue owner processes.
-
-    Runs every 60 seconds. Uses both lock-file and process-table scanning
-    to detect zombie queue owners not associated with any running step.
-    """
-    import logging
-    logger = logging.getLogger("stepwise.server")
-    engine = _get_engine()
-
-    while True:
-        try:
-            await asyncio.sleep(60)
-
-            active_ids, active_pids = _collect_active_agent_info(engine.store)
-
-            # Lock-file based cleanup — skip queue owners whose session ID
-            # OR PID matches a running step
-            from stepwise.agent import cleanup_orphaned_queue_owners
-            lock_orphans = cleanup_orphaned_queue_owners(active_ids, active_pids, kill=True)
-            if lock_orphans:
-                logger.info("Periodic cleanup: terminated %d orphaned queue owner(s) via lock files", len(lock_orphans))
-
-            # Process-table based cleanup
-            from stepwise.agent import find_zombie_queue_owners
-            zombies = find_zombie_queue_owners(active_ids, active_pids)
-            for pid, cmdline in zombies:
-                logger.info("Periodic cleanup: zombie queue owner pid=%d cmd=%s", pid, cmdline[:120])
-                try:
-                    os.kill(pid, signal.SIGTERM)
-                except (ProcessLookupError, PermissionError):
-                    pass
-            if zombies:
-                logger.info("Periodic cleanup: terminated %d zombie queue owner(s) via process scan", len(zombies))
-
-        except asyncio.CancelledError:
-            break
-        except Exception:
-            logger.debug("Periodic queue owner cleanup error", exc_info=True)
-            await asyncio.sleep(60)
+    """No-op: acpx queue owner cleanup removed with AcpxBackend."""
+    # Kept as a no-op so callers don't need updating; the task just sleeps forever.
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        pass
 
 
 def _setup_file_logging(dot_dir: Path) -> None:

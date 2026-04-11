@@ -1963,10 +1963,7 @@ class Engine:
             acpx: str,
             clean_env: dict[str, str],
         ) -> None:
-            from stepwise.agent import _find_queue_owners, _is_pid_alive
-
             for name, (agent, session_id) in sess.items():
-                closed = False
                 try:
                     result = subprocess.run(
                         [acpx, agent, "sessions", "close", "--name", name],
@@ -1974,30 +1971,13 @@ class Engine:
                     )
                     if result.returncode == 0:
                         _engine_logger.debug("Closed session queue owner: %s", name)
-                        closed = True
                     else:
                         _engine_logger.debug(
-                            "acpx sessions close failed (rc=%d) for %s, falling back to kill",
+                            "acpx sessions close failed (rc=%d) for %s",
                             result.returncode, name,
                         )
                 except Exception as exc:
                     _engine_logger.debug("acpx sessions close failed for %s: %s", name, exc)
-
-                if not closed and session_id:
-                    try:
-                        for info in _find_queue_owners():
-                            if info.session_id == session_id:
-                                if _is_pid_alive(info.pid):
-                                    os.kill(info.pid, signal.SIGTERM)
-                                    _engine_logger.debug(
-                                        "Killed queue owner pid=%d for session %s",
-                                        info.pid, session_id,
-                                    )
-                                break
-                    except Exception as exc:
-                        _engine_logger.warning(
-                            "Failed to kill queue owner for session %s: %s", name, exc,
-                        )
 
         t = threading.Thread(
             target=_close_sessions, args=(sessions, acpx_path, env), daemon=True,
@@ -3901,7 +3881,7 @@ class AsyncEngine(Engine):
         _dispatch_ready is idempotent — it only launches steps whose deps are
         met and that don't already have a run. Safe to call unconditionally.
         """
-        from stepwise.agent import _is_pid_alive
+        from stepwise.process_lifecycle import _is_pid_alive
 
         for job in self.store.active_jobs():
             # Detect stuck running steps: run is RUNNING but no task in registry.
@@ -4070,7 +4050,7 @@ class AsyncEngine(Engine):
         by reattach_surviving_runs().
         """
         from pathlib import Path
-        from stepwise.agent import _is_pid_alive
+        from stepwise.process_lifecycle import _is_pid_alive
 
         for run in self.store.running_runs(job.id):
             step_def = job.workflow.steps.get(run.step_name)
@@ -4941,7 +4921,7 @@ def _adopt_stale_cli_job(engine: AsyncEngine, job: Job) -> None:
     Fails all RUNNING steps (their runner process is dead), transfers ownership,
     and triggers engine re-evaluation so exit rules can recover.
     """
-    from stepwise.agent import _is_pid_alive
+    from stepwise.process_lifecycle import _is_pid_alive
 
     _engine_logger.info(
         "Auto-adopting stale CLI job %s (%s) — owner %s, last heartbeat %s",

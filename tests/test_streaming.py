@@ -666,13 +666,13 @@ class TestAgentRenderPrompt:
 
 
 class TestAgentWorkspaceResolve:
-    """Tests for workspace path .resolve() in AcpxBackend.spawn."""
+    """Tests for workspace path .resolve() in ACPBackend.spawn."""
 
     def test_relative_path_resolved_to_absolute(self):
         """A relative workspace_path in config is converted to absolute via .resolve()."""
-        # The resolve happens inside AcpxBackend.spawn at:
+        # The resolve happens inside ACPBackend.spawn at:
         #   working_dir = str(Path(config.get("working_dir", context.workspace_path)).resolve())
-        # We test the same logic directly since spawning acpx requires the binary.
+        # We test the same logic directly since spawning the agent requires the binary.
         from pathlib import Path
 
         relative = "some/relative/path"

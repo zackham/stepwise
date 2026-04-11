@@ -1179,38 +1179,6 @@ class TestCLIServerRouting:
 class TestConditionalTranscriptCapture:
     """Tests that transcript capture is skipped for agent steps not in a chain."""
 
-    def test_capture_skipped_when_no_chain(self):
-        """AgentProcess.capture_transcript=False skips _capture_transcript."""
-        from stepwise.agent import AgentProcess, AcpxBackend
-        from unittest.mock import patch
-
-        backend = AcpxBackend()
-        process = AgentProcess(
-            pid=1, pgid=1, output_path="/tmp/test.jsonl",
-            working_dir="/tmp", session_name="step-test-1",
-            capture_transcript=False,
-        )
-
-        with patch.object(backend, "get_session_messages") as mock_get:
-            backend._capture_transcript(process)
-            mock_get.assert_not_called()
-
-    def test_capture_runs_when_in_chain(self):
-        """AgentProcess.capture_transcript=True attempts capture."""
-        from stepwise.agent import AgentProcess, AcpxBackend
-        from unittest.mock import patch
-
-        backend = AcpxBackend()
-        process = AgentProcess(
-            pid=1, pgid=1, output_path="/tmp/test.jsonl",
-            working_dir="/tmp", session_name="step-test-1",
-            capture_transcript=True,
-        )
-
-        with patch.object(backend, "get_session_messages", return_value=None) as mock_get:
-            backend._capture_transcript(process)
-            mock_get.assert_called_once()
-
     def test_agent_executor_sets_capture_from_chain(self):
         """AgentExecutor.start() sets capture_transcript based on context.chain."""
         from stepwise.agent import AgentExecutor, MockAgentBackend

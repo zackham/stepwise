@@ -6,7 +6,6 @@ from unittest.mock import patch
 
 import yaml
 
-from stepwise.agent import AcpxBackend
 from stepwise.config import StepwiseConfig, load_config
 from stepwise.yaml_loader import load_workflow_yaml
 
@@ -100,58 +99,3 @@ steps:
         assert "permissions" not in wf.steps["do-work"].executor.config
 
 
-# ── AcpxBackend flag selection ───────────────────────────────────
-
-
-class TestAcpxBackendPermissions:
-    def test_default_permissions_stored(self):
-        backend = AcpxBackend(default_permissions="prompt")
-        assert backend.default_permissions == "prompt"
-
-    def test_default_is_approve_all(self):
-        backend = AcpxBackend()
-        assert backend.default_permissions == "approve_all"
-
-    def _build_args(self, backend, config):
-        """Extract the acpx command args that spawn() would build.
-
-        Simulates the permission flag logic without actually spawning a process.
-        """
-        permissions = config.get("permissions") or backend.default_permissions
-        args = [backend.acpx_path, "--format", "json", "--cwd", "/tmp"]
-        if permissions == "approve_all":
-            args.append("--approve-all")
-        elif permissions == "deny":
-            args.append("--deny-all")
-        # "prompt" → no flag
-        return args
-
-    def test_approve_all_flag(self):
-        backend = AcpxBackend(default_permissions="approve_all")
-        args = self._build_args(backend, {})
-        assert "--approve-all" in args
-        assert "--deny-all" not in args
-
-    def test_prompt_no_flag(self):
-        backend = AcpxBackend(default_permissions="prompt")
-        args = self._build_args(backend, {})
-        assert "--approve-all" not in args
-        assert "--deny-all" not in args
-
-    def test_deny_flag(self):
-        backend = AcpxBackend(default_permissions="deny")
-        args = self._build_args(backend, {})
-        assert "--deny-all" in args
-        assert "--approve-all" not in args
-
-    def test_step_level_overrides_default(self):
-        backend = AcpxBackend(default_permissions="approve_all")
-        args = self._build_args(backend, {"permissions": "deny"})
-        assert "--deny-all" in args
-        assert "--approve-all" not in args
-
-    def test_step_level_prompt_overrides_approve_all(self):
-        backend = AcpxBackend(default_permissions="approve_all")
-        args = self._build_args(backend, {"permissions": "prompt"})
-        assert "--approve-all" not in args
-        assert "--deny-all" not in args

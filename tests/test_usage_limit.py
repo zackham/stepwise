@@ -9,7 +9,8 @@ from unittest.mock import MagicMock
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from stepwise.agent import _detect_usage_limit_in_line, AcpxBackend
+from stepwise.agent import _detect_usage_limit_in_line
+from stepwise.acp_ndjson import tail_for_usage_limit
 
 
 class TestDetectUsageLimitInLine:
@@ -50,20 +51,20 @@ class TestTailForUsageLimit:
             f.write('{"params": {}}\n')
             path = f.name
         try:
-            offset, hit = AcpxBackend._tail_for_usage_limit(path, 0, parse_json=True)
+            offset, hit = tail_for_usage_limit(path, 0, parse_json=True)
             assert hit is None
             assert offset > 0
             # Write more data
             with open(path, "a") as f:
                 f.write(json.dumps({"error": {"message": "out of extra usage resets 3pm (UTC)"}}) + "\n")
-            offset2, hit2 = AcpxBackend._tail_for_usage_limit(path, offset, parse_json=True)
+            offset2, hit2 = tail_for_usage_limit(path, offset, parse_json=True)
             assert hit2 is not None
             assert offset2 > offset
         finally:
             os.unlink(path)
 
     def test_missing_file(self):
-        offset, hit = AcpxBackend._tail_for_usage_limit("/nonexistent", 0, parse_json=True)
+        offset, hit = tail_for_usage_limit("/nonexistent", 0, parse_json=True)
         assert offset == 0
         assert hit is None
 

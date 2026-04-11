@@ -106,7 +106,7 @@ class TestAdoptStaleCLIJob:
         )
         store.save_run(run)
 
-        with patch("stepwise.agent._is_pid_alive", return_value=False):
+        with patch("stepwise.process_lifecycle._is_pid_alive", return_value=False):
             _adopt_stale_cli_job(engine, job)
 
         loaded_run = store.load_run(run.id)
@@ -134,7 +134,7 @@ class TestAdoptStaleCLIJob:
         )
         store.save_run(run)
 
-        with patch("stepwise.agent._is_pid_alive", return_value=True):
+        with patch("stepwise.process_lifecycle._is_pid_alive", return_value=True):
             _adopt_stale_cli_job(engine, job)
 
         loaded_run = store.load_run(run.id)
@@ -299,7 +299,7 @@ class TestAdoptedJobRecovery:
         store.save_run(run_b)
 
         # Adopt — fails step-b
-        with patch("stepwise.agent._is_pid_alive", return_value=False):
+        with patch("stepwise.process_lifecycle._is_pid_alive", return_value=False):
             _adopt_stale_cli_job(engine, job)
 
         # step-b should be failed

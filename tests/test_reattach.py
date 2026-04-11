@@ -13,9 +13,7 @@ from stepwise.agent import (
     AgentExecutor,
     AgentProcess,
     AgentStatus,
-    AcpxBackend,
     MockAgentBackend,
-    verify_agent_pid,
 )
 from stepwise.engine import AsyncEngine, _unwrap_executor
 from stepwise.executors import (
@@ -139,57 +137,6 @@ def _make_reattach_engine(
 
     reg.register("agent", agent_factory)
     return AsyncEngine(store=store, registry=reg)
-
-
-# ── T1: PID verification tests (R3) ─────────────────────────────────
-
-
-class TestVerifyAgentPid:
-    """verify_agent_pid: /proc-based PID identity verification."""
-
-    def test_dead_pid_returns_false(self):
-        """PID not in /proc → False."""
-        with patch("stepwise.agent.Path") as mock_path:
-            mock_path.return_value.parent.is_dir.return_value = True
-            mock_path.return_value.read_bytes.side_effect = FileNotFoundError
-            assert verify_agent_pid(99999) is False
-
-    def test_acpx_pid_returns_true(self):
-        """PID with 'acpx' in cmdline → True."""
-        with patch("stepwise.agent.Path") as mock_path:
-            mock_path.return_value.parent.is_dir.return_value = True
-            mock_path.return_value.read_bytes.return_value = b"acpx\x00claude\x00run"
-            with patch("stepwise.agent._get_process_pgid", return_value=100):
-                assert verify_agent_pid(1234, expected_pgid=100) is True
-
-    def test_non_agent_pid_returns_false(self):
-        """PID with unrelated cmdline → False (recycled)."""
-        with patch("stepwise.agent.Path") as mock_path:
-            mock_path.return_value.parent.is_dir.return_value = True
-            mock_path.return_value.read_bytes.return_value = b"/bin/bash\x00-l"
-            assert verify_agent_pid(1234) is False
-
-    def test_pgid_mismatch_returns_false(self):
-        """Cmdline matches but PGID differs → False (recycled into different group)."""
-        with patch("stepwise.agent.Path") as mock_path:
-            mock_path.return_value.parent.is_dir.return_value = True
-            mock_path.return_value.read_bytes.return_value = b"acpx\x00claude"
-            with patch("stepwise.agent._get_process_pgid", return_value=999):
-                assert verify_agent_pid(1234, expected_pgid=100) is False
-
-    def test_no_proc_fallback_alive(self):
-        """Non-Linux (no /proc) falls back to os.kill — alive → True."""
-        with patch("stepwise.agent.Path") as mock_path:
-            mock_path.return_value.parent.is_dir.return_value = False
-            with patch("os.kill"):  # no exception = alive
-                assert verify_agent_pid(1234) is True
-
-    def test_no_proc_fallback_dead(self):
-        """Non-Linux (no /proc) falls back to os.kill — dead → False."""
-        with patch("stepwise.agent.Path") as mock_path:
-            mock_path.return_value.parent.is_dir.return_value = False
-            with patch("os.kill", side_effect=ProcessLookupError):
-                assert verify_agent_pid(1234) is False
 
 
 # ── T2: Core reattach lifecycle tests (R1, R2) ──────────────────────
@@ -376,35 +323,6 @@ class TestReattachScenarios:
         assert loaded_run.result.artifact["summary"] == "done"
         assert loaded_run.result.artifact["score"] == 0.95
 
-    def test_nonchild_error_detection(self):
-        """R5: AcpxBackend._completed_status with exit_code_reliable=False detects errors."""
-        tmpdir = tempfile.mkdtemp()
-        output_path = os.path.join(tmpdir, "output.jsonl")
-        # Write NDJSON with an error event
-        with open(output_path, "w") as f:
-            f.write(json.dumps({"error": {"message": "Context limit exceeded"}}) + "\n")
-
-        backend = AcpxBackend(acpx_path="acpx", default_agent="claude")
-        process = AgentProcess(
-            pid=1, pgid=1, output_path=output_path, working_dir=tmpdir,
-        )
-        status = backend._completed_status(process, exit_code=0, exit_code_reliable=False)
-        assert status.state == "failed"
-        assert "Context limit exceeded" in status.error
-
-    def test_nonchild_no_error_succeeds(self):
-        """Non-child PID with clean output → success."""
-        tmpdir = tempfile.mkdtemp()
-        output_path = os.path.join(tmpdir, "output.jsonl")
-        with open(output_path, "w") as f:
-            f.write(json.dumps({"params": {"update": {"content": "done"}}}) + "\n")
-
-        backend = AcpxBackend(acpx_path="acpx", default_agent="claude")
-        process = AgentProcess(
-            pid=1, pgid=1, output_path=output_path, working_dir=tmpdir,
-        )
-        status = backend._completed_status(process, exit_code=0, exit_code_reliable=False)
-        assert status.state == "completed"
 
 
 # ── T4: Poll watch and idempotency tests (R4) ───────────────────────

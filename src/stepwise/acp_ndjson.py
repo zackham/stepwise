@@ -1,8 +1,8 @@
 """Shared ACP NDJSON extraction helpers.
 
 Parse ACP-format NDJSON output files to extract session IDs, costs,
-text content, errors, and usage limit signals.  Used by both
-AcpxBackend (agent.py) and ClaudeDirectBackend (claude_direct.py).
+text content, errors, and usage limit signals.  Used by ACPBackend
+and the engine's session tracking.
 """
 
 from __future__ import annotations

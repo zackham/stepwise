@@ -48,7 +48,7 @@ ACPX_SESSION_UPDATE = _session_update("sess-abc-123", {
     "content": {"type": "text", "text": "Hello "},
 })
 
-# Simulates claude_direct translated output (result.sessionId only in result lines)
+# Simulates ACP translated output (result.sessionId only in result lines)
 CLAUDE_DIRECT_INIT_REQ = {"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {"protocolVersion": 1}}
 CLAUDE_DIRECT_INIT_RESP = {"jsonrpc": "2.0", "id": 0, "result": {"protocolVersion": 1}}
 CLAUDE_DIRECT_SESSION = {"jsonrpc": "2.0", "id": 2, "result": {"sessionId": "claude-sess-456"}}
@@ -377,8 +377,8 @@ class TestFullScenario:
         assert extract_cost(path) == 0.042
         assert read_last_error(path) is None
 
-    def test_claude_direct_style_output(self, tmp_path):
-        """Full claude_direct-style NDJSON output parses correctly."""
+    def test_acp_translated_style_output(self, tmp_path):
+        """Full ACP-translated NDJSON output parses correctly."""
         lines = [
             CLAUDE_DIRECT_INIT_REQ,
             CLAUDE_DIRECT_INIT_RESP,

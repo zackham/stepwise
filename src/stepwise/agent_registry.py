@@ -5,8 +5,8 @@ mechanism: CLI flag, env var, or ACP method call), and capabilities.
 
 Override chain: flow step value > config default > error if required and missing.
 
-This module has NO dependencies on agent.py, claude_direct.py, engine.py,
-or any existing executor code.
+This module has NO dependencies on agent.py, engine.py, or any
+existing executor code.
 """
 
 from __future__ import annotations
