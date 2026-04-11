@@ -348,14 +348,14 @@ function LaunchedJobs({ scheduleId }: { scheduleId: string }) {
     <div className="divide-y divide-border/30">
       {jobs.map((job) => (
         <button
-          key={job.job_id}
-          onClick={() => navigate({ to: "/jobs/$jobId", params: { jobId: job.job_id } })}
+          key={job.id}
+          onClick={() => navigate({ to: "/jobs/$jobId", params: { jobId: job.id } })}
           className="flex items-center gap-3 w-full px-3 py-2 text-left hover:bg-zinc-50/80 dark:hover:bg-zinc-800/40 transition-colors cursor-pointer"
         >
           <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", JOB_DOT_COLOR[job.status] ?? "bg-zinc-400")} />
           <div className="flex-1 min-w-0">
             <span className="text-sm text-foreground truncate block">
-              {job.name || job.job_id.slice(0, 12)}
+              {job.name || job.id.slice(0, 12)}
             </span>
             <span className="text-[11px] text-zinc-500">{timeAgo(job.created_at)}</span>
           </div>

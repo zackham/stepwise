@@ -95,6 +95,6 @@ export function fetchScheduleStats(scheduleId: string): Promise<ScheduleStats> {
 export function fetchScheduleJobs(
   scheduleId: string,
   limit: number = 20,
-): Promise<{ job_id: string; name: string | null; status: string; created_at: string }[]> {
+): Promise<{ id: string; name: string | null; status: string; created_at: string }[]> {
   return request(`/schedules/${scheduleId}/jobs?limit=${limit}`);
 }
