@@ -3176,6 +3176,8 @@ class Engine:
 
     def _check_poll_watch(self, job: Job, run: StepRun) -> bool:
         """Check a poll watch. Returns True if fulfilled."""
+        from stepwise.poll_eval import evaluate_poll_command_sync
+
         if not run.watch or run.watch.mode != "poll":
             return False
 
@@ -3203,72 +3205,54 @@ class Engine:
         if run.inputs:
             input_file.write_text(json.dumps(run.inputs, default=str))
 
-        env = {**os.environ, "JOB_ENGINE_INPUTS": str(input_file)}
+        env = {"JOB_ENGINE_INPUTS": str(input_file)}
 
-        try:
-            result = subprocess.run(
-                check_command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                env=env,
-                cwd=workspace,
-            )
-        except Exception as e:
-            # Check error — log and retry next interval
-            self._update_watch_state(run, error=str(e))
+        # Use shared poll evaluation logic
+        poll_result = evaluate_poll_command_sync(
+            command=check_command,
+            cwd=workspace,
+            env=env,
+            timeout_seconds=300,  # in-job polls get generous timeout
+        )
+
+        if poll_result.error:
+            self._update_watch_state(run, error=poll_result.error)
             return False
 
-        if result.returncode != 0:
-            # Non-zero = check error, retry next interval
-            self._update_watch_state(run, error=result.stderr.strip())
-            return False
-
-        stdout = result.stdout.strip()
-        if not stdout:
-            # Empty = not ready
+        if not poll_result.ready:
             self._update_watch_state(run)
             return False
 
-        try:
-            payload = json.loads(stdout)
-            if isinstance(payload, dict):
-                # Fulfilled!
-                run.result = HandoffEnvelope(
-                    artifact=payload,
-                    sidecar=Sidecar(),
-                    workspace=job.workspace_path,
-                    timestamp=_now(),
-                )
+        # Fulfilled!
+        payload = poll_result.output
+        run.result = HandoffEnvelope(
+            artifact=payload,
+            sidecar=Sidecar(),
+            workspace=job.workspace_path,
+            timestamp=_now(),
+        )
 
-                # Apply derived outputs
-                step_def = job.workflow.steps.get(run.step_name)
-                if step_def:
-                    derived_error = self._apply_derived_outputs(step_def, run.result)
-                    if derived_error:
-                        _engine_logger.warning("Derived output error in poll watch: %s", derived_error)
-                        self._update_watch_state(run, error=derived_error)
-                        return False
+        # Apply derived outputs
+        step_def = job.workflow.steps.get(run.step_name)
+        if step_def:
+            derived_error = self._apply_derived_outputs(step_def, run.result)
+            if derived_error:
+                _engine_logger.warning("Derived output error in poll watch: %s", derived_error)
+                self._update_watch_state(run, error=derived_error)
+                return False
 
-                run.status = StepRunStatus.COMPLETED
-                run.completed_at = _now()
-                run.watch = None
-                self.store.save_run(run)
+        run.status = StepRunStatus.COMPLETED
+        run.completed_at = _now()
+        run.watch = None
+        self.store.save_run(run)
 
-                self._emit(job.id, WATCH_FULFILLED, {
-                    "run_id": run.id,
-                    "mode": "poll",
-                    "payload": payload,
-                })
-                self._process_completion(job, run)
-                return True
-        except (json.JSONDecodeError, ValueError):
-            # Non-JSON stdout = not ready
-            self._update_watch_state(run)
-            return False
-
-        self._update_watch_state(run)
-        return False
+        self._emit(job.id, WATCH_FULFILLED, {
+            "run_id": run.id,
+            "mode": "poll",
+            "payload": payload,
+        })
+        self._process_completion(job, run)
+        return True
 
     def _update_watch_state(self, run: StepRun, error: str | None = None) -> None:
         """Update poll watch timing state."""

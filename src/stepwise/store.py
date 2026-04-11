@@ -16,8 +16,15 @@ from stepwise.models import (
     Job,
     JobConfig,
     JobStatus,
+    OverlapPolicy,
+    RecoveryPolicy,
+    Schedule,
+    ScheduleStatus,
+    ScheduleTick,
+    ScheduleType,
     StepRun,
     StepRunStatus,
+    TickOutcome,
     WatchSpec,
     WorkflowDefinition,
 )
@@ -137,6 +144,57 @@ class SQLiteStore:
                 group_name TEXT PRIMARY KEY,
                 max_concurrent INTEGER NOT NULL DEFAULT 0
             );
+
+            CREATE TABLE IF NOT EXISTS schedules (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                type TEXT NOT NULL CHECK (type IN ('cron', 'poll')),
+                flow_path TEXT NOT NULL,
+                cron_expr TEXT NOT NULL,
+                poll_command TEXT,
+                poll_timeout_seconds INTEGER DEFAULT 30,
+                cooldown_seconds INTEGER,
+                job_inputs TEXT DEFAULT '{}',
+                job_name_template TEXT,
+                overlap_policy TEXT DEFAULT 'skip' CHECK (overlap_policy IN ('skip', 'queue', 'allow')),
+                recovery_policy TEXT DEFAULT 'skip' CHECK (recovery_policy IN ('skip', 'catch_up_once')),
+                status TEXT DEFAULT 'active' CHECK (status IN ('active', 'paused')),
+                timezone TEXT DEFAULT 'America/Los_Angeles',
+                max_consecutive_errors INTEGER DEFAULT 10,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                paused_at TEXT,
+                last_fired_at TEXT,
+                metadata TEXT DEFAULT '{}'
+            );
+
+            CREATE TABLE IF NOT EXISTS schedule_ticks (
+                id TEXT PRIMARY KEY,
+                schedule_id TEXT NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+                scheduled_for TEXT NOT NULL,
+                evaluated_at TEXT NOT NULL,
+                outcome TEXT NOT NULL CHECK (outcome IN ('fired', 'skipped', 'error', 'overlap_skipped', 'cooldown_skipped')),
+                reason TEXT,
+                poll_output TEXT,
+                job_id TEXT,
+                duration_ms INTEGER,
+                FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_ticks_schedule_ts
+                ON schedule_ticks(schedule_id, evaluated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_ticks_schedule_outcome
+                ON schedule_ticks(schedule_id, outcome, evaluated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_ticks_job
+                ON schedule_ticks(job_id);
+
+            CREATE TABLE IF NOT EXISTS schedule_queue (
+                schedule_id TEXT NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+                job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+                queued_at TEXT NOT NULL,
+                PRIMARY KEY (schedule_id, job_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_sched_queue_schedule
+                ON schedule_queue(schedule_id, queued_at);
         """)
         self._conn.commit()
         self._migrate()
@@ -1060,6 +1118,253 @@ class SQLiteStore:
             (group, JobStatus.RUNNING.value),
         ).fetchall()
         return [self._row_to_job(r) for r in rows]
+
+    # ── Schedules ────────────────────────────────────────────────────────
+
+    def save_schedule(self, schedule: Schedule) -> None:
+        self._conn.execute(
+            """INSERT OR REPLACE INTO schedules
+               (id, name, type, flow_path, cron_expr, poll_command, poll_timeout_seconds,
+                cooldown_seconds, job_inputs, job_name_template, overlap_policy,
+                recovery_policy, status, timezone, max_consecutive_errors,
+                created_at, updated_at, paused_at, last_fired_at, metadata)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                schedule.id, schedule.name, schedule.type.value, schedule.flow_path,
+                schedule.cron_expr, schedule.poll_command, schedule.poll_timeout_seconds,
+                schedule.cooldown_seconds, _dumps(schedule.job_inputs),
+                schedule.job_name_template, schedule.overlap_policy.value,
+                schedule.recovery_policy.value, schedule.status.value, schedule.timezone,
+                schedule.max_consecutive_errors,
+                schedule.created_at.isoformat(), schedule.updated_at.isoformat(),
+                schedule.paused_at.isoformat() if schedule.paused_at else None,
+                schedule.last_fired_at.isoformat() if schedule.last_fired_at else None,
+                _dumps(schedule.metadata),
+            ),
+        )
+        self._conn.commit()
+
+    def get_schedule(self, schedule_id: str) -> Schedule | None:
+        row = self._conn.execute(
+            "SELECT * FROM schedules WHERE id = ?", (schedule_id,)
+        ).fetchone()
+        return self._row_to_schedule(row) if row else None
+
+    def get_schedule_by_name(self, name: str) -> Schedule | None:
+        row = self._conn.execute(
+            "SELECT * FROM schedules WHERE name = ?", (name,)
+        ).fetchone()
+        return self._row_to_schedule(row) if row else None
+
+    def list_schedules(
+        self, status: str | None = None, schedule_type: str | None = None
+    ) -> list[Schedule]:
+        query = "SELECT * FROM schedules WHERE 1=1"
+        params: list[Any] = []
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        if schedule_type:
+            query += " AND type = ?"
+            params.append(schedule_type)
+        query += " ORDER BY created_at DESC"
+        rows = self._conn.execute(query, params).fetchall()
+        return [self._row_to_schedule(r) for r in rows]
+
+    def update_schedule(self, schedule_id: str, **kwargs: Any) -> None:
+        """Update specific fields on a schedule."""
+        allowed = {
+            "name", "flow_path", "cron_expr", "poll_command", "poll_timeout_seconds",
+            "cooldown_seconds", "job_inputs", "job_name_template", "overlap_policy",
+            "recovery_policy", "status", "timezone", "max_consecutive_errors",
+            "paused_at", "last_fired_at", "metadata", "updated_at",
+        }
+        sets = []
+        params = []
+        for key, val in kwargs.items():
+            if key not in allowed:
+                continue
+            if key in ("job_inputs", "metadata"):
+                val = _dumps(val)
+            elif key in ("paused_at", "last_fired_at", "updated_at") and isinstance(val, datetime):
+                val = val.isoformat()
+            sets.append(f"{key} = ?")
+            params.append(val)
+        if not sets:
+            return
+        # Always bump updated_at
+        if "updated_at" not in kwargs:
+            sets.append("updated_at = ?")
+            params.append(datetime.now(timezone.utc).isoformat())
+        params.append(schedule_id)
+        self._conn.execute(
+            f"UPDATE schedules SET {', '.join(sets)} WHERE id = ?", params
+        )
+        self._conn.commit()
+
+    def delete_schedule(self, schedule_id: str) -> None:
+        self._conn.execute("DELETE FROM schedules WHERE id = ?", (schedule_id,))
+        self._conn.commit()
+
+    def _row_to_schedule(self, row: sqlite3.Row) -> Schedule:
+        return Schedule(
+            id=row["id"],
+            name=row["name"],
+            type=ScheduleType(row["type"]),
+            flow_path=row["flow_path"],
+            cron_expr=row["cron_expr"],
+            poll_command=row["poll_command"],
+            poll_timeout_seconds=row["poll_timeout_seconds"] or 30,
+            cooldown_seconds=row["cooldown_seconds"],
+            job_inputs=json.loads(row["job_inputs"] or "{}"),
+            job_name_template=row["job_name_template"],
+            overlap_policy=OverlapPolicy(row["overlap_policy"] or "skip"),
+            recovery_policy=RecoveryPolicy(row["recovery_policy"] or "skip"),
+            status=ScheduleStatus(row["status"] or "active"),
+            timezone=row["timezone"] or "America/Los_Angeles",
+            max_consecutive_errors=row["max_consecutive_errors"] or 10,
+            created_at=_parse_dt(row["created_at"]),
+            updated_at=_parse_dt(row["updated_at"]),
+            paused_at=_parse_dt(row["paused_at"]) if row["paused_at"] else None,
+            last_fired_at=_parse_dt(row["last_fired_at"]) if row["last_fired_at"] else None,
+            metadata=json.loads(row["metadata"] or "{}"),
+        )
+
+    # ── Schedule Ticks ────────────────────────────────────────────────��───
+
+    def save_tick(self, tick: ScheduleTick) -> None:
+        self._conn.execute(
+            """INSERT INTO schedule_ticks
+               (id, schedule_id, scheduled_for, evaluated_at, outcome, reason,
+                poll_output, job_id, duration_ms)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                tick.id, tick.schedule_id, tick.scheduled_for.isoformat(),
+                tick.evaluated_at.isoformat(), tick.outcome.value, tick.reason,
+                _dumps(tick.poll_output) if tick.poll_output else None,
+                tick.job_id, tick.duration_ms,
+            ),
+        )
+        self._conn.commit()
+
+    def list_ticks(
+        self,
+        schedule_id: str,
+        limit: int = 50,
+        outcome: str | None = None,
+        offset: int = 0,
+    ) -> list[ScheduleTick]:
+        query = "SELECT * FROM schedule_ticks WHERE schedule_id = ?"
+        params: list[Any] = [schedule_id]
+        if outcome:
+            query += " AND outcome = ?"
+            params.append(outcome)
+        query += " ORDER BY evaluated_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        rows = self._conn.execute(query, params).fetchall()
+        return [self._row_to_tick(r) for r in rows]
+
+    def last_fired_tick(self, schedule_id: str) -> ScheduleTick | None:
+        row = self._conn.execute(
+            "SELECT * FROM schedule_ticks WHERE schedule_id = ? AND outcome = 'fired' ORDER BY evaluated_at DESC LIMIT 1",
+            (schedule_id,),
+        ).fetchone()
+        return self._row_to_tick(row) if row else None
+
+    def tick_stats(self, schedule_id: str) -> dict:
+        """Compute aggregate stats for a schedule's ticks."""
+        row = self._conn.execute(
+            """SELECT
+                COUNT(*) as total_ticks,
+                SUM(CASE WHEN outcome = 'fired' THEN 1 ELSE 0 END) as total_fires,
+                AVG(CASE WHEN duration_ms IS NOT NULL THEN duration_ms END) as avg_duration_ms,
+                MAX(CASE WHEN outcome = 'fired' THEN evaluated_at END) as last_fired_at
+            FROM schedule_ticks WHERE schedule_id = ?""",
+            (schedule_id,),
+        ).fetchone()
+        total = row["total_ticks"] or 0
+        fires = row["total_fires"] or 0
+        return {
+            "total_ticks": total,
+            "total_fires": fires,
+            "fire_rate": fires / total if total > 0 else 0,
+            "avg_check_duration_ms": int(row["avg_duration_ms"]) if row["avg_duration_ms"] else None,
+            "last_fired_at": row["last_fired_at"],
+        }
+
+    def consecutive_errors(self, schedule_id: str) -> int:
+        """Count consecutive error ticks from most recent backward."""
+        rows = self._conn.execute(
+            "SELECT outcome FROM schedule_ticks WHERE schedule_id = ? ORDER BY evaluated_at DESC LIMIT 100",
+            (schedule_id,),
+        ).fetchall()
+        count = 0
+        for r in rows:
+            if r["outcome"] == "error":
+                count += 1
+            else:
+                break
+        return count
+
+    def prune_ticks(self, schedule_id: str, keep_days: int = 30) -> int:
+        """Delete old skip/cooldown ticks. Keep fired and error ticks indefinitely."""
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).isoformat()
+        cursor = self._conn.execute(
+            """DELETE FROM schedule_ticks
+               WHERE schedule_id = ? AND evaluated_at < ?
+               AND outcome IN ('skipped', 'overlap_skipped', 'cooldown_skipped')""",
+            (schedule_id, cutoff),
+        )
+        self._conn.commit()
+        return cursor.rowcount
+
+    def _row_to_tick(self, row: sqlite3.Row) -> ScheduleTick:
+        poll_output_raw = row["poll_output"]
+        poll_output = json.loads(poll_output_raw) if poll_output_raw else None
+        return ScheduleTick(
+            id=row["id"],
+            schedule_id=row["schedule_id"],
+            scheduled_for=_parse_dt(row["scheduled_for"]),
+            evaluated_at=_parse_dt(row["evaluated_at"]),
+            outcome=TickOutcome(row["outcome"]),
+            reason=row["reason"],
+            poll_output=poll_output,
+            job_id=row["job_id"],
+            duration_ms=row["duration_ms"],
+        )
+
+    # ── Schedule Queue ──────────────────────────────────────────────────��─
+
+    def enqueue_schedule_job(self, schedule_id: str, job_id: str) -> None:
+        self._conn.execute(
+            "INSERT INTO schedule_queue (schedule_id, job_id, queued_at) VALUES (?, ?, ?)",
+            (schedule_id, job_id, datetime.now(timezone.utc).isoformat()),
+        )
+        self._conn.commit()
+
+    def dequeue_schedule_job(self, schedule_id: str) -> str | None:
+        """Pop the oldest queued job for a schedule. Returns job_id or None."""
+        row = self._conn.execute(
+            "SELECT job_id FROM schedule_queue WHERE schedule_id = ? ORDER BY queued_at LIMIT 1",
+            (schedule_id,),
+        ).fetchone()
+        if not row:
+            return None
+        job_id = row["job_id"]
+        self._conn.execute(
+            "DELETE FROM schedule_queue WHERE schedule_id = ? AND job_id = ?",
+            (schedule_id, job_id),
+        )
+        self._conn.commit()
+        return job_id
+
+    def schedule_queue_depth(self, schedule_id: str) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) as cnt FROM schedule_queue WHERE schedule_id = ?",
+            (schedule_id,),
+        ).fetchone()
+        return row["cnt"] if row else 0
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
 

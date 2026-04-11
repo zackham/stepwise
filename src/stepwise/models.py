@@ -2191,3 +2191,148 @@ class Event:
             data=d.get("data", {}),
             is_effector=d.get("is_effector", False),
         )
+
+
+# ── Schedule ──────────────────────────────────────────────────────────────
+
+
+class ScheduleType(Enum):
+    CRON = "cron"
+    POLL = "poll"
+
+
+class ScheduleStatus(Enum):
+    ACTIVE = "active"
+    PAUSED = "paused"
+
+
+class OverlapPolicy(Enum):
+    SKIP = "skip"
+    QUEUE = "queue"
+    ALLOW = "allow"
+
+
+class RecoveryPolicy(Enum):
+    SKIP = "skip"
+    CATCH_UP_ONCE = "catch_up_once"
+
+
+class TickOutcome(Enum):
+    FIRED = "fired"
+    SKIPPED = "skipped"
+    ERROR = "error"
+    OVERLAP_SKIPPED = "overlap_skipped"
+    COOLDOWN_SKIPPED = "cooldown_skipped"
+
+
+@dataclass
+class Schedule:
+    id: str
+    name: str
+    type: ScheduleType
+    flow_path: str
+    cron_expr: str
+    poll_command: str | None = None
+    poll_timeout_seconds: int = 30
+    cooldown_seconds: int | None = None
+    job_inputs: dict = field(default_factory=dict)
+    job_name_template: str | None = None
+    overlap_policy: OverlapPolicy = OverlapPolicy.SKIP
+    recovery_policy: RecoveryPolicy = RecoveryPolicy.SKIP
+    status: ScheduleStatus = ScheduleStatus.ACTIVE
+    timezone: str = "America/Los_Angeles"
+    max_consecutive_errors: int = 10
+    created_at: datetime = field(default_factory=_now)
+    updated_at: datetime = field(default_factory=_now)
+    paused_at: datetime | None = None
+    last_fired_at: datetime | None = None
+    metadata: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "type": self.type.value,
+            "flow_path": self.flow_path,
+            "cron_expr": self.cron_expr,
+            "poll_command": self.poll_command,
+            "poll_timeout_seconds": self.poll_timeout_seconds,
+            "cooldown_seconds": self.cooldown_seconds,
+            "job_inputs": self.job_inputs,
+            "job_name_template": self.job_name_template,
+            "overlap_policy": self.overlap_policy.value,
+            "recovery_policy": self.recovery_policy.value,
+            "status": self.status.value,
+            "timezone": self.timezone,
+            "max_consecutive_errors": self.max_consecutive_errors,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+            "paused_at": self.paused_at.isoformat() if self.paused_at else None,
+            "last_fired_at": self.last_fired_at.isoformat() if self.last_fired_at else None,
+            "metadata": self.metadata,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> Schedule:
+        return cls(
+            id=d["id"],
+            name=d["name"],
+            type=ScheduleType(d["type"]),
+            flow_path=d["flow_path"],
+            cron_expr=d["cron_expr"],
+            poll_command=d.get("poll_command"),
+            poll_timeout_seconds=d.get("poll_timeout_seconds", 30),
+            cooldown_seconds=d.get("cooldown_seconds"),
+            job_inputs=d.get("job_inputs") or {},
+            job_name_template=d.get("job_name_template"),
+            overlap_policy=OverlapPolicy(d.get("overlap_policy", "skip")),
+            recovery_policy=RecoveryPolicy(d.get("recovery_policy", "skip")),
+            status=ScheduleStatus(d.get("status", "active")),
+            timezone=d.get("timezone", "America/Los_Angeles"),
+            max_consecutive_errors=d.get("max_consecutive_errors", 10),
+            created_at=datetime.fromisoformat(d["created_at"]) if d.get("created_at") else _now(),
+            updated_at=datetime.fromisoformat(d["updated_at"]) if d.get("updated_at") else _now(),
+            paused_at=datetime.fromisoformat(d["paused_at"]) if d.get("paused_at") else None,
+            last_fired_at=datetime.fromisoformat(d["last_fired_at"]) if d.get("last_fired_at") else None,
+            metadata=d.get("metadata") or {},
+        )
+
+
+@dataclass
+class ScheduleTick:
+    id: str
+    schedule_id: str
+    scheduled_for: datetime
+    evaluated_at: datetime
+    outcome: TickOutcome
+    reason: str | None = None
+    poll_output: dict | None = None
+    job_id: str | None = None
+    duration_ms: int | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "schedule_id": self.schedule_id,
+            "scheduled_for": self.scheduled_for.isoformat(),
+            "evaluated_at": self.evaluated_at.isoformat(),
+            "outcome": self.outcome.value,
+            "reason": self.reason,
+            "poll_output": self.poll_output,
+            "job_id": self.job_id,
+            "duration_ms": self.duration_ms,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> ScheduleTick:
+        return cls(
+            id=d["id"],
+            schedule_id=d["schedule_id"],
+            scheduled_for=datetime.fromisoformat(d["scheduled_for"]),
+            evaluated_at=datetime.fromisoformat(d["evaluated_at"]),
+            outcome=TickOutcome(d["outcome"]),
+            reason=d.get("reason"),
+            poll_output=d.get("poll_output"),
+            job_id=d.get("job_id"),
+            duration_ms=d.get("duration_ms"),
+        )

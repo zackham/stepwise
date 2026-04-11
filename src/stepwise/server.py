@@ -915,7 +915,49 @@ async def lifespan(app: FastAPI):
     _source_watcher = asyncio.create_task(_flow_source_watcher())
     _health_checker = asyncio.create_task(_process_health_check())
 
+    # ── Scheduler Service ──
+    global _scheduler
+    from stepwise.scheduler import SchedulerService
+
+    async def _create_and_start_scheduled_job(
+        flow_path: str = None,
+        inputs: dict = None,
+        name: str = None,
+        metadata: dict = None,
+        staged: bool = False,
+        job_id: str = None,
+        start_only: bool = False,
+    ) -> str:
+        """Bridge between scheduler and engine for job creation."""
+        if start_only and job_id:
+            _engine.start_job(job_id)
+            return job_id
+
+        from stepwise.flow_resolution import resolve_flow
+        flow_file = resolve_flow(flow_path, _project_dir)
+
+        from stepwise.yaml_loader import load_workflow_yaml
+        workflow = load_workflow_yaml(flow_file)
+
+        job = _engine.create_job(
+            objective=name or f"Scheduled: {flow_path}",
+            workflow=workflow,
+            inputs=inputs,
+            name=name,
+            metadata=metadata,
+        )
+        if not staged:
+            _engine.start_job(job.id)
+        return job.id
+
+    _scheduler = SchedulerService(store=store, project_dir=str(_project_dir))
+    await _scheduler.start(_create_and_start_scheduled_job)
+
     yield
+
+    # Stop scheduler
+    if _scheduler:
+        await _scheduler.stop()
 
     # Cancel all stream tailer tasks
     for task in _stream_tasks.values():
@@ -4470,8 +4512,10 @@ async def trigger_schedule(schedule_id: str):
     sched = _resolve_schedule(schedule_id)
     engine = _get_engine()
 
-    flow_abs = (_project_dir / sched.flow_path).resolve()
-    if not flow_abs.is_file():
+    from stepwise.flow_resolution import resolve_flow, FlowResolutionError
+    try:
+        flow_abs = resolve_flow(sched.flow_path, _project_dir)
+    except FlowResolutionError:
         raise HTTPException(status_code=400, detail=f"Flow not found: {sched.flow_path}")
 
     if sched.type == ScheduleType.POLL and sched.poll_command:
