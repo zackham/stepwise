@@ -4519,9 +4519,22 @@ def resume_schedule(schedule_id: str):
 async def trigger_schedule(schedule_id: str):
     """Manually fire a schedule now, bypassing cron timing."""
     from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+    from stepwise.models import OverlapPolicy
 
     sched = _resolve_schedule(schedule_id)
     engine = _get_engine()
+
+    # Overlap check: respect the schedule's overlap policy
+    if sched.overlap_policy == OverlapPolicy.SKIP:
+        running = engine.store._conn.execute(
+            """SELECT id FROM jobs
+               WHERE json_extract(metadata, '$.sys.schedule_id') = ?
+               AND status IN ('running', 'pending', 'paused')
+               LIMIT 1""",
+            (sched.id,),
+        ).fetchone()
+        if running:
+            return {"status": "skipped", "schedule_id": sched.id, "reason": f"overlap: job {running['id']} is still running"}
 
     from stepwise.flow_resolution import resolve_flow, FlowResolutionError
     try:
@@ -4609,6 +4622,7 @@ def get_schedule_stats(schedule_id: str):
     engine = _get_engine()
     stats = engine.store.tick_stats(sched.id)
     stats["consecutive_errors"] = engine.store.consecutive_errors(sched.id)
+    stats["consecutive_skips"] = engine.store.consecutive_skips(sched.id)
     stats["queue_depth"] = engine.store.schedule_queue_depth(sched.id)
     return stats
 

@@ -1306,6 +1306,20 @@ class SQLiteStore:
                 break
         return count
 
+    def consecutive_skips(self, schedule_id: str) -> int:
+        """Count consecutive skipped ticks from most recent backward."""
+        rows = self._conn.execute(
+            "SELECT outcome FROM schedule_ticks WHERE schedule_id = ? ORDER BY evaluated_at DESC LIMIT 100",
+            (schedule_id,),
+        ).fetchall()
+        count = 0
+        for r in rows:
+            if r["outcome"] in ("skipped", "overlap_skipped", "cooldown_skipped"):
+                count += 1
+            else:
+                break
+        return count
+
     def prune_ticks(self, schedule_id: str, keep_days: int = 30) -> int:
         """Delete old skip/cooldown ticks. Keep fired and error ticks indefinitely."""
         from datetime import timedelta

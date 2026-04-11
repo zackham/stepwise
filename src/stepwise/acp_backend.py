@@ -211,6 +211,12 @@ class ACPBackend:
         fork_from = config.get("_fork_from_session_id")
         session_uuid = config.get("_session_uuid")
 
+        logger.info(
+            "[%s] session setup: name=%s uuid=%s fork_from=%s managed_id=%s active_count=%d",
+            step_id, session_name, session_uuid, fork_from,
+            id(acp_proc), len(self.lifecycle.active),
+        )
+
         if fork_from:
             session_id = acp_proc.client.fork_session(fork_from, working_dir)
         elif session_uuid:

@@ -2381,6 +2381,11 @@ class Engine:
                                 # directly and stashes it on executor_state["session_id"].
                                 if not state.session_id:
                                     state.session_id = (run.executor_state or {}).get("session_id")
+                                _engine_logger.info(
+                                    "Session capture for %s/%s: session=%s, uuid=%s (from output=%s, executor_state=%s)",
+                                    job.id, step_name, step_def.session, state.session_id,
+                                    bool(output_path), (run.executor_state or {}).get("session_id"),
+                                )
                                 state.created = True
                             # §9.3 critical section: if this step is a
                             # fork source, snapshot the session JSON inside

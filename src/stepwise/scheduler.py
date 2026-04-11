@@ -403,13 +403,28 @@ class SchedulerService:
         return env
 
     def _find_running_job(self, sched: Schedule) -> str | None:
-        """Check if the most recent job launched by this schedule is still running."""
-        last_fired = self.store.last_fired_tick(sched.id)
-        if not last_fired or not last_fired.job_id:
-            return None
-        job = self.store.get_job(last_fired.job_id) if hasattr(self.store, 'get_job') else None
-        if job and job.status.value in ("running", "pending", "paused"):
-            return job.id
+        """Check if ANY job from this schedule is still running.
+
+        Queries jobs by schedule_id in metadata — catches both scheduler-fired
+        and manually-triggered jobs.
+        """
+        try:
+            rows = self.store._conn.execute(
+                """SELECT id, status FROM jobs
+                   WHERE json_extract(metadata, '$.sys.schedule_id') = ?
+                   AND status IN ('running', 'pending', 'paused')
+                   LIMIT 1""",
+                (sched.id,),
+            ).fetchall()
+            if rows:
+                return rows[0]["id"]
+        except Exception:
+            # Fallback: check last fired tick
+            last_fired = self.store.last_fired_tick(sched.id)
+            if last_fired and last_fired.job_id:
+                job = self.store.get_job(last_fired.job_id) if hasattr(self.store, 'get_job') else None
+                if job and job.status.value in ("running", "pending", "paused"):
+                    return job.id
         return None
 
     def _record_tick(
