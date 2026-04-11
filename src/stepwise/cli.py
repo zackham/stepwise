@@ -1808,6 +1808,264 @@ def cmd_config(args: argparse.Namespace) -> int:
         return EXIT_USAGE_ERROR
 
 
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Check system prerequisites for containment and agent execution."""
+    import shutil
+
+    io = _io(args)
+    all_ok = True
+
+    if getattr(args, "containment", False):
+        io.log("info", "Containment prerequisites:")
+
+        # KVM
+        kvm_ok = Path("/dev/kvm").exists()
+        io.log("info", f"  {'✓' if kvm_ok else '✗'} KVM (/dev/kvm)")
+        if not kvm_ok:
+            io.log("warning", "    KVM not available. Enable virtualization in BIOS.")
+            all_ok = False
+
+        # cloud-hypervisor
+        ch_path = shutil.which("cloud-hypervisor")
+        io.log("info", f"  {'✓' if ch_path else '✗'} cloud-hypervisor")
+        if not ch_path:
+            io.log("warning", "    Install: https://github.com/cloud-hypervisor/cloud-hypervisor/releases")
+            all_ok = False
+
+        # virtiofsd
+        vfs_paths = ["/usr/lib/virtiofsd", shutil.which("virtiofsd")]
+        vfs_ok = any(p and Path(p).exists() for p in vfs_paths if p)
+        io.log("info", f"  {'✓' if vfs_ok else '✗'} virtiofsd")
+        if not vfs_ok:
+            io.log("warning", "    Install: pacman -S virtiofsd (Arch) or cargo install virtiofsd")
+            all_ok = False
+
+        # Guest kernel
+        kernel_path = Path.home() / ".stepwise" / "vmm" / "vmlinux-x86_64"
+        io.log("info", f"  {'✓' if kernel_path.exists() else '✗'} Guest kernel ({kernel_path})")
+        if not kernel_path.exists():
+            io.log("warning", "    Download from cloud-hypervisor/linux releases")
+            all_ok = False
+
+        # Rootfs
+        rootfs_path = Path.home() / ".stepwise" / "vmm" / "rootfs.ext4"
+        io.log("info", f"  {'✓' if rootfs_path.exists() else '✗'} Rootfs ({rootfs_path})")
+        if not rootfs_path.exists():
+            io.log("warning", "    Build with: stepwise build-rootfs")
+            all_ok = False
+        elif rootfs_path.exists():
+            size_mb = rootfs_path.stat().st_size / (1024 * 1024)
+            io.log("info", f"    Size: {size_mb:.0f} MB")
+
+        # vhost_vsock module
+        try:
+            with open("/proc/modules") as f:
+                modules = f.read()
+            vsock_ok = "vhost_vsock" in modules
+        except OSError:
+            vsock_ok = False
+        io.log("info", f"  {'✓' if vsock_ok else '✗'} vhost_vsock kernel module")
+        if not vsock_ok:
+            io.log("warning", "    Load with: sudo modprobe vhost_vsock")
+            all_ok = False
+
+        # vmmd daemon
+        from stepwise.containment.vmmd_client import is_vmmd_running
+        vmmd_ok = is_vmmd_running()
+        io.log("info", f"  {'✓' if vmmd_ok else '○'} vmmd daemon {'running' if vmmd_ok else 'not running'}")
+        if not vmmd_ok:
+            io.log("info", "    Start with: sudo stepwise vmmd start --detach")
+            # Not a hard failure — vmmd auto-starts when needed
+
+    if all_ok:
+        io.log("info", "All checks passed.")
+    else:
+        io.log("warning", "Some checks failed. See above for details.")
+
+    return EXIT_SUCCESS if all_ok else 1
+
+
+def cmd_build_rootfs(args: argparse.Namespace) -> int:
+    """Build the containment VM rootfs image."""
+    io = _io(args)
+
+    try:
+        from stepwise.containment.rootfs import build_rootfs
+    except ImportError as e:
+        io.log("error", f"Containment module not available: {e}")
+        return 1
+
+    io.log("info", "Building containment rootfs...")
+    try:
+        path = build_rootfs(
+            output_path=args.output,
+            size_mb=args.size,
+            include_node=not getattr(args, "no_node", False),
+            include_python=not getattr(args, "no_python", False),
+        )
+        io.log("info", f"Rootfs built: {path} ({path.stat().st_size / 1024 / 1024:.0f} MB)")
+        return EXIT_SUCCESS
+    except Exception as e:
+        io.log("error", f"Rootfs build failed: {e}")
+        return 1
+
+
+def cmd_audit(args: argparse.Namespace) -> int:
+    """Show containment security profile for a flow."""
+    from stepwise.flow_resolution import FlowResolutionError, resolve_flow
+    from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
+
+    io = _io(args)
+    project_dir = Path(args.project_dir).resolve() if args.project_dir else Path.cwd().resolve()
+
+    try:
+        flow_path = resolve_flow(args.flow, project_dir)
+    except FlowResolutionError as e:
+        io.log("error", str(e))
+        return EXIT_USAGE_ERROR
+
+    try:
+        workflow = load_workflow_yaml(str(flow_path))
+    except (YAMLLoadError, Exception) as e:
+        io.log("error", f"Failed to load flow: {e}")
+        return EXIT_USAGE_ERROR
+
+    io.log("info", f"Security audit: {flow_path.name}")
+    io.log("info", "")
+
+    # Group steps by executor type
+    agent_steps = []
+    host_steps = []
+    for name, step in workflow.steps.items():
+        executor = step.executor or "agent"
+        if executor == "agent":
+            agent_steps.append((name, step))
+        else:
+            host_steps.append((name, step, executor))
+
+    if agent_steps:
+        io.log("info", "Agent steps (contained when containment enabled):")
+        for name, step in agent_steps:
+            agent = getattr(step, "agent", None) or "claude"
+            tools_str = ", ".join(getattr(step, "tools", []) or ["(default)"])
+            io.log("info", f"  {name}: agent={agent} tools=[{tools_str}]")
+
+    if host_steps:
+        io.log("info", "")
+        io.log("info", "Host steps (always on host, no containment):")
+        for name, step, executor in host_steps:
+            io.log("info", f"  {name}: executor={executor}")
+
+    io.log("info", "")
+    vm_groups = len(set(
+        (getattr(s, "agent", "claude"), tuple(getattr(s, "tools", []) or []))
+        for _, s in agent_steps
+    )) if agent_steps else 0
+    io.log("info", f"VM groups: {vm_groups} (distinct agent configs)")
+    io.log("info", f"Host steps: {len(host_steps)}")
+
+    return EXIT_SUCCESS
+
+
+def cmd_vmmd(args: argparse.Namespace) -> int:
+    """Manage the containment VM manager daemon."""
+    io = _io(args)
+    action = args.action
+
+    if action == "start":
+        if args.detach:
+            # Background mode: spawn vmmd as a detached sudo process
+            import subprocess as _sp
+            import sys
+
+            cmd = ["sudo", sys.executable, "-m", "stepwise.containment.vmmd"]
+            if args.work_dir:
+                cmd.extend(["--work-dir", args.work_dir])
+
+            _sp.Popen(
+                cmd,
+                stdin=_sp.DEVNULL,
+                stdout=_sp.DEVNULL,
+                stderr=_sp.DEVNULL,
+                start_new_session=True,
+            )
+
+            # Wait for socket
+            from stepwise.containment.vmmd_client import DEFAULT_SOCKET
+            sock_path = Path(args.work_dir or "") / "vmmd.sock" if args.work_dir else DEFAULT_SOCKET
+            for _ in range(50):
+                if sock_path.exists():
+                    io.log("info", f"vmmd started (socket: {sock_path})")
+                    return EXIT_SUCCESS
+                import time
+                time.sleep(0.1)
+
+            io.log("error", "vmmd failed to start within 5 seconds")
+            return 1
+        else:
+            # Foreground mode: run vmmd directly (requires sudo/root)
+            import os
+            if os.geteuid() != 0:
+                io.log("error", "vmmd must run as root. Use: sudo stepwise vmmd start")
+                return 1
+
+            from stepwise.containment.vmmd import VMManagerDaemon
+
+            work_dir = Path(args.work_dir) if args.work_dir else None
+            daemon = VMManagerDaemon(work_dir=work_dir)
+            try:
+                io.log("info", f"vmmd starting (socket: {daemon.socket_path})")
+                daemon.serve_forever()
+            except KeyboardInterrupt:
+                pass
+            return EXIT_SUCCESS
+
+    elif action == "stop":
+        from stepwise.containment.vmmd_client import stop_vmmd
+        if stop_vmmd():
+            io.log("info", "vmmd stopped.")
+        else:
+            io.log("info", "vmmd was not running.")
+        return EXIT_SUCCESS
+
+    elif action == "status":
+        from stepwise.containment.vmmd_client import VMManagerClient, is_vmmd_running
+
+        if not is_vmmd_running():
+            io.log("info", "vmmd is not running.")
+            return 1
+
+        try:
+            client = VMManagerClient(auto_start=False)
+            status = client.status()
+            client.close()
+
+            io.log("info", f"vmmd running (PID {status['pid']}, uptime {status['uptime_seconds']:.0f}s)")
+            io.log("info", f"  VMs: {status['vm_count']}")
+            io.log("info", f"  Kernel: {status['kernel_path']}")
+            io.log("info", f"  Rootfs: {status['rootfs_path']}")
+
+            for vm in status.get("vms", []):
+                io.log("info", f"  VM {vm['vm_id']}: cid={vm['cid']} uptime={vm['uptime_seconds']:.0f}s")
+
+        except Exception as e:
+            io.log("error", f"Cannot get vmmd status: {e}")
+            return 1
+
+        return EXIT_SUCCESS
+
+    elif action == "restart":
+        from stepwise.containment.vmmd_client import stop_vmmd
+        stop_vmmd()
+        import time
+        time.sleep(1)
+        # Re-dispatch to start
+        args.action = "start"
+        return cmd_vmmd(args)
+
+    return EXIT_SUCCESS
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     """Validate flow structure and model resolution."""
     from stepwise.config import load_config_with_sources
@@ -2270,6 +2528,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.watch:
         return _run_watch(args, project, flow_path, inputs)  # args.job_name accessed inside
 
+    # Apply --containment override to config
+    containment_override = getattr(args, "containment", None)
+    run_config = None
+    if containment_override:
+        from stepwise.config import load_config
+        run_config = load_config()
+        run_config.agent_containment = containment_override if containment_override != "none" else None
+
     # Headless mode (default)
     return run_flow(
         flow_path=flow_path,
@@ -2278,6 +2544,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         inputs=inputs if inputs else None,
         workspace=args.workspace,
         quiet=args.quiet,
+        config=run_config,
         report=args.report,
         report_output=args.report_output,
         output_json=getattr(args, "output_format", None) == "json",
@@ -4966,12 +5233,44 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--meta", action="append", default=[], dest="meta",
                        metavar="KEY=VALUE",
                        help="Set job metadata (dot notation: sys.origin=cli, app.project=foo)")
+    p_run.add_argument("--containment", choices=["cloud-hypervisor", "none"],
+                       help="Agent containment mode (default: none)")
 
     # open
     p_open = sub.add_parser("open", help="Open a flow or job in the web UI")
     p_open.add_argument("target", help="Flow name, path, @registry:ref, or job ID")
     p_open.add_argument("--port", type=int, help="Override port for ephemeral server")
     p_open.add_argument("--url", action="store_true", help="Print URL instead of opening browser")
+
+    # doctor
+    p_doctor = sub.add_parser("doctor", help="Check system prerequisites (containment, agents, config)")
+    p_doctor.add_argument("--containment", action="store_true",
+                          help="Check containment prerequisites (KVM, cloud-hypervisor, virtiofsd, rootfs)")
+
+    # build-rootfs
+    p_rootfs = sub.add_parser("build-rootfs", help="Build or rebuild the containment VM rootfs image")
+    p_rootfs.add_argument("--size", type=int, default=2048, metavar="MB",
+                          help="Rootfs image size in MB (default: 2048)")
+    p_rootfs.add_argument("--output", help="Output path (default: ~/.stepwise/vmm/rootfs.ext4)")
+    p_rootfs.add_argument("--no-node", action="store_true", help="Exclude Node.js from rootfs")
+    p_rootfs.add_argument("--no-python", action="store_true", help="Exclude Python from rootfs")
+
+    # audit (security visualization)
+    p_audit = sub.add_parser("audit", help="Show containment security profile for a flow")
+    p_audit.add_argument("flow", help="Flow name or path to .flow.yaml file")
+
+    # vmmd (VM Manager Daemon)
+    p_vmmd = sub.add_parser("vmmd", help="Manage the containment VM manager daemon",
+                            formatter_class=argparse.RawDescriptionHelpFormatter,
+                            epilog="Examples:\n"
+                                   "  sudo stepwise vmmd start           # start in foreground\n"
+                                   "  sudo stepwise vmmd start --detach  # start in background\n"
+                                   "  stepwise vmmd status               # show daemon status\n"
+                                   "  stepwise vmmd stop                 # stop the daemon")
+    p_vmmd.add_argument("action", choices=["start", "stop", "status", "restart"],
+                        help="Daemon action")
+    p_vmmd.add_argument("--detach", action="store_true", help="Run in background (daemonize)")
+    p_vmmd.add_argument("--work-dir", help="Override VMM work directory")
 
     # check
     p_check = sub.add_parser("check", help="Validate flow structure and model resolution")
@@ -6334,6 +6633,10 @@ def main(argv: list[str] | None = None) -> int:
         "catalog": cmd_catalog,
         "config": cmd_config,
         "check": cmd_check,
+        "doctor": cmd_doctor,
+        "build-rootfs": cmd_build_rootfs,
+        "audit": cmd_audit,
+        "vmmd": cmd_vmmd,
         "login": cmd_login,
         "logout": cmd_logout,
         "share": cmd_share,

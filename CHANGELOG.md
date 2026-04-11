@@ -3,6 +3,28 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.40.0] — 2026-04-11
+
+### Added
+- **Agent containment** — hardware-isolated agent execution via [Cloud-Hypervisor](https://www.cloudhypervisor.org/) microVMs. Agent steps run inside VMs with only declared filesystem paths, credentials, and network endpoints. Non-agent steps (script, LLM, polling, external) always run on host. Opt-in via `containment: cloud-hypervisor` at step, flow, or agent settings level, or `--containment cloud-hypervisor` CLI flag
+- **vmmd (VM Manager Daemon)** — privileged daemon managing VM lifecycle (virtiofsd, cloud-hypervisor, shared memory). Runs as root via one-time sudo prompt. Stepwise runs unprivileged and talks to vmmd over a Unix socket. ACP data path goes directly to guest via vsock — vmmd only handles control plane
+- **virtiofs workspace mounting** — host directories mounted live into VMs via virtiofs. Near-native read/write performance for multi-GB repos. No copy-in/copy-out. Host kernel enforces subtree boundaries
+- **VM grouping by agent config** — steps with the same tools, paths, and credentials share a VM. Different configs get separate hardware boundaries. Uses the same `ResourceLifecycleManager` as ACP process lifecycle
+- **Guest agent** — Python agent inside VM (vsock port 9999) that spawns ACP commands with bidirectional stdio bridging. Handles concurrent connections, process lifecycle, and clean shutdown
+- **`stepwise vmmd start/stop/status`** — manage the VM manager daemon
+- **`stepwise doctor --containment`** — check containment prerequisites (KVM, cloud-hypervisor, virtiofsd, kernel, rootfs, vmmd)
+- **`stepwise build-rootfs`** — build VM rootfs image from agent registry (Alpine + Python 3.12 + Node 22 + ACP adapters)
+- **`stepwise audit <flow>`** — show containment security profile (VM groups, step containment, host steps)
+- **`containment` field in YAML** — flow-level and step-level, with override chain: step > flow > agent settings > CLI
+- **`docs/containment.md`** — comprehensive user-facing documentation with architecture, setup, security model, troubleshooting
+
+### Changed
+- **`ACPBackend`** — accepts optional `ContainmentBackend` for hardware-isolated process spawning. `_config_eq` includes containment in equality check
+- **`ResolvedAgentConfig`** — new `containment` field, populated from agent settings or step overrides
+- **`StepwiseConfig`** — new `agent_containment` field
+- **CLI** — `--containment` flag on `stepwise run`
+- **Documentation** — containment added to README, cli.md, concepts.md, executors.md, agent-integration.md, troubleshooting.md, flow-reference.md
+
 ## [0.39.0] — 2026-04-10
 
 ### Added

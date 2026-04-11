@@ -1,0 +1,274 @@
+"""Rootfs builder for containment VMs.
+
+Builds ext4 filesystem images suitable for cloud-hypervisor guests.
+Derives requirements from the agent registry: if an agent command
+starts with 'npx', the rootfs needs Node.js; if it starts with
+'python' or 'aloop', it needs Python.
+
+Build process:
+  1. Create a Docker container from Alpine base
+  2. Install Python, Node, and required packages
+  3. Install the guest agent script
+  4. Export as ext4 image
+
+Usage:
+  stepwise build-rootfs              # Build from agent registry
+  stepwise build-rootfs --agent X    # Include specific agent deps
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+from stepwise.containment.guest_agent import GUEST_AGENT_SCRIPT, GUEST_INIT_SCRIPT
+
+logger = logging.getLogger("stepwise.containment.rootfs")
+
+DEFAULT_VMM_DIR = Path.home() / ".stepwise" / "vmm"
+DEFAULT_ROOTFS_PATH = DEFAULT_VMM_DIR / "rootfs.ext4"
+
+# Base Alpine version
+ALPINE_VERSION = "3.21"
+ALPINE_MIRROR = "https://dl-cdn.alpinelinux.org/alpine"
+
+
+def needs_node(agents: dict | None = None) -> bool:
+    """Check if any agent needs Node.js (npx command)."""
+    if agents is None:
+        from stepwise.agent_registry import BUILTIN_AGENTS
+        agents = BUILTIN_AGENTS
+    return any(
+        agent.command and agent.command[0] in ("npx", "node", "npm")
+        for agent in agents.values()
+    )
+
+
+def needs_python(agents: dict | None = None) -> bool:
+    """Check if any agent needs Python."""
+    if agents is None:
+        from stepwise.agent_registry import BUILTIN_AGENTS
+        agents = BUILTIN_AGENTS
+    return any(
+        agent.command and agent.command[0] in ("python", "python3", "aloop", "pip")
+        for agent in agents.values()
+    )
+
+
+def build_rootfs(
+    output_path: str | Path | None = None,
+    size_mb: int = 2048,
+    include_node: bool | None = None,
+    include_python: bool | None = None,
+    extra_packages: list[str] | None = None,
+    extra_npm_packages: list[str] | None = None,
+    extra_pip_packages: list[str] | None = None,
+) -> Path:
+    """Build a rootfs ext4 image for containment VMs.
+
+    Uses Docker to build the filesystem contents, then exports
+    to an ext4 image.
+    """
+    output = Path(output_path or DEFAULT_ROOTFS_PATH)
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    # Auto-detect requirements from agent registry
+    if include_node is None:
+        include_node = needs_node()
+    if include_python is None:
+        include_python = needs_python()
+
+    logger.info(
+        "Building rootfs: node=%s python=%s size=%dMB output=%s",
+        include_node, include_python, size_mb, output,
+    )
+
+    # Build Dockerfile content
+    dockerfile = _generate_dockerfile(
+        include_node=include_node,
+        include_python=include_python,
+        extra_packages=extra_packages or [],
+        extra_npm_packages=extra_npm_packages or [],
+        extra_pip_packages=extra_pip_packages or [],
+    )
+
+    with tempfile.TemporaryDirectory(prefix="stepwise-rootfs-") as build_dir:
+        build_path = Path(build_dir)
+
+        # Write Dockerfile
+        (build_path / "Dockerfile").write_text(dockerfile)
+
+        # Write guest agent
+        (build_path / "guest-agent.py").write_text(GUEST_AGENT_SCRIPT)
+        (build_path / "init.sh").write_text(GUEST_INIT_SCRIPT)
+
+        # Build container
+        tag = "stepwise-rootfs-builder:latest"
+        logger.info("Building container image...")
+        subprocess.run(
+            ["docker", "build", "-t", tag, "."],
+            cwd=build_dir,
+            check=True,
+            capture_output=True,
+        )
+
+        # Create container (don't start it)
+        container_id = subprocess.run(
+            ["docker", "create", tag],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+        try:
+            # Export filesystem as tar
+            tar_path = build_path / "rootfs.tar"
+            logger.info("Exporting container filesystem...")
+            with open(tar_path, "wb") as f:
+                subprocess.run(
+                    ["docker", "export", container_id],
+                    stdout=f,
+                    check=True,
+                )
+
+            # Create ext4 image from tar
+            logger.info("Creating ext4 image (%dMB)...", size_mb)
+            _tar_to_ext4(tar_path, output, size_mb)
+
+        finally:
+            # Clean up container
+            subprocess.run(
+                ["docker", "rm", container_id],
+                capture_output=True,
+            )
+            # Clean up image
+            subprocess.run(
+                ["docker", "rmi", tag],
+                capture_output=True,
+            )
+
+    logger.info("Rootfs built: %s (%.1f MB)", output, output.stat().st_size / 1024 / 1024)
+    return output
+
+
+def _generate_dockerfile(
+    include_node: bool,
+    include_python: bool,
+    extra_packages: list[str],
+    extra_npm_packages: list[str],
+    extra_pip_packages: list[str],
+) -> str:
+    """Generate a Dockerfile for the rootfs."""
+    lines = [
+        f"FROM alpine:{ALPINE_VERSION}",
+        "",
+        "# Base system",
+        "RUN apk add --no-cache bash coreutils util-linux mount socat",
+        "",
+    ]
+
+    if include_python:
+        lines.extend([
+            "# Python",
+            "RUN apk add --no-cache python3 py3-pip",
+            "",
+        ])
+
+    if include_node:
+        lines.extend([
+            "# Node.js",
+            "RUN apk add --no-cache nodejs npm",
+            "",
+        ])
+
+    if extra_packages:
+        lines.extend([
+            "# Extra packages",
+            f"RUN apk add --no-cache {' '.join(extra_packages)}",
+            "",
+        ])
+
+    if include_node:
+        # Pre-install ACP adapters
+        npm_packages = [
+            "@agentclientprotocol/claude-agent-acp",
+        ]
+        npm_packages.extend(extra_npm_packages)
+        lines.extend([
+            "# ACP adapters",
+            f"RUN npm install -g {' '.join(npm_packages)}",
+            "",
+        ])
+
+    if include_python and extra_pip_packages:
+        lines.extend([
+            "# Python packages",
+            f"RUN pip install --break-system-packages {' '.join(extra_pip_packages)}",
+            "",
+        ])
+
+    lines.extend([
+        "# Guest agent",
+        "RUN mkdir -p /opt/stepwise",
+        "COPY guest-agent.py /opt/stepwise/guest-agent.py",
+        "COPY init.sh /init.sh",
+        "RUN chmod +x /init.sh /opt/stepwise/guest-agent.py",
+        "",
+        "# Create workspace mount point",
+        "RUN mkdir -p /mnt/workspace",
+    ])
+
+    return "\n".join(lines) + "\n"
+
+
+def _tar_to_ext4(tar_path: Path, output: Path, size_mb: int) -> None:
+    """Convert a tar archive to an ext4 filesystem image."""
+    # Create sparse image
+    subprocess.run(
+        ["dd", "if=/dev/zero", f"of={output}", "bs=1M",
+         "count=0", f"seek={size_mb}"],
+        check=True,
+        capture_output=True,
+    )
+
+    # Format as ext4
+    subprocess.run(
+        ["mkfs.ext4", "-F", "-q", str(output)],
+        check=True,
+        capture_output=True,
+    )
+
+    # Mount and extract tar
+    mount_dir = tempfile.mkdtemp(prefix="stepwise-rootfs-mount-")
+    try:
+        subprocess.run(
+            ["sudo", "mount", "-o", "loop", str(output), mount_dir],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["sudo", "tar", "xf", str(tar_path), "-C", mount_dir],
+            check=True,
+            capture_output=True,
+        )
+    finally:
+        subprocess.run(
+            ["sudo", "umount", mount_dir],
+            capture_output=True,
+        )
+        shutil.rmtree(mount_dir, ignore_errors=True)
+
+
+def check_rootfs(path: str | Path | None = None) -> dict:
+    """Check if a rootfs image exists and is valid."""
+    rootfs = Path(path or DEFAULT_ROOTFS_PATH)
+    result = {
+        "exists": rootfs.exists(),
+        "path": str(rootfs),
+        "size_mb": rootfs.stat().st_size / 1024 / 1024 if rootfs.exists() else 0,
+    }
+    return result

@@ -799,7 +799,7 @@ def _parse_executor(
             if k in step_data:
                 config[k] = step_data[k]
     elif executor_type == "agent":
-        for k in ("prompt", "output_mode", "output_path", "emit_flow", "working_dir", "permissions", "agent"):
+        for k in ("prompt", "output_mode", "output_path", "emit_flow", "working_dir", "permissions", "agent", "containment"):
             if k in step_data:
                 config[k] = step_data[k]
         if prompt_from_file:
@@ -1985,6 +1985,14 @@ def load_workflow_yaml(
 
     if errors:
         raise YAMLLoadError(errors)
+
+    # Propagate flow-level containment to agent steps that don't override it
+    flow_containment = data.get("containment")
+    if flow_containment:
+        for step in steps.values():
+            executor_type = step.executor.type if step.executor else "script"
+            if executor_type == "agent" and "containment" not in step.executor.config:
+                step.executor.config["containment"] = flow_containment
 
     # Parse metadata from top-level fields
     metadata = _parse_metadata(data, source_path)

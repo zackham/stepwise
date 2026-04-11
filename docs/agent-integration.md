@@ -343,6 +343,14 @@ stepwise run flow.yaml --wait --input k=v
 
 ---
 
+## Agent Security: Containment
+
+Agent steps can run inside hardware-isolated microVMs, bounding the blast radius of autonomous sessions. When containment is enabled, each agent runs in a separate VM with access limited to explicitly declared filesystem paths, credentials, and network endpoints. This is especially relevant for agent-called flows where the calling agent delegates work to sub-agents — containment ensures that a compromised sub-agent can't escape its declared scope.
+
+Enable containment via the CLI flag (`--containment cloud-hypervisor`), per-step in the flow YAML, or globally in agent settings. See the [Containment guide](containment.md) for setup, architecture, and the full security model.
+
+---
+
 ## Troubleshooting
 
 **"Missing required input"** — Run `stepwise schema flow.yaml` to see what inputs are required.

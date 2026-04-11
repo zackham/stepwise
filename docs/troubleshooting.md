@@ -253,3 +253,15 @@ stepwise cache debug my-flow.flow.yaml fetch --input url="https://example.com"
 4. **Step stuck:** `stepwise list --suspended` to find waiting external steps, `stepwise tail <job-id>` for live events
 5. **Cache issues:** `stepwise cache stats` to check hit rates, `stepwise run --rerun <step>` to bypass cache for one step
 6. **Agent/LLM errors:** `stepwise config get openrouter_api_key` to verify key, `stepwise check <flow>` for model resolution
+
+---
+
+## Containment
+
+Issues related to running agent steps in hardware-isolated microVMs. See the [Containment guide](containment.md) for architecture and setup.
+
+| Problem | Cause | Fix |
+|---------|-------|-----|
+| `stepwise doctor --containment` reports KVM unavailable | Virtualization not enabled in BIOS, or `/dev/kvm` missing | Enable VT-x / AMD-V in BIOS settings. On cloud instances, use a bare-metal or nested-virt-enabled instance type. |
+| VM boot fails with "Unable to mount root fs" | Corrupted or missing rootfs image | Rebuild with `stepwise build-rootfs`. The rootfs is stored at `~/.stepwise/vmm/rootfs.ext4`. |
+| vmmd won't start or agent steps hang waiting for VM | vmmd daemon not running or crashed | Start with `sudo stepwise vmmd start --detach`. Check status with `stepwise vmmd status`. If vmmd died, check `~/.stepwise/vmm/vmmd.log` for errors. |

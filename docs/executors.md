@@ -163,6 +163,18 @@ limits:
 
 When a limit is hit, the step fails with a descriptive error (e.g., `cost_limit_exceeded`). Exit rules can catch this and route to a fallback.
 
+**Containment:** Agent steps can run inside hardware-isolated microVMs, bounding the blast radius of autonomous sessions. Enable containment per-step with the `containment` field:
+
+```yaml
+research:
+  executor: agent
+  containment: cloud-hypervisor
+  prompt: "Research $topic thoroughly"
+  outputs: [findings, sources]
+```
+
+Steps with different tools, paths, or credentials run in separate VMs — a research agent can never access a deploy agent's credentials. Containment can also be set at the flow level, in agent settings, or via the `--containment` CLI flag. See the [Containment guide](containment.md) for the full security model and setup.
+
 **When to use:** Code generation, research with web browsing, complex analysis requiring tool use, any task where the number of steps isn't known in advance. Agents are powerful but expensive — use LLM executor for simpler tasks.
 
 **Streaming:** While an agent runs, its output streams to the web UI in real-time — you can watch it think, use tools, and iterate. After completion, the full trace is available in the step's detail panel and in `--report` output.

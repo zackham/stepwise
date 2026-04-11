@@ -99,6 +99,7 @@ class AgentConfig:
     command: list[str]
     config: dict[str, ConfigKey] = field(default_factory=dict)
     capabilities: AgentCapabilities = field(default_factory=AgentCapabilities)
+    containment: str | None = None  # "cloud-hypervisor" | None
 
     def to_dict(self) -> dict:
         d: dict[str, Any] = {
@@ -123,6 +124,7 @@ class AgentConfig:
             command=d.get("command", []),
             config=config,
             capabilities=AgentCapabilities.from_dict(caps_raw) if isinstance(caps_raw, dict) else AgentCapabilities(),
+            containment=d.get("containment"),
         )
 
 
@@ -137,6 +139,7 @@ class ResolvedAgentConfig:
     model: str | None = None
     tools: list[str] | None = None
     allowed_paths: list[str] | None = None
+    containment: str | None = None  # "cloud-hypervisor" | None
 
 
 # ── Builtin Agents ──────────────────────────────────────────────────
@@ -308,6 +311,11 @@ def resolve_config(
     resolved_tools: list[str] | None = None
     resolved_allowed_paths: list[str] | None = None
 
+    # Containment: step override > agent config > None
+    resolved_containment = overrides.pop("containment", None)
+    if resolved_containment is None and hasattr(agent, "containment"):
+        resolved_containment = getattr(agent, "containment", None)
+
     for key_name, config_key in agent.config.items():
         # Determine raw value: step override > default
         if key_name in overrides:
@@ -353,4 +361,5 @@ def resolve_config(
         model=resolved_model,
         tools=resolved_tools,
         allowed_paths=resolved_allowed_paths,
+        containment=resolved_containment,
     )

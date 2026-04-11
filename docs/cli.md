@@ -15,6 +15,7 @@ See [Quickstart](quickstart.md) for installation and first-run instructions. See
 | [Server](#server-commands) | `server start`, `server stop`, `server restart`, `server status` |
 | [Registry](#registry-commands) | `share`, `get`, `search`, `info`, `login`, `logout` |
 | [Configuration](#configuration-commands) | `config`, `init`, `templates`, `schema`, `diagram` |
+| [Containment](#containment-commands) | `doctor --containment`, `build-rootfs`, `audit`, `vmmd start/stop/status` |
 | [Utility](#utility-commands) | `agent-help`, `catalog`, `flows`, `extensions`, `docs`, `cache`, `help`, `version`, `update`, `uninstall` |
 
 ## Common Workflows
@@ -216,6 +217,7 @@ Same as headless mode (shows step progress to stderr) but prints structured JSON
 | `--rerun STEP` | Bypass cache for this step (repeatable) |
 | `--notify URL` | Webhook URL for job event notifications |
 | `--notify-context JSON` | JSON context to include in webhook payloads |
+| `--containment BACKEND` | Run agent steps with containment isolation (e.g., `cloud-hypervisor`). See [Containment](containment.md) |
 | `--meta KEY=VALUE` | Set job metadata (dot notation: `sys.origin=cli`, `app.project=foo`) |
 
 ---
@@ -946,6 +948,102 @@ Renders a dark-themed DAG matching the web UI aesthetic. Requires the system `gr
 |------|-------------|
 | `-f, --format {svg,png,pdf}` | Output format (default: svg) |
 | `-o, --output PATH` | Output file path (default: `<flow-name>.<format>` in cwd) |
+
+---
+
+## Containment Commands
+
+Commands for running agent steps inside hardware-isolated microVMs. See the [Containment guide](containment.md) for architecture, security model, and configuration.
+
+### `stepwise doctor --containment`
+
+Check containment prerequisites: KVM availability, cloud-hypervisor binary, virtiofsd binary, vhost_vsock kernel module, and guest kernel.
+
+```bash
+stepwise doctor --containment
+```
+
+Reports pass/fail for each requirement with fix instructions for failures.
+
+---
+
+### `stepwise build-rootfs`
+
+Build the Alpine-based ext4 rootfs image used by containment VMs. The image includes Python, Node.js, and ACP adapter packages. Stored at `~/.stepwise/vmm/rootfs.ext4`.
+
+```bash
+stepwise build-rootfs
+stepwise build-rootfs --size 2048              # custom size in MB (default: 1024)
+stepwise build-rootfs --output /path/to/rootfs.ext4  # custom output path
+stepwise build-rootfs --no-node                # omit Node.js from the image
+stepwise build-rootfs --no-python              # omit Python from the image
+```
+
+| Flag | Description |
+|------|-------------|
+| `--size MB` | Root filesystem size in megabytes (default: 1024) |
+| `--output PATH` | Custom output path (default: `~/.stepwise/vmm/rootfs.ext4`) |
+| `--no-node` | Exclude Node.js from the rootfs image |
+| `--no-python` | Exclude Python from the rootfs image |
+
+---
+
+### `stepwise audit`
+
+Show the containment security profile of a flow. Reports which steps run in VMs, which run on host, how many VM groups exist, and what each group can access.
+
+```bash
+stepwise audit my-flow.yaml
+```
+
+---
+
+### `stepwise vmmd`
+
+Manage the VM manager daemon (vmmd). The daemon runs as root and handles all privileged operations: virtiofsd, cloud-hypervisor, shared memory mapping. Stepwise runs unprivileged and talks to vmmd via a Unix socket.
+
+#### `stepwise vmmd start`
+
+Start the VM manager daemon.
+
+```bash
+sudo stepwise vmmd start                       # foreground
+sudo stepwise vmmd start --detach              # background daemon
+sudo stepwise vmmd start --detach --work-dir /path/to/vmm  # custom working directory
+```
+
+| Flag | Description |
+|------|-------------|
+| `--detach` | Run as a background daemon |
+| `--work-dir DIR` | Override the vmmd working directory (default: `~/.stepwise/vmm`) |
+
+#### `stepwise vmmd stop`
+
+Stop the VM manager daemon. Shuts down all running VMs.
+
+```bash
+stepwise vmmd stop
+```
+
+#### `stepwise vmmd status`
+
+Show whether the daemon is running, its PID, socket path, and active VM count.
+
+```bash
+stepwise vmmd status
+```
+
+---
+
+### Running flows with containment
+
+Use the `--containment` flag on `stepwise run` to enable hardware isolation for all agent steps in a flow:
+
+```bash
+stepwise run my-flow --containment cloud-hypervisor
+```
+
+This can also be set per-step, per-flow, or per-agent in configuration. See [Containment: Enable containment](containment.md#enable-containment) for the full override chain.
 
 ---
 

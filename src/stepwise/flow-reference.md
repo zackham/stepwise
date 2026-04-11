@@ -53,6 +53,7 @@ description: "What this flow does"
 author: alice                    # optional, auto from git config
 version: "1.0"                   # optional
 forked_from: "@bob:original"     # optional, provenance for forked flows
+containment: cloud-hypervisor    # optional — agent containment mode (applies to all agent steps)
 
 steps:
   step-name:
@@ -248,6 +249,7 @@ implement:
 | `output_path` | string | no | — | File path for `"file"` mode |
 | `agent` | string | no | `"claude"` | ACP agent name (claude, codex, gemini, etc.) |
 | `working_dir` | string | no | workspace | Override working directory |
+| `containment` | string | no | — | Agent containment mode (`cloud-hypervisor` or omit for none). See [containment docs](../docs/containment.md) |
 | `timeout` | int | no | — | Timeout in seconds |
 
 *One of `prompt` or `prompt_file` required.

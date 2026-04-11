@@ -117,6 +117,7 @@ class StepwiseConfig:
     max_concurrent_agents: int = 3
     max_concurrent_by_executor: dict[str, int] = field(default_factory=dict)
     agent_permissions: str = "approve_all"  # "approve_all" | "prompt" | "deny"
+    agent_containment: str | None = None  # "cloud-hypervisor" | None
     agent_process_ttl: int = 0  # seconds; 0 = disabled (no limit). Safety net for zombie processes.
 
     def resolve_model(self, model_ref: str) -> str:
@@ -175,6 +176,8 @@ class StepwiseConfig:
             d["max_concurrent_by_executor"] = self.max_concurrent_by_executor
         if self.agent_permissions != "approve_all":
             d["agent_permissions"] = self.agent_permissions
+        if self.agent_containment:
+            d["agent_containment"] = self.agent_containment
         if self.agent_process_ttl != 0:
             d["agent_process_ttl"] = self.agent_process_ttl
         return d
@@ -214,6 +217,7 @@ class StepwiseConfig:
             max_concurrent_agents=d.get("max_concurrent_agents", 3),
             max_concurrent_by_executor=validated_limits,
             agent_permissions=d.get("agent_permissions", "approve_all"),
+            agent_containment=d.get("agent_containment"),
             agent_process_ttl=d.get("agent_process_ttl", 0),
         )
 

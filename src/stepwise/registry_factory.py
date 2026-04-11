@@ -61,9 +61,20 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
         responses=cfg.get("responses"),
     ))
 
+    # Containment backend (if configured)
+    containment_backend = None
+    if getattr(config, "agent_containment", None) == "cloud-hypervisor":
+        try:
+            from stepwise.containment.cloud_hypervisor import CloudHypervisorBackend
+            containment_backend = CloudHypervisorBackend()
+            logger.info("Containment enabled: cloud-hypervisor")
+        except Exception as exc:
+            logger.warning("Failed to initialize cloud-hypervisor containment: %s", exc)
+
     # Agent executor (native ACP)
     acp_backend = ACPBackend(
         default_permissions=config.agent_permissions,
+        containment=containment_backend,
     )
     registry.register("agent", lambda cfg: AgentExecutor(
         backend=acp_backend,

@@ -416,6 +416,10 @@ External steps are the trust primitive. They pause the job and present full cont
 
 External steps + escalation rules = workflows that delegate aggressively but fail safely. The human is always in the loop — not as a bottleneck, but as a circuit breaker.
 
+### Hardware boundaries — containment
+
+Scoped delegation bounds what an agent *should* access. Containment bounds what it *can* access. Agent steps can run inside hardware-isolated microVMs (via Cloud-Hypervisor), so that even a compromised agent can only reach the filesystem paths, credentials, and network endpoints explicitly declared in its configuration. Steps with different security profiles run in separate VMs — a research agent with web-search tools can never access a deploy agent's AWS credentials, because they execute in different hardware boundaries. Containment is opt-in and transparent to the ACP protocol layer. See the [Containment guide](containment.md) for architecture and setup.
+
 ### Audit trail
 
 Every state transition, input resolution, and cost event is persisted as a structured step event. This powers the web UI's event timeline, HTML reports via `--report`, and direct queries against the SQLite store.

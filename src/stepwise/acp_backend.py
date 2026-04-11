@@ -44,10 +44,18 @@ class ACPBackend:
 
     Native ACP agent backend using stdio transport. Manages process
     lifecycle via ResourceLifecycleManager with backward-looking reuse.
+
+    Optionally wraps process spawning with a containment backend
+    (cloud-hypervisor, etc.) for hardware-isolated execution.
     """
 
-    def __init__(self, default_permissions: str = "approve_all"):
+    def __init__(
+        self,
+        default_permissions: str = "approve_all",
+        containment: Any | None = None,
+    ):
         self.default_permissions = default_permissions
+        self.containment = containment  # ContainmentBackend or None
         self.lifecycle: ResourceLifecycleManager[ACPProcess] = ResourceLifecycleManager(
             is_eq=self._config_eq,
             factory=self._spawn_process,
@@ -56,16 +64,22 @@ class ACPBackend:
 
     @staticmethod
     def _config_eq(a: ResolvedAgentConfig, b: ResolvedAgentConfig) -> bool:
-        """Two configs can share a process if agent, model, tools, and paths match."""
+        """Two configs can share a process if agent, model, tools, paths, and containment match."""
         return (
             a.name == b.name
             and a.model == b.model
             and a.tools == b.tools
             and a.allowed_paths == b.allowed_paths
+            and a.containment == b.containment
         )
 
     def _spawn_process(self, config: ResolvedAgentConfig) -> ACPProcess:
-        """Spawn ACP server subprocess, do handshake."""
+        """Spawn ACP server subprocess, do handshake.
+
+        If a containment backend is configured, the process is spawned
+        inside a hardware-isolated environment (microVM). The stdio
+        streams are bridged via vsock, transparent to the ACP protocol.
+        """
         env = {
             k: v
             for k, v in os.environ.items()
@@ -73,16 +87,30 @@ class ACPBackend:
         }
         env.update(config.env_vars)
 
-        proc = subprocess.Popen(
-            config.command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            env=env,
-            start_new_session=True,
-        )
+        # Use containment spawn context if available
+        if self.containment and getattr(config, "containment", None):
+            from stepwise.containment.backend import ContainmentConfig
+
+            containment_config = ContainmentConfig(
+                mode=config.containment,
+                tools=config.tools,
+                allowed_paths=config.allowed_paths,
+                working_dir=config.allowed_paths[0] if config.allowed_paths else ".",
+            )
+            spawn_ctx = self.containment.get_spawn_context(containment_config)
+            cwd = config.allowed_paths[0] if config.allowed_paths else "."
+            proc = spawn_ctx.spawn(config.command, env, cwd)
+        else:
+            proc = subprocess.Popen(
+                config.command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                env=env,
+                start_new_session=True,
+            )
 
         transport = JsonRpcTransport(proc)
         transport.start()
@@ -362,5 +390,7 @@ class ACPBackend:
         return True
 
     def cleanup(self) -> None:
-        """Release all managed processes (job end)."""
+        """Release all managed processes and containment environments (job end)."""
         self.lifecycle.release_all()
+        if self.containment:
+            self.containment.release_all()

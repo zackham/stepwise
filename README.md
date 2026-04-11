@@ -72,6 +72,8 @@ stepwise run nightly-analysis --async --input date="2026-03-29"
 
 **Coordination validator.** `stepwise validate` catches session-writer races, unguarded loop-back bindings, and cycle errors before you run. Predicate-form `when:` clauses let the validator prove mutual exclusion between conditional branches sharing a session.
 
+**Containment for agent isolation.** Agent steps can run inside hardware-isolated [Cloud-Hypervisor](https://www.cloudhypervisor.org/) microVMs, bounding the blast radius of autonomous sessions. Each VM gets only the filesystem paths, credentials, and network endpoints declared in its config — a research agent can never access a deploy agent's AWS keys because they run in separate hardware boundaries. Opt-in, transparent to the ACP protocol, near-native filesystem performance via virtiofs. See [Containment](docs/containment.md).
+
 **Crash-proof by default.** SQLite WAL mode, heartbeat-based stale detection, automatic orphan recovery. Kill the server, restart it, jobs resume. No message queue, no distributed state.
 
 ## A flow in 30 seconds
@@ -126,9 +128,15 @@ Share a kit to the registry with `stepwise share swdev`. Install with `stepwise 
 
 ```
 stepwise run <flow> [--watch|--wait|--async]   Run a flow
+stepwise run <flow> --containment cloud-hypervisor  Run with agent containment
 stepwise open <flow|job>                       Open in web UI
 stepwise server start [--detach]               Persistent server + web UI
 stepwise validate <flow>                       Check a flow for errors
+stepwise audit <flow>                          Show containment security profile
+stepwise doctor --containment                  Check containment prerequisites
+stepwise build-rootfs                          Build VM rootfs image
+sudo stepwise vmmd start --detach              Start VM manager daemon
+stepwise vmmd status                           Check VM manager status
 stepwise jobs                                  List all jobs
 stepwise status <job-id>                       Step-by-step detail
 stepwise fulfill <run-id> '{...}'              Fulfill a suspended external step
@@ -153,6 +161,7 @@ Full reference: [`docs/cli.md`](docs/cli.md)
 | [Web UI](docs/web-ui.md) | The dashboard — DAG viewer, step detail, external input |
 | [CLI Reference](docs/cli.md) | Every command, flag, example, exit code |
 | [Agent Integration](docs/agent-integration.md) | Making flows callable by AI agents |
+| [Containment](docs/containment.md) | Hardware-isolated agent execution with Cloud-Hypervisor microVMs |
 | [Flow Reference](docs/flow-reference.md) | Complete `.flow.yaml` schema |
 | [Troubleshooting](docs/troubleshooting.md) | Error messages, diagnostics, common fixes |
 
