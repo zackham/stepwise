@@ -173,7 +173,6 @@ def test_ephemeral_fork_resolves_snapshot():
     if exec_ref is None:
         pytest.skip("cache hit — not expected")
     assert exec_ref.config.get("_fork_from_session_id") == "snap-abc-123"
-    assert exec_ref.config.get("_backend_type") == "claude_direct"
 
 
 # ── R10: $job.context fork_from resolves from job inputs ─────────────
@@ -195,7 +194,6 @@ def test_job_input_fork_from_resolves():
     if exec_ref is None:
         pytest.skip("cache hit")
     assert exec_ref.config.get("_fork_from_session_id") == "snap-from-parent-456"
-    assert exec_ref.config.get("_backend_type") == "claude_direct"
 
 
 # ── R11: fork_from step-name still detected as fork source ───────────

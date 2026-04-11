@@ -170,9 +170,9 @@ def test_maybe_snapshot_skips_non_fork_source(engine, fake_sessions_dir):
     })
     job = engine.create_job("t", wf)
     engine._ensure_session_registry(job)
-    # Set claude_uuid for the session
+    # Set session_id for the session
     state = engine._session_registries[job.id]["solo_sess"]
-    state.claude_uuid = "live-uuid"
+    state.session_id = "live-uuid"
     state.created = True
 
     run = StepRun(
@@ -209,7 +209,7 @@ def test_maybe_snapshot_creates_snapshot_for_fork_source(engine, fake_sessions_d
     job = engine.create_job("t", wf)
     engine._ensure_session_registry(job)
     state = engine._session_registries[job.id]["parent"]
-    state.claude_uuid = "live-uuid-123"
+    state.session_id = "live-uuid-123"
     state.created = True
 
     run = StepRun(
@@ -252,7 +252,7 @@ def test_maybe_snapshot_failure_leaves_step_in_recoverable_state(
     job = engine.create_job("t", wf)
     engine._ensure_session_registry(job)
     state = engine._session_registries[job.id]["parent"]
-    state.claude_uuid = "live-uuid"
+    state.session_id = "live-uuid"
     state.created = True
 
     run = StepRun(
@@ -289,7 +289,7 @@ def test_maybe_snapshot_called_within_lock_critical_section(
     job = engine.create_job("t", wf)
     engine._ensure_session_registry(job)
     state = engine._session_registries[job.id]["parent"]
-    state.claude_uuid = "live-uuid"
+    state.session_id = "live-uuid"
     state.created = True
 
     run = StepRun(
@@ -338,7 +338,7 @@ def test_maybe_snapshot_called_within_lock_critical_section(
 def test_session_context_uses_snapshot_uuid_not_live_uuid(engine, fake_sessions_dir):
     """When a child step is preparing to fork, the engine plumbs the
     snapshot UUID (from the parent step's executor_state) into
-    _fork_from_session_id, not the live SessionState.claude_uuid."""
+    _fork_from_session_id, not the live SessionState.session_id."""
     wf = WorkflowDefinition(steps={
         "parent_root": _agent_step("parent_root", session="parent"),
         "child": _agent_step(
@@ -349,7 +349,7 @@ def test_session_context_uses_snapshot_uuid_not_live_uuid(engine, fake_sessions_
     engine._ensure_session_registry(job)
     # Live parent UUID is "live-parent-uuid"
     parent_state = engine._session_registries[job.id]["parent"]
-    parent_state.claude_uuid = "live-parent-uuid"
+    parent_state.session_id = "live-parent-uuid"
     parent_state.created = True
 
     # Persist a completed parent run with snapshot_uuid set
@@ -367,4 +367,4 @@ def test_session_context_uses_snapshot_uuid_not_live_uuid(engine, fake_sessions_
     # Snapshot lookup returns the snapshot uuid
     assert engine._lookup_snapshot_uuid(job, "parent_root") == "snap-parent-uuid"
     # And the snapshot uuid is distinct from the live uuid
-    assert "snap-parent-uuid" != parent_state.claude_uuid
+    assert "snap-parent-uuid" != parent_state.session_id

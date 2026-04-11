@@ -987,7 +987,7 @@ class AgentExecutor(Executor):
         **config: Any,
     ) -> None:
         self.backend = backend
-        self.claude_direct = claude_direct_backend
+        self.claude_direct = claude_direct_backend  # Legacy, unused with ACPBackend
         self.prompt_template = prompt
         self.output_mode = output_mode
         self.output_path = output_path
@@ -1008,9 +1008,7 @@ class AgentExecutor(Executor):
         self._session_name = config.get("_session_name")
 
     def _select_backend(self, config: dict) -> AgentBackend:
-        """Select backend based on config. Returns claude_direct for fork/resume."""
-        if config.get("_backend_type") == "claude_direct" and self.claude_direct:
-            return self.claude_direct
+        """Select backend. ACPBackend handles all operations natively."""
         return self.backend
 
     def start(self, inputs: dict, context: ExecutionContext) -> ExecutorResult:

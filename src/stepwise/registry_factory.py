@@ -9,8 +9,8 @@ from __future__ import annotations
 import logging
 import os
 
-from stepwise.agent import AgentExecutor, AcpxBackend
-from stepwise.claude_direct import ClaudeDirectBackend
+from stepwise.acp_backend import ACPBackend
+from stepwise.agent import AgentExecutor
 from pathlib import Path
 from stepwise.config import StepwiseConfig, load_config
 from stepwise.executors import (
@@ -61,23 +61,12 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
         responses=cfg.get("responses"),
     ))
 
-    # Agent executor (ACP via acpx)
-    # Config default_agent > env var > "claude"
-    default_agent = (config.default_agent
-                     or os.environ.get("STEPWISE_DEFAULT_AGENT")
-                     or "claude")
-    import shutil
-    acpx_env = os.environ.get("ACPX_PATH")
-    acpx_path = acpx_env or shutil.which("acpx") or "acpx"
-    acpx_backend = AcpxBackend(
-        acpx_path=acpx_path,
-        default_agent=default_agent,
+    # Agent executor (native ACP)
+    acp_backend = ACPBackend(
         default_permissions=config.agent_permissions,
     )
-    claude_direct_backend = ClaudeDirectBackend()
     registry.register("agent", lambda cfg: AgentExecutor(
-        backend=acpx_backend,
-        claude_direct_backend=claude_direct_backend,
+        backend=acp_backend,
         prompt=cfg.get("prompt", ""),
         output_mode=cfg.get("output_mode", "effect"),
         output_path=cfg.get("output_path"),

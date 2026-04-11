@@ -84,8 +84,7 @@ MAX_ARTIFACT_BYTES = 5 * 1024 * 1024
 class SessionState:
     """Per-job tracking of named session lifecycle."""
     name: str
-    claude_uuid: str | None = None
-    backend_type: str = "acpx"
+    session_id: str | None = None
     is_forked: bool = False
     agent: str = "claude"
     created: bool = False
@@ -197,7 +196,6 @@ class Engine:
                 registry[session_name] = SessionState(name=session_name, agent=agent)
             if step_def.fork_from:
                 registry[session_name].is_forked = True
-                registry[session_name].backend_type = "claude_direct"
         return registry
 
     def _ensure_session_registry(self, job: Job) -> None:
@@ -471,10 +469,10 @@ class Engine:
             if step_def and step_def.session and job.id in self._session_registries:
                 state = self._session_registries[job.id].get(step_def.session)
 
-        if state is None or not state.claude_uuid:
+        if state is None or not state.session_id:
             _engine_logger.warning(
-                "fork-source step %r completed without a captured claude_uuid; "
-                "snapshot skipped (fork would fall back to live UUID)",
+                "fork-source step %r completed without a captured session_id; "
+                "snapshot skipped (fork would fall back to live session_id)",
                 step_name,
             )
             return
@@ -499,8 +497,8 @@ class Engine:
         try:
             from stepwise.snapshot import snapshot_session
             from stepwise.session_lock import SessionLock
-            with SessionLock(state.claude_uuid, working_dir, "exclusive"):
-                snap_uuid = snapshot_session(state.claude_uuid, working_dir)
+            with SessionLock(state.session_id, working_dir, "exclusive"):
+                snap_uuid = snapshot_session(state.session_id, working_dir)
                 run.executor_state = {
                     **(run.executor_state or {}),
                     "snapshot_uuid": snap_uuid,
@@ -511,7 +509,7 @@ class Engine:
                 self.store.save_run(run)
             _engine_logger.info(
                 "snapshotted session %s -> %s for fork-source step %r",
-                state.claude_uuid, snap_uuid, step_name,
+                state.session_id, snap_uuid, step_name,
             )
         except Exception as exc:
             # Acceptable v1.0 wart per §9.3: if the snapshot fails, leave
@@ -2240,40 +2238,21 @@ class Engine:
                 session_state = self._session_registries[job.id].get(step_def.session)
                 if session_state:
                     session_ctx["_session_name"] = session_state.name
-                    session_ctx["_backend_type"] = session_state.backend_type
                     session_ctx["_agent"] = session_state.agent
 
-                    if session_state.claude_uuid and not step_def.fork_from:
+                    if session_state.session_id and not step_def.fork_from:
                         # Continue existing session
-                        session_ctx["_session_uuid"] = session_state.claude_uuid
+                        session_ctx["_session_uuid"] = session_state.session_id
                     elif step_def.fork_from and not session_state.created:
-                        # First (chain-root) step on a forked session — pass
-                        # the parent step's SNAPSHOT UUID, not the live UUID.
-                        # Per §9 of the coordination doc, forking from the
-                        # live UUID has a race where the parent session may
-                        # continue writing past the intended fork point. The
-                        # snapshot UUID is created by the fork-source step's
-                        # synchronous lifecycle
-                        # (see _maybe_snapshot_for_fork_source).
-                        #
-                        # Under step-name fork_from semantics (§8.2),
-                        # ``step_def.fork_from`` names the parent STEP whose
-                        # completion-tail is the fork anchor.
+                        # First (chain-root) step on a forked session.
+                        # Try snapshot UUID first, fall back to live session_id.
                         snap_uuid = self._lookup_snapshot_uuid(
                             job, step_def.fork_from
                         )
                         if snap_uuid:
                             session_ctx["_fork_from_session_id"] = snap_uuid
                         else:
-                            # Fallback to live UUID if no snapshot exists
-                            # (e.g., parent step hasn't completed yet —
-                            # surfaces as a noisy log so we notice). Read
-                            # the parent step's completed run directly; if
-                            # the step's executor_state recorded a live
-                            # session UUID (the acpx backend stores it under
-                            # ``session_id``), use that. Otherwise fall back
-                            # to the parent step's session-state claude_uuid
-                            # via the registry.
+                            # Fallback to live session_id if no snapshot exists.
                             live_uuid: str | None = None
                             parent_run = self.store.latest_completed_run(
                                 job.id, step_def.fork_from
@@ -2295,21 +2274,18 @@ class Engine:
                                         self._session_registries[job.id]
                                         .get(parent_session_name)
                                     )
-                                    if parent_state and parent_state.claude_uuid:
-                                        live_uuid = parent_state.claude_uuid
+                                    if parent_state and parent_state.session_id:
+                                        live_uuid = parent_state.session_id
                             if live_uuid:
                                 _engine_logger.warning(
                                     "fork from step %r missing snapshot_uuid; "
-                                    "falling back to live parent UUID (race risk)",
+                                    "falling back to live parent session_id (race risk)",
                                     step_def.fork_from,
                                 )
                                 session_ctx["_fork_from_session_id"] = live_uuid
-                        session_ctx["_backend_type"] = "claude_direct"
                     elif session_state.created:
-                        # Subsequent step on forked session — continue via claude_direct
-                        session_ctx["_session_uuid"] = session_state.claude_uuid
-                        if session_state.is_forked:
-                            session_ctx["_backend_type"] = "claude_direct"
+                        # Subsequent step on forked session — continue
+                        session_ctx["_session_uuid"] = session_state.session_id
 
             # §9.7.1: Ephemeral fork — fork_from set but NO session declared.
             # Look up the fork source's snapshot UUID and pass it directly
@@ -2322,7 +2298,6 @@ class Engine:
                     uuid_from_input = job.inputs.get(input_name)
                     if uuid_from_input:
                         session_ctx["_fork_from_session_id"] = uuid_from_input
-                        session_ctx["_backend_type"] = "claude_direct"
                 else:
                     # Ephemeral fork from a same-scope step name
                     snap_uuid = self._lookup_snapshot_uuid(
@@ -2330,7 +2305,6 @@ class Engine:
                     )
                     if snap_uuid:
                         session_ctx["_fork_from_session_id"] = snap_uuid
-                        session_ctx["_backend_type"] = "claude_direct"
                     else:
                         # Fallback: try live session UUID from executor_state
                         parent_run = self.store.latest_completed_run(
@@ -2340,7 +2314,6 @@ class Engine:
                             live_uuid = parent_run.executor_state.get("session_id")
                             if live_uuid:
                                 session_ctx["_fork_from_session_id"] = live_uuid
-                                session_ctx["_backend_type"] = "claude_direct"
 
             # Legacy continue_session support
             elif step_def.continue_session:
@@ -2475,30 +2448,22 @@ class Engine:
                         self._emit_effector_events(job.id, result.envelope)
                         # Write to cache if enabled
                         self._write_step_cache(job, step_def, run, result.envelope)
-                        # Capture session UUID for named sessions
+                        # Capture session ID for named sessions
                         if step_def.session and job.id in self._session_registries:
                             state = self._session_registries[job.id].get(step_def.session)
                             if state and not state.created:
                                 output_path = (run.executor_state or {}).get("output_path")
                                 if output_path:
                                     try:
-                                        from stepwise.claude_direct import _extract_claude_session_id
-                                        state.claude_uuid = _extract_claude_session_id(output_path)
+                                        from stepwise.acp_ndjson import extract_session_id
+                                        state.session_id = extract_session_id(output_path, result_only=True)
                                     except Exception:
                                         pass
-                                # Fallback: the acpx backend's `sessions ensure` call
-                                # captures the claude session UUID directly from its
-                                # stdout and stashes it on executor_state["session_id"].
-                                # When a named session is reused across jobs the ACP
-                                # NDJSON has no `session/new` event to parse from, so
-                                # _extract_claude_session_id returns None. Use the
-                                # backend-captured value in that case — it is the
-                                # same UUID as the on-disk session JSONL filename.
-                                if not state.claude_uuid:
-                                    state.claude_uuid = (run.executor_state or {}).get("session_id")
+                                # Fallback: the backend captures the session ID
+                                # directly and stashes it on executor_state["session_id"].
+                                if not state.session_id:
+                                    state.session_id = (run.executor_state or {}).get("session_id")
                                 state.created = True
-                                if state.is_forked:
-                                    state.backend_type = "claude_direct"
                             # §9.3 critical section: if this step is a
                             # fork source, snapshot the session JSON inside
                             # an exclusive lock and persist the snapshot
@@ -4265,10 +4230,9 @@ class AsyncEngine(Engine):
                     session_state = self._session_registries[job.id].get(step_def.session)
                     if session_state:
                         session_ctx["_session_name"] = session_state.name
-                        session_ctx["_backend_type"] = session_state.backend_type
                         session_ctx["_agent"] = session_state.agent
-                        if session_state.claude_uuid:
-                            session_ctx["_session_uuid"] = session_state.claude_uuid
+                        if session_state.session_id:
+                            session_ctx["_session_uuid"] = session_state.session_id
 
             # Legacy continue_session
             elif step_def.continue_session:

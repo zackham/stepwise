@@ -22,7 +22,6 @@ import pytest
 
 from tests.conftest import run_job, run_job_sync
 from stepwise.agent import AgentExecutor, AgentStatus, MockAgentBackend
-from stepwise.claude_direct import ClaudeDirectBackend
 from stepwise.engine import AsyncEngine, Engine, SessionState
 from stepwise.executors import ExecutionContext, ExecutorRegistry, ExecutorResult
 from stepwise.models import (
@@ -51,7 +50,7 @@ def mock_backend():
 
 @pytest.fixture
 def mock_claude_direct():
-    """A second mock backend acting as ClaudeDirectBackend."""
+    """A second mock backend (legacy, kept for backward-compat tests)."""
     return MockAgentBackend()
 
 
@@ -101,13 +100,12 @@ class TestBuildSessionRegistry:
         state = registry["planning"]
         assert state.name == "planning"
         assert state.agent == "claude"
-        assert state.backend_type == "acpx"
         assert state.is_forked is False
-        assert state.claude_uuid is None
+        assert state.session_id is None
         assert state.created is False
 
     def test_fork_session_registry(self, engine):
-        """Fork session gets correct backend_type and is_forked flag."""
+        """Fork session gets correct is_forked flag."""
         wf = WorkflowDefinition(steps={
             "plan": StepDefinition(
                 name="plan", outputs=["plan"],
@@ -126,9 +124,7 @@ class TestBuildSessionRegistry:
         registry = engine._build_session_registry(job)
 
         assert len(registry) == 2
-        assert registry["planning"].backend_type == "acpx"
         assert registry["planning"].is_forked is False
-        assert registry["critic"].backend_type == "claude_direct"
         assert registry["critic"].is_forked is True
 
     def test_no_sessions_empty_registry(self, engine):
@@ -200,7 +196,6 @@ class TestSessionContextInjection:
 
         # exec_ref should have session config
         assert exec_ref.config.get("_session_name") == "planning"
-        assert exec_ref.config.get("_backend_type") == "acpx"
         # No UUID yet (not created)
         assert "_session_uuid" not in exec_ref.config
         assert "_fork_from_session_id" not in exec_ref.config
@@ -228,7 +223,7 @@ class TestSessionContextInjection:
         # Simulate first step having completed and set UUID
         registry = engine._session_registries[job.id]
         registry["planning"].created = True
-        registry["planning"].claude_uuid = "uuid-abc-123"
+        registry["planning"].session_id = "uuid-abc-123"
 
         run, exec_ref, inputs, ctx = engine._prepare_step_run(job, "implement")
 
@@ -259,7 +254,7 @@ class TestSessionContextInjection:
         # Simulate parent session having completed
         registry = engine._session_registries[job.id]
         registry["planning"].created = True
-        registry["planning"].claude_uuid = "parent-uuid-456"
+        registry["planning"].session_id = "parent-uuid-456"
 
         run, exec_ref, inputs, ctx = engine._prepare_step_run(job, "review")
 
@@ -267,7 +262,6 @@ class TestSessionContextInjection:
         # No snapshot_uuid persisted on the parent step's run, so the
         # fallback path supplies the live parent UUID via the registry.
         assert exec_ref.config.get("_fork_from_session_id") == "parent-uuid-456"
-        assert exec_ref.config.get("_backend_type") == "claude_direct"
 
     def test_legacy_continue_session_still_works(self, engine, mock_backend):
         """Old continue_session: true flows still produce correct config."""
@@ -318,7 +312,7 @@ class TestSessionContextInjection:
 
 class TestSessionUUIDCapture:
     def test_uuid_captured_on_first_step(self, engine, mock_backend, tmp_path):
-        """Session registry gets claude_uuid after first step completes."""
+        """Session registry gets session_id after first step completes."""
         # Create a mock ACP output file with session ID
         output_file = tmp_path / "output.jsonl"
         output_file.write_text(
@@ -362,66 +356,53 @@ class TestSessionUUIDCapture:
         assert state.created is False
 
         # Simulate capture
-        state.claude_uuid = "uuid-captured-789"
+        state.session_id = "uuid-captured-789"
         state.created = True
-        assert state.claude_uuid == "uuid-captured-789"
+        assert state.session_id == "uuid-captured-789"
         assert state.created is True
 
     def test_uuid_not_overwritten_on_subsequent_steps(self):
-        """Once created, claude_uuid should not change."""
-        state = SessionState(name="planning", claude_uuid="first-uuid", created=True)
+        """Once created, session_id should not change."""
+        state = SessionState(name="planning", session_id="first-uuid", created=True)
         # If we call the capture logic again and it's already created, it should skip
         assert state.created is True
         # The engine code checks `not session_state.created` before overwriting
         # So this uuid should remain
-        assert state.claude_uuid == "first-uuid"
+        assert state.session_id == "first-uuid"
 
-    def test_fork_stays_claude_direct_after_creation(self):
-        """Forked sessions keep backend_type=claude_direct after creation."""
+    def test_fork_session_state_after_creation(self):
+        """Forked sessions keep is_forked=True after creation."""
         state = SessionState(
             name="critic",
             is_forked=True,
-            backend_type="claude_direct",
         )
         # Simulate creation
         state.created = True
-        state.claude_uuid = "fork-uuid-abc"
-        if state.is_forked:
-            state.backend_type = "claude_direct"
-        assert state.backend_type == "claude_direct"
+        state.session_id = "fork-uuid-abc"
+        assert state.is_forked is True
+        assert state.session_id == "fork-uuid-abc"
 
 
 # ── Backend Selection ───────────────────────────────────────────────
 
 
 class TestBackendSelection:
-    def test_select_default_backend(self, mock_backend, mock_claude_direct):
-        """Without _backend_type, default backend is selected."""
+    def test_select_always_returns_backend(self, mock_backend, mock_claude_direct):
+        """ACPBackend handles all operations — always returns primary backend."""
         executor = AgentExecutor(
             backend=mock_backend,
-            claude_direct_backend=mock_claude_direct,
             prompt="test",
         )
         config = {"_session_name": "main"}
         assert executor._select_backend(config) is mock_backend
 
-    def test_select_claude_direct_backend(self, mock_backend, mock_claude_direct):
-        """With _backend_type=claude_direct, claude_direct backend is selected."""
+    def test_select_backend_ignores_legacy_type(self, mock_backend):
+        """_backend_type is no longer used — always returns primary backend."""
         executor = AgentExecutor(
             backend=mock_backend,
-            claude_direct_backend=mock_claude_direct,
             prompt="test",
         )
         config = {"_backend_type": "claude_direct", "_session_name": "fork"}
-        assert executor._select_backend(config) is mock_claude_direct
-
-    def test_select_fallback_when_no_claude_direct(self, mock_backend):
-        """If no claude_direct backend, fall back to default even with _backend_type."""
-        executor = AgentExecutor(
-            backend=mock_backend,
-            prompt="test",
-        )
-        config = {"_backend_type": "claude_direct"}
         assert executor._select_backend(config) is mock_backend
 
 
@@ -514,7 +495,7 @@ class TestRestartResilience:
         engine._ensure_session_registry(job)
         registry = engine._session_registries[job.id]
         registry["planning"].created = True
-        registry["planning"].claude_uuid = "restart-uuid"
+        registry["planning"].session_id = "restart-uuid"
 
         from stepwise.models import StepRun
         run = StepRun(
@@ -601,8 +582,7 @@ class TestSessionState:
     def test_defaults(self):
         state = SessionState(name="main")
         assert state.name == "main"
-        assert state.claude_uuid is None
-        assert state.backend_type == "acpx"
+        assert state.session_id is None
         assert state.is_forked is False
         assert state.agent == "claude"
         assert state.created is False
@@ -611,10 +591,8 @@ class TestSessionState:
         state = SessionState(
             name="critic",
             is_forked=True,
-            backend_type="claude_direct",
         )
         assert state.is_forked is True
-        assert state.backend_type == "claude_direct"
 
 
 # ── Ensure Session Registry ────────────────────────────────────────
@@ -636,13 +614,13 @@ class TestEnsureSessionRegistry:
         registry1 = engine._session_registries[job.id]
 
         # Mutate the registry
-        registry1["planning"].claude_uuid = "modified"
+        registry1["planning"].session_id = "modified"
 
         # Call again — should NOT rebuild
         engine._ensure_session_registry(job)
         registry2 = engine._session_registries[job.id]
 
-        assert registry2["planning"].claude_uuid == "modified"
+        assert registry2["planning"].session_id == "modified"
         assert registry1 is registry2
 
 

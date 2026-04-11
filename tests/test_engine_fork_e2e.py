@@ -86,7 +86,7 @@ def test_e2e_fork_flow_uses_snapshot(engine, fake_sessions_dir):
     # Simulate the parent session having captured a live UUID after
     # subprocess exit (this is normally done by the completion path).
     parent_state = engine._session_registries[job.id]["parent"]
-    parent_state.claude_uuid = "live-parent-uuid-001"
+    parent_state.session_id = "live-parent-uuid-001"
     parent_state.created = True
 
     # Synthesize a COMPLETED parent run (no snapshot_uuid yet — that's
@@ -119,11 +119,11 @@ def test_e2e_fork_flow_uses_snapshot(engine, fake_sessions_dir):
     assert snap == "snap-of-live-parent-uuid-001"
 
     # Step 3 acceptance: the snapshot UUID is distinct from the live UUID.
-    assert snap != parent_state.claude_uuid
+    assert snap != parent_state.session_id
 
     # The lock file should exist (created by SessionLock during the
     # critical section).
-    lock_file = fake_sessions_dir / f"{parent_state.claude_uuid}.lock"
+    lock_file = fake_sessions_dir / f"{parent_state.session_id}.lock"
     assert lock_file.exists()
 
 
@@ -135,7 +135,7 @@ def test_e2e_non_fork_source_unchanged(engine, fake_sessions_dir):
     job = engine.create_job("e2e nofork", wf)
     engine._ensure_session_registry(job)
     state = engine._session_registries[job.id]["solo_sess"]
-    state.claude_uuid = "live-solo-uuid"
+    state.session_id = "live-solo-uuid"
     state.created = True
 
     run = StepRun(
