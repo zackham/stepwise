@@ -771,7 +771,7 @@ function JobListView({ jobs }: { jobs: Job[] }) {
                   <div key={`group-${groupName}`}>
                     <button
                       onClick={() => toggleGroup(groupName)}
-                      className="w-full flex items-center gap-3 px-4 sm:px-6 py-3 bg-zinc-50/30 dark:bg-zinc-900/20 hover:bg-zinc-100/50 dark:hover:bg-zinc-800/30 transition-colors text-left"
+                      className="w-full flex items-center gap-3 px-4 sm:px-6 py-3 bg-zinc-100/40 dark:bg-zinc-800/50 hover:bg-zinc-100/60 dark:hover:bg-zinc-700/50 transition-colors text-left border-l-2 border-primary/60"
                     >
                       {/* Checkbox placeholder for alignment */}
                       <span className="w-4 shrink-0" />
