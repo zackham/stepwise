@@ -27,6 +27,7 @@ export interface Schedule {
   updated_at: string;
   paused_at: string | null;
   last_fired_at: string | null;
+  last_job_status: string | null;
   metadata: Record<string, unknown>;
 }
 

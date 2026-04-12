@@ -710,9 +710,22 @@ function ScheduleRow({
         </div>
       </div>
 
-      {/* Last fired */}
-      <div className="hidden md:block w-24 text-right text-xs text-zinc-500 shrink-0">
-        {schedule.last_fired_at ? timeAgo(schedule.last_fired_at) : "never"}
+      {/* Last fired + status */}
+      <div className="hidden md:flex flex-col items-end w-28 text-xs shrink-0">
+        <span className="text-zinc-500">
+          {schedule.last_fired_at ? timeAgo(schedule.last_fired_at) : "never"}
+        </span>
+        {schedule.last_job_status && (
+          <span className={cn(
+            "text-[10px] mt-0.5",
+            schedule.last_job_status === "completed" && "text-emerald-500",
+            schedule.last_job_status === "running" && "text-blue-400",
+            schedule.last_job_status === "failed" && "text-red-400",
+            schedule.last_job_status === "cancelled" && "text-zinc-400",
+          )}>
+            {schedule.last_job_status}
+          </span>
+        )}
       </div>
 
       {/* Actions */}

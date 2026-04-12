@@ -4282,10 +4282,21 @@ def _cron_description(expr: str) -> str:
 
 def _serialize_schedule(sched: Schedule, stats: dict | None = None) -> dict:
     """Convert a Schedule to a JSON-serializable dict with optional stats."""
+    engine = _get_engine()
     d = sched.to_dict()
     d["cron_description"] = _cron_description(sched.cron_expr)
     if stats:
         d["stats"] = stats
+    # Include last fired job status
+    last_tick = engine.store.last_fired_tick(sched.id)
+    if last_tick and last_tick.job_id:
+        try:
+            job = engine.store.load_job(last_tick.job_id)
+            d["last_job_status"] = job.status.value
+        except (KeyError, Exception):
+            d["last_job_status"] = None
+    else:
+        d["last_job_status"] = None
     return d
 
 
