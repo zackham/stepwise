@@ -291,10 +291,27 @@ class SchedulerService:
         )
 
     def _render_job_name(self, sched: Schedule, poll_output: dict | None) -> str:
-        """Render job name from template or generate default."""
-        if sched.job_name_template and poll_output:
+        """Render job name from template or generate default.
+
+        Built-in variables: {date} (YYYY-MM-DD), {time} (HH:MM).
+        Poll output keys are also available for poll-type schedules.
+        """
+        if sched.job_name_template:
+            now = _now()
             try:
-                return sched.job_name_template.format(**poll_output)
+                import zoneinfo
+                tz = zoneinfo.ZoneInfo(sched.timezone)
+            except Exception:
+                tz = timezone.utc
+            local = now.astimezone(tz)
+            template_vars = {
+                "date": local.strftime("%Y-%m-%d"),
+                "time": local.strftime("%H:%M"),
+            }
+            if poll_output:
+                template_vars.update(poll_output)
+            try:
+                return sched.job_name_template.format(**template_vars)
             except (KeyError, ValueError):
                 pass
         return f"sched: {sched.name}"

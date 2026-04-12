@@ -57,6 +57,8 @@ import type { LocalFlow } from "@/lib/types";
 import { fetchLocalFlows } from "@/lib/api";
 import cronstrue from "cronstrue";
 import { ScheduleChat } from "@/components/schedules/ScheduleChat";
+import { JobStatusBadge } from "@/components/StatusBadge";
+import { usePanelRegister } from "@/hooks/usePanelRegister";
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -422,26 +424,16 @@ function CronIntervalPicker({
         </p>
       )}
 
-      {/* Advanced toggle */}
-      <button
-        type="button"
-        onClick={() => setShowAdvanced(!showAdvanced)}
-        className="text-[11px] text-zinc-500 hover:text-foreground transition-colors cursor-pointer"
-      >
-        {showAdvanced ? "Hide cron" : "Edit cron"}
-      </button>
-
-      {showAdvanced && (
-        <Input
-          value={value}
-          onChange={(e) => {
-            onChange(e.target.value);
-            setCustomMode("custom");
-          }}
-          placeholder="*/5 * * * *"
-          className="font-mono text-xs"
-        />
-      )}
+      {/* Always show raw cron expression */}
+      <Input
+        value={value}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setCustomMode("custom");
+        }}
+        placeholder="*/5 * * * *"
+        className="font-mono text-xs"
+      />
     </div>
   );
 }
@@ -820,9 +812,10 @@ function ScheduleFormDialog({
               placeholder="my-flow-{date}"
             />
             <p className="text-[11px] text-zinc-500">
-              {form.type === "poll"
-                ? <>Variables from poll output: <code className="px-1 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 font-mono">{"{key_name}"}</code>. Example: <code className="px-1 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 font-mono">fix-issue-{"{number}"}</code></>
-                : "No template variables available for cron schedules."}
+              Built-in: <code className="px-1 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 font-mono">{"{date}"}</code> <code className="px-1 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 font-mono">{"{time}"}</code>
+              {form.type === "poll" && (
+                <> · Poll output: <code className="px-1 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 font-mono">{"{key_name}"}</code></>
+              )}
             </p>
           </div>
 
@@ -967,21 +960,17 @@ function ScheduleRow({
         </div>
       </div>
 
-      {/* Last fired + status */}
-      <div className="hidden md:flex flex-col items-end w-28 text-xs shrink-0">
-        <span className="text-zinc-500">
-          {schedule.last_fired_at ? timeAgo(schedule.last_fired_at) : "never"}
-        </span>
-        {schedule.last_job_status && (
-          <span className={cn(
-            "text-[10px] mt-0.5",
-            schedule.last_job_status === "completed" && "text-emerald-500",
-            schedule.last_job_status === "running" && "text-blue-400",
-            schedule.last_job_status === "failed" && "text-red-400",
-            schedule.last_job_status === "cancelled" && "text-zinc-400",
-          )}>
-            {schedule.last_job_status}
-          </span>
+      {/* Last fired */}
+      <div className="hidden md:block w-20 text-right text-xs text-zinc-500 shrink-0">
+        {schedule.last_fired_at ? timeAgo(schedule.last_fired_at) : "never"}
+      </div>
+
+      {/* Last job status */}
+      <div className="hidden md:flex w-24 justify-end shrink-0">
+        {schedule.last_job_status ? (
+          <JobStatusBadge status={schedule.last_job_status as any} />
+        ) : (
+          <span className="text-xs text-zinc-600">—</span>
         )}
       </div>
 
@@ -1035,6 +1024,14 @@ export function SchedulesPage() {
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const queryClient = useQueryClient();
+
+  // Register chat toggle in global nav header (same pattern as editor)
+  usePanelRegister({
+    chat: {
+      open: chatOpen,
+      toggle: () => setChatOpen((v) => !v),
+    },
+  });
 
   const { data: schedules = [], isLoading } = useSchedules(
     statusFilter ?? undefined,
@@ -1158,15 +1155,7 @@ export function SchedulesPage() {
 
         <div className="h-4 w-px bg-border" />
 
-        {/* Chat + New Schedule buttons */}
-        <Button
-          size="sm"
-          variant={chatOpen ? "default" : "outline"}
-          onClick={() => setChatOpen(!chatOpen)}
-          title="Chat with AI about schedules"
-        >
-          <Bot className="h-3.5 w-3.5" />
-        </Button>
+        {/* New Schedule button */}
         <Button size="sm" onClick={handleCreate}>
           <Plus className="h-3.5 w-3.5" data-icon="inline-start" />
           New Schedule
@@ -1177,7 +1166,8 @@ export function SchedulesPage() {
       <div className="flex items-center gap-3 px-4 sm:px-6 py-2 border-b border-border/50 text-[11px] uppercase tracking-wider text-zinc-500 font-medium">
         <span className="w-2 shrink-0" />
         <span className="flex-1">Name</span>
-        <span className="hidden md:block w-24 text-right">Last fired</span>
+        <span className="hidden md:block w-20 text-right">Last fired</span>
+        <span className="hidden md:block w-24 text-right">Last status</span>
         <span className="w-[152px] shrink-0" />
       </div>
 
