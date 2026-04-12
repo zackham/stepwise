@@ -771,7 +771,7 @@ function JobListView({ jobs }: { jobs: Job[] }) {
                   <div key={`group-${groupName}`}>
                     <button
                       onClick={() => toggleGroup(groupName)}
-                      className="w-full flex items-center gap-3 px-4 sm:px-6 py-3 bg-zinc-100/40 dark:bg-zinc-800/50 hover:bg-zinc-100/60 dark:hover:bg-zinc-700/50 transition-colors text-left border-l-2 border-primary/60"
+                      className="w-full flex items-center gap-3 px-4 sm:px-6 py-2.5 bg-zinc-100/50 dark:bg-zinc-800/60 hover:bg-zinc-200/50 dark:hover:bg-zinc-700/60 transition-colors text-left border-l-2 border-primary/70"
                     >
                       {/* Checkbox placeholder for alignment */}
                       <span className="w-4 shrink-0" />
@@ -801,7 +801,11 @@ function JobListView({ jobs }: { jobs: Job[] }) {
                         <span>{jobsSummary}</span>
                       </div>
                     </button>
-                    {isExpanded && groupJobs.map(renderRow)}
+                    {isExpanded && (
+                      <div className="border-l-2 border-primary/30 ml-6 bg-zinc-900/30">
+                        {groupJobs.map(renderRow)}
+                      </div>
+                    )}
                   </div>
                 );
               })}
