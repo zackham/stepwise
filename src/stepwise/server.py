@@ -4692,7 +4692,7 @@ Be concise and conversational. Use short sentences.
 - overlap_policy: "skip" (default), "queue", or "allow"
 - recovery_policy: "skip" (default) or "catch_up_once"
 - timezone: IANA timezone (default "America/Los_Angeles")
-- job_name_template: template for job names, can include {"{variables}"} from poll output
+- job_name_template: template for job names, can include variables like {number} from poll output
 - job_inputs: key-value pairs passed to the flow
 """
 
@@ -4920,9 +4920,10 @@ async def schedules_chat(req: SchedulesChatRequest):
     except Exception:
         flows_json = "Could not load flows."
 
-    system_prompt = _SCHEDULE_CHAT_SYSTEM.format(
-        schedules_json=schedules_json,
-        flows_json=flows_json,
+    system_prompt = _SCHEDULE_CHAT_SYSTEM.replace(
+        "{schedules_json}", schedules_json
+    ).replace(
+        "{flows_json}", flows_json
     )
 
     # Build messages
@@ -4934,7 +4935,7 @@ async def schedules_chat(req: SchedulesChatRequest):
     def generate():
         import httpx as _httpx
 
-        model = "anthropic/claude-sonnet-4-20250514"
+        model = "anthropic/claude-sonnet-4-6"
         max_turns = 5  # Max tool-use turns
 
         current_messages = list(messages)
