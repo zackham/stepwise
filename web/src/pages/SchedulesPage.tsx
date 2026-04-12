@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Play,
   Pause,
@@ -13,6 +13,7 @@ import {
   Pencil,
   X,
   Loader2,
+  Bot,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +21,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+  SelectGroup,
+  SelectLabel,
+} from "@/components/ui/select";
 import { useSchedules, useScheduleMutations } from "@/hooks/useSchedules";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -46,6 +56,7 @@ import type { CreateSchedulePayload } from "@/lib/schedule-api";
 import type { LocalFlow } from "@/lib/types";
 import { fetchLocalFlows } from "@/lib/api";
 import cronstrue from "cronstrue";
+import { ScheduleChat } from "@/components/schedules/ScheduleChat";
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -186,6 +197,253 @@ interface ScheduleFormData {
   overlap_policy: string;
   recovery_policy: string;
   timezone: string;
+}
+
+// ── Cron Interval Picker ─────────────────────────────────────────────
+
+interface CronPreset {
+  label: string;
+  cron: string;
+  mode: "minute" | "hourly" | "daily" | "weekly";
+}
+
+const CRON_PRESETS: CronPreset[] = [
+  { label: "Every 5 min", cron: "*/5 * * * *", mode: "minute" },
+  { label: "Every 15 min", cron: "*/15 * * * *", mode: "minute" },
+  { label: "Every 30 min", cron: "*/30 * * * *", mode: "minute" },
+  { label: "Hourly", cron: "0 * * * *", mode: "hourly" },
+  { label: "Daily", cron: "0 9 * * *", mode: "daily" },
+  { label: "Weekly", cron: "0 9 * * MON", mode: "weekly" },
+];
+
+const DAY_NAMES = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
+const DAY_LABELS = ["M", "T", "W", "T", "F", "S", "S"];
+
+function parseCronMode(expr: string): "minute" | "hourly" | "daily" | "weekly" | "custom" {
+  if (!expr) return "minute";
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) return "custom";
+  const [min, hour, dom, mon, dow] = parts;
+  // Check presets first
+  if (CRON_PRESETS.some((p) => p.cron === expr)) {
+    return CRON_PRESETS.find((p) => p.cron === expr)!.mode;
+  }
+  // Minute intervals: */N * * * *
+  if (min.startsWith("*/") && hour === "*" && dom === "*" && mon === "*" && dow === "*") return "minute";
+  // Hourly: N * * * *
+  if (!min.includes("/") && !min.includes(",") && hour === "*" && dom === "*" && mon === "*" && dow === "*") return "hourly";
+  // Weekly: has dow != *
+  if (dow !== "*") return "weekly";
+  // Daily: specific hour, dom/mon/dow are *
+  if (dom === "*" && mon === "*" && dow === "*") return "daily";
+  return "custom";
+}
+
+function CronIntervalPicker({
+  value,
+  onChange,
+  cronPreview,
+  label,
+}: {
+  value: string;
+  onChange: (expr: string) => void;
+  cronPreview: string;
+  label?: string;
+}) {
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [customMode, setCustomMode] = useState<"minute" | "hourly" | "daily" | "weekly" | "custom" | null>(null);
+
+  const mode = customMode ?? parseCronMode(value);
+
+  // Parse current values from cron for the custom controls
+  const parts = value.trim().split(/\s+/);
+  const cronMin = parts[0] || "0";
+  const cronHour = parts[1] || "9";
+  const cronDow = parts[4] || "*";
+
+  const minuteInterval = cronMin.startsWith("*/") ? parseInt(cronMin.slice(2)) || 5 : 5;
+  const atMinute = !cronMin.includes("/") && !cronMin.includes(",") ? parseInt(cronMin) || 0 : 0;
+  const atHour = cronHour !== "*" ? parseInt(cronHour) || 9 : 9;
+
+  const selectedDays = cronDow === "*" ? [] : cronDow.split(",");
+
+  const handlePreset = (preset: CronPreset) => {
+    onChange(preset.cron);
+    setCustomMode(null);
+  };
+
+  const handleMinuteChange = (mins: number) => {
+    const clamped = Math.max(1, Math.min(59, mins));
+    onChange(`*/${clamped} * * * *`);
+  };
+
+  const handleHourlyChange = (min: number) => {
+    onChange(`${Math.max(0, Math.min(59, min))} * * * *`);
+  };
+
+  const handleDailyChange = (hour: number, min: number) => {
+    const safeDow = mode === "weekly" && selectedDays.length > 0 ? selectedDays.join(",") : "*";
+    onChange(`${Math.max(0, Math.min(59, min))} ${Math.max(0, Math.min(23, hour))} * * ${safeDow}`);
+  };
+
+  const handleDayToggle = (day: string) => {
+    let days = [...selectedDays];
+    if (days.includes(day)) {
+      days = days.filter((d) => d !== day);
+    } else {
+      days.push(day);
+    }
+    // Sort by day order
+    days.sort((a, b) => DAY_NAMES.indexOf(a) - DAY_NAMES.indexOf(b));
+    if (days.length === 0) {
+      onChange(`${atMinute} ${atHour} * * *`);
+      setCustomMode("daily");
+    } else {
+      onChange(`${atMinute} ${atHour} * * ${days.join(",")}`);
+    }
+  };
+
+  const activePreset = CRON_PRESETS.find((p) => p.cron === value);
+
+  return (
+    <div className="space-y-2">
+      <Label>{label || "Schedule"}</Label>
+
+      {/* Preset buttons */}
+      <div className="flex flex-wrap gap-1">
+        {CRON_PRESETS.map((preset) => (
+          <button
+            key={preset.cron}
+            type="button"
+            onClick={() => handlePreset(preset)}
+            className={cn(
+              "px-2 py-1 text-[11px] rounded-md border transition-colors cursor-pointer",
+              activePreset?.cron === preset.cron
+                ? "bg-zinc-100 dark:bg-zinc-800 border-zinc-300 dark:border-zinc-600 text-foreground font-medium"
+                : "border-zinc-200 dark:border-zinc-700 text-zinc-500 hover:text-foreground hover:border-zinc-400",
+            )}
+          >
+            {preset.label}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => { setCustomMode("custom"); setShowAdvanced(true); }}
+          className={cn(
+            "px-2 py-1 text-[11px] rounded-md border transition-colors cursor-pointer",
+            mode === "custom" && !activePreset
+              ? "bg-zinc-100 dark:bg-zinc-800 border-zinc-300 dark:border-zinc-600 text-foreground font-medium"
+              : "border-zinc-200 dark:border-zinc-700 text-zinc-500 hover:text-foreground hover:border-zinc-400",
+          )}
+        >
+          Custom
+        </button>
+      </div>
+
+      {/* Custom controls */}
+      {mode === "minute" && !activePreset && (
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-zinc-500">Every</span>
+          <Input
+            type="number"
+            value={minuteInterval}
+            onChange={(e) => handleMinuteChange(parseInt(e.target.value) || 5)}
+            min={1}
+            max={59}
+            className="w-16 h-7 text-xs font-mono"
+          />
+          <span className="text-zinc-500">minutes</span>
+        </div>
+      )}
+
+      {mode === "hourly" && !activePreset && (
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-zinc-500">At minute</span>
+          <Input
+            type="number"
+            value={atMinute}
+            onChange={(e) => handleHourlyChange(parseInt(e.target.value) || 0)}
+            min={0}
+            max={59}
+            className="w-16 h-7 text-xs font-mono"
+          />
+        </div>
+      )}
+
+      {(mode === "daily" || mode === "weekly") && !activePreset && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-zinc-500">At</span>
+            <Input
+              type="number"
+              value={atHour}
+              onChange={(e) => handleDailyChange(parseInt(e.target.value) || 0, atMinute)}
+              min={0}
+              max={23}
+              className="w-14 h-7 text-xs font-mono"
+            />
+            <span className="text-zinc-500">:</span>
+            <Input
+              type="number"
+              value={atMinute}
+              onChange={(e) => handleDailyChange(atHour, parseInt(e.target.value) || 0)}
+              min={0}
+              max={59}
+              className="w-14 h-7 text-xs font-mono"
+            />
+          </div>
+          <div className="flex items-center gap-1">
+            {DAY_NAMES.map((day, i) => (
+              <button
+                key={day}
+                type="button"
+                onClick={() => handleDayToggle(day)}
+                className={cn(
+                  "w-7 h-7 text-[10px] rounded-md border transition-colors cursor-pointer",
+                  selectedDays.includes(day)
+                    ? "bg-blue-100 dark:bg-blue-500/20 border-blue-300 dark:border-blue-500/40 text-blue-700 dark:text-blue-300 font-medium"
+                    : "border-zinc-200 dark:border-zinc-700 text-zinc-500 hover:border-zinc-400",
+                )}
+              >
+                {DAY_LABELS[i]}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Live preview */}
+      {cronPreview && (
+        <p className={cn(
+          "text-[11px]",
+          cronPreview === "Invalid cron expression" ? "text-red-400" : "text-zinc-500",
+        )}>
+          {cronPreview}
+        </p>
+      )}
+
+      {/* Advanced toggle */}
+      <button
+        type="button"
+        onClick={() => setShowAdvanced(!showAdvanced)}
+        className="text-[11px] text-zinc-500 hover:text-foreground transition-colors cursor-pointer"
+      >
+        {showAdvanced ? "Hide cron" : "Edit cron"}
+      </button>
+
+      {showAdvanced && (
+        <Input
+          value={value}
+          onChange={(e) => {
+            onChange(e.target.value);
+            setCustomMode("custom");
+          }}
+          placeholder="*/5 * * * *"
+          className="font-mono text-xs"
+        />
+      )}
+    </div>
+  );
 }
 
 const DEFAULT_FORM: ScheduleFormData = {
@@ -443,50 +701,24 @@ function ScheduleFormDialog({
             </div>
           </div>
 
-          {/* Cron expression (always shown for cron, optionally for poll) */}
+          {/* Cron interval picker (shown for cron type) */}
           {form.type === "cron" && (
-            <div className="space-y-1.5">
-              <Label htmlFor="schedule-cron">Cron Expression</Label>
-              <Input
-                id="schedule-cron"
-                value={form.cron_expr}
-                onChange={(e) => update("cron_expr", e.target.value)}
-                placeholder="*/5 * * * *"
-                className="font-mono"
-                required
-              />
-              {cronPreview && (
-                <p className={cn(
-                  "text-[11px]",
-                  cronPreview === "Invalid cron expression" ? "text-red-400" : "text-zinc-500",
-                )}>
-                  {cronPreview}
-                </p>
-              )}
-            </div>
+            <CronIntervalPicker
+              value={form.cron_expr}
+              onChange={(expr) => update("cron_expr", expr)}
+              cronPreview={cronPreview}
+            />
           )}
 
           {/* Poll-specific fields */}
           {form.type === "poll" && (
             <>
-              <div className="space-y-1.5">
-                <Label htmlFor="schedule-cron-poll">Cron Expression (poll check interval)</Label>
-                <Input
-                  id="schedule-cron-poll"
-                  value={form.cron_expr}
-                  onChange={(e) => update("cron_expr", e.target.value)}
-                  placeholder="*/5 * * * *"
-                  className="font-mono"
-                />
-                {cronPreview && (
-                  <p className={cn(
-                    "text-[11px]",
-                    cronPreview === "Invalid cron expression" ? "text-red-400" : "text-zinc-500",
-                  )}>
-                    {cronPreview}
-                  </p>
-                )}
-              </div>
+              <CronIntervalPicker
+                value={form.cron_expr}
+                onChange={(expr) => update("cron_expr", expr)}
+                cronPreview={cronPreview}
+                label="Poll Check Interval"
+              />
               <div className="space-y-1.5">
                 <Label htmlFor="schedule-poll-cmd">Poll Command</Label>
                 <Textarea
@@ -587,43 +819,68 @@ function ScheduleFormDialog({
               onChange={(e) => update("job_name_template", e.target.value)}
               placeholder="my-flow-{date}"
             />
+            <p className="text-[11px] text-zinc-500">
+              {form.type === "poll"
+                ? <>Variables from poll output: <code className="px-1 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 font-mono">{"{key_name}"}</code>. Example: <code className="px-1 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 font-mono">fix-issue-{"{number}"}</code></>
+                : "No template variables available for cron schedules."}
+            </p>
           </div>
 
           {/* Policies + Timezone */}
           <div className="grid grid-cols-3 gap-3">
             <div className="space-y-1.5">
-              <Label htmlFor="schedule-overlap">Overlap</Label>
-              <select
-                id="schedule-overlap"
+              <Label>Overlap</Label>
+              <Select
                 value={form.overlap_policy}
-                onChange={(e) => update("overlap_policy", e.target.value)}
-                className="h-8 w-full rounded-lg border border-input bg-transparent px-2 text-sm dark:bg-input/30"
+                onValueChange={(val) => { if (val !== null) update("overlap_policy", val as string); }}
               >
-                <option value="skip">skip</option>
-                <option value="queue">queue</option>
-                <option value="allow">allow</option>
-              </select>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="skip">skip</SelectItem>
+                  <SelectItem value="queue">queue</SelectItem>
+                  <SelectItem value="allow">allow</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="schedule-recovery">Recovery</Label>
-              <select
-                id="schedule-recovery"
+              <Label>Recovery</Label>
+              <Select
                 value={form.recovery_policy}
-                onChange={(e) => update("recovery_policy", e.target.value)}
-                className="h-8 w-full rounded-lg border border-input bg-transparent px-2 text-sm dark:bg-input/30"
+                onValueChange={(val) => { if (val !== null) update("recovery_policy", val as string); }}
               >
-                <option value="skip">skip</option>
-                <option value="catch_up_once">catch_up_once</option>
-              </select>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="skip">skip</SelectItem>
+                  <SelectItem value="catch_up_once">catch_up_once</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="schedule-tz">Timezone</Label>
-              <Input
-                id="schedule-tz"
+              <Label>Timezone</Label>
+              <Select
                 value={form.timezone}
-                onChange={(e) => update("timezone", e.target.value)}
-                placeholder="America/Los_Angeles"
-              />
+                onValueChange={(val) => { if (val !== null) update("timezone", val as string); }}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectLabel>Common</SelectLabel>
+                    <SelectItem value="America/Los_Angeles">America/Los_Angeles</SelectItem>
+                    <SelectItem value="America/Denver">America/Denver</SelectItem>
+                    <SelectItem value="America/Chicago">America/Chicago</SelectItem>
+                    <SelectItem value="America/New_York">America/New_York</SelectItem>
+                    <SelectItem value="UTC">UTC</SelectItem>
+                    <SelectItem value="Europe/London">Europe/London</SelectItem>
+                    <SelectItem value="Asia/Tokyo">Asia/Tokyo</SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
             </div>
           </div>
 
@@ -776,6 +1033,8 @@ export function SchedulesPage() {
   const [typeFilter, setTypeFilter] = useState<ScheduleType | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
+  const queryClient = useQueryClient();
 
   const { data: schedules = [], isLoading } = useSchedules(
     statusFilter ?? undefined,
@@ -850,7 +1109,9 @@ export function SchedulesPage() {
   const isSubmitting = mutations.createSchedule.isPending || mutations.updateSchedule.isPending;
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full">
+      {/* Main content */}
+      <div className="flex h-full flex-col flex-1 min-w-0">
       {/* Header */}
       <div className="flex items-center gap-4 border-b border-border px-4 sm:px-6 py-3">
         <div className="flex items-center gap-2">
@@ -897,7 +1158,15 @@ export function SchedulesPage() {
 
         <div className="h-4 w-px bg-border" />
 
-        {/* New Schedule button */}
+        {/* Chat + New Schedule buttons */}
+        <Button
+          size="sm"
+          variant={chatOpen ? "default" : "outline"}
+          onClick={() => setChatOpen(!chatOpen)}
+          title="Chat with AI about schedules"
+        >
+          <Bot className="h-3.5 w-3.5" />
+        </Button>
         <Button size="sm" onClick={handleCreate}>
           <Plus className="h-3.5 w-3.5" data-icon="inline-start" />
           New Schedule
@@ -956,6 +1225,17 @@ export function SchedulesPage() {
         onSubmit={handleFormSubmit}
         isSubmitting={isSubmitting}
       />
+      </div>
+
+      {/* Chat Panel */}
+      {chatOpen && (
+        <ScheduleChat
+          onClose={() => setChatOpen(false)}
+          onScheduleChanged={() => {
+            queryClient.invalidateQueries({ queryKey: ["schedules"] });
+          }}
+        />
+      )}
     </div>
   );
 }

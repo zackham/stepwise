@@ -4661,6 +4661,410 @@ def list_schedule_jobs(
     return [_serialize_job(j, summary=True) for j in jobs]
 
 
+# ── Schedule Chat (LLM-assisted schedule management) ──────────────────
+
+
+class SchedulesChatRequest(BaseModel):
+    message: str
+    history: list[dict[str, str]] = []
+
+
+_SCHEDULE_CHAT_SYSTEM = """\
+You are a helpful schedule management assistant for Stepwise. You help users \
+create, modify, pause, resume, and delete schedules.
+
+You have tools to manage schedules. When the user asks you to do something, \
+use the appropriate tool. After taking an action, briefly confirm what you did.
+
+Be concise and conversational. Use short sentences.
+
+## Current schedules
+{schedules_json}
+
+## Available flows
+{flows_json}
+
+## Schedule fields reference
+- name: unique identifier (kebab-case recommended)
+- type: "cron" or "poll"
+- flow_path: path to the flow YAML file
+- cron_expr: cron expression (e.g. "*/5 * * * *")
+- overlap_policy: "skip" (default), "queue", or "allow"
+- recovery_policy: "skip" (default) or "catch_up_once"
+- timezone: IANA timezone (default "America/Los_Angeles")
+- job_name_template: template for job names, can include {"{variables}"} from poll output
+- job_inputs: key-value pairs passed to the flow
+"""
+
+_SCHEDULE_CHAT_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "create_schedule",
+            "description": "Create a new schedule",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Schedule name"},
+                    "type": {"type": "string", "enum": ["cron", "poll"], "description": "Schedule type"},
+                    "flow_path": {"type": "string", "description": "Path to the flow YAML"},
+                    "cron_expr": {"type": "string", "description": "Cron expression"},
+                    "overlap_policy": {"type": "string", "enum": ["skip", "queue", "allow"]},
+                    "recovery_policy": {"type": "string", "enum": ["skip", "catch_up_once"]},
+                    "timezone": {"type": "string"},
+                    "job_name_template": {"type": "string"},
+                    "job_inputs": {"type": "object"},
+                },
+                "required": ["name", "type", "flow_path", "cron_expr"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_schedule",
+            "description": "Update an existing schedule",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "schedule_id": {"type": "string", "description": "Schedule ID or name"},
+                    "name": {"type": "string"},
+                    "cron_expr": {"type": "string"},
+                    "overlap_policy": {"type": "string", "enum": ["skip", "queue", "allow"]},
+                    "recovery_policy": {"type": "string", "enum": ["skip", "catch_up_once"]},
+                    "timezone": {"type": "string"},
+                    "job_name_template": {"type": "string"},
+                    "job_inputs": {"type": "object"},
+                },
+                "required": ["schedule_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_schedule",
+            "description": "Delete a schedule",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "schedule_id": {"type": "string", "description": "Schedule ID or name"},
+                },
+                "required": ["schedule_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "pause_schedule",
+            "description": "Pause an active schedule",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "schedule_id": {"type": "string", "description": "Schedule ID or name"},
+                },
+                "required": ["schedule_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "resume_schedule",
+            "description": "Resume a paused schedule",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "schedule_id": {"type": "string", "description": "Schedule ID or name"},
+                },
+                "required": ["schedule_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_schedules",
+            "description": "List all schedules with their current status",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+]
+
+
+def _execute_schedule_tool(name: str, args: dict) -> tuple[str, dict | None]:
+    """Execute a schedule management tool call. Returns (result_text, action_data)."""
+    engine = _get_engine()
+
+    if name == "list_schedules":
+        schedules = engine.store.list_schedules()
+        if not schedules:
+            return "No schedules found.", None
+        lines = []
+        for s in schedules:
+            lines.append(f"- **{s.name}** ({s.id}): {s.status.value}, type={s.type.value}, cron=`{s.cron_expr}`")
+        return "\n".join(lines), None
+
+    if name == "create_schedule":
+        from stepwise.flow_resolution import resolve_flow, FlowResolutionError
+        try:
+            sched_type = ScheduleType(args.get("type", "cron"))
+            overlap = OverlapPolicy(args.get("overlap_policy", "skip"))
+            recovery = RecoveryPolicy(args.get("recovery_policy", "skip"))
+        except ValueError as e:
+            return f"Invalid value: {e}", None
+
+        try:
+            resolve_flow(args["flow_path"], _project_dir)
+        except FlowResolutionError:
+            return f"Flow not found: {args['flow_path']}", None
+
+        existing = engine.store.get_schedule_by_name(args["name"])
+        if existing:
+            return f"Schedule with name '{args['name']}' already exists.", None
+
+        sched = Schedule(
+            id=_gen_id("sched"),
+            name=args["name"],
+            type=sched_type,
+            flow_path=args["flow_path"],
+            cron_expr=args.get("cron_expr", ""),
+            overlap_policy=overlap,
+            recovery_policy=recovery,
+            timezone=args.get("timezone", "America/Los_Angeles"),
+            job_name_template=args.get("job_name_template"),
+            job_inputs=args.get("job_inputs", {}),
+        )
+        engine.store.save_schedule(sched)
+        if _scheduler:
+            _scheduler.reload_schedule(sched.id)
+        return f"Created schedule **{sched.name}** ({sched.id}).", {"action": "created", "schedule_id": sched.id}
+
+    if name == "update_schedule":
+        sid = args.pop("schedule_id", "")
+        sched = engine.store.get_schedule(sid) or engine.store.get_schedule_by_name(sid)
+        if not sched:
+            return f"Schedule not found: {sid}", None
+        updates = {k: v for k, v in args.items() if v is not None}
+        if not updates:
+            return "No fields to update.", None
+        engine.store.update_schedule(sched.id, **updates)
+        if _scheduler:
+            _scheduler.reload_schedule(sched.id)
+        return f"Updated schedule **{sched.name}**.", {"action": "updated", "schedule_id": sched.id}
+
+    if name == "delete_schedule":
+        sid = args.get("schedule_id", "")
+        sched = engine.store.get_schedule(sid) or engine.store.get_schedule_by_name(sid)
+        if not sched:
+            return f"Schedule not found: {sid}", None
+        engine.store.delete_schedule(sched.id)
+        if _scheduler:
+            _scheduler.reload_schedule(sched.id)
+        return f"Deleted schedule **{sched.name}**.", {"action": "deleted", "schedule_id": sched.id}
+
+    if name == "pause_schedule":
+        sid = args.get("schedule_id", "")
+        sched = engine.store.get_schedule(sid) or engine.store.get_schedule_by_name(sid)
+        if not sched:
+            return f"Schedule not found: {sid}", None
+        if sched.status == ScheduleStatus.PAUSED:
+            return f"Schedule **{sched.name}** is already paused.", None
+        engine.store.update_schedule(sched.id, status=ScheduleStatus.PAUSED.value, paused_at=_now())
+        if _scheduler:
+            _scheduler.reload_schedule(sched.id)
+        return f"Paused schedule **{sched.name}**.", {"action": "paused", "schedule_id": sched.id}
+
+    if name == "resume_schedule":
+        sid = args.get("schedule_id", "")
+        sched = engine.store.get_schedule(sid) or engine.store.get_schedule_by_name(sid)
+        if not sched:
+            return f"Schedule not found: {sid}", None
+        if sched.status == ScheduleStatus.ACTIVE:
+            return f"Schedule **{sched.name}** is already active.", None
+        engine.store.update_schedule(sched.id, status=ScheduleStatus.ACTIVE.value, paused_at=None)
+        if _scheduler:
+            _scheduler.reload_schedule(sched.id)
+        return f"Resumed schedule **{sched.name}**.", {"action": "resumed", "schedule_id": sched.id}
+
+    return f"Unknown tool: {name}", None
+
+
+@app.post("/api/schedules/chat")
+async def schedules_chat(req: SchedulesChatRequest):
+    """Chat with an LLM about schedule management. Streams NDJSON."""
+    from starlette.responses import StreamingResponse
+
+    config = load_config(_project_dir)
+    api_key = config.openrouter_api_key
+    if not api_key:
+        def error_gen():
+            yield json.dumps({"type": "error", "content": "OpenRouter API key not configured. Set it in .stepwise/config.yaml."}) + "\n"
+            yield json.dumps({"type": "done"}) + "\n"
+        return StreamingResponse(error_gen(), media_type="application/x-ndjson")
+
+    # Build context: current schedules + available flows
+    engine = _get_engine()
+    schedules = engine.store.list_schedules()
+    schedules_json = json.dumps([_serialize_schedule(s) for s in schedules], indent=2) if schedules else "No schedules configured yet."
+
+    # Get available flows
+    try:
+        from stepwise.flow_resolution import discover_flows
+        local_flows = discover_flows(_project_dir)
+        flows_json = json.dumps([{"name": f.name, "path": str(f.path)} for f in local_flows], indent=2)
+    except Exception:
+        flows_json = "Could not load flows."
+
+    system_prompt = _SCHEDULE_CHAT_SYSTEM.format(
+        schedules_json=schedules_json,
+        flows_json=flows_json,
+    )
+
+    # Build messages
+    messages = [{"role": "system", "content": system_prompt}]
+    for h in req.history:
+        messages.append({"role": h["role"], "content": h["content"]})
+    messages.append({"role": "user", "content": req.message})
+
+    def generate():
+        import httpx as _httpx
+
+        model = "anthropic/claude-sonnet-4-20250514"
+        max_turns = 5  # Max tool-use turns
+
+        current_messages = list(messages)
+
+        for _turn in range(max_turns):
+            payload = {
+                "model": model,
+                "messages": current_messages,
+                "tools": _SCHEDULE_CHAT_TOOLS,
+                "temperature": 0.3,
+                "max_tokens": 2048,
+                "stream": True,
+            }
+
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://stepwise.local",
+                "X-Title": "Stepwise Schedule Chat",
+            }
+
+            try:
+                with _httpx.stream(
+                    "POST",
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    json=payload,
+                    headers=headers,
+                    timeout=120.0,
+                ) as resp:
+                    if resp.status_code >= 400:
+                        error_body = resp.read().decode()
+                        yield json.dumps({"type": "error", "content": f"LLM API error ({resp.status_code}): {error_body[:200]}"}) + "\n"
+                        yield json.dumps({"type": "done"}) + "\n"
+                        return
+
+                    # Accumulate SSE chunks to build the full response
+                    full_content = ""
+                    tool_calls_accum: dict[int, dict] = {}  # index -> {name, arguments_str}
+
+                    for line in resp.iter_lines():
+                        if not line or not line.startswith("data: "):
+                            continue
+                        data_str = line[6:]
+                        if data_str.strip() == "[DONE]":
+                            break
+                        try:
+                            chunk_data = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+
+                        choices = chunk_data.get("choices", [])
+                        if not choices:
+                            continue
+                        delta = choices[0].get("delta", {})
+
+                        # Stream text content
+                        if delta.get("content"):
+                            full_content += delta["content"]
+                            yield json.dumps({"type": "text", "content": delta["content"]}) + "\n"
+
+                        # Accumulate tool calls
+                        if delta.get("tool_calls"):
+                            for tc in delta["tool_calls"]:
+                                idx = tc.get("index", 0)
+                                if idx not in tool_calls_accum:
+                                    tool_calls_accum[idx] = {"name": "", "arguments_str": ""}
+                                if tc.get("function", {}).get("name"):
+                                    tool_calls_accum[idx]["name"] = tc["function"]["name"]
+                                if tc.get("function", {}).get("arguments"):
+                                    tool_calls_accum[idx]["arguments_str"] += tc["function"]["arguments"]
+
+                    # If there were tool calls, execute them and loop
+                    if tool_calls_accum:
+                        # Add the assistant message with tool calls to conversation
+                        assistant_msg: dict = {"role": "assistant"}
+                        if full_content:
+                            assistant_msg["content"] = full_content
+                        tc_list = []
+                        for idx in sorted(tool_calls_accum.keys()):
+                            tc = tool_calls_accum[idx]
+                            tc_list.append({
+                                "id": f"call_{idx}",
+                                "type": "function",
+                                "function": {
+                                    "name": tc["name"],
+                                    "arguments": tc["arguments_str"],
+                                },
+                            })
+                        assistant_msg["tool_calls"] = tc_list
+                        current_messages.append(assistant_msg)
+
+                        # Execute each tool call
+                        for tc_item in tc_list:
+                            func_name = tc_item["function"]["name"]
+                            try:
+                                func_args = json.loads(tc_item["function"]["arguments"])
+                            except json.JSONDecodeError:
+                                func_args = {}
+
+                            result_text, action_data = _execute_schedule_tool(func_name, func_args)
+
+                            # Emit action event if schedule was modified
+                            if action_data:
+                                yield json.dumps({"type": "action", **action_data}) + "\n"
+
+                            # Add tool result to conversation
+                            current_messages.append({
+                                "role": "tool",
+                                "tool_call_id": tc_item["id"],
+                                "content": result_text,
+                            })
+
+                        # Continue the loop to get the LLM's response after tool execution
+                        continue
+                    else:
+                        # No tool calls — we're done
+                        break
+
+            except _httpx.TimeoutException:
+                yield json.dumps({"type": "error", "content": "Request timed out."}) + "\n"
+                break
+            except Exception as e:
+                yield json.dumps({"type": "error", "content": str(e)}) + "\n"
+                break
+
+        yield json.dumps({"type": "done"}) + "\n"
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")
+
+
 # ── Static files (production) ─────────────────────────────────────────
 
 from stepwise.project import get_web_dir
