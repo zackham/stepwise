@@ -87,6 +87,7 @@ class SessionState:
     is_forked: bool = False
     agent: str = "claude"
     created: bool = False
+    working_dir: str | None = None
 
 
 # Config keys whose values are passed to subprocess.run(shell=True).
@@ -252,6 +253,9 @@ class Engine:
                     if b.source_step != cname and (cname, b.source_step) not in back_edges:
                         fwd[b.source_step].add(cname)
             for s in cdef.after:
+                if s in steps and s != cname:
+                    fwd[s].add(cname)
+            for s in cdef.after_resolved:
                 if s in steps and s != cname:
                     fwd[s].add(cname)
 
@@ -826,8 +830,30 @@ class Engine:
         return descendants
 
     def reset_job(self, job_id: str) -> None:
-        """Clear a job's runtime history and return it to PENDING."""
+        """Clear a job's runtime history and return it to PENDING.
+
+        Also cancels any dependent jobs that were started based on this
+        job's (now-invalidated) completion, and resets them to PENDING
+        so they re-wait for this job to complete.
+        """
         job = self.store.load_job(job_id)
+
+        # Cancel dependents that were started based on the now-invalidated completion
+        for dep_job in self.store.job_dependents(job_id):
+            if dep_job.status in (JobStatus.RUNNING, JobStatus.COMPLETED, JobStatus.FAILED):
+                _engine_logger.info(
+                    "Cancelling dependent job %s (was %s) because dep %s is being reset",
+                    dep_job.id, dep_job.status.value, job_id,
+                )
+                try:
+                    self.cancel_job(dep_job.id)
+                except (KeyError, ValueError):
+                    pass
+                # Reset the dependent back to PENDING so it re-waits
+                try:
+                    self.reset_job(dep_job.id)
+                except (KeyError, ValueError):
+                    pass
 
         for descendant_id in reversed(self._collect_descendant_job_ids(job_id)):
             try:
@@ -870,6 +896,19 @@ class Engine:
             self._cleanup_run_executor(job, latest)
 
         self._emit(job_id, EXTERNAL_RERUN, {"step": step_name})
+
+        # Ensure session registry exists (may be missing after server restart)
+        self._ensure_session_registry(job)
+
+        # Clear SKIPPED runs from downstream steps so the engine re-evaluates
+        # them after this step completes. Without this, a rerun that succeeds
+        # after a prior failure would leave downstream steps permanently skipped.
+        cleared = self.store.delete_skipped_runs(job.id, exclude_step=step_name)
+        if cleared:
+            _engine_logger.info(
+                "Cleared %d skipped runs for job %s to allow re-evaluation",
+                cleared, job_id,
+            )
 
         # Make sure job is running
         if job.status in (
@@ -1435,6 +1474,17 @@ class Engine:
                 if job.status != JobStatus.RUNNING:
                     return
 
+            # 4b. Eagerly skip when-blocked steps so after_resolved deps
+            # can unblock. Only attempt when no steps were just launched
+            # (ready was empty) to avoid premature skipping before downstream
+            # steps have a chance to be found ready.
+            if not ready:
+                job = self.store.load_job(job.id)
+                if job.status == JobStatus.RUNNING:
+                    if self._skip_when_blocked_steps(job):
+                        made_progress = True
+                        job = self.store.load_job(job.id)
+
             # 5. Check job completion / settlement
             job = self.store.load_job(job.id)
             if job.status != JobStatus.RUNNING:
@@ -1578,6 +1628,11 @@ class Engine:
             if not self._is_dep_settled(job, dep_step):
                 return False
 
+        # Check after_resolved deps: ALL must be resolved (COMPLETED or SKIPPED)
+        for dep_step in step_def.after_resolved:
+            if not self._is_dep_resolved(job, dep_step):
+                return False
+
         # Check after_any_of groups: at least ONE member per group must be settled
         # (per §10.2 first-success-wins eligibility, no cancellation).
         for group in step_def.after_any_of:
@@ -1684,6 +1739,23 @@ class Engine:
             return True
         return False
 
+    def _is_dep_resolved(self, job: Job, dep_step_name: str) -> bool:
+        """Check if a dep step is resolved: COMPLETED, SKIPPED, or FAILED
+        with on_error: continue.
+
+        Used by _is_step_ready for after_resolved deps. Unlike _is_dep_settled,
+        this also accepts SKIPPED runs as terminal, enabling reconvergence
+        after conditional branches.
+        """
+        # Standard: current completed run
+        if self._is_dep_settled(job, dep_step_name):
+            return True
+        # SKIPPED run counts as resolved
+        dep_latest = self.store.latest_run(job.id, dep_step_name)
+        if dep_latest and dep_latest.status == StepRunStatus.SKIPPED:
+            return True
+        return False
+
     # ── Currentness ───────────────────────────────────────────────────────
 
     # Currentness with cycle detection
@@ -1751,6 +1823,27 @@ class Engine:
             if not self._is_current(job, source_run, _checking_steps):
                 return False
 
+        # For after_resolved deps: check provenance. SKIPPED deps are always
+        # current (they don't get superseded), COMPLETED deps use normal check.
+        for dep_step in step_def.after_resolved:
+            if not run.dep_run_ids:
+                return False
+            source_run_id = run.dep_run_ids.get(dep_step)
+            if not source_run_id:
+                return False
+            try:
+                source_run = self.store.load_run(source_run_id)
+            except KeyError:
+                return False
+            if source_run.status == StepRunStatus.SKIPPED:
+                # SKIPPED runs are terminal — always current
+                latest_dep = self.store.latest_run(job.id, dep_step)
+                if latest_dep and latest_dep.id == source_run.id:
+                    continue
+                return False
+            if not self._is_current(job, source_run, _checking_steps):
+                return False
+
         # For any_of deps: only check the source that was actually used (in dep_run_ids).
         # Step 7 (§11.4): if the any_of binding is itself a back-edge,
         # skip the currentness check entirely (same rationale as regular
@@ -1780,7 +1873,7 @@ class Engine:
         return True
 
     def _dep_steps(self, step_def: StepDefinition) -> list[str]:
-        """All dependency steps: input binding sources + after + for_each source.
+        """All dependency steps: input binding sources + after + after_resolved + for_each source.
 
         Step 7 (§11.7): bindings marked is_back_edge=True are EXCLUDED from
         the dependency walk used by cycle detection and currentness checks.
@@ -1797,6 +1890,7 @@ class Engine:
             else:
                 deps.append(b.source_step)
         deps.extend(step_def.after)
+        deps.extend(step_def.after_resolved)
         if step_def.for_each:
             deps.append(step_def.for_each.source_step)
         return deps
@@ -1862,6 +1956,160 @@ class Engine:
             for next_dep in self._dep_steps(dep_def):
                 queue.append((next_dep, path_has_ext))
         return False
+
+    # ── Eager skip for when-blocked steps ────────────────────────────────
+
+    def _skip_when_blocked_steps(self, job: Job) -> bool:
+        """Eagerly create SKIPPED runs for steps whose deps are all settled
+        but whose ``when:`` condition evaluates to False.
+
+        Without this, when-blocked steps only get SKIPPED at job settlement
+        time (``_settle_unstarted_steps``). That's too late for downstream
+        steps using ``after_resolved:`` — they need the SKIPPED run to exist
+        before they can evaluate their own readiness.
+
+        Safety guard: only skip when no steps are in-flight (running,
+        suspended, delegated). This prevents premature skipping when a loop
+        might re-execute deps and change their outputs, making the ``when:``
+        condition true in a future iteration.
+
+        Returns True if any steps were skipped (caller should re-dispatch).
+        """
+        # Safety: don't eagerly skip while steps are in flight — a loop
+        # might re-run deps and change the when-condition's inputs.
+        if (self.store.running_runs(job.id)
+                or self.store.suspended_runs(job.id)
+                or self.store.delegated_runs(job.id)):
+            return False
+
+        skipped_any = False
+        for step_name, step_def in job.workflow.steps.items():
+            if step_def.when is None:
+                continue  # no condition — can't be when-blocked
+            # Skip if already has a run — UNLESS the run is stale (deps changed
+            # since it was created). Stale runs need when-condition re-evaluation
+            # so that after_resolved downstream steps see fresh SKIPPED/COMPLETED state.
+            latest = self.store.latest_run(job.id, step_name)
+            if latest is not None:
+                # Active or failed: don't touch
+                if latest.status in (StepRunStatus.RUNNING, StepRunStatus.SUSPENDED,
+                                     StepRunStatus.DELEGATED, StepRunStatus.FAILED):
+                    continue
+                # Current COMPLETED: step ran successfully in this iteration
+                if latest.status == StepRunStatus.COMPLETED:
+                    if self._is_current(job, latest):
+                        continue
+                    # Stale COMPLETED: fall through to re-evaluate when condition
+                elif latest.status == StepRunStatus.SKIPPED:
+                    # Check if deps have changed since the skip decision
+                    if latest.dep_run_ids is not None:
+                        stale = False
+                        for dep_step, used_run_id in latest.dep_run_ids.items():
+                            if dep_step == "$job":
+                                continue
+                            dep_latest = self.store.latest_run(job.id, dep_step)
+                            if dep_latest and dep_latest.id != used_run_id:
+                                stale = True
+                                break
+                        if not stale:
+                            continue
+                    # No dep_run_ids (pre-fix SKIPPED) or deps changed: re-evaluate
+            # Check if all deps are settled (same as _is_step_ready but
+            # WITHOUT the when evaluation and WITHOUT the active-run check)
+            deps_ready = True
+            # Regular deps (inputs + after + for_each)
+            regular_deps: list[str] = [
+                b.source_step for b in step_def.inputs
+                if not b.any_of_sources and b.source_step != "$job"
+                and not b.optional and not b.is_back_edge
+            ]
+            regular_deps.extend(step_def.after)
+            if step_def.for_each:
+                regular_deps.append(step_def.for_each.source_step)
+            for dep_step in regular_deps:
+                if not self._is_dep_settled(job, dep_step):
+                    deps_ready = False
+                    break
+            if not deps_ready:
+                continue
+            # after_resolved deps
+            for dep_step in step_def.after_resolved:
+                if not self._is_dep_resolved(job, dep_step):
+                    deps_ready = False
+                    break
+            if not deps_ready:
+                continue
+            # after_any_of groups
+            for group in step_def.after_any_of:
+                has_settled = False
+                for member in group:
+                    if self._is_dep_settled(job, member):
+                        has_settled = True
+                        break
+                    if self._is_dep_settled_on_error_continue(job, member):
+                        has_settled = True
+                        break
+                if not has_settled:
+                    deps_ready = False
+                    break
+            if not deps_ready:
+                continue
+            # any_of input groups
+            for binding in step_def.inputs:
+                if binding.any_of_sources:
+                    if binding.is_back_edge:
+                        continue
+                    has_available = False
+                    for src_step, _ in binding.any_of_sources:
+                        dep_latest = self.store.latest_completed_run(job.id, src_step)
+                        if dep_latest and self._is_current(job, dep_latest):
+                            if not self._dep_will_be_superseded(job, src_step):
+                                has_available = True
+                                break
+                        if self._is_dep_settled_on_error_continue(job, src_step):
+                            has_available = True
+                            break
+                    if not has_available and not binding.optional:
+                        deps_ready = False
+                        break
+            if not deps_ready:
+                continue
+            # All deps are ready — now evaluate the when condition
+            try:
+                from stepwise.models import WhenPredicate
+                inputs, dep_run_ids, presence = self._resolve_inputs(job, step_def)
+                when_result = True
+                if isinstance(step_def.when, WhenPredicate):
+                    from stepwise.validator.mutex import evaluate_when_predicate
+                    when_result = evaluate_when_predicate(step_def.when, inputs, presence)
+                else:
+                    from stepwise.yaml_loader import evaluate_when_condition
+                    when_result = evaluate_when_condition(step_def.when, inputs)
+                if not when_result:
+                    # when is false with all deps settled → skip immediately
+                    run = StepRun(
+                        id=_gen_id("run"), job_id=job.id, step_name=step_name,
+                        attempt=self.store.next_attempt(job.id, step_name),
+                        status=StepRunStatus.SKIPPED,
+                        dep_run_ids=dep_run_ids,
+                        error="when condition false",
+                        started_at=_now(), completed_at=_now(),
+                    )
+                    self.store.save_run(run)
+                    self._emit(job.id, STEP_SKIPPED, {
+                        "step": step_name, "reason": "when_false",
+                    })
+                    skipped_any = True
+                    _engine_logger.info(
+                        "Eagerly skipped step %s/%s (when condition false)",
+                        job.id, step_name,
+                    )
+            except Exception:
+                _engine_logger.warning(
+                    "when evaluation failed for step %s during eager skip check",
+                    step_name, exc_info=True,
+                )
+        return skipped_any
 
     # ── Job Completion ────────────────────────────────────────────────────
 
@@ -2161,7 +2409,30 @@ class Engine:
                     if session_state.session_id and not step_def.fork_from:
                         # Continue existing session
                         session_ctx["_session_uuid"] = session_state.session_id
-                    elif step_def.fork_from and not session_state.created:
+                        if session_state.working_dir:
+                            session_ctx["_session_working_dir"] = session_state.working_dir
+                    elif not session_state.session_id and not step_def.fork_from and attempt > 1:
+                        # Session not yet captured — check previous runs'
+                        # executor_state for a session_id (crash recovery).
+                        for prev_run in reversed(self.store.runs_for_step(job.id, step_name)):
+                            if prev_run.executor_state:
+                                recovered_id = prev_run.executor_state.get("session_id")
+                                if recovered_id:
+                                    _engine_logger.info(
+                                        "Recovered session_id %s from run %s for %s/%s",
+                                        recovered_id[:8], prev_run.id, job.id, step_name,
+                                    )
+                                    session_ctx["_session_uuid"] = recovered_id
+                                    session_state.session_id = recovered_id
+                                    # Also recover working_dir so load_session
+                                    # finds the session in the right project.
+                                    recovered_wd = prev_run.executor_state.get("working_dir")
+                                    if recovered_wd:
+                                        session_ctx["_session_working_dir"] = recovered_wd
+                                        session_state.working_dir = recovered_wd
+                                    break
+
+                    if step_def.fork_from and not session_state.created:
                         # First (chain-root) step on a forked session.
                         # Try snapshot UUID first, fall back to live session_id.
                         snap_uuid = self._lookup_snapshot_uuid(
@@ -2381,9 +2652,11 @@ class Engine:
                                 # directly and stashes it on executor_state["session_id"].
                                 if not state.session_id:
                                     state.session_id = (run.executor_state or {}).get("session_id")
+                                state.working_dir = (run.executor_state or {}).get("working_dir")
                                 _engine_logger.info(
-                                    "Session capture for %s/%s: session=%s, uuid=%s (from output=%s, executor_state=%s)",
+                                    "Session capture for %s/%s: session=%s, uuid=%s, working_dir=%s (from output=%s, executor_state=%s)",
                                     job.id, step_name, step_def.session, state.session_id,
+                                    state.working_dir,
                                     bool(output_path), (run.executor_state or {}).get("session_id"),
                                 )
                                 state.created = True
@@ -2533,6 +2806,9 @@ class Engine:
                 if binding.source_step != "$job" and binding.source_step in all_steps:
                     has_dependents.add(binding.source_step)
             for seq in step.after:
+                if seq in all_steps:
+                    has_dependents.add(seq)
+            for seq in step.after_resolved:
                 if seq in all_steps:
                     has_dependents.add(seq)
         return [s for s in all_steps if s not in has_dependents]
@@ -3016,6 +3292,17 @@ class Engine:
             latest = self.store.latest_completed_run(job.id, seq_step)
             if latest:
                 dep_run_ids[seq_step] = latest.id
+
+        # Record after_resolved deps — use latest terminal run (COMPLETED or
+        # SKIPPED), not just latest COMPLETED. In loop iterations, a dep that
+        # was COMPLETED in iter N may be SKIPPED in iter N+1; the SKIPPED run
+        # (higher attempt) is the authoritative state.
+        for seq_step in step_def.after_resolved:
+            latest_any = self.store.latest_run(job.id, seq_step)
+            if latest_any and latest_any.status in (
+                StepRunStatus.COMPLETED, StepRunStatus.SKIPPED,
+            ):
+                dep_run_ids[seq_step] = latest_any.id
 
         return inputs, dep_run_ids, presence
 
@@ -3848,13 +4135,14 @@ class AsyncEngine(Engine):
                             )
                 # PID liveness check: task exists but subprocess is dead
                 # (e.g. process crashed but executor thread is stuck on I/O)
-                elif run.id in self._tasks and run.pid and run.started_at:
-                    if not _is_pid_alive(run.pid):
+                elif run.id in self._tasks and run.started_at:
+                    pid = run.pid or (run.executor_state or {}).get("pid")
+                    if pid and not _is_pid_alive(pid):
                         age = (_now() - run.started_at).total_seconds()
                         if age > 30:  # 30s grace for process teardown
                             _async_logger.warning(
                                 "Dead PID detected: %s/%s (run %s, PID %d, age %.0fs)",
-                                job.id, run.step_name, run.id, run.pid, age,
+                                job.id, run.step_name, run.id, pid, age,
                             )
                             task = self._tasks.pop(run.id, None)
                             if task:
@@ -3864,7 +4152,7 @@ class AsyncEngine(Engine):
                             if step_def:
                                 self._fail_run(
                                     job, run, step_def,
-                                    error=f"Script process died (PID {run.pid} no longer alive)",
+                                    error=f"Script process died (PID {pid} no longer alive)",
                                     error_category="infra_failure",
                                 )
             self._dispatch_ready(job.id)
@@ -3991,32 +4279,40 @@ class AsyncEngine(Engine):
             if not step_def or step_def.executor.type != "script":
                 continue
 
-            if not run.pid:
-                # No PID stored — can't determine process state, fail the run
-                _async_logger.warning(
-                    "Script run %s (step %s) has no PID — failing as unrecoverable",
-                    run.id, run.step_name,
-                )
-                self._fail_run(
-                    job, run, step_def,
-                    error="Script process lost on restart (no PID stored, no stdout file)",
-                )
-                continue
+            pid = run.pid or (run.executor_state or {}).get("pid")
 
-            if _is_pid_alive(run.pid):
-                continue  # Still running — will be handled by normal engine flow
-
-            # PID is dead — attempt file-based recovery
+            # PID-based recovery path
             workspace = job.workspace_path or "."
             step_io_dir = Path(workspace) / ".stepwise" / "step-io"
             stdout_path = step_io_dir / f"{run.step_name}-{run.attempt}.stdout"
             exitcode_path = step_io_dir / f"{run.step_name}-{run.attempt}.exitcode"
             stderr_path = step_io_dir / f"{run.step_name}-{run.attempt}.stderr"
 
+            if not pid:
+                # No PID anywhere — try file-based recovery as last resort
+                if stdout_path.exists():
+                    _async_logger.info(
+                        "Script run %s (step %s) has no PID but stdout file exists — recovering from file",
+                        run.id, run.step_name,
+                    )
+                else:
+                    _async_logger.warning(
+                        "Script run %s (step %s) has no PID and no stdout file — failing as unrecoverable",
+                        run.id, run.step_name,
+                    )
+                    self._fail_run(
+                        job, run, step_def,
+                        error="Script process lost on restart (no PID stored, no stdout file)",
+                    )
+                    continue
+            elif _is_pid_alive(pid):
+                continue  # Still running — will be handled by normal engine flow
+
+            # PID is dead (or absent with stdout file) — attempt file-based recovery
             if not stdout_path.exists():
                 _async_logger.warning(
-                    "Script run %s (step %s, PID %d) died with no stdout file — failing",
-                    run.id, run.step_name, run.pid,
+                    "Script run %s (step %s, PID %s) died with no stdout file — failing",
+                    run.id, run.step_name, pid,
                 )
                 self._fail_run(
                     job, run, step_def,
@@ -4035,8 +4331,8 @@ class AsyncEngine(Engine):
                     pass
 
             _async_logger.info(
-                "Recovering script run %s (step %s, PID %d) from stdout file (exitcode=%d)",
-                run.id, run.step_name, run.pid, exitcode,
+                "Recovering script run %s (step %s, PID %s) from stdout file (exitcode=%d)",
+                run.id, run.step_name, pid, exitcode,
             )
 
             # Build ExecutorResult as ScriptExecutor would, then process it
@@ -4229,7 +4525,8 @@ class AsyncEngine(Engine):
                 continue
 
             for run in self.store.running_runs(job.id):
-                if not run.executor_state or not run.pid:
+                pid = run.pid or (run.executor_state or {}).get("pid")
+                if not run.executor_state or not pid:
                     await self._queue.put(("step_error", job.id, run.step_name, run.id,
                         RuntimeError("No executor_state for reattach")))
                     continue
@@ -4243,7 +4540,7 @@ class AsyncEngine(Engine):
                 reattached += 1
                 _async_logger.info(
                     "Reattaching surviving run %s (job %s step %s, PID %d)",
-                    run.id, job.id, run.step_name, run.pid,
+                    run.id, job.id, run.step_name, pid,
                 )
 
             for run in self.store.suspended_runs(job.id):
@@ -4413,7 +4710,21 @@ class AsyncEngine(Engine):
         job = self.store.load_job(job_id)
         if job.status != JobStatus.RUNNING:
             return
+
         ready = self._find_ready(job)
+
+        # Eagerly skip when-blocked steps so after_resolved deps can unblock.
+        # Only attempt when nothing is ready to launch — if steps are launchable,
+        # do that first. The in-flight guard inside _skip_when_blocked_steps
+        # provides additional safety against premature skipping.
+        if not ready:
+            while self._skip_when_blocked_steps(job):
+                job = self.store.load_job(job_id)
+                if job.status != JobStatus.RUNNING:
+                    return
+            # Re-check readiness after skipping may have unblocked new steps
+            ready = self._find_ready(job)
+
         if ready:
             _async_logger.info(f"Dispatching {len(ready)} ready step(s) for job {job_id}: {ready}")
         throttled = False
@@ -4552,11 +4863,11 @@ class AsyncEngine(Engine):
 
             def update_state(state: dict) -> None:
                 def _do_update():
-                    run = self.store.load_run(run_id)
-                    run.executor_state = state
-                    if "pid" in state:
-                        run.pid = state["pid"]
-                    self.store.save_run(run)
+                    self.store.update_run_state(
+                        run_id,
+                        executor_state=state,
+                        pid=state.get("pid"),
+                    )
                     # Broadcast tick when usage limit state changes so UI refreshes
                     if "usage_limit_waiting" in state and self.on_broadcast:
                         self.on_broadcast({"job_id": job_id})
