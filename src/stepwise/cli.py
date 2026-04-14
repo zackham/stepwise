@@ -1986,11 +1986,22 @@ def cmd_vmmd(args: argparse.Namespace) -> int:
 
     if action == "start":
         if args.detach:
-            # Background mode: spawn vmmd as a detached sudo process
+            # Background mode: spawn vmmd as a detached privileged process.
+            #
+            # If we're already root (the user ran `sudo stepwise vmmd start`),
+            # DO NOT nest another sudo — a nested sudo resets SUDO_USER to
+            # "root", which makes `_default_vmm_dir()` resolve to /root/.stepwise
+            # instead of the invoking user's ~/.stepwise. That leaves the
+            # unprivileged `stepwise vmmd status` client looking at the wrong
+            # path, and the daemon appears "not running" even though it is.
+            import os as _os
             import subprocess as _sp
             import sys
 
-            cmd = ["sudo", sys.executable, "-m", "stepwise.containment.vmmd"]
+            if _os.geteuid() == 0:
+                cmd = [sys.executable, "-m", "stepwise.containment.vmmd"]
+            else:
+                cmd = ["sudo", sys.executable, "-m", "stepwise.containment.vmmd"]
             if args.work_dir:
                 cmd.extend(["--work-dir", args.work_dir])
 
@@ -2002,9 +2013,14 @@ def cmd_vmmd(args: argparse.Namespace) -> int:
                 start_new_session=True,
             )
 
-            # Wait for socket
-            from stepwise.containment.vmmd_client import DEFAULT_SOCKET
-            sock_path = Path(args.work_dir or "") / "vmmd.sock" if args.work_dir else DEFAULT_SOCKET
+            # Resolve the expected socket path the same way the daemon does
+            # — honoring SUDO_USER so the log + the wait probe agree with
+            # reality when CLI is running under sudo.
+            from stepwise.containment.vmmd import SOCKET_NAME, _default_vmm_dir
+            if args.work_dir:
+                sock_path = Path(args.work_dir) / SOCKET_NAME
+            else:
+                sock_path = _default_vmm_dir() / SOCKET_NAME
             for _ in range(50):
                 if sock_path.exists():
                     io.log("info", f"vmmd started (socket: {sock_path})")

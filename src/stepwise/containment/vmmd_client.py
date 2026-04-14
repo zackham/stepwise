@@ -22,11 +22,31 @@ from pathlib import Path
 from typing import IO, Any
 
 from stepwise.containment.backend import ContainmentConfig
+from stepwise.containment.vmmd import PID_NAME, SOCKET_NAME, _default_vmm_dir
 
 logger = logging.getLogger("stepwise.containment.vmmd_client")
 
-DEFAULT_SOCKET = Path.home() / ".stepwise" / "vmm" / "vmmd.sock"
-DEFAULT_PID = Path.home() / ".stepwise" / "vmm" / "vmmd.pid"
+
+def _default_socket() -> Path:
+    """Invoking-user-aware vmmd socket path.
+
+    Honors SUDO_USER so that `sudo stepwise vmmd {status,stop,restart}`
+    finds the socket at the invoking user's ~/.stepwise/vmm, not root's.
+    Evaluated lazily (not a module-level constant) so tests can
+    monkeypatch SUDO_USER between calls.
+    """
+    return _default_vmm_dir() / SOCKET_NAME
+
+
+def _default_pid() -> Path:
+    return _default_vmm_dir() / PID_NAME
+
+
+# Backwards-compatible module-level names — computed at import time
+# against the user in play when the module first loads. Prefer the
+# functions above in code paths that might run under sudo.
+DEFAULT_SOCKET = _default_socket()
+DEFAULT_PID = _default_pid()
 
 
 class VMManagerNotRunning(RuntimeError):
@@ -46,7 +66,7 @@ class VMManagerClient:
         socket_path: str | Path | None = None,
         auto_start: bool = True,
     ):
-        self._socket_path = Path(socket_path or DEFAULT_SOCKET)
+        self._socket_path = Path(socket_path or _default_socket())
         self._auto_start = auto_start
         self._conn: socket.socket | None = None
         self._rfile: IO[str] | None = None
@@ -215,7 +235,7 @@ class VMManagerClient:
 
 def is_vmmd_running(socket_path: Path | None = None) -> bool:
     """Check if vmmd is running by probing the socket."""
-    sock_path = Path(socket_path or DEFAULT_SOCKET)
+    sock_path = Path(socket_path or _default_socket())
     if not sock_path.exists():
         return False
     try:
@@ -229,7 +249,7 @@ def is_vmmd_running(socket_path: Path | None = None) -> bool:
 
 def get_vmmd_pid(pid_path: Path | None = None) -> int | None:
     """Read vmmd PID from PID file. Returns None if not running."""
-    path = Path(pid_path or DEFAULT_PID)
+    path = Path(pid_path or _default_pid())
     if not path.exists():
         return None
     try:
