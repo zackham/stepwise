@@ -732,6 +732,78 @@ export function setDefaultAgent(agent: string): Promise<{ status: string }> {
   });
 }
 
+// ── Agents ──────────────────────────────────────────────────────────
+
+export interface AgentConfigKey {
+  flag?: string;
+  env?: string;
+  acp?: string;
+  default?: unknown;
+  builtin_default?: unknown;
+  required?: boolean;
+}
+
+export interface AgentCapabilities {
+  fork: boolean;
+  resume: boolean;
+  sessions: boolean;
+  modes: boolean;
+  multi_session: boolean;
+}
+
+export interface AgentInfo {
+  name: string;
+  command: string[];
+  is_builtin: boolean;
+  is_disabled: boolean;
+  has_overrides: boolean;
+  config: Record<string, AgentConfigKey>;
+  capabilities: AgentCapabilities;
+  containment: string | null;
+}
+
+export function fetchAgents(): Promise<{ agents: AgentInfo[] }> {
+  return request<{ agents: AgentInfo[] }>("/agents");
+}
+
+export function updateAgent(name: string, agent: Partial<AgentInfo>): Promise<{ status: string; agent: AgentInfo }> {
+  return request(`/agents/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    body: JSON.stringify(agent),
+  });
+}
+
+export function createAgent(agent: Partial<AgentInfo>): Promise<{ status: string; agent: AgentInfo }> {
+  return request("/agents", {
+    method: "POST",
+    body: JSON.stringify(agent),
+  });
+}
+
+export function deleteAgent(name: string): Promise<{ status: string }> {
+  return request(`/agents/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+}
+
+export function disableAgent(name: string): Promise<{ status: string }> {
+  return request(`/agents/${encodeURIComponent(name)}/disable`, {
+    method: "POST",
+  });
+}
+
+export function enableAgent(name: string): Promise<{ status: string }> {
+  return request(`/agents/${encodeURIComponent(name)}/enable`, {
+    method: "POST",
+  });
+}
+
+export function resetAgent(name: string): Promise<{ status: string }> {
+  return request(`/agents/${encodeURIComponent(name)}/reset`, {
+    method: "POST",
+  });
+}
+
 // ── Editor LLM Chat ──────────────────────────────────────────────────
 
 export interface ChatChunk {

@@ -523,3 +523,19 @@ def save_project_local_config(project_dir: Path, **kwargs: Any) -> None:
     data.update(kwargs)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
+
+
+def save_agents_to_local_config(project_dir: Path, agents_data: dict) -> None:
+    """Update only the ``agents:`` key in project-local config.
+
+    Reads ``.stepwise/config.local.yaml``, replaces just the ``agents``
+    section with *agents_data*, and writes back without clobbering other
+    settings.
+    """
+    path = project_dir / ".stepwise" / "config.local.yaml"
+    data: dict[str, Any] = {}
+    if path.exists():
+        data = yaml.safe_load(path.read_text()) or {}
+    data["agents"] = agents_data
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))

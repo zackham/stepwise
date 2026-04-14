@@ -22,6 +22,7 @@ from stepwise.engine import AsyncEngine, Engine, _adopt_stale_cli_job, _auto_ado
 from stepwise.config import (
     load_config, load_config_with_sources, save_config,
     save_project_config, save_project_local_config,
+    save_agents_to_local_config,
     StepwiseConfig, ModelEntry,
     DEFAULT_LABEL_NAMES,
     validate_label_name, label_model_id,
@@ -448,7 +449,7 @@ def _get_engine() -> AsyncEngine:
     return _engine
 
 
-def _serialize_job(job: Job, summary: bool = False) -> dict:
+def _serialize_job(job: Job, summary: bool = False, cost_usd: float | None = None) -> dict:
     if summary:
         engine = _get_engine()
         has_suspended = bool(engine.store.suspended_runs(job.id))
@@ -474,7 +475,13 @@ def _serialize_job(job: Job, summary: bool = False) -> dict:
                     "started_at": last.started_at.isoformat() if last.started_at else None,
                     "completed_at": last.completed_at.isoformat() if last.completed_at else None,
                 }
-        return {
+        # Lightweight workflow: step names (empty dicts) + metadata only, no full step definitions
+        step_names = list(job.workflow.steps.keys()) if job.workflow else []
+        wf_meta = job.workflow.metadata.to_dict() if job.workflow and job.workflow.metadata else None
+        lightweight_workflow = {"steps": {name: {} for name in step_names}}
+        if wf_meta:
+            lightweight_workflow["metadata"] = wf_meta
+        result = {
             "id": job.id,
             "name": job.name,
             "objective": job.objective,
@@ -488,10 +495,15 @@ def _serialize_job(job: Job, summary: bool = False) -> dict:
             "metadata": job.metadata,
             "has_suspended_steps": has_suspended,
             "current_step": current_step,
-            "workflow": job.workflow.to_dict() if job.workflow else None,
+            "workflow": lightweight_workflow,
+            "step_count": len(step_names),
+            "completed_steps": engine.store.completed_step_count(job.id),
             "job_group": job.job_group,
             "depends_on": job.depends_on,
         }
+        if cost_usd is not None:
+            result["cost_usd"] = round(cost_usd, 4)
+        return result
     return job.to_dict()
 
 
@@ -747,22 +759,23 @@ def _cleanup_zombie_jobs(store: ThreadSafeStore) -> None:
         running_runs = store.running_runs(job.id)
         for run in running_runs:
             # Check if the agent process is still alive
-            if run.pid:
+            pid = run.pid or (run.executor_state or {}).get("pid")
+            if pid:
                 try:
-                    os.kill(run.pid, 0)
+                    os.kill(pid, 0)
                     pid_alive = True
                 except (ProcessLookupError, PermissionError):
                     pid_alive = False
                 if pid_alive:
                     logger.info(
                         "Step run %s (job %s step %s) PID %d verified alive, leaving for reattach",
-                        run.id, job.id, run.step_name, run.pid,
+                        run.id, job.id, run.step_name, pid,
                     )
                     continue
                 else:
                     logger.info(
                         "Step run %s (job %s step %s) PID %d dead or recycled, marking failed",
-                        run.id, job.id, run.step_name, run.pid,
+                        run.id, job.id, run.step_name, pid,
                     )
 
             # Kill the actual OS process group if we have its pgid
@@ -775,7 +788,7 @@ def _cleanup_zombie_jobs(store: ThreadSafeStore) -> None:
                     except (ProcessLookupError, PermissionError):
                         pass  # already dead
             run.status = StepRunStatus.FAILED
-            run.error = f"Agent process died (PID {run.pid} not found on restart)" if run.pid else "Server restarted: step was orphaned"
+            run.error = f"Agent process died (PID {pid} not found on restart)" if pid else "Server restarted: step was orphaned"
             run.pid = None
             run.completed_at = _now()
             store.save_run(run)
@@ -866,6 +879,13 @@ async def lifespan(app: FastAPI):
     from stepwise.registry_factory import create_default_registry
     config = load_config(_project_dir)
     registry = create_default_registry(config)
+
+    # Inject config API keys into process environment so agent subprocesses
+    # (spawned via _expand_env_refs in agent_registry) can resolve ${VAR} refs.
+    if config.openrouter_api_key and not os.environ.get("OPENROUTER_API_KEY"):
+        os.environ["OPENROUTER_API_KEY"] = config.openrouter_api_key
+    if config.anthropic_api_key and not os.environ.get("ANTHROPIC_API_KEY"):
+        os.environ["ANTHROPIC_API_KEY"] = config.anthropic_api_key
 
     # Ensure server.log exists regardless of how the server was started
     # (foreground, systemd, etc.).  server_bg.py already sets up a handler
@@ -1069,7 +1089,8 @@ def list_jobs(request: Request, status: str | None = None, top_level: bool = Fal
                 valid = [s.value for s in JobStatus]
                 raise HTTPException(status_code=400, detail=f"Invalid status '{status}'. Valid: {valid}")
             jobs = [j for j in jobs if j.status == job_status]
-        serialized = [_serialize_job(j, summary=True) for j in jobs]
+        cost_map = engine.store.batch_job_costs([j.id for j in jobs])
+        serialized = [_serialize_job(j, summary=True, cost_usd=cost_map.get(j.id, 0.0)) for j in jobs]
         if include_total:
             return {"jobs": serialized, "total": len(serialized)}
         return serialized
@@ -1089,7 +1110,8 @@ def list_jobs(request: Request, status: str | None = None, top_level: bool = Fal
         meta_filters=meta_filters or None,
         include_archived=include_archived,
     )
-    serialized = [_serialize_job(j, summary=True) for j in jobs]
+    cost_map = engine.store.batch_job_costs([j.id for j in jobs])
+    serialized = [_serialize_job(j, summary=True, cost_usd=cost_map.get(j.id, 0.0)) for j in jobs]
     if include_total:
         total = len(engine.store.all_jobs(
             job_status, top_level_only=top_level, limit=0,
@@ -2385,6 +2407,8 @@ def get_config():
     return {
         "has_api_key": bool(cfg.openrouter_api_key),
         "has_anthropic_key": bool(cfg.anthropic_api_key),
+        "openrouter_api_key": cfg.openrouter_api_key or "",
+        "anthropic_api_key": cfg.anthropic_api_key or "",
         "api_key_source": cs.api_key_source,
         "model_registry": [m.to_dict() for m in enriched],
         "default_model": cfg.default_model,
@@ -2621,6 +2645,273 @@ def reload_config_endpoint():
     """Reload config from disk. Use after manual YAML edits."""
     cfg = _reload_engine_config()
     return {"status": "reloaded", "limits": cfg.resolved_executor_limits()}
+
+
+# ── Agent settings endpoints ──────────────────────────────────────────
+
+import re as _re
+
+_AGENT_NAME_RE = _re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
+
+
+class CreateAgentRequest(BaseModel):
+    name: str
+    command: list[str]
+    config: dict[str, Any] | None = None
+    capabilities: dict[str, Any] | None = None
+    containment: str | None = None
+    disabled: bool = False
+
+
+class UpdateAgentRequest(BaseModel):
+    command: list[str] | None = None
+    config: dict[str, Any] | None = None
+    capabilities: dict[str, Any] | None = None
+    containment: str | None = None
+    disabled: bool | None = None
+
+
+def _read_local_agents_raw() -> dict:
+    """Read the raw agents dict from config.local.yaml."""
+    import yaml as yaml_lib
+    path = _project_dir / ".stepwise" / "config.local.yaml"
+    if not path.exists():
+        return {}
+    data = yaml_lib.safe_load(path.read_text()) or {}
+    agents = data.get("agents", {})
+    return agents if isinstance(agents, dict) else {}
+
+
+def _reload_and_inject() -> StepwiseConfig:
+    """Reload config and re-inject API keys into os.environ."""
+    cfg = _reload_engine_config()
+    if cfg.openrouter_api_key:
+        os.environ["OPENROUTER_API_KEY"] = cfg.openrouter_api_key
+    if cfg.anthropic_api_key:
+        os.environ["ANTHROPIC_API_KEY"] = cfg.anthropic_api_key
+    return cfg
+
+
+@app.get("/api/agents")
+def get_agents():
+    """List all agents with metadata for the settings UI."""
+    from stepwise.agent_registry import get_all_agents_with_metadata
+    return {"agents": get_all_agents_with_metadata()}
+
+
+@app.put("/api/agents/{name}")
+def update_agent(name: str, req: UpdateAgentRequest):
+    """Update an agent's config. For builtins, creates/updates an override."""
+    from stepwise.agent_registry import BUILTIN_AGENTS
+
+    is_builtin = name in BUILTIN_AGENTS
+    local_agents = _read_local_agents_raw()
+
+    if is_builtin:
+        # Reject command changes for builtins
+        if req.command is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot change command for builtin agent '{name}'. Create a custom agent instead.",
+            )
+        # Build partial override
+        override = local_agents.get(name, {})
+        if not isinstance(override, dict):
+            override = {}
+        if req.disabled is not None:
+            override["disabled"] = req.disabled
+        if req.containment is not None:
+            override["containment"] = req.containment
+        if req.capabilities is not None:
+            existing_caps = override.get("capabilities", {})
+            if not isinstance(existing_caps, dict):
+                existing_caps = {}
+            existing_caps.update(req.capabilities)
+            override["capabilities"] = existing_caps
+        if req.config is not None:
+            existing_config = override.get("config", {})
+            if not isinstance(existing_config, dict):
+                existing_config = {}
+            for key_name, key_data in req.config.items():
+                existing_config[key_name] = key_data
+            override["config"] = existing_config
+        local_agents[name] = override
+    else:
+        # Custom agent — must already exist in local config
+        if name not in local_agents:
+            raise HTTPException(status_code=404, detail=f"Agent '{name}' not found.")
+        agent_data = local_agents[name]
+        if not isinstance(agent_data, dict):
+            agent_data = {}
+        if req.command is not None:
+            agent_data["command"] = req.command
+        if req.disabled is not None:
+            agent_data["disabled"] = req.disabled
+        if req.containment is not None:
+            agent_data["containment"] = req.containment
+        if req.capabilities is not None:
+            existing_caps = agent_data.get("capabilities", {})
+            if not isinstance(existing_caps, dict):
+                existing_caps = {}
+            existing_caps.update(req.capabilities)
+            agent_data["capabilities"] = existing_caps
+        if req.config is not None:
+            existing_config = agent_data.get("config", {})
+            if not isinstance(existing_config, dict):
+                existing_config = {}
+            for key_name, key_data in req.config.items():
+                existing_config[key_name] = key_data
+            agent_data["config"] = existing_config
+        local_agents[name] = agent_data
+
+    save_agents_to_local_config(_project_dir, local_agents)
+    _reload_and_inject()
+    return {"status": "updated", "name": name}
+
+
+@app.post("/api/agents")
+def create_agent(req: CreateAgentRequest):
+    """Create a custom agent."""
+    from stepwise.agent_registry import BUILTIN_AGENTS
+
+    if not _AGENT_NAME_RE.match(req.name):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid agent name '{req.name}'. Must match: ^[a-z][a-z0-9_-]{{0,62}}$",
+        )
+    if req.name in BUILTIN_AGENTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot create agent '{req.name}' — it's a builtin agent name. Use PUT to override settings.",
+        )
+    if not req.command:
+        raise HTTPException(status_code=400, detail="Agent command must be non-empty.")
+
+    local_agents = _read_local_agents_raw()
+    if req.name in local_agents:
+        raise HTTPException(status_code=409, detail=f"Agent '{req.name}' already exists.")
+
+    agent_data: dict[str, Any] = {"command": req.command}
+    if req.config:
+        agent_data["config"] = req.config
+    if req.capabilities:
+        agent_data["capabilities"] = req.capabilities
+    if req.containment:
+        agent_data["containment"] = req.containment
+    if req.disabled:
+        agent_data["disabled"] = req.disabled
+
+    local_agents[req.name] = agent_data
+    save_agents_to_local_config(_project_dir, local_agents)
+    _reload_and_inject()
+    return {"status": "created", "name": req.name}
+
+
+@app.delete("/api/agents/{name}")
+def delete_agent(name: str):
+    """Delete a custom agent. Builtins cannot be deleted (use disable)."""
+    from stepwise.agent_registry import BUILTIN_AGENTS
+
+    if name in BUILTIN_AGENTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete builtin agent '{name}'. Use POST /api/agents/{name}/disable to disable it, "
+                   f"or POST /api/agents/{name}/reset to remove overrides.",
+        )
+
+    local_agents = _read_local_agents_raw()
+    if name not in local_agents:
+        raise HTTPException(status_code=404, detail=f"Agent '{name}' not found.")
+
+    del local_agents[name]
+    save_agents_to_local_config(_project_dir, local_agents)
+    _reload_and_inject()
+    return {"status": "deleted", "name": name}
+
+
+@app.post("/api/agents/{name}/disable")
+def disable_agent(name: str):
+    """Disable an agent."""
+    from stepwise.agent_registry import BUILTIN_AGENTS, _get_all_agents
+
+    all_agents = _get_all_agents()
+    if name not in all_agents:
+        raise HTTPException(status_code=404, detail=f"Agent '{name}' not found.")
+
+    local_agents = _read_local_agents_raw()
+    is_builtin = name in BUILTIN_AGENTS
+
+    if is_builtin:
+        override = local_agents.get(name, {})
+        if not isinstance(override, dict):
+            override = {}
+        override["disabled"] = True
+        local_agents[name] = override
+    else:
+        agent_data = local_agents.get(name, {})
+        if not isinstance(agent_data, dict):
+            agent_data = {}
+        agent_data["disabled"] = True
+        local_agents[name] = agent_data
+
+    save_agents_to_local_config(_project_dir, local_agents)
+    _reload_and_inject()
+    return {"status": "disabled", "name": name}
+
+
+@app.post("/api/agents/{name}/enable")
+def enable_agent(name: str):
+    """Enable a previously disabled agent."""
+    from stepwise.agent_registry import BUILTIN_AGENTS, _get_all_agents
+
+    all_agents = _get_all_agents()
+    if name not in all_agents:
+        raise HTTPException(status_code=404, detail=f"Agent '{name}' not found.")
+
+    local_agents = _read_local_agents_raw()
+    is_builtin = name in BUILTIN_AGENTS
+
+    if is_builtin:
+        override = local_agents.get(name, {})
+        if not isinstance(override, dict):
+            override = {}
+        override.pop("disabled", None)
+        # Clean up empty override
+        if not override:
+            local_agents.pop(name, None)
+        else:
+            local_agents[name] = override
+    else:
+        agent_data = local_agents.get(name, {})
+        if not isinstance(agent_data, dict):
+            agent_data = {}
+        agent_data.pop("disabled", None)
+        local_agents[name] = agent_data
+
+    save_agents_to_local_config(_project_dir, local_agents)
+    _reload_and_inject()
+    return {"status": "enabled", "name": name}
+
+
+@app.post("/api/agents/{name}/reset")
+def reset_agent(name: str):
+    """Reset a builtin agent to defaults by removing overrides."""
+    from stepwise.agent_registry import BUILTIN_AGENTS
+
+    if name not in BUILTIN_AGENTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Agent '{name}' is not a builtin. Only builtins can be reset.",
+        )
+
+    local_agents = _read_local_agents_raw()
+    if name not in local_agents:
+        return {"status": "already_default", "name": name}
+
+    del local_agents[name]
+    save_agents_to_local_config(_project_dir, local_agents)
+    _reload_and_inject()
+    return {"status": "reset", "name": name}
 
 
 # ── Editor (flow listing / loading / saving) ─────────────────────────
@@ -3029,7 +3320,6 @@ def get_kit_detail(kit_name: str):
         "usage": kit_def.usage,
         "tags": kit_def.tags,
         "include": kit_def.include,
-        "defaults": kit_def.defaults,
         "flows": flows,
         "raw_yaml": raw_yaml,
     }

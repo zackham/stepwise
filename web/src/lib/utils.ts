@@ -49,6 +49,11 @@ export function formatDuration(start: string | null, end: string | null): string
   return `${(ms / 3600000).toFixed(1)}h`;
 }
 
+/** Build the editor URL path for a flow, accounting for kit membership. */
+export function flowEditorPath(flow: { name: string; kit_name?: string | null }): string {
+  return flow.kit_name ? `/flows/${flow.kit_name}/${flow.name}` : `/flows/${flow.name}`;
+}
+
 /** Format cost with min 3 significant figures, always show cents. */
 export function formatCost(cost: number): string {
   if (cost === 0) return "$0.00";

@@ -100,6 +100,7 @@ class AgentConfig:
     config: dict[str, ConfigKey] = field(default_factory=dict)
     capabilities: AgentCapabilities = field(default_factory=AgentCapabilities)
     containment: str | None = None  # "cloud-hypervisor" | None
+    disabled: bool = False
 
     def to_dict(self) -> dict:
         d: dict[str, Any] = {
@@ -111,6 +112,8 @@ class AgentConfig:
         caps = self.capabilities.to_dict()
         if caps:
             d["capabilities"] = caps
+        if self.disabled:
+            d["disabled"] = True
         return d
 
     @staticmethod
@@ -125,6 +128,7 @@ class AgentConfig:
             config=config,
             capabilities=AgentCapabilities.from_dict(caps_raw) if isinstance(caps_raw, dict) else AgentCapabilities(),
             containment=d.get("containment"),
+            disabled=d.get("disabled", False),
         )
 
 
@@ -150,20 +154,16 @@ BUILTIN_AGENTS: dict[str, AgentConfig] = {
         name="claude",
         command=["npx", "@agentclientprotocol/claude-agent-acp"],
         config={
-            "model": ConfigKey(flag="--model", default="opus"),
+            "model": ConfigKey(flag="--model"),
             "max_turns": ConfigKey(flag="--max-turns"),
-            "tools": ConfigKey(
-                flag="--allowedTools",
-                default=["Read", "Edit", "Write", "Bash", "Glob", "Grep"],
-            ),
+            "tools": ConfigKey(flag="--allowedTools"),
+            "disallowed_tools": ConfigKey(flag="--disallowedTools"),
             "allowed_paths": ConfigKey(
                 flag="--allowedPaths",
                 default=["${working_dir}"],
             ),
             "api_key": ConfigKey(
                 env="ANTHROPIC_API_KEY",
-                default="${ANTHROPIC_API_KEY}",
-                required=True,
             ),
         },
         capabilities=AgentCapabilities(fork=True, resume=True),
@@ -174,32 +174,19 @@ BUILTIN_AGENTS: dict[str, AgentConfig] = {
         config={
             "model": ConfigKey(flag="--model", default="minimax-m2.5"),
             "mode": ConfigKey(acp="set_session_mode"),
-            "tools": ConfigKey(
-                flag="--tools",
-                default=["read_file", "write_file", "edit_file", "bash", "load_skill"],
-            ),
-            "allowed_paths": ConfigKey(
-                env="ALOOP_ALLOWED_PATHS",
-                default=["${working_dir}"],
-            ),
             "api_key": ConfigKey(
                 env="OPENROUTER_API_KEY",
                 default="${OPENROUTER_API_KEY}",
                 required=True,
             ),
         },
+        capabilities=AgentCapabilities(fork=True, resume=True, modes=True),
     ),
     "codex": AgentConfig(
         name="codex",
         command=["npx", "@zed-industries/codex-acp"],
         config={
-            "model": ConfigKey(flag="--model"),
-            "sandbox": ConfigKey(flag="--sandbox", default="workspace-write"),
-            "tools": ConfigKey(flag="--tools"),
-            "allowed_paths": ConfigKey(
-                flag="--allowed-paths",
-                default=["${working_dir}"],
-            ),
+            "model": ConfigKey(flag="-c"),
         },
     ),
 }
@@ -213,10 +200,19 @@ _user_agents: dict[str, AgentConfig] = {}
 def load_user_agents_from_config(config_data: dict) -> dict[str, AgentConfig]:
     """Parse user-defined agents from a stepwise config dict.
 
+    For builtin agents, entries without a ``command`` key are treated as
+    partial overrides (deep-merged via :func:`merge_agent_override`).
+    Entries with a ``command`` key are full custom agent definitions.
+
     Expected format in config YAML::
 
         agents:
-          my-agent:
+          claude:                    # builtin override (partial)
+            disabled: false
+            config:
+              model:
+                default: "sonnet"
+          my-agent:                  # full custom agent
             command: ["my-agent", "serve"]
             config:
               model:
@@ -235,8 +231,12 @@ def load_user_agents_from_config(config_data: dict) -> dict[str, AgentConfig]:
     for name, agent_data in raw.items():
         if not isinstance(agent_data, dict):
             continue
-        agent_data.setdefault("name", name)
-        agents[name] = AgentConfig.from_dict(agent_data)
+        # If this is a builtin name and has no command, treat as partial override
+        if name in BUILTIN_AGENTS and "command" not in agent_data:
+            agents[name] = merge_agent_override(BUILTIN_AGENTS[name], agent_data)
+        else:
+            agent_data.setdefault("name", name)
+            agents[name] = AgentConfig.from_dict(agent_data)
     return agents
 
 
@@ -251,6 +251,114 @@ def _get_all_agents() -> dict[str, AgentConfig]:
     merged = dict(BUILTIN_AGENTS)
     merged.update(_user_agents)
     return merged
+
+
+def merge_agent_override(builtin: AgentConfig, override: dict) -> AgentConfig:
+    """Deep-merge a partial override dict into a builtin AgentConfig.
+
+    Only supplied fields are changed.  Config keys are merged individually
+    (not replaced wholesale), so you can override a single key's default
+    without losing the other keys.
+    """
+    merged = deepcopy(builtin)
+
+    if "disabled" in override:
+        merged.disabled = bool(override["disabled"])
+
+    if "containment" in override:
+        merged.containment = override["containment"]
+
+    if "capabilities" in override:
+        caps_raw = override["capabilities"]
+        if isinstance(caps_raw, dict):
+            existing = merged.capabilities.to_dict()
+            existing.update(caps_raw)
+            merged.capabilities = AgentCapabilities.from_dict(existing)
+
+    if "config" in override and isinstance(override["config"], dict):
+        for key_name, key_data in override["config"].items():
+            if key_name in merged.config:
+                # Merge into existing ConfigKey
+                existing_key = merged.config[key_name]
+                if isinstance(key_data, dict):
+                    if "flag" in key_data:
+                        existing_key.flag = key_data["flag"]
+                    if "env" in key_data:
+                        existing_key.env = key_data["env"]
+                    if "acp" in key_data:
+                        existing_key.acp = key_data["acp"]
+                    if "default" in key_data:
+                        existing_key.default = key_data["default"]
+                    if "required" in key_data:
+                        existing_key.required = key_data["required"]
+                else:
+                    # Scalar shorthand — just set the default
+                    existing_key.default = key_data
+            else:
+                # New config key
+                if isinstance(key_data, dict):
+                    merged.config[key_name] = ConfigKey.from_dict(key_data)
+                else:
+                    merged.config[key_name] = ConfigKey(default=key_data)
+
+    return merged
+
+
+def get_all_agents_with_metadata() -> list[dict]:
+    """Return agent metadata for the settings UI.
+
+    Each entry includes:
+      - name, command, is_builtin, is_disabled, has_overrides
+      - config: dict of config keys with flag/env/acp, default,
+        builtin_default (if overridden), required
+      - capabilities: dict
+      - containment: str | None
+    """
+    result = []
+    all_agents = _get_all_agents()
+
+    for name, agent in sorted(all_agents.items()):
+        is_builtin = name in BUILTIN_AGENTS
+        builtin = BUILTIN_AGENTS.get(name)
+
+        # Detect overrides: user agents that shadow a builtin
+        has_overrides = False
+        if is_builtin and name in _user_agents:
+            has_overrides = True
+
+        # Build config key details
+        config_info: dict[str, dict] = {}
+        for key_name, ck in agent.config.items():
+            key_info: dict[str, Any] = {}
+            if ck.flag is not None:
+                key_info["flag"] = ck.flag
+            if ck.env is not None:
+                key_info["env"] = ck.env
+            if ck.acp is not None:
+                key_info["acp"] = ck.acp
+            key_info["default"] = ck.default
+            if ck.required:
+                key_info["required"] = True
+            # If overridden, include the builtin default for comparison
+            if has_overrides and builtin and key_name in builtin.config:
+                builtin_default = builtin.config[key_name].default
+                if builtin_default != ck.default:
+                    key_info["builtin_default"] = builtin_default
+            config_info[key_name] = key_info
+
+        entry: dict[str, Any] = {
+            "name": name,
+            "command": agent.command,
+            "is_builtin": is_builtin,
+            "is_disabled": agent.disabled,
+            "has_overrides": has_overrides,
+            "config": config_info,
+            "capabilities": agent.capabilities.to_dict(),
+            "containment": agent.containment,
+        }
+        result.append(entry)
+
+    return result
 
 
 # ── Public API ──────────────────────────────────────────────────────

@@ -94,6 +94,7 @@ export interface StepDefinition {
   chain_label?: string;
   session?: string;
   fork_from?: string;
+  derived_outputs?: Record<string, string>;
 }
 
 // ── Flow Metadata ────────────────────────────────────────────────────
@@ -249,6 +250,9 @@ export interface Job {
   job_group: string | null;
   depends_on: string[];
   flow_source_path?: string | null;
+  cost_usd?: number | null;
+  step_count?: number;
+  completed_steps?: number;
 }
 
 // ── Event ──────────────────────────────────────────────────────────────
