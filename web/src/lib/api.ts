@@ -660,6 +660,10 @@ export interface ConfigResponse {
   has_api_key: boolean;
   has_anthropic_key: boolean;
   api_key_source: string | null;
+  // Present values (or "" when unset). Server returns these so the
+  // Settings page can show a masked preview — see server.py /config.
+  openrouter_api_key?: string;
+  anthropic_api_key?: string;
   model_registry: ModelInfo[];
   default_model: string;
   default_agent: string;

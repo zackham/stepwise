@@ -838,6 +838,12 @@ function JobListView({ jobs }: { jobs: Job[] }) {
               const completedCount = groupJobs.filter((j) => TERMINAL_STATUSES.has(j.status)).length;
               const jobsSummary = `${completedCount} of ${groupJobs.length} done`;
               const mostRecent = groupJobs.reduce((latest, j) => j.updated_at > latest ? j.updated_at : latest, groupJobs[0].updated_at);
+              // Aggregate group cost so collapsed groups surface spend at a
+              // glance — matches the per-job Cost column on expanded rows.
+              const totalCostUsd = groupJobs.reduce(
+                (sum, j) => sum + (costMap.get(j.id) ?? 0),
+                0,
+              );
 
               return (
                 <div
@@ -866,7 +872,7 @@ function JobListView({ jobs }: { jobs: Job[] }) {
                     </div>
                     <div className="hidden sm:flex items-center gap-4 shrink-0 text-[11px] text-zinc-500 tabular-nums">
                       <span className="w-14 text-right">{jobsSummary}</span>
-                      <span className="w-16 text-right"></span>
+                      <span className="w-16 text-right">{totalCostUsd > 0 ? formatCost(totalCostUsd) : ""}</span>
                       <span className="w-16 text-right">{durationStr}</span>
                       <span className="w-20 text-right">
                         <JobStatusBadge status={rolledStatus} />
