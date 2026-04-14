@@ -25,6 +25,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from stepwise.containment.acp_bridge import ACP_BRIDGE_SCRIPT
 from stepwise.containment.guest_agent import GUEST_AGENT_SCRIPT, GUEST_INIT_SCRIPT
 
 logger = logging.getLogger("stepwise.containment.rootfs")
@@ -102,8 +103,9 @@ def build_rootfs(
         # Write Dockerfile
         (build_path / "Dockerfile").write_text(dockerfile)
 
-        # Write guest agent
+        # Write guest agent + ACP containment bridge
         (build_path / "guest-agent.py").write_text(GUEST_AGENT_SCRIPT)
+        (build_path / "acp-bridge.py").write_text(ACP_BRIDGE_SCRIPT)
         (build_path / "init.sh").write_text(GUEST_INIT_SCRIPT)
 
         # Build container
@@ -212,11 +214,12 @@ def _generate_dockerfile(
         ])
 
     lines.extend([
-        "# Guest agent",
+        "# Guest agent + ACP containment bridge",
         "RUN mkdir -p /opt/stepwise",
         "COPY guest-agent.py /opt/stepwise/guest-agent.py",
+        "COPY acp-bridge.py /opt/stepwise/acp-bridge.py",
         "COPY init.sh /init.sh",
-        "RUN chmod +x /init.sh /opt/stepwise/guest-agent.py",
+        "RUN chmod +x /init.sh /opt/stepwise/guest-agent.py /opt/stepwise/acp-bridge.py",
         "",
         "# Create workspace mount point",
         "RUN mkdir -p /mnt/workspace",

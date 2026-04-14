@@ -29,6 +29,7 @@ import time
 from dataclasses import dataclass, field
 from typing import IO, Any
 
+from stepwise.containment.acp_bridge import BRIDGE_PORT, BridgeClient
 from stepwise.containment.backend import (
     ContainmentConfig,
     ProcessHandle,
@@ -216,6 +217,50 @@ class VMSpawnContext:
             spawn_id=spawn_id,
             rfile=sock_rfile,
             wfile=sock_wfile,
+        )
+
+    def open_bridge(self, host_workdir: str) -> BridgeClient:
+        """Open a connection to the in-VM ACP bridge (vsock port 9998).
+
+        Used for claude/codex: the adapter process stays on the host (it
+        needs API keys + network) but its filesystem / terminal tool
+        requests are proxied into the VM via the returned client. The VM
+        is the one booted for this spawn context's config, so `open_bridge`
+        and `spawn` share the same virtiofs workspace mount.
+        """
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(30)
+        sock.connect(self._vm.vsock_socket)
+        sock.sendall(f"CONNECT {BRIDGE_PORT}\n".encode())
+
+        response = b""
+        while b"\n" not in response:
+            chunk = sock.recv(256)
+            if not chunk:
+                raise ConnectionError("vsock bridge CONNECT failed: closed")
+            response += chunk
+        if not response.startswith(b"OK"):
+            raise ConnectionError(f"vsock bridge CONNECT failed: {response!r}")
+
+        sock.settimeout(None)
+        rfile = sock.makefile("r", buffering=1, encoding="utf-8")
+        wfile = sock.makefile("w", buffering=1, encoding="utf-8")
+
+        def _close():
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except (OSError, socket.error):
+                pass
+            try:
+                sock.close()
+            except (OSError, socket.error):
+                pass
+
+        return BridgeClient(
+            rfile=rfile,
+            wfile=wfile,
+            close_fn=_close,
+            host_workdir=host_workdir,
         )
 
 

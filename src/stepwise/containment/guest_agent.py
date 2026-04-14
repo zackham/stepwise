@@ -194,6 +194,13 @@ if grep -q virtiofs /proc/filesystems 2>/dev/null; then
     mount -t virtiofs workspace /mnt/workspace 2>/dev/null
 fi
 
-# Start the guest agent
+# Start the ACP containment bridge in the background (vsock port 9998).
+# Host-side claude/codex adapters proxy fs/terminal requests to this
+# process so operations execute inside the VM sandbox.
+if [ -f /opt/stepwise/acp-bridge.py ]; then
+    python3 /opt/stepwise/acp-bridge.py &
+fi
+
+# Start the guest agent (vsock port 9999) in the foreground as PID 1's main.
 exec python3 /opt/stepwise/guest-agent.py
 '''

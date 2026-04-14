@@ -21,8 +21,19 @@ from stepwise.acp_ndjson import extract_cost, extract_session_id, read_last_erro
 from stepwise.acp_transport import AcpError, JsonRpcTransport
 from stepwise.agent import AgentProcess, AgentStatus
 from stepwise.agent_registry import ResolvedAgentConfig, resolve_config
+from stepwise.containment.acp_bridge import BridgeClient, BridgeError, translate_path
 from stepwise.executors import ExecutionContext
 from stepwise.lifecycle import ResourceLifecycleManager
+
+# Agents that handle their own tool execution internally and should run
+# entirely inside the containment VM. Everything else (claude, codex,
+# any npx-based ACP adapter) stays on the host and proxies filesystem
+# and terminal operations to the in-VM bridge — see _register_client_handlers.
+_IN_VM_AGENTS = frozenset({"aloop"})
+
+
+def _runs_in_vm(agent_name: str) -> bool:
+    return agent_name in _IN_VM_AGENTS
 
 logger = logging.getLogger("stepwise.acp_backend")
 
@@ -37,6 +48,7 @@ class ACPProcess:
     client: ACPClient
     capabilities: dict = field(default_factory=dict)
     pid_file: Path | None = None
+    bridge_client: BridgeClient | None = None
 
 
 class ACPBackend:
@@ -64,7 +76,10 @@ class ACPBackend:
         )
 
     @staticmethod
-    def _register_client_handlers(transport: JsonRpcTransport) -> None:
+    def _register_client_handlers(
+        transport: JsonRpcTransport,
+        bridge_client: BridgeClient | None = None,
+    ) -> None:
         """Register handlers for ACP client-side requests.
 
         The ACP agent (server) sends requests to the client for:
@@ -73,8 +88,15 @@ class ACPBackend:
         - Terminal/shell execution (terminal/create, terminal/output, etc.)
 
         Without these, the agent hangs waiting for responses that never come.
+
+        When `bridge_client` is provided, fs/terminal requests are proxied
+        through the in-VM ACP bridge instead of executing on the host. This
+        is the containment path for claude/codex: the adapter runs on the
+        host (needs API keys + network) but all sandbox-relevant operations
+        execute inside the microVM. Host-absolute paths under the bridge's
+        `host_workdir` are rewritten to the VM's `/mnt/workspace` mount so
+        both sides see the same virtiofs-backed bytes.
         """
-        # Track active terminals (terminal_id -> Popen)
         terminals: dict[str, subprocess.Popen] = {}
 
         def handle_request_permission(params: dict) -> dict:
@@ -83,13 +105,24 @@ class ACPBackend:
             for opt in options:
                 if opt.get("optionId") in ("allow_once", "allow_always"):
                     return {"outcome": {"outcome": "selected", "optionId": opt["optionId"]}}
-            # Fallback: select first option
             if options:
                 return {"outcome": {"outcome": "selected", "optionId": options[0]["optionId"]}}
             return {"outcome": {"outcome": "cancelled"}}
 
+        def _rewrite(params: dict) -> dict:
+            if not bridge_client or "path" not in params:
+                return params
+            rewritten = dict(params)
+            rewritten["path"] = translate_path(params["path"], bridge_client.host_workdir)
+            return rewritten
+
         def handle_read_text_file(params: dict) -> dict:
             file_path = params.get("path", "")
+            if bridge_client:
+                try:
+                    return bridge_client.call("fs/read_text_file", _rewrite(params))
+                except BridgeError as exc:
+                    raise RuntimeError(f"Cannot read {file_path}: {exc}")
             try:
                 content = Path(file_path).read_text()
                 return {"content": content}
@@ -99,6 +132,11 @@ class ACPBackend:
         def handle_write_text_file(params: dict) -> dict:
             file_path = params.get("path", "")
             content = params.get("content", "")
+            if bridge_client:
+                try:
+                    return bridge_client.call("fs/write_text_file", _rewrite(params))
+                except BridgeError as exc:
+                    raise RuntimeError(f"Cannot write {file_path}: {exc}")
             try:
                 p = Path(file_path)
                 p.parent.mkdir(parents=True, exist_ok=True)
@@ -108,6 +146,11 @@ class ACPBackend:
                 raise RuntimeError(f"Cannot write {file_path}: {exc}")
 
         def handle_terminal_create(params: dict) -> dict:
+            if bridge_client:
+                try:
+                    return bridge_client.call("terminal/create", params)
+                except BridgeError as exc:
+                    raise RuntimeError(f"Terminal create failed: {exc}")
             from uuid import uuid4
             cmd = params.get("command", "")
             cwd = params.get("cwd")
@@ -128,12 +171,16 @@ class ACPBackend:
                 raise RuntimeError(f"Terminal create failed: {exc}")
 
         def handle_terminal_output(params: dict) -> dict:
+            if bridge_client:
+                try:
+                    return bridge_client.call("terminal/output", params)
+                except BridgeError as exc:
+                    raise RuntimeError(f"Terminal output failed: {exc}")
             import select as _select
             terminal_id = params.get("terminalId", "")
             proc = terminals.get(terminal_id)
             if not proc or not proc.stdout:
                 return {"output": "", "isEof": True}
-            # Non-blocking read of available output
             ready, _, _ = _select.select([proc.stdout], [], [], 0.1)
             if ready:
                 chunk = proc.stdout.read(65536) if proc.stdout.readable() else ""
@@ -142,6 +189,11 @@ class ACPBackend:
             return {"output": "", "isEof": proc.poll() is not None}
 
         def handle_terminal_wait(params: dict) -> dict:
+            if bridge_client:
+                try:
+                    return bridge_client.call("terminal/wait_for_exit", params)
+                except BridgeError as exc:
+                    raise RuntimeError(f"Terminal wait failed: {exc}")
             terminal_id = params.get("terminalId", "")
             timeout_ms = params.get("timeoutMs", 30000)
             proc = terminals.get(terminal_id)
@@ -149,13 +201,17 @@ class ACPBackend:
                 return {"exitCode": -1}
             try:
                 proc.wait(timeout=timeout_ms / 1000)
-                # Read remaining output
                 remaining = proc.stdout.read() if proc.stdout else ""
                 return {"exitCode": proc.returncode, "output": remaining}
             except subprocess.TimeoutExpired:
                 return {"exitCode": None, "timedOut": True}
 
         def handle_terminal_kill(params: dict) -> dict:
+            if bridge_client:
+                try:
+                    return bridge_client.call("terminal/kill", params)
+                except BridgeError as exc:
+                    raise RuntimeError(f"Terminal kill failed: {exc}")
             terminal_id = params.get("terminalId", "")
             proc = terminals.get(terminal_id)
             if proc:
@@ -167,6 +223,11 @@ class ACPBackend:
             return {}
 
         def handle_terminal_release(params: dict) -> dict:
+            if bridge_client:
+                try:
+                    return bridge_client.call("terminal/release", params)
+                except BridgeError as exc:
+                    raise RuntimeError(f"Terminal release failed: {exc}")
             terminal_id = params.get("terminalId", "")
             proc = terminals.pop(terminal_id, None)
             if proc and proc.poll() is None:
@@ -208,6 +269,14 @@ class ACPBackend:
         If a containment backend is configured, the process is spawned
         inside a hardware-isolated environment (microVM). The stdio
         streams are bridged via vsock, transparent to the ACP protocol.
+
+        Per-agent containment strategy:
+        - aloop runs entirely inside the VM (tools handled internally).
+        - claude/codex spawn on the host (they need API keys + network)
+          but their fs/terminal tool requests are proxied into the VM
+          via a BridgeClient, so the sandbox is real. The bridge runs
+          alongside the guest agent inside the VM — see
+          `stepwise.containment.acp_bridge.ACP_BRIDGE_SCRIPT`.
         """
         env = {
             k: v
@@ -216,7 +285,8 @@ class ACPBackend:
         }
         env.update(config.env_vars)
 
-        # Use containment spawn context if available
+        bridge_client: BridgeClient | None = None
+
         if self.containment and getattr(config, "containment", None):
             from stepwise.containment.backend import ContainmentConfig
 
@@ -228,7 +298,32 @@ class ACPBackend:
             )
             spawn_ctx = self.containment.get_spawn_context(containment_config)
             cwd = config.allowed_paths[0] if config.allowed_paths else "."
-            proc = spawn_ctx.spawn(config.command, env, cwd)
+
+            if _runs_in_vm(config.name):
+                # Tools handled inside the VM — no host-side bridge needed.
+                proc = spawn_ctx.spawn(config.command, env, cwd)
+            else:
+                # Host-spawn the adapter, open a bridge into the VM for
+                # fs/terminal operations. `spawn_ctx` must expose
+                # `open_bridge`; the cloud-hypervisor backend does.
+                open_bridge = getattr(spawn_ctx, "open_bridge", None)
+                if open_bridge is None:
+                    raise RuntimeError(
+                        f"containment backend {type(spawn_ctx).__name__} does not "
+                        f"support host-adapter bridging required by agent {config.name!r}"
+                    )
+                bridge_client = open_bridge(cwd)
+                proc = subprocess.Popen(
+                    config.command,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1,
+                    env=env,
+                    cwd=cwd,
+                    start_new_session=True,
+                )
         else:
             proc = subprocess.Popen(
                 config.command,
@@ -245,7 +340,7 @@ class ACPBackend:
 
         # Register client-side request handlers that the ACP agent expects.
         # Without these, the agent hangs when it sends tool execution requests.
-        self._register_client_handlers(transport)
+        self._register_client_handlers(transport, bridge_client=bridge_client)
 
         transport.start()
         client = ACPClient(transport)
@@ -267,6 +362,11 @@ class ACPBackend:
                 proc.wait(timeout=2)
             except Exception:
                 pass
+            if bridge_client is not None:
+                try:
+                    bridge_client.close()
+                except Exception:
+                    pass
             detail = f": {stderr_text}" if stderr_text else ""
             raise RuntimeError(
                 f"ACP handshake failed for agent {config.name!r}: {exc}{detail}"
@@ -296,11 +396,17 @@ class ACPBackend:
             client=client,
             capabilities=caps,
             pid_file=pid_file,
+            bridge_client=bridge_client,
         )
 
     @staticmethod
     def _kill_process(acp_proc: ACPProcess) -> None:
         """Gracefully terminate an ACP process."""
+        if acp_proc.bridge_client is not None:
+            try:
+                acp_proc.bridge_client.close()
+            except Exception:
+                pass
         try:
             acp_proc.transport.close()
         except Exception:
