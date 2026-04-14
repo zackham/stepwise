@@ -264,6 +264,62 @@ implement:
 
 Auto-injected prompt variables: `$objective`, `$workspace`.
 
+### Structured Outputs (`outputs:` on agent steps)
+
+When an agent step declares `outputs: [field_a, field_b, ...]`, stepwise hands the agent a file path and a schema, and the agent is expected to write a JSON object matching that schema as one of its final actions. This is how you wire agent responses into the rest of the DAG.
+
+**What stepwise does automatically:**
+
+1. **Auto-promotes `output_mode`.** If `outputs:` is declared and the user didn't explicitly set `output_mode`, the mode is lifted from the default `"effect"` to `"file"`. Agent steps with declared outputs almost always want the file path — this saves a line of boilerplate. Explicit `output_mode: <value>` always wins. (`agent.py:_auto_promoted`)
+
+2. **Sets `STEPWISE_OUTPUT_FILE` in the agent's env.** An absolute file path, resolved against the step workspace. The agent can `echo "..." > "$STEPWISE_OUTPUT_FILE"` directly without parsing instructions. (`agent.py:_build_agent_env`)
+
+3. **Appends a `<stepwise-output>` block to the prompt.** Only when `output_mode == "file"` AND `outputs:` is non-empty. The block contains the target file path, the list of required JSON keys, a shaped example, and a reminder that the path is available as `$STEPWISE_OUTPUT_FILE`. (`agent.py:_append_output_instructions`)
+
+**What the agent literally sees** (appended to your prompt when `outputs: [score, summary]` is declared):
+
+```
+<stepwise-output>
+When you have completed your task, write your structured output as a JSON file to: my-step-output.json
+
+Required JSON keys: "score", "summary"
+Example:
+```json
+{
+  "score": "<score value>",
+  "summary": "<summary value>"
+}
+```
+
+The file path is also available as $STEPWISE_OUTPUT_FILE.
+Write this file as one of your final actions.
+</stepwise-output>
+```
+
+**Relationship of the three knobs:**
+
+| Field | Set by | Purpose |
+|---|---|---|
+| `outputs:` | user (in YAML) | Names of fields that downstream `inputs:` bindings can reference |
+| `output_mode:` | user or auto-promoted | How stepwise extracts the artifact after the step finishes |
+| `output_path:` | user (optional, `"file"` mode only) | Override the default `<step-name>-output.json` filename |
+
+`outputs:` is the schema; `output_mode: file` is the mechanism; `output_path:` is the override.
+
+**Opting out of the appended block** (rare — typically because your prompt file already gives custom instructions):
+
+```yaml
+my-step:
+  executor: agent
+  prompt_file: prompts/custom.md
+  outputs: [score]
+  output_mode: effect    # explicit — prevents auto-promotion to "file"
+```
+
+With `output_mode: effect`, the agent's artifact becomes `{"status": "completed"}`, the `<stepwise-output>` block is not appended, and `STEPWISE_OUTPUT_FILE` is not set. `outputs:` still controls the downstream binding surface, but the agent isn't asked to produce anything structured — downstream steps reading those output fields will see `None`.
+
+**Opting out with a different mode** — `output_mode: stream_result` gives you the full agent text under `result`, also skipping the structured-output block.
+
 ### Named Sessions
 
 Agent and LLM steps can share conversations using **named sessions**. Steps with the same `session: <name>` reuse the same agent session, continuing the conversation instead of starting fresh. This saves tokens and preserves full conversational context.
