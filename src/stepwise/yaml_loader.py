@@ -1126,7 +1126,25 @@ def _resolve_flow_source(
                 input_vars = _parse_input_vars(flow_data)
             except ValueError:
                 pass  # validation errors handled elsewhere
-        return WorkflowDefinition(steps=flow_steps, input_vars=input_vars), None
+        # Inherit source_dir from the lexically enclosing flow file so that
+        # `run: scripts/foo.py` and `prompt_file: prompts/foo.md` inside an
+        # inline sub-flow continue to reference the parent flow's assets
+        # (matching authoring intent for inline for_each blocks). Only set
+        # this when the parent context is itself file-backed — for string-
+        # loaded parents (no source_path) source_dir stays None.
+        inline_source_dir = (
+            str(base_dir.resolve())
+            if base_dir is not None and loading_files
+            else None
+        )
+        return (
+            WorkflowDefinition(
+                steps=flow_steps,
+                input_vars=input_vars,
+                source_dir=inline_source_dir,
+            ),
+            None,
+        )
 
     raise ValueError(
         f"Step '{step_name}' {context}: 'flow' must be a string or mapping"

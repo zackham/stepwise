@@ -5,9 +5,15 @@ import os
 import pytest
 from pathlib import Path
 
-from stepwise.models import WorkflowDefinition
+from stepwise.models import JobStatus, WorkflowDefinition
 from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
-from stepwise.executors import ScriptExecutor, ExecutionContext
+from stepwise.executors import (
+    ExecutorRegistry,
+    ExternalExecutor,
+    MockLLMExecutor,
+    ScriptExecutor,
+    ExecutionContext,
+)
 from stepwise.engine import Engine
 from stepwise.store import SQLiteStore
 
@@ -418,3 +424,174 @@ steps:
         wf = load_workflow_yaml(str(flow))
         step = wf.steps["review"]
         assert step.executor.config["prompt"] == "Please review the output and approve."
+
+
+# ── Sub-flow STEPWISE_FLOW_DIR resolution ─────────────────────────────
+
+
+def _make_flow_dir_engine() -> tuple[SQLiteStore, Engine]:
+    """Engine wired with a script registry that honors flow_dir."""
+    store = SQLiteStore(":memory:")
+    reg = ExecutorRegistry()
+    reg.register("script", lambda cfg: ScriptExecutor(
+        command=cfg.get("command", "echo '{}'"),
+        working_dir=cfg.get("working_dir"),
+        flow_dir=cfg.get("flow_dir"),
+    ))
+    reg.register("external", lambda cfg: ExternalExecutor(prompt=cfg.get("prompt", "")))
+    reg.register("mock_llm", lambda cfg: MockLLMExecutor())
+    reg.register("for_each", lambda cfg: ScriptExecutor(command="echo '{}'"))
+    return store, Engine(store=store, registry=reg)
+
+
+def _tick_until_done(engine: Engine, job_id: str, max_ticks: int = 50):
+    for _ in range(max_ticks):
+        job = engine.get_job(job_id)
+        if job.status not in (JobStatus.RUNNING, JobStatus.PENDING):
+            return job
+        engine.tick()
+    return engine.get_job(job_id)
+
+
+class TestSubFlowFlowDir:
+    """STEPWISE_FLOW_DIR resolves to the directory of the flow file that
+    DEFINES the executing step, not the root job's flow.
+    """
+
+    def test_inline_for_each_subflow_uses_parent_flow_dir(self, tmp_path):
+        """Inline `flow:` block under for_each inherits the enclosing flow's dir.
+
+        Reproduces the bug: a `run: scripts/lookup.py` step inside an inline
+        for_each sub-flow should resolve `scripts/lookup.py` relative to the
+        PARENT flow's directory (which is where the script actually lives).
+        Before the fix, this failed with `No such file or directory`.
+        """
+        flow_dir = tmp_path / "parent-flow"
+        flow_dir.mkdir()
+        scripts_dir = flow_dir / "scripts"
+        scripts_dir.mkdir()
+        script = scripts_dir / "lookup.py"
+        script.write_text(
+            'import json, os\n'
+            'item = os.environ.get("STEPWISE_INPUT_item", "")\n'
+            'flow_dir = os.environ.get("STEPWISE_FLOW_DIR", "")\n'
+            'print(json.dumps({"looked_up": item.upper(), "flow_dir": flow_dir}))\n'
+        )
+
+        marker = flow_dir / "FLOW.yaml"
+        marker.write_text("""\
+name: parent-flow
+author: test
+steps:
+  produce:
+    run: 'echo ''{"items": ["a", "b", "c"]}'''
+    outputs: [items]
+
+  fan-out:
+    for_each: produce.items
+    as: item
+    flow:
+      steps:
+        lookup:
+          run: scripts/lookup.py
+          inputs:
+            item: $job.item
+          outputs: [looked_up, flow_dir]
+    outputs: [results]
+""")
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+
+        wf = load_workflow_yaml(str(marker))
+        sub_flow = wf.steps["fan-out"].sub_flow
+        assert sub_flow is not None
+        # The crux of the fix: inline sub-flow inherits parent flow's source_dir.
+        assert sub_flow.source_dir == str(flow_dir.resolve())
+
+        store, engine = _make_flow_dir_engine()
+        job = engine.create_job("test", wf, workspace_path=str(workspace))
+        engine.start_job(job.id)
+        job = _tick_until_done(engine, job.id)
+
+        assert job.status == JobStatus.COMPLETED, (
+            f"job ended in {job.status}; runs="
+            f"{[(r.step_name, r.status, r.error) for r in store.runs_for_job(job.id)]}"
+        )
+
+        fe_runs = engine.get_runs(job.id, "fan-out")
+        assert len(fe_runs) == 1
+        results = fe_runs[0].result.artifact["results"]
+        assert len(results) == 3
+        assert {r["looked_up"] for r in results} == {"A", "B", "C"}
+        for r in results:
+            assert r["flow_dir"] == str(flow_dir.resolve())
+
+        store.close()
+
+    def test_composed_subflow_uses_its_own_flow_dir(self, tmp_path):
+        """A composed (file-loaded) sub-flow uses its OWN directory, not the
+        caller's. Ensures `flow: name`/`flow: ./other.yaml` references stay
+        self-contained when scripts/prompts live alongside the included flow.
+        """
+        # Parent flow lives in one directory.
+        parent_dir = tmp_path / "parent"
+        parent_dir.mkdir()
+        parent_marker = parent_dir / "FLOW.yaml"
+
+        # Composed sub-flow lives in a sibling directory with its own scripts.
+        child_dir = tmp_path / "child"
+        child_dir.mkdir()
+        child_scripts = child_dir / "scripts"
+        child_scripts.mkdir()
+        (child_scripts / "report.py").write_text(
+            'import json, os\n'
+            'flow_dir = os.environ.get("STEPWISE_FLOW_DIR", "")\n'
+            'print(json.dumps({"value": "ok", "flow_dir": flow_dir}))\n'
+        )
+        child_marker = child_dir / "FLOW.yaml"
+        child_marker.write_text("""\
+name: child-flow
+author: test
+steps:
+  report:
+    run: scripts/report.py
+    outputs: [value, flow_dir]
+""")
+
+        parent_marker.write_text(f"""\
+name: parent-flow
+author: test
+steps:
+  call:
+    flow: {child_marker}
+    outputs: [value, flow_dir]
+""")
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+
+        wf = load_workflow_yaml(str(parent_marker))
+        # Composed sub-flow keeps its OWN source_dir.
+        sub = wf.steps["call"].sub_flow
+        assert sub is not None
+        assert sub.source_dir == str(child_dir.resolve())
+
+        store, engine = _make_flow_dir_engine()
+        job = engine.create_job("test", wf, workspace_path=str(workspace))
+        engine.start_job(job.id)
+        job = _tick_until_done(engine, job.id)
+
+        assert job.status == JobStatus.COMPLETED, (
+            f"job ended in {job.status}; runs="
+            f"{[(r.step_name, r.status, r.error) for r in store.runs_for_job(job.id)]}"
+        )
+
+        sub_jobs = store.child_jobs(job.id)
+        assert sub_jobs, "expected a sub-job to be created for composed flow"
+        sub_runs = store.runs_for_job(sub_jobs[0].id)
+        report_runs = [r for r in sub_runs if r.step_name == "report"]
+        assert report_runs
+        artifact = report_runs[0].result.artifact
+        assert artifact["value"] == "ok"
+        assert artifact["flow_dir"] == str(child_dir.resolve())
+
+        store.close()
