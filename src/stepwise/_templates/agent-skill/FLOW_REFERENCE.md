@@ -39,8 +39,6 @@ category: development                        # optional
 tags: [agent, code]                          # optional
 include:                                     # optional — registry flows auto-fetched on install
   - @bob:code-review
-defaults:                                    # optional — default input values for all flows
-  project_path: .
 ```
 
 Kit flows run as `stepwise run kit/flow` locally or `stepwise run @author:kit/flow` from the registry. Share kits with `stepwise share <kit-name>`.
@@ -50,7 +48,7 @@ Kit flows run as `stepwise run kit/flow` locally or `stepwise run @author:kit/fl
 ```yaml
 name: my-flow                    # kebab-case identifier
 description: "What this flow does"
-author: alice                    # optional, auto from git config
+author: alice                    # required
 version: "1.0"                   # optional
 forked_from: "@bob:original"     # optional, provenance for forked flows
 

@@ -1189,6 +1189,8 @@ def _build_flow_graph(wf, fmt: str, name: str | None = None):
                 depended_on.add(binding.source_step)
         for seq in step.after:
             depended_on.add(seq)
+        for seq in step.after_resolved:
+            depended_on.add(seq)
         if step.for_each:
             depended_on.add(step.for_each.source_step)
 
@@ -1282,6 +1284,12 @@ def _build_flow_graph(wf, fmt: str, name: str | None = None):
             if dep in wf.steps:
                 dot.edge(dep, step_name, style="dashed", color="#666")
 
+        # After-resolved edges (dashed with different color)
+        for dep in step.after_resolved:
+            if dep in wf.steps:
+                dot.edge(dep, step_name, style="dashed", color="#22c55e",
+                         label="resolved", fontcolor="#22c55e")
+
         # Loop-back edges from exit rules
         for rule in step.exit_rules:
             action = rule.config.get("action", "")
@@ -1353,9 +1361,13 @@ def cmd_new(args: argparse.Namespace) -> int:
         return EXIT_USAGE_ERROR
 
     flow_dir.mkdir(parents=True)
+    from stepwise.yaml_loader import get_author
+    author = get_author()
+
     template = (
         f"name: {name}\n"
         f'description: ""\n'
+        f"author: {author}\n"
         f"\n"
         f"# A 3-step workflow: gather data → analyze with LLM → format results\n"
         f"# Run with: stepwise run {run_ref} --input topic=\"your topic\"\n"

@@ -13,6 +13,7 @@ from stepwise.server import app
 
 SAMPLE_FLOW_YAML = """\
 name: quick-task
+author: test
 steps:
   do_it:
     executor: llm

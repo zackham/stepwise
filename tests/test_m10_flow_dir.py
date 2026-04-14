@@ -21,6 +21,8 @@ class TestSourceDir:
     def test_source_dir_set_from_file(self, tmp_path):
         flow = tmp_path / "my-flow.yaml"
         flow.write_text("""\
+name: test
+author: test
 steps:
   hello:
     run: 'echo "hi"'
@@ -42,6 +44,8 @@ steps:
     def test_source_dir_serializes(self, tmp_path):
         flow = tmp_path / "test.yaml"
         flow.write_text("""\
+name: test
+author: test
 steps:
   hello:
     run: 'echo "hi"'
@@ -64,6 +68,8 @@ steps:
         flow_dir.mkdir()
         marker = flow_dir / "FLOW.yaml"
         marker.write_text("""\
+name: test
+author: test
 steps:
   hello:
     run: 'echo "hi"'
@@ -208,6 +214,8 @@ class TestScriptPathResolutionIntegration:
 
         marker = flow_dir / "FLOW.yaml"
         marker.write_text("""\
+name: test
+author: test
 steps:
   greet:
     run: scripts/hello.py
@@ -255,6 +263,8 @@ class TestPromptFileResolution:
 
         flow = tmp_path / "test.yaml"
         flow.write_text("""\
+name: test
+author: test
 steps:
   analyze:
     executor: llm
@@ -268,6 +278,8 @@ steps:
     def test_prompt_file_missing_raises_error(self, tmp_path):
         flow = tmp_path / "test.yaml"
         flow.write_text("""\
+name: test
+author: test
 steps:
   analyze:
     executor: llm
@@ -284,6 +296,8 @@ steps:
 
         flow = tmp_path / "test.yaml"
         flow.write_text("""\
+name: test
+author: test
 steps:
   analyze:
     executor: llm
@@ -303,6 +317,8 @@ steps:
 
         flow = tmp_path / "test.yaml"
         flow.write_text("""\
+name: test
+author: test
 steps:
   analyze:
     executor: llm
@@ -323,6 +339,8 @@ steps:
 
         flow = tmp_path / "test.yaml"
         flow.write_text("""\
+name: test
+author: test
 steps:
   work:
     executor: agent
@@ -369,6 +387,8 @@ steps:
 
         marker = flow_dir / "FLOW.yaml"
         marker.write_text("""\
+name: test
+author: test
 steps:
   analyze:
     executor: llm
@@ -387,6 +407,8 @@ steps:
 
         flow = tmp_path / "test.yaml"
         flow.write_text("""\
+name: test
+author: test
 steps:
   review:
     executor: external

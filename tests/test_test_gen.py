@@ -15,6 +15,7 @@ from tests.conftest import register_step_fn, run_job_sync
 
 YAML_LINEAR = """\
 name: linear-test
+author: test
 steps:
   fetch:
     run: |
@@ -31,6 +32,7 @@ steps:
 
 YAML_WITH_LOOPS = """\
 name: loop-test
+author: test
 steps:
   generate:
     run: |
@@ -49,6 +51,7 @@ steps:
 
 YAML_WITH_JOB_INPUTS = """\
 name: job-input-test
+author: test
 steps:
   fetch:
     run: |
@@ -61,6 +64,7 @@ steps:
 
 YAML_WITH_BRANCHES = """\
 name: branch-test
+author: test
 steps:
   check:
     run: |
@@ -86,6 +90,7 @@ steps:
 
 YAML_WITH_EXTERNAL = """\
 name: external-test
+author: test
 steps:
   review:
     executor: external
@@ -102,6 +107,7 @@ steps:
 
 YAML_WITH_ADVANCE_CONDITION = """\
 name: advance-cond-test
+author: test
 steps:
   analyze:
     run: |

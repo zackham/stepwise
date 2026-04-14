@@ -663,6 +663,27 @@ class SQLiteStore:
         )
         self._conn.commit()
 
+    def update_run_state(self, run_id: str, executor_state: dict, pid: int | None = None) -> None:
+        """Atomic UPDATE of executor_state and optionally pid.
+
+        Avoids the read-modify-write race in load_run + save_run by issuing
+        a single UPDATE.  COALESCE(?, pid) keeps the existing pid when the
+        caller passes None, so concurrent save_run calls on other columns
+        can't clobber a pid that was already written.
+        """
+        self._conn.execute(
+            """UPDATE step_runs
+               SET executor_state = ?,
+                   pid = COALESCE(?, pid)
+             WHERE id = ?""",
+            (
+                _dumps(executor_state),
+                pid,
+                run_id,
+            ),
+        )
+        self._conn.commit()
+
     def load_run(self, run_id: str) -> StepRun:
         row = self._conn.execute(
             "SELECT * FROM step_runs WHERE id = ?", (run_id,)
@@ -774,6 +795,14 @@ class SQLiteStore:
             return row["max_attempt"] + 1
         return 1
 
+    def completed_step_count(self, job_id: str) -> int:
+        """Count of distinct steps with at least one COMPLETED run for a job."""
+        row = self._conn.execute(
+            "SELECT COUNT(DISTINCT step_name) as cnt FROM step_runs WHERE job_id = ? AND status = ?",
+            (job_id, StepRunStatus.COMPLETED.value),
+        ).fetchone()
+        return row["cnt"] if row else 0
+
     def completed_run_count(self, job_id: str, step_name: str) -> int:
         """Count of COMPLETED runs for a step (for iteration tracking)."""
         row = self._conn.execute(
@@ -789,6 +818,35 @@ class SQLiteStore:
             (job_id, step_name),
         ).fetchone()
         return row["cnt"] if row else 0
+
+    def delete_skipped_runs(self, job_id: str, exclude_step: str | None = None) -> int:
+        """Delete all SKIPPED step runs for a job.
+
+        Used by rerun_step to clear stale skip markers so the engine
+        re-evaluates downstream steps after an upstream is rerun.
+        Returns the number of runs deleted.
+        """
+        if exclude_step:
+            rows = self._conn.execute(
+                "SELECT id FROM step_runs WHERE job_id = ? AND status = ? AND step_name != ?",
+                (job_id, StepRunStatus.SKIPPED.value, exclude_step),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT id FROM step_runs WHERE job_id = ? AND status = ?",
+                (job_id, StepRunStatus.SKIPPED.value),
+            ).fetchall()
+        run_ids = [r["id"] for r in rows]
+        if not run_ids:
+            return 0
+        placeholders = ",".join("?" * len(run_ids))
+        self._conn.execute(
+            f"DELETE FROM step_events WHERE run_id IN ({placeholders})", run_ids
+        )
+        self._conn.execute(
+            f"DELETE FROM step_runs WHERE id IN ({placeholders})", run_ids
+        )
+        return len(run_ids)
 
     # ── Job Ownership & Heartbeat ────────────────────────────────────────
 
@@ -910,6 +968,47 @@ class SQLiteStore:
             (run_id,),
         ).fetchone()
         return float(row["total"]) if row and row["total"] else 0.0
+
+    def batch_job_costs(self, job_ids: list[str]) -> dict[str, float]:
+        """Compute cost_usd for multiple jobs in minimal queries.
+
+        Uses a single SQL query to sum step_event costs and executor_meta
+        fallbacks per job. Returns {job_id: cost_usd} for all requested IDs.
+        Does NOT recurse into sub-jobs (too expensive for a list view).
+        """
+        if not job_ids:
+            return {}
+        result: dict[str, float] = {jid: 0.0 for jid in job_ids}
+        # Batch 1: sum step_event costs grouped by job_id
+        placeholders = ",".join("?" for _ in job_ids)
+        rows = self._conn.execute(
+            f"""SELECT sr.job_id, SUM(json_extract(se.data, '$.cost_usd')) as total
+                FROM step_events se
+                JOIN step_runs sr ON se.run_id = sr.id
+                WHERE sr.job_id IN ({placeholders}) AND se.type = 'cost'
+                GROUP BY sr.job_id""",
+            job_ids,
+        ).fetchall()
+        event_costs: dict[str, float] = {}
+        for row in rows:
+            if row["total"]:
+                event_costs[row["job_id"]] = float(row["total"])
+                result[row["job_id"]] = float(row["total"])
+        # Batch 2: for jobs with no step_event cost, try executor_meta fallback
+        missing = [jid for jid in job_ids if jid not in event_costs]
+        if missing:
+            mp = ",".join("?" for _ in missing)
+            meta_rows = self._conn.execute(
+                f"""SELECT job_id, SUM(json_extract(result, '$.executor_meta.cost_usd')) as total
+                    FROM step_runs
+                    WHERE job_id IN ({mp}) AND result IS NOT NULL
+                    GROUP BY job_id""",
+                missing,
+            ).fetchall()
+            for row in meta_rows:
+                if row["total"]:
+                    result[row["job_id"]] = float(row["total"])
+        return result
 
     # ── Events ────────────────────────────────────────────────────────────
 

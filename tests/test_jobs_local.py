@@ -33,6 +33,7 @@ from stepwise.store import SQLiteStore
 
 SIMPLE_FLOW = """\
 name: simple
+author: test
 steps:
   hello:
     run: 'echo "{\\"msg\\": \\"hi\\"}"'

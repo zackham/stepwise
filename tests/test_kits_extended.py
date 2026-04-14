@@ -1,4 +1,4 @@
-"""Tests for kit features: new-in-kit, catalog, kit defaults."""
+"""Tests for kit features: new-in-kit, catalog, author requirement."""
 
 import os
 import subprocess
@@ -13,10 +13,9 @@ from stepwise.flow_resolution import (
     FLOW_DIR_MARKER,
     discover_kits,
     discover_flows,
-    get_kit_defaults_for_flow,
     resolve_flow,
 )
-from stepwise.yaml_loader import load_kit_yaml, load_workflow_yaml
+from stepwise.yaml_loader import load_kit_yaml, load_workflow_yaml, YAMLLoadError
 
 
 @pytest.fixture
@@ -28,7 +27,7 @@ def kit_project(tmp_path):
     flows = project / "flows"
     flows.mkdir()
 
-    # Create a kit with defaults
+    # Create a kit (no defaults — removed)
     kit_dir = flows / "mykit"
     kit_dir.mkdir()
     (kit_dir / KIT_DIR_MARKER).write_text(
@@ -36,24 +35,22 @@ def kit_project(tmp_path):
         "description: Test kit\n"
         "author: testauthor\n"
         "category: testing\n"
-        "defaults:\n"
-        "  author: kitauthor\n"
-        "  visibility: background\n"
     )
 
-    # Flow without author/visibility (should inherit from kit)
+    # Flow with author
     flow1 = kit_dir / "flow-a"
     flow1.mkdir()
     (flow1 / FLOW_DIR_MARKER).write_text(
         "name: flow-a\n"
         "description: A test flow\n"
+        "author: flowauthor\n"
         "steps:\n"
         "  step1:\n"
         "    run: echo ok\n"
         "    outputs: [result]\n"
     )
 
-    # Flow WITH explicit author (should NOT be overridden by kit default)
+    # Flow with explicit author
     flow2 = kit_dir / "flow-b"
     flow2.mkdir()
     (flow2 / FLOW_DIR_MARKER).write_text(
@@ -66,12 +63,13 @@ def kit_project(tmp_path):
         "    outputs: [result]\n"
     )
 
-    # Standalone flow (no kit defaults)
+    # Standalone flow with author
     standalone = flows / "standalone"
     standalone.mkdir()
     (standalone / FLOW_DIR_MARKER).write_text(
         "name: standalone\n"
         "description: Standalone flow\n"
+        "author: standaloneauthor\n"
         "steps:\n"
         "  step1:\n"
         "    run: echo ok\n"
@@ -81,65 +79,44 @@ def kit_project(tmp_path):
     return project
 
 
-class TestKitDefaults:
-    def test_inherits_author_from_kit(self, kit_project):
+class TestAuthorRequired:
+    def test_flow_with_author_loads(self, kit_project):
         flow_path = kit_project / "flows" / "mykit" / "flow-a" / FLOW_DIR_MARKER
         wf = load_workflow_yaml(flow_path)
-        assert wf.metadata.author == "kitauthor"
+        assert wf.metadata.author == "flowauthor"
 
-    def test_inherits_visibility_from_kit(self, kit_project):
-        flow_path = kit_project / "flows" / "mykit" / "flow-a" / FLOW_DIR_MARKER
-        wf = load_workflow_yaml(flow_path)
-        assert wf.metadata.visibility == "background"
-
-    def test_explicit_author_not_overridden(self, kit_project):
+    def test_explicit_author_preserved(self, kit_project):
         flow_path = kit_project / "flows" / "mykit" / "flow-b" / FLOW_DIR_MARKER
         wf = load_workflow_yaml(flow_path)
         assert wf.metadata.author == "explicitauthor"
 
-    def test_standalone_flow_no_defaults(self, kit_project):
+    def test_standalone_flow_with_author(self, kit_project):
         flow_path = kit_project / "flows" / "standalone" / FLOW_DIR_MARKER
         wf = load_workflow_yaml(flow_path)
-        assert wf.metadata.author == ""
+        assert wf.metadata.author == "standaloneauthor"
         assert wf.metadata.visibility == "interactive"
 
-    def test_get_kit_defaults_for_kit_flow(self, kit_project):
-        flow_path = kit_project / "flows" / "mykit" / "flow-a" / FLOW_DIR_MARKER
-        defaults = get_kit_defaults_for_flow(flow_path)
-        assert defaults is not None
-        assert defaults["author"] == "kitauthor"
-        assert defaults["visibility"] == "background"
-
-    def test_get_kit_defaults_for_standalone(self, kit_project):
-        flow_path = kit_project / "flows" / "standalone" / FLOW_DIR_MARKER
-        defaults = get_kit_defaults_for_flow(flow_path)
-        assert defaults is None
-
-    def test_explicit_kit_defaults_param_overrides_auto(self, kit_project):
-        """When kit_defaults is explicitly passed, it takes precedence over auto-detection."""
-        flow_path = kit_project / "flows" / "mykit" / "flow-a" / FLOW_DIR_MARKER
-        wf = load_workflow_yaml(flow_path, kit_defaults={"author": "override"})
-        assert wf.metadata.author == "override"
-
-    def test_kit_defaults_no_defaults_field(self, tmp_path):
-        """Kit with no defaults field returns None."""
-        project = tmp_path / "project"
-        project.mkdir()
-        flows = project / "flows"
-        kit_dir = flows / "nodefaults"
-        kit_dir.mkdir(parents=True)
-        (kit_dir / KIT_DIR_MARKER).write_text(
-            "name: nodefaults\n"
-            "description: No defaults\n"
-        )
-        flow_dir = kit_dir / "myflow"
-        flow_dir.mkdir()
-        flow_yaml = flow_dir / FLOW_DIR_MARKER
+    def test_missing_author_raises_error(self, tmp_path):
+        """Flow without author should fail validation."""
+        flow_yaml = tmp_path / "FLOW.yaml"
         flow_yaml.write_text(
-            "name: myflow\nsteps:\n  s:\n    run: echo ok\n    outputs: [x]\n"
+            "name: no-author\n"
+            "description: Missing author\n"
+            "steps:\n"
+            "  s:\n"
+            "    run: echo ok\n"
+            "    outputs: [x]\n"
         )
-        defaults = get_kit_defaults_for_flow(flow_yaml)
-        assert defaults is None
+        with pytest.raises(YAMLLoadError, match="'author' is required"):
+            load_workflow_yaml(flow_yaml)
+
+    def test_kit_yaml_no_defaults_field(self, kit_project):
+        """Kit YAML should load without a defaults field."""
+        kit_yaml = kit_project / "flows" / "mykit" / "KIT.yaml"
+        kit_def = load_kit_yaml(kit_yaml)
+        assert kit_def.name == "mykit"
+        assert kit_def.author == "testauthor"
+        assert not hasattr(kit_def, "defaults")
 
 
 class TestNewInKit:

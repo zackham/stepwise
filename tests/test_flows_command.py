@@ -196,7 +196,7 @@ class TestFlowsKitGrouping:
         fd = kit_dir / "hidden"
         fd.mkdir()
         (fd / "FLOW.yaml").write_text(
-            "name: hidden\nvisibility: internal\nsteps:\n  s:\n    run: echo '{}'\n"
+            "name: hidden\nauthor: test\nvisibility: internal\nsteps:\n  s:\n    run: echo '{}'\n"
         )
         rc, combined = _run_flows(monkeypatch, tmp_path, capsys)
         assert rc == EXIT_SUCCESS

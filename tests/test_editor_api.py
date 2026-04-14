@@ -16,6 +16,7 @@ from stepwise.store import SQLiteStore
 
 SIMPLE_FLOW = """\
 name: simple-test
+author: test
 steps:
   greet:
     run: 'echo "{\\"message\\": \\"hello\\"}"'
@@ -24,6 +25,7 @@ steps:
 
 TWO_STEP_FLOW = """\
 name: two-step
+author: test
 steps:
   fetch:
     run: 'echo "{\\"data\\": \\"raw\\"}"'
@@ -38,6 +40,7 @@ steps:
 
 INVALID_YAML = """\
 name: bad
+author: test
 steps:
   broken:
     executor: llm
@@ -46,6 +49,7 @@ steps:
 
 MALFORMED_YAML = """\
 name: [unterminated
+author: test
   steps:
 """
 
@@ -281,6 +285,7 @@ class TestSaveLocalFlow:
     def test_save_overwrites_file(self, client, project_dir):
         new_yaml = """\
 name: updated-flow
+author: test
 steps:
   hello:
     run: 'echo "{\\"msg\\": \\"updated\\"}"'
@@ -305,6 +310,7 @@ steps:
         original = (project_dir / "simple.flow.yaml").read_text()
         new_yaml = """\
 name: v2
+author: test
 steps:
   step1:
     run: 'echo "{\\"x\\": 1}"'
@@ -336,6 +342,7 @@ steps:
     def test_save_new_file(self, client, project_dir):
         new_yaml = """\
 name: brand-new
+author: test
 steps:
   only:
     run: 'echo "{\\"v\\": 1}"'
@@ -354,6 +361,7 @@ steps:
     def test_save_returns_graph(self, client, project_dir):
         new_yaml = """\
 name: with-graph
+author: test
 steps:
   a:
     run: 'echo "{\\"x\\": 1}"'
@@ -443,7 +451,7 @@ class TestKitEndpoints:
         solo = tmp_path / "flows" / "solo"
         solo.mkdir(parents=True, exist_ok=True)
         (solo / "FLOW.yaml").write_text(
-            "name: solo\nsteps:\n  s:\n    run: echo '{}'\n    outputs: [x]\n"
+            "name: solo\nauthor: test\nsteps:\n  s:\n    run: echo '{}'\n    outputs: [x]\n"
         )
         return tmp_path
 

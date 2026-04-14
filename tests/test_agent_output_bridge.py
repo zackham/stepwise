@@ -391,6 +391,7 @@ def test_for_each_agent_output_bridge(async_engine):
 
 SIMPLE_EMIT_FLOW = """\
 name: emitted-flow
+author: test
 steps:
   do-work:
     run: |

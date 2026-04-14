@@ -333,6 +333,7 @@ class TestRegistryRefResolution:
 
         yaml_str = textwrap.dedent("""\
             name: test
+            author: test
             steps:
               source:
                 run: 'echo "{\\"items\\": [1, 2, 3]}"'

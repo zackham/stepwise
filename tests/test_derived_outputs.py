@@ -124,6 +124,7 @@ def test_derived_outputs_yaml_parsing():
 
     yaml_text = """\
 name: test-derived
+author: test
 steps:
   analyze:
     run: |

@@ -83,14 +83,14 @@ class TestFlowStepParsing:
         with tempfile.TemporaryDirectory() as d:
             sub_path = Path(d) / "sub.flow.yaml"
             sub_path.write_text(
-                "steps:\n"
+                "name: test\nauthor: test\nsteps:\n"
                 "  work:\n"
                 "    run: echo answer\n"
                 "    outputs: [answer]\n"
             )
             main_path = Path(d) / "main.flow.yaml"
             main_path.write_text(
-                "steps:\n"
+                "name: test\nauthor: test\nsteps:\n"
                 "  delegate:\n"
                 "    flow: sub.flow.yaml\n"
                 "    outputs: [answer]\n"
@@ -110,14 +110,14 @@ class TestFlowStepParsing:
             sub_dir = flows_dir / "helper"
             sub_dir.mkdir()
             (sub_dir / "FLOW.yaml").write_text(
-                "steps:\n"
+                "name: test\nauthor: test\nsteps:\n"
                 "  work:\n"
                 "    run: echo data\n"
                 "    outputs: [data]\n"
             )
             main_path = flows_dir / "main.flow.yaml"
             main_path.write_text(
-                "steps:\n"
+                "name: test\nauthor: test\nsteps:\n"
                 "  delegate:\n"
                 "    flow: helper\n"
                 "    outputs: [data]\n"
@@ -189,13 +189,13 @@ class TestFlowStepParsing:
             b_path = Path(d) / "b.flow.yaml"
 
             a_path.write_text(
-                "steps:\n"
+                "name: test\nauthor: test\nsteps:\n"
                 "  delegate:\n"
                 "    flow: b.flow.yaml\n"
                 "    outputs: [x]\n"
             )
             b_path.write_text(
-                "steps:\n"
+                "name: test\nauthor: test\nsteps:\n"
                 "  delegate:\n"
                 "    flow: a.flow.yaml\n"
                 "    outputs: [x]\n"
@@ -429,14 +429,14 @@ class TestFlowStepIntegration:
         with tempfile.TemporaryDirectory() as d:
             sub_path = Path(d) / "sub.flow.yaml"
             sub_path.write_text(
-                "steps:\n"
+                "name: test\nauthor: test\nsteps:\n"
                 "  work:\n"
                 '    run: "echo \'{\\"answer\\": \\"42\\"}\'"\n'
                 "    outputs: [answer]\n"
             )
             main_path = Path(d) / "main.flow.yaml"
             main_path.write_text(
-                "steps:\n"
+                "name: test\nauthor: test\nsteps:\n"
                 "  delegate:\n"
                 "    flow: sub.flow.yaml\n"
                 "    outputs: [answer]\n"

@@ -46,6 +46,7 @@ class TestCacheConfigYaml:
     def test_cache_true(self):
         yaml = """
 name: test
+author: test
 steps:
   a:
     run: 'echo "{}"'
@@ -62,6 +63,7 @@ steps:
     def test_cache_false(self):
         yaml = """
 name: test
+author: test
 steps:
   a:
     run: 'echo "{}"'
@@ -75,6 +77,7 @@ steps:
     def test_cache_dict_with_ttl(self):
         yaml = """
 name: test
+author: test
 steps:
   a:
     run: 'echo "{}"'

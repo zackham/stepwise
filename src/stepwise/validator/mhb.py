@@ -162,6 +162,10 @@ def compute_mhb_ancestors(
             if (step.name, dep_name) in back_edges:
                 continue
             ancestors[step.name].add(dep_name)
+        for dep_name in step.after_resolved:
+            if (step.name, dep_name) in back_edges:
+                continue
+            ancestors[step.name].add(dep_name)
         for ib in step.inputs:
             if ib.any_of_sources is not None:
                 continue  # handled in (d) below
@@ -280,6 +284,10 @@ def compute_mhb_strict_ancestors(
     # Seed with (a') direct edges — EXCLUDING optional, back-edge, any_of
     for step in _iter_steps(flow):
         for dep_name in step.after:
+            if (step.name, dep_name) in back_edges:
+                continue
+            strict[step.name].add(dep_name)
+        for dep_name in step.after_resolved:
             if (step.name, dep_name) in back_edges:
                 continue
             strict[step.name].add(dep_name)

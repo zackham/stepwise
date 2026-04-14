@@ -238,6 +238,7 @@ class TestMixedFlow:
     def test_mixed_string_and_predicate_loads_cleanly(self, tmp_path):
         flow_yaml = """\
 name: mixed-when
+author: test
 steps:
   fetch:
     run: |
@@ -271,6 +272,7 @@ steps:
     def test_predicate_in_with_yaml_list(self, tmp_path):
         flow_yaml = """\
 name: in-list
+author: test
 steps:
   fetch:
     run: |

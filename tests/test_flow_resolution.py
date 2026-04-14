@@ -19,6 +19,7 @@ from stepwise.project import init_project
 
 SIMPLE_FLOW = """\
 name: test
+author: test
 steps:
   hello:
     run: 'echo "hello"'
@@ -348,6 +349,7 @@ class TestCLINameResolution:
         flow_dir.mkdir()
         (flow_dir / "FLOW.yaml").write_text("""\
 name: greet
+author: test
 steps:
   hello:
     run: 'echo "{\\"message\\": \\"hi\\"}"'

@@ -26,6 +26,7 @@ from stepwise.runner import run_flow
 
 SIMPLE_FLOW = """\
 name: simple
+author: test
 steps:
   hello:
     run: 'echo "{\\"msg\\": \\"hi\\"}"'
@@ -34,6 +35,7 @@ steps:
 
 TWO_STEP_FLOW = """\
 name: two-step
+author: test
 steps:
   step-a:
     run: 'echo "{\\"val\\": 1}"'

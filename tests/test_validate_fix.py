@@ -8,6 +8,7 @@ from stepwise.yaml_loader import apply_fixes, load_workflow_yaml
 
 YAML_WITH_UNBOUNDED_LOOP = """\
 name: test-fix
+author: test
 steps:
   generate:
     # This step generates text
@@ -26,6 +27,7 @@ steps:
 
 YAML_MULTIPLE_UNBOUNDED = """\
 name: multi-fix
+author: test
 steps:
   step-a:
     run: |
@@ -71,6 +73,7 @@ steps:
 
 YAML_ALREADY_BOUNDED = """\
 name: clean
+author: test
 steps:
   generate:
     run: |

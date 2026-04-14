@@ -93,6 +93,7 @@ class TestValidate:
     def test_valid_flow(self, tmp_path, capsys):
         flow = self._write_flow(tmp_path, """
 name: test
+author: test
 steps:
   hello:
     run: "echo hello"
@@ -119,6 +120,7 @@ steps:
     def test_invalid_flow_bad_structure(self, tmp_path, capsys):
         flow = self._write_flow(tmp_path, """
 name: bad
+author: test
 steps:
   step1:
     run: "echo test"
@@ -145,7 +147,7 @@ class TestTemplates:
         monkeypatch.chdir(tmp_path)
         init_project(tmp_path)
         # Add a user template
-        (tmp_path / DOT_DIR_NAME / "templates" / "my-flow.yaml").write_text("name: my-flow\nsteps: {}")
+        (tmp_path / DOT_DIR_NAME / "templates" / "my-flow.yaml").write_text("name: my-flow\nauthor: test\nsteps: {}")
         rc = main(["templates"])
         assert rc == EXIT_SUCCESS
         captured = capsys.readouterr()

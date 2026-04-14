@@ -106,6 +106,7 @@ class TestConfigParsing:
     def test_parse_config_basic(self):
         wf = load_workflow_string("""
 name: test
+author: test
 config:
   persona:
     description: "Your persona"
@@ -135,6 +136,7 @@ steps:
         with pytest.raises(YAMLLoadError):
             load_workflow_string("""
 name: test
+author: test
 config:
   style:
     type: choice
@@ -148,6 +150,7 @@ steps:
         with pytest.raises(YAMLLoadError):
             load_workflow_string("""
 name: test
+author: test
 config:
   x:
     type: invalid
@@ -161,6 +164,7 @@ steps:
         with pytest.raises(YAMLLoadError):
             load_workflow_string("""
 name: test
+author: test
 config:
   123bad:
     description: "bad name"
@@ -173,6 +177,7 @@ steps:
     def test_parse_config_inferred_required(self):
         wf = load_workflow_string("""
 name: test
+author: test
 config:
   with_default:
     default: hello
@@ -193,6 +198,7 @@ steps:
     def test_parse_config_sensitive(self):
         wf = load_workflow_string("""
 name: test
+author: test
 config:
   api_key:
     description: "Your API key"
@@ -215,6 +221,7 @@ steps:
         """Config var with null spec should get defaults."""
         wf = load_workflow_string("""
 name: test
+author: test
 config:
   simple:
 steps:
@@ -236,6 +243,7 @@ class TestRequiresParsing:
     def test_parse_requires_structured(self):
         wf = load_workflow_string("""
 name: test
+author: test
 requires:
   - name: ffmpeg
     description: Audio processing
@@ -255,6 +263,7 @@ steps:
     def test_parse_requires_install_url(self):
         wf = load_workflow_string("""
 name: test
+author: test
 requires:
   - name: camofox
     description: Anti-detection browser
@@ -272,6 +281,7 @@ steps:
     def test_parse_requires_shorthand(self):
         wf = load_workflow_string("""
 name: test
+author: test
 requires:
   - ffmpeg
   - camofox
@@ -291,6 +301,7 @@ class TestReadmeLoading:
     def test_readme_inline(self):
         wf = load_workflow_string("""
 name: test
+author: test
 readme: |
   # My Flow
   This flow does great things.
@@ -305,7 +316,7 @@ steps:
         flow_dir = tmp_path / "my-flow"
         flow_dir.mkdir()
         (flow_dir / "FLOW.yaml").write_text(
-            "name: test\nsteps:\n  a:\n    run: echo ok\n    outputs: [r]\n"
+            "name: test\nauthor: test\nsteps:\n  a:\n    run: echo ok\n    outputs: [r]\n"
         )
         (flow_dir / "README.md").write_text("# My Flow\nDetails here.")
         wf = load_workflow_yaml(str(flow_dir / "FLOW.yaml"))
@@ -315,7 +326,7 @@ steps:
         flow_dir = tmp_path / "my-flow"
         flow_dir.mkdir()
         (flow_dir / "FLOW.yaml").write_text(
-            "name: test\nreadme: |\n  Inline content.\n"
+            "name: test\nauthor: test\nreadme: |\n  Inline content.\n"
             "steps:\n  a:\n    run: echo ok\n    outputs: [r]\n"
         )
         (flow_dir / "README.md").write_text("File content.")
@@ -331,6 +342,7 @@ class TestConfigWarnings:
     def test_warning_orphan_job_input(self):
         wf = load_workflow_string("""
 name: test
+author: test
 steps:
   a:
     run: echo ok
@@ -345,6 +357,7 @@ steps:
     def test_no_warning_when_no_job_inputs_and_no_config(self):
         wf = load_workflow_string("""
 name: test
+author: test
 steps:
   a:
     run: echo ok
@@ -357,6 +370,7 @@ steps:
     def test_warning_orphan_job_input_with_config(self):
         wf = load_workflow_string("""
 name: test
+author: test
 config:
   bar:
     description: declared
@@ -374,6 +388,7 @@ steps:
     def test_warning_unused_config_var(self):
         wf = load_workflow_string("""
 name: test
+author: test
 config:
   bar:
     description: unused
@@ -388,6 +403,7 @@ steps:
     def test_no_warning_when_config_matches_inputs(self):
         wf = load_workflow_string("""
 name: test
+author: test
 config:
   x:
     description: input x
@@ -404,6 +420,7 @@ steps:
     def test_warning_no_default_or_example(self):
         wf = load_workflow_string("""
 name: test
+author: test
 config:
   bare:
     description: "needs something"
@@ -427,6 +444,7 @@ class TestConfigValueResolution:
         flow_dir.mkdir()
         (flow_dir / "FLOW.yaml").write_text("""
 name: test
+author: test
 config:
   a:
     default: "1"
@@ -450,6 +468,7 @@ steps:
         flow_file = tmp_path / "mine.flow.yaml"
         flow_file.write_text("""
 name: test
+author: test
 config:
   a:
     default: "1"
@@ -471,6 +490,7 @@ steps:
         flow_dir.mkdir()
         (flow_dir / "FLOW.yaml").write_text("""
 name: test
+author: test
 config:
   x:
     default: "d"
@@ -491,6 +511,7 @@ steps:
         flow_dir.mkdir()
         (flow_dir / "FLOW.yaml").write_text("""
 name: test
+author: test
 config:
   a:
     default: "1"
@@ -518,6 +539,7 @@ steps:
         flow_dir.mkdir()
         (flow_dir / "FLOW.yaml").write_text("""
 name: test
+author: test
 config:
   api_key:
     description: "Your API key"
@@ -545,6 +567,7 @@ steps:
         flow_dir.mkdir()
         (flow_dir / "FLOW.yaml").write_text("""
 name: test
+author: test
 config:
   api_key:
     sensitive: true
@@ -570,6 +593,7 @@ class TestBackwardCompatibility:
     def test_flow_without_config_loads_normally(self):
         wf = load_workflow_string("""
 name: test
+author: test
 steps:
   a:
     run: echo ok
@@ -582,6 +606,7 @@ steps:
     def test_workflow_definition_roundtrip_with_config(self):
         wf = load_workflow_string("""
 name: test
+author: test
 config:
   persona:
     description: "Your persona"
@@ -639,6 +664,7 @@ class TestRunWaitOptionalConfigVars:
         flow = tmp_path / "test.flow.yaml"
         flow.write_text(
             'name: test-optional\n'
+            'author: test\n'
             'config:\n'
             '  project:\n'
             '    description: Project name for registry lookup\n'
@@ -693,6 +719,7 @@ class TestRunWaitOptionalConfigVars:
         flow = tmp_path / "test.flow.yaml"
         flow.write_text(
             'name: test-optional-binding\n'
+            'author: test\n'
             'steps:\n'
             '  a:\n'
             '    run: |\n'

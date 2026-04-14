@@ -31,6 +31,7 @@ def _load(tmp_path, body: str):
 def test_back_edges_computed_from_bindings(tmp_path):
     body = """\
 name: simple-loop
+author: test
 steps:
   start:
     run: 'echo "{}"'
@@ -65,6 +66,7 @@ def test_residual_forward_cycle_still_rejected(tmp_path):
     rejected by the residual cycle check."""
     body = """\
 name: forward-cycle
+author: test
 steps:
   a:
     run: 'echo "{}"'
@@ -89,6 +91,7 @@ steps:
 def test_simple_loop_back_validates_clean(tmp_path):
     body = """\
 name: clean-loop
+author: test
 steps:
   start:
     run: 'echo "{}"'
@@ -123,6 +126,7 @@ def test_any_of_swdev_plan_pattern_validates_clean(tmp_path):
     where refine is the back-edge and plan is the iter-1 producer."""
     body = """\
 name: swdev-plan
+author: test
 steps:
   plan:
     run: 'echo "{}"'
@@ -155,6 +159,7 @@ steps:
 def test_find_cycle_nodes_excluding_back_edges_passes_clean_loop(tmp_path):
     body = """\
 name: clean-loop
+author: test
 steps:
   a:
     run: 'echo "{}"'
@@ -195,6 +200,7 @@ def test_research_proposal_pattern_validates_clean(tmp_path):
     """The research-proposal pattern: optional back-edge from external-checkpoint."""
     body = """\
 name: research-proposal-min
+author: test
 steps:
   init:
     run: 'echo "{}"'

@@ -42,6 +42,7 @@ def _write_flow(tmp_path: Path, content: str, name: str = "test.flow.yaml") -> P
 
 SIMPLE_SCRIPT_FLOW = """\
 name: simple
+author: test
 steps:
   hello:
     run: 'echo "{\\"message\\": \\"hello world\\"}"'
@@ -50,6 +51,7 @@ steps:
 
 TWO_STEP_FLOW = """\
 name: two-step
+author: test
 steps:
   step1:
     run: 'echo "{\\"result\\": \\"done\\"}"'
@@ -63,6 +65,7 @@ steps:
 
 FAILING_FLOW = """\
 name: failing
+author: test
 steps:
   bad:
     run: "exit 1"
@@ -71,6 +74,7 @@ steps:
 
 EXTERNAL_STEP_FLOW = """\
 name: with-external
+author: test
 steps:
   ask:
     executor: external
@@ -85,6 +89,7 @@ steps:
 
 EXTERNAL_MULTI_FIELD_FLOW = """\
 name: multi-field-external
+author: test
 steps:
   review:
     executor: external
@@ -176,6 +181,7 @@ class TestRunFlow:
         project = init_project(tmp_path)
         flow_content = """\
 name: with-inputs
+author: test
 steps:
   echo:
     run: 'echo "{\\"out\\": \\"ok\\"}"'
@@ -318,6 +324,7 @@ class TestLoopFlow:
     def test_loop_flow(self, tmp_path):
         loop_flow = """\
 name: loop-test
+author: test
 steps:
   count:
     run: 'echo "{\\"n\\": 1}"'

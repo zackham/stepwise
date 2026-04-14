@@ -10,6 +10,7 @@ from stepwise.server import app
 
 FLOW_YAML = """\
 name: test-flow
+author: test
 steps:
   fetch:
     run: curl http://example.com
@@ -182,7 +183,7 @@ class TestAddStep:
         """Adding a step to a flow with zero steps should succeed."""
         empty_flow = project_dir / "flows" / "empty" / "FLOW.yaml"
         empty_flow.parent.mkdir(parents=True, exist_ok=True)
-        empty_flow.write_text("name: empty-flow\nsteps: {}\n")
+        empty_flow.write_text("name: empty-flow\nauthor: test\nsteps: {}\n")
         resp = client.post(
             "/api/flows/add-step",
             json={"flow_path": "flows/empty/FLOW.yaml", "name": "first", "executor": "script"},

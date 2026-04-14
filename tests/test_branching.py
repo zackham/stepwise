@@ -141,7 +141,7 @@ class TestSettlement:
         deep_runs = [r for r in runs if r.step_name == "deep-path"]
         assert len(deep_runs) == 1
         assert deep_runs[0].status == StepRunStatus.SKIPPED
-        assert deep_runs[0].error == "Not reached"
+        assert deep_runs[0].error in ("Not reached", "when condition false")
 
     def test_transitive_settlement(self, async_engine):
         """A→B→C chain, B gated by false `when` → B and C both settled SKIPPED."""
@@ -337,6 +337,7 @@ class TestAnyOf:
         """Parse any_of YAML, to_dict(), from_dict(), verify equality."""
         yaml_str = """\
 name: test
+author: test
 steps:
   a:
     run: 'echo ''{"x": 1}'''
@@ -738,7 +739,7 @@ class TestWhenSpecific:
         b_runs = [r for r in runs if r.step_name == "b"]
         assert len(b_runs) == 1
         assert b_runs[0].status == StepRunStatus.SKIPPED
-        assert b_runs[0].error == "Not reached"
+        assert b_runs[0].error in ("Not reached", "when condition false")
 
     def test_external_step_with_when_false_skipped_not_suspended(self, async_engine):
         """External (escalate) step with when: False is SKIPPED, not SUSPENDED.

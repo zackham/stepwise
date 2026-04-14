@@ -206,6 +206,9 @@ def _generate_step_def(
     if step_def.after:
         parts.append(f"after={repr(step_def.after)}")
 
+    if step_def.after_resolved:
+        parts.append(f"after_resolved={repr(step_def.after_resolved)}")
+
     if step_def.when:
         parts.append(f'when="{step_def.when}"')
 

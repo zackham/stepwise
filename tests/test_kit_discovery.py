@@ -17,6 +17,7 @@ from stepwise.yaml_loader import KitLoadError, load_kit_yaml
 
 SIMPLE_FLOW = """\
 name: test
+author: test
 steps:
   hello:
     run: 'echo "hello"'
@@ -25,6 +26,7 @@ steps:
 
 MINIMAL_KIT = """\
 name: {name}
+author: test
 description: "Test kit"
 """
 
@@ -39,8 +41,6 @@ usage: |
 include:
   - "@community:helper@^1.0"
 tags: [test, demo]
-defaults:
-  model: test-model
 """
 
 
@@ -87,13 +87,12 @@ class TestKitDefinition:
         k = KitDefinition(
             name="swdev", description="Dev kit", author="zack",
             category="development", usage="Use wisely",
-            include=["@bob:review"], defaults={"model": "gpt-4"},
+            include=["@bob:review"],
             tags=["dev", "plan"],
         )
         k2 = KitDefinition.from_dict(k.to_dict())
         assert k2.name == k.name
         assert k2.include == k.include
-        assert k2.defaults == k.defaults
         assert k2.tags == k.tags
 
     def test_to_dict_omits_defaults(self):
@@ -107,7 +106,6 @@ class TestKitDefinition:
         k = KitDefinition.from_dict({"name": "test"})
         assert k.description == ""
         assert k.tags == []
-        assert k.defaults == {}
 
 
 class TestLoadKitYaml:
@@ -132,7 +130,6 @@ class TestLoadKitYaml:
         assert "Always" in result.usage
         assert result.include == ["@community:helper@^1.0"]
         assert result.tags == ["test", "demo"]
-        assert result.defaults == {"model": "test-model"}
 
     def test_missing_name_errors(self, tmp_path):
         kit_dir = tmp_path / "bad"

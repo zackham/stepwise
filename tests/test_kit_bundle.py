@@ -27,6 +27,7 @@ SIMPLE_KIT_YAML = "name: test-kit\ndescription: A test kit\nauthor: alice\ntags:
 
 SIMPLE_FLOW_A = """\
 name: flow-a
+author: test
 steps:
   hello:
     run: 'echo "{\\"msg\\": \\"hi\\"}"'
@@ -35,6 +36,7 @@ steps:
 
 SIMPLE_FLOW_B = """\
 name: flow-b
+author: test
 steps:
   world:
     run: 'echo "{\\"msg\\": \\"world\\"}"'

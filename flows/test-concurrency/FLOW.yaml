@@ -3,6 +3,7 @@ description: >
   Diagnostic flow to measure concurrent agent/executor capacity.
   Launches N parallel steps via for-each and logs timing for each.
   Check stepwise.agent and stepwise.async_engine logs for concurrency data.
+author: stepwise
 
 inputs:
   count:

@@ -114,6 +114,36 @@ def _parse_after(after_data: Any, step_name: str) -> tuple[list[str], list[list[
     return regular, any_of_groups
 
 
+def _parse_after_resolved(data: Any, step_name: str) -> list[str]:
+    """Parse the ``after_resolved:`` field — a list of step names whose
+    terminal state (COMPLETED or SKIPPED) unblocks the dependent step.
+
+    Accepts:
+      - None → []
+      - str → [str]
+      - list[str] → list[str]
+    """
+    if data is None or data == []:
+        return []
+    if isinstance(data, str):
+        return [data]
+    if isinstance(data, list):
+        result: list[str] = []
+        for item in data:
+            if isinstance(item, str):
+                result.append(item)
+            else:
+                raise ValueError(
+                    f"step {step_name!r}: after_resolved entries must be strings, "
+                    f"got {type(item).__name__}"
+                )
+        return result
+    raise ValueError(
+        f"step {step_name!r}: 'after_resolved' must be a string or list of strings, "
+        f"got {type(data).__name__}"
+    )
+
+
 def _parse_when(when_data: Any, step_name: str) -> str | WhenPredicate | None:
     """Dispatch a `when:` field into either legacy string form or predicate form.
 
@@ -228,6 +258,9 @@ def _mark_back_edges(steps: dict) -> list[str]:
                     if b.source_step != cn:
                         fwd[b.source_step].add(cn)
             for s in cd.after:
+                if s in steps and s != cn:
+                    fwd[s].add(cn)
+            for s in cd.after_resolved:
                 if s in steps and s != cn:
                     fwd[s].add(cn)
 
@@ -565,7 +598,6 @@ def load_kit_yaml(path: str | Path) -> KitDefinition:
         category=data.get("category", ""),
         usage=data.get("usage", ""),
         include=[str(i) for i in include],
-        defaults=data.get("defaults", {}),
         tags=[str(t) for t in tags],
     )
 
@@ -1293,6 +1325,9 @@ def _parse_step(
         else:
             after, after_any_of = [], []
 
+        # after_resolved: deps that accept SKIPPED as settled
+        after_resolved = _parse_after_resolved(step_data.get("after_resolved"), step_name)
+
         return StepDefinition(
             name=step_name,
             description=step_data.get("description", ""),
@@ -1301,6 +1336,7 @@ def _parse_step(
             executor=ExecutorRef("sub_flow", {"flow_ref": flow_ref} if flow_ref else {}),
             inputs=input_bindings,
             after=after,
+            after_resolved=after_resolved,
             after_any_of=after_any_of,
             sub_flow=sub_flow,
             when=_parse_when(step_data.get("when"), step_name),
@@ -1362,6 +1398,9 @@ def _parse_step(
         else:
             after, after_any_of = [], []
 
+        # after_resolved: deps that accept SKIPPED as settled
+        after_resolved = _parse_after_resolved(step_data.get("after_resolved"), step_name)
+
         return StepDefinition(
             name=step_name,
             description=step_data.get("description", ""),
@@ -1370,6 +1409,7 @@ def _parse_step(
             executor=executor,
             inputs=input_bindings,
             after=after,
+            after_resolved=after_resolved,
             after_any_of=after_any_of,
             for_each=for_each_spec,
             sub_flow=sub_flow,
@@ -1487,6 +1527,9 @@ def _parse_step(
             f"Step '{step_name}': derived_outputs must be a mapping"
         )
 
+    # after_resolved: deps that accept SKIPPED as settled
+    after_resolved = _parse_after_resolved(step_data.get("after_resolved"), step_name)
+
     return StepDefinition(
         name=step_name,
         description=step_data.get("description", ""),
@@ -1495,6 +1538,7 @@ def _parse_step(
         executor=executor,
         inputs=input_bindings,
         after=after,
+        after_resolved=after_resolved,
         after_any_of=after_any_of,
         exit_rules=exit_rules,
         idempotency=idempotency,
@@ -1662,7 +1706,7 @@ def _validate_sessions(
             continue
         if step_def.fork_from not in steps:
             continue
-        deps = set(step_def.after)
+        deps = set(step_def.after) | set(step_def.after_resolved)
         for inp in step_def.inputs:
             if inp.source_step and inp.source_step != "$job":
                 deps.add(inp.source_step)
@@ -1725,6 +1769,8 @@ def _parse_metadata(data: dict, source_path: Path | None = None) -> FlowMetadata
             stem = stem[:-5]
         name = stem
 
+    author = data.get("author", "")
+
     visibility = data.get("visibility", "interactive")
     if visibility not in VALID_VISIBILITY:
         raise YAMLLoadError([
@@ -1735,7 +1781,7 @@ def _parse_metadata(data: dict, source_path: Path | None = None) -> FlowMetadata
     return FlowMetadata(
         name=name,
         description=data.get("description", ""),
-        author=data.get("author", ""),
+        author=author,
         version=data.get("version", ""),
         forked_from=data.get("forked_from", ""),
         visibility=visibility,
@@ -1898,7 +1944,6 @@ def load_workflow_yaml(
     base_dir: Path | None = None,
     loading_files: frozenset[Path] | None = None,
     project_dir: Path | None = None,
-    kit_defaults: dict | None = None,
 ) -> WorkflowDefinition:
     """Load a WorkflowDefinition from a YAML file or string.
 
@@ -1949,17 +1994,6 @@ def load_workflow_yaml(
     if not isinstance(data, dict):
         raise YAMLLoadError(["YAML root must be a mapping"])
 
-    # Auto-detect kit defaults if not explicitly provided
-    if kit_defaults is None and source_path is not None:
-        from stepwise.flow_resolution import get_kit_defaults_for_flow
-        kit_defaults = get_kit_defaults_for_flow(source_path)
-
-    # Apply kit defaults — kit values are used when the flow doesn't set them
-    if kit_defaults:
-        for key, val in kit_defaults.items():
-            if key not in data or data[key] in (None, "", []):
-                data[key] = val
-
     # Parse steps
     steps_data = data.get("steps")
     if not steps_data or not isinstance(steps_data, dict):
@@ -1996,6 +2030,10 @@ def load_workflow_yaml(
 
     # Parse metadata from top-level fields
     metadata = _parse_metadata(data, source_path)
+
+    # Require author when loading from a file
+    if source_path is not None and not metadata.author:
+        raise YAMLLoadError(["'author' is required in flow metadata"])
 
     # Parse config variables, input variables, and requirements
     try:

@@ -203,6 +203,8 @@ class TestCLIValidateWarnings:
     def test_validate_shows_warnings(self, tmp_path):
         """Write a flow YAML with stall risk; verify validate output has warnings."""
         flow_content = """\
+name: test
+author: test
 steps:
   review:
     executor: external
@@ -767,6 +769,7 @@ class TestCheckCLIIntegration:
         flow = tmp_path / "bad.flow.yaml"
         flow.write_text("""\
 name: bad-cycle
+author: test
 steps:
   a:
     run: echo hi
@@ -796,6 +799,7 @@ steps:
         flow = tmp_path / "good.flow.yaml"
         flow.write_text("""\
 name: good-flow
+author: test
 steps:
   a:
     run: echo hi

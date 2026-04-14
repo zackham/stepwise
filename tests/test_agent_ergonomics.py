@@ -292,6 +292,7 @@ def external_flow(tmp_project):
     flow = tmp_project / "external.flow.yaml"
     flow.write_text("""\
 name: external-test
+author: test
 description: Flow with external approval
 
 steps:

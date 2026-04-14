@@ -244,6 +244,7 @@ class TestYAMLContainment:
 
         wf = load_workflow_yaml("""
 name: test
+author: test
 description: test
 steps:
   research:
@@ -260,6 +261,7 @@ steps:
 
         wf = load_workflow_yaml("""
 name: test
+author: test
 description: test
 containment: cloud-hypervisor
 steps:
@@ -276,6 +278,7 @@ steps:
 
         wf = load_workflow_yaml("""
 name: test
+author: test
 description: test
 containment: cloud-hypervisor
 steps:
@@ -295,6 +298,7 @@ steps:
 
         wf = load_workflow_yaml("""
 name: test
+author: test
 description: test
 containment: cloud-hypervisor
 steps:
@@ -311,6 +315,7 @@ steps:
 
         wf = load_workflow_yaml("""
 name: test
+author: test
 description: test
 steps:
   research:

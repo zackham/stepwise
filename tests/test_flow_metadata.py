@@ -132,7 +132,7 @@ steps:
     outputs: [msg]
 """
 
-    FLOW_WITHOUT_METADATA = """\
+    FLOW_WITHOUT_AUTHOR = """\
 steps:
   hello:
     run: 'echo "{\\"msg\\": \\"hi\\"}"'
@@ -141,6 +141,7 @@ steps:
 
     FLOW_PARTIAL_METADATA = """\
 name: partial
+author: zack
 steps:
   hello:
     run: 'echo "{\\"msg\\": \\"hi\\"}"'
@@ -156,27 +157,11 @@ steps:
         assert wf.metadata.author == "zack"
         assert wf.metadata.version == "1.0"
 
-    def test_backward_compatible_no_metadata(self, tmp_path):
+    def test_missing_author_raises_error(self, tmp_path):
         flow = tmp_path / "bare.flow.yaml"
-        flow.write_text(self.FLOW_WITHOUT_METADATA)
-        wf = load_workflow_yaml(flow)
-        # No metadata fields → defaults
-        assert wf.metadata.description == ""
-        assert wf.metadata.author == ""
-        # But name should default from filename
-        assert wf.metadata.name == "bare"
-
-    def test_name_defaults_from_filename(self, tmp_path):
-        flow = tmp_path / "my-cool-flow.flow.yaml"
-        flow.write_text(self.FLOW_WITHOUT_METADATA)
-        wf = load_workflow_yaml(flow)
-        assert wf.metadata.name == "my-cool-flow"
-
-    def test_name_defaults_from_plain_yaml(self, tmp_path):
-        flow = tmp_path / "simple.yaml"
-        flow.write_text(self.FLOW_WITHOUT_METADATA)
-        wf = load_workflow_yaml(flow)
-        assert wf.metadata.name == "simple"
+        flow.write_text(self.FLOW_WITHOUT_AUTHOR)
+        with pytest.raises(YAMLLoadError, match="'author' is required"):
+            load_workflow_yaml(flow)
 
     def test_explicit_name_overrides_filename(self, tmp_path):
         flow = tmp_path / "other.flow.yaml"
@@ -191,10 +176,10 @@ steps:
         assert wf.metadata.name == "partial"
         assert wf.metadata.description == ""
 
-    def test_string_source_no_filename_fallback(self):
-        wf = load_workflow_yaml(self.FLOW_WITHOUT_METADATA)
-        # No file path → name stays empty
-        assert wf.metadata.name == ""
+    def test_string_source_without_author_accepts(self):
+        """Inline YAML strings don't require author (only files do)."""
+        wf = load_workflow_yaml(self.FLOW_WITHOUT_AUTHOR)
+        assert wf.metadata.author == ""
 
     def test_flow_yaml_extension_recognized(self, tmp_path):
         flow = tmp_path / "test.flow.yaml"
@@ -208,15 +193,14 @@ steps:
         wf = load_workflow_yaml(str(flow))
         assert wf.metadata.name == "my-demo"
 
-    def test_visibility_defaults_to_interactive(self, tmp_path):
-        flow = tmp_path / "test.flow.yaml"
-        flow.write_text(self.FLOW_WITHOUT_METADATA)
-        wf = load_workflow_yaml(flow)
+    def test_visibility_defaults_to_interactive(self):
+        wf = load_workflow_yaml(self.FLOW_WITH_METADATA)
         assert wf.metadata.visibility == "interactive"
 
     def test_visibility_background(self):
         yaml_str = """\
 name: bg-flow
+author: zack
 visibility: background
 steps:
   hello:
@@ -229,6 +213,7 @@ steps:
     def test_visibility_internal(self):
         yaml_str = """\
 name: internal-flow
+author: zack
 visibility: internal
 steps:
   hello:
@@ -241,6 +226,7 @@ steps:
     def test_visibility_interactive_explicit(self):
         yaml_str = """\
 name: explicit-flow
+author: zack
 visibility: interactive
 steps:
   hello:
@@ -253,6 +239,7 @@ steps:
     def test_visibility_invalid_rejected(self):
         yaml_str = """\
 name: bad-flow
+author: zack
 visibility: secret
 steps:
   hello:
@@ -299,31 +286,35 @@ class TestParseMetadata:
     """Internal _parse_metadata helper."""
 
     def test_with_source_path_flow_yaml(self):
-        data = {}
+        data = {"author": "test"}
         m = _parse_metadata(data, Path("/tmp/my-flow.flow.yaml"))
         assert m.name == "my-flow"
 
     def test_with_source_path_plain_yaml(self):
-        data = {}
+        data = {"author": "test"}
         m = _parse_metadata(data, Path("/tmp/simple.yaml"))
         assert m.name == "simple"
 
     def test_explicit_name_wins(self):
-        data = {"name": "explicit"}
+        data = {"name": "explicit", "author": "test"}
         m = _parse_metadata(data, Path("/tmp/different.flow.yaml"))
         assert m.name == "explicit"
 
     def test_no_source_path(self):
-        data = {}
+        data = {"author": "test"}
         m = _parse_metadata(data, None)
         assert m.name == ""
 
+    def test_missing_author_returns_empty(self):
+        m = _parse_metadata({}, None)
+        assert m.author == ""
+
     def test_visibility_parsed(self):
-        data = {"visibility": "background"}
+        data = {"visibility": "background", "author": "test"}
         m = _parse_metadata(data, None)
         assert m.visibility == "background"
 
     def test_visibility_defaults_interactive(self):
-        data = {}
+        data = {"author": "test"}
         m = _parse_metadata(data, None)
         assert m.visibility == "interactive"

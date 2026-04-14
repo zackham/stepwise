@@ -32,6 +32,7 @@ def simple_flow(tmp_project):
     flow = tmp_project / "simple.flow.yaml"
     flow.write_text("""\
 name: simple
+author: test
 description: A simple test flow
 
 steps:
@@ -66,6 +67,7 @@ def external_flow(tmp_project):
     flow = tmp_project / "external.flow.yaml"
     flow.write_text("""\
 name: external-test
+author: test
 description: Flow with external approval
 
 steps:
@@ -99,6 +101,7 @@ def no_input_flow(tmp_project):
     flow = tmp_project / "standalone.flow.yaml"
     flow.write_text("""\
 name: standalone
+author: test
 description: A self-contained flow
 
 steps:
@@ -203,6 +206,7 @@ class TestSchema:
         flow = tmp_project / "config-test.flow.yaml"
         flow.write_text("""\
 name: config-test
+author: test
 config:
   persona:
     description: Your persona
@@ -583,6 +587,7 @@ class TestAgentHelp:
         flow = custom / "my.flow.yaml"
         flow.write_text("""\
 name: custom-flow
+author: test
 description: A custom flow
 steps:
   hello:
@@ -604,6 +609,7 @@ steps:
         flow_interactive = tmp_project / "visible.flow.yaml"
         flow_interactive.write_text("""\
 name: visible-flow
+author: test
 description: An interactive flow
 steps:
   hello:
@@ -613,6 +619,7 @@ steps:
         flow_bg = tmp_project / "bg.flow.yaml"
         flow_bg.write_text("""\
 name: background-flow
+author: test
 description: A background flow
 visibility: background
 steps:
@@ -623,6 +630,7 @@ steps:
         flow_internal = tmp_project / "int.flow.yaml"
         flow_internal.write_text("""\
 name: internal-flow
+author: test
 visibility: internal
 steps:
   hello:
@@ -645,6 +653,7 @@ steps:
         flow = tmp_project / "vis.flow.yaml"
         flow.write_text("""\
 name: vis-flow
+author: test
 steps:
   hello:
     run: 'echo "{\\"msg\\": \\"hi\\"}"'
@@ -653,6 +662,7 @@ steps:
         bg_flow = tmp_project / "bgflow.flow.yaml"
         bg_flow.write_text("""\
 name: bg-flow
+author: test
 visibility: background
 steps:
   hello:
@@ -700,6 +710,7 @@ class TestOutputJsonStandalone:
         fail_flow = tmp_project / "fail.flow.yaml"
         fail_flow.write_text("""\
 name: fail
+author: test
 steps:
   boom:
     run: |
@@ -774,6 +785,7 @@ class TestInfo:
         flow = tmp_project / "my-flow.flow.yaml"
         flow.write_text("""\
 name: my-flow
+author: test
 description: A flow with config and requirements
 
 config:
@@ -843,6 +855,7 @@ class TestConfigInit:
         flow = tmp_project / "my-flow.flow.yaml"
         flow.write_text("""\
 name: my-flow
+author: test
 
 config:
   api_key:
@@ -890,6 +903,7 @@ steps:
         flow = tmp_project / "my-flow.flow.yaml"
         flow.write_text("""\
 name: my-flow
+author: test
 
 config:
   api_key:
@@ -922,6 +936,7 @@ steps:
         flow = tmp_project / "simple.flow.yaml"
         flow.write_text("""\
 name: simple
+author: test
 steps:
   run:
     run: |
@@ -981,6 +996,7 @@ class TestWaitCommand:
         fail_flow = tmp_project / "fail.flow.yaml"
         fail_flow.write_text("""\
 name: fail
+author: test
 steps:
   boom:
     run: |
@@ -1060,6 +1076,7 @@ steps:
         slow_flow = tmp_path / "slow.flow.yaml"
         slow_flow.write_text("""\
 name: slow
+author: test
 steps:
   waiting:
     run: |

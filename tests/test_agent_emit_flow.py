@@ -58,6 +58,7 @@ class FileWritingMockBackend(MockAgentBackend):
 
 SIMPLE_EMIT_FLOW = """\
 name: emitted-flow
+author: test
 steps:
   do-work:
     run: |
@@ -67,6 +68,7 @@ steps:
 
 MULTI_STEP_EMIT_FLOW = """\
 name: emitted-multi
+author: test
 steps:
   step-a:
     run: |
@@ -208,6 +210,7 @@ def test_agent_emit_output_mismatch_fails(async_engine):
     # Emit a flow whose terminal step outputs ["value"] but parent expects ["result"]
     mismatch_flow = """\
 name: mismatch
+author: test
 steps:
   do-work:
     run: |

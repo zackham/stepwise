@@ -12,6 +12,7 @@ from stepwise.project import init_project
 
 SIMPLE_FLOW = """\
 name: downloaded
+author: test
 steps:
   hello:
     run: 'echo "{\\"msg\\": \\"hi\\"}"'

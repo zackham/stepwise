@@ -489,7 +489,7 @@ class TestCopyButtons:
     def test_copy_button_in_yaml_appendix(self, tmp_path):
         """Copy button appears in YAML source section."""
         flow_file = tmp_path / "test.flow.yaml"
-        flow_file.write_text("name: test\nsteps:\n  s:\n    run: echo hi\n")
+        flow_file.write_text("name: test\nauthor: test\nsteps:\n  s:\n    run: echo hi\n")
 
         wf = _make_workflow({"s": {"outputs": ["x"]}})
         job = _make_job(wf)

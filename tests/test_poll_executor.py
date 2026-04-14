@@ -292,6 +292,7 @@ class TestPollYamlParsing:
         from stepwise.yaml_loader import load_workflow_yaml
         yaml_str = """
 name: test-poll
+author: test
 steps:
   wait-approval:
     executor: poll
@@ -313,6 +314,7 @@ steps:
         from stepwise.yaml_loader import load_workflow_yaml
         yaml_str = """
 name: test-poll
+author: test
 steps:
   wait-deploy:
     executor: poll
@@ -334,6 +336,7 @@ steps:
         from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
         yaml_str = """
 name: test-poll
+author: test
 steps:
   broken:
     executor: poll
@@ -349,6 +352,7 @@ steps:
         from stepwise.yaml_loader import load_workflow_yaml
         yaml_str = """
 name: test-poll
+author: test
 steps:
   wait-review:
     executor: poll

@@ -22,6 +22,7 @@ def _load(tmp_path, body: str):
 def test_single_step_self_loop_marked(tmp_path):
     body = """\
 name: self-loop
+author: test
 steps:
   start:
     run: 'echo "{}"'
@@ -54,6 +55,7 @@ steps:
 def test_two_step_forward_loop_marked(tmp_path):
     body = """\
 name: two-step
+author: test
 steps:
   analyze:
     run: 'echo "{}"'
@@ -88,6 +90,7 @@ def test_any_of_all_sources_back_edge_marked(tmp_path):
     loop, the binding-as-a-whole is marked is_back_edge."""
     body = """\
 name: any-of-back-edge
+author: test
 steps:
   seed:
     run: 'echo "{}"'
@@ -140,6 +143,7 @@ def test_any_of_mixed_scope_not_marked(tmp_path):
     is_back_edge (per §11.4) because not every source is a back-edge."""
     body = """\
 name: mixed-any-of
+author: test
 steps:
   plan:
     run: 'echo "{}"'
@@ -182,6 +186,7 @@ steps:
 def test_optional_back_edge_marked(tmp_path):
     body = """\
 name: opt-back
+author: test
 steps:
   start:
     run: 'echo "{}"'
@@ -217,6 +222,7 @@ steps:
 def test_is_present_on_loop_back_accepted(tmp_path):
     body = """\
 name: is-present-loop-back
+author: test
 steps:
   start:
     run: 'echo "{}"'
@@ -254,6 +260,7 @@ steps:
 def test_is_present_on_regular_binding_rejected(tmp_path):
     body = """\
 name: bad-is-present
+author: test
 steps:
   fetch:
     run: 'echo "{}"'
@@ -281,6 +288,7 @@ steps:
 def test_is_present_on_mixed_any_of_rejected(tmp_path):
     body = """\
 name: bad-mixed-any-of
+author: test
 steps:
   plan:
     run: 'echo "{}"'
@@ -322,6 +330,7 @@ steps:
 def test_is_null_legal_on_regular_binding(tmp_path):
     body = """\
 name: is-null-ok
+author: test
 steps:
   fetch:
     run: 'echo "{}"'

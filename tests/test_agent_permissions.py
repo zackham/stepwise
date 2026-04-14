@@ -76,6 +76,7 @@ class TestYAMLPermissions:
     def test_permissions_in_agent_step(self):
         yaml_str = """\
 name: test-flow
+author: test
 steps:
   do-work:
     executor: agent
@@ -89,6 +90,7 @@ steps:
     def test_no_permissions_field(self):
         yaml_str = """\
 name: test-flow
+author: test
 steps:
   do-work:
     executor: agent

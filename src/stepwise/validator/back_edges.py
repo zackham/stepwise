@@ -47,6 +47,11 @@ def _build_edges(
             if dep_name in flow.steps and name not in edges[dep_name]:
                 edges[dep_name].add(name)
                 in_degree[name] += 1
+        # after_resolved dependencies
+        for dep_name in step.after_resolved:
+            if dep_name in flow.steps and name not in edges[dep_name]:
+                edges[dep_name].add(name)
+                in_degree[name] += 1
         # after_any_of (added in step 2)
         for group in step.after_any_of:
             for dep_name in group:

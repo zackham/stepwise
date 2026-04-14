@@ -14,6 +14,7 @@ def test_is_present_on_regular_binding_rejected_at_parse_time(tmp_path):
     """
     flow_yaml = """\
 name: test-is-present
+author: test
 steps:
   fetch:
     run: |
@@ -41,6 +42,7 @@ def test_dynamic_session_name_rejected_at_parse_time(tmp_path):
     """R12: a templated session name like '${var}' is rejected at parse time."""
     flow_yaml = """\
 name: test-dynamic-session
+author: test
 steps:
   writer:
     run: 'echo "{}"'
@@ -60,6 +62,7 @@ def test_static_session_name_with_dash_rejected(tmp_path):
     """A session name with a dash (not a Python identifier) is rejected."""
     flow_yaml = """\
 name: test-dashed
+author: test
 steps:
   writer:
     run: 'echo "{}"'
@@ -79,6 +82,7 @@ def test_valid_session_name_accepted(tmp_path):
     """A valid identifier-like session name parses cleanly."""
     flow_yaml = """\
 name: test-valid
+author: test
 steps:
   writer:
     executor: agent

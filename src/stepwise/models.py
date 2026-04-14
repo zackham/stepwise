@@ -589,6 +589,7 @@ class StepDefinition:
     executor: ExecutorRef
     inputs: list[InputBinding] = field(default_factory=list)
     after: list[str] = field(default_factory=list)  # wait-for-completion deps
+    after_resolved: list[str] = field(default_factory=list)  # wait-for-resolved deps (COMPLETED or SKIPPED)
     after_any_of: list[list[str]] = field(default_factory=list)  # wait-for any of N step groups (universal-prefix any_of, §7.2.b/d)
     exit_rules: list[ExitRule] = field(default_factory=list)
     idempotency: str = "idempotent"  # "idempotent" | "retriable_with_guard" | "non_retriable"
@@ -623,6 +624,8 @@ class StepDefinition:
             "exit_rules": [r.to_dict() for r in self.exit_rules],
             "idempotency": self.idempotency,
         }
+        if self.after_resolved:
+            d["after_resolved"] = list(self.after_resolved)
         if self.when is not None:
             if isinstance(self.when, WhenPredicate):
                 d["when"] = self.when.to_dict()
@@ -674,6 +677,7 @@ class StepDefinition:
             executor=ExecutorRef.from_dict(d["executor"]),
             inputs=[InputBinding.from_dict(b) for b in d.get("inputs", [])],
             after=after_split,
+            after_resolved=d.get("after_resolved", []),
             exit_rules=[ExitRule.from_dict(r) for r in d.get("exit_rules", [])],
             idempotency=d.get("idempotency", "idempotent"),
             when=(
@@ -750,7 +754,6 @@ class KitDefinition:
     category: str = ""
     usage: str = ""
     include: list[str] = field(default_factory=list)
-    defaults: dict = field(default_factory=dict)
     tags: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -767,8 +770,6 @@ class KitDefinition:
             d["usage"] = self.usage
         if self.include:
             d["include"] = self.include
-        if self.defaults:
-            d["defaults"] = self.defaults
         if self.tags:
             d["tags"] = self.tags
         return d
@@ -782,7 +783,6 @@ class KitDefinition:
             category=d.get("category", ""),
             usage=d.get("usage", ""),
             include=d.get("include", []),
-            defaults=d.get("defaults", {}),
             tags=d.get("tags", []),
         )
 
@@ -870,6 +870,9 @@ def collect_loop_back_edges(
                     if b.any_of_sources or b.optional:
                         input_edges.add((cname, src))
         for s in cdef.after:
+            if s in steps and s != cname:
+                fwd[s].add(cname)
+        for s in cdef.after_resolved:
             if s in steps and s != cname:
                 fwd[s].add(cname)
 
@@ -975,6 +978,9 @@ class WorkflowDefinition:
         for seq_step in step.after:
             if seq_step in self.steps:
                 deps.add(seq_step)
+        for seq_step in step.after_resolved:
+            if seq_step in self.steps:
+                deps.add(seq_step)
         return deps
 
     def _get_ancestors(self, step_name: str) -> set[str]:
@@ -1043,6 +1049,13 @@ class WorkflowDefinition:
                 if seq_step not in step_names:
                     errors.append(
                         f"Step '{name}': after references unknown step '{seq_step}'"
+                    )
+
+            # Check after_resolved references
+            for seq_step in step.after_resolved:
+                if seq_step not in step_names:
+                    errors.append(
+                        f"Step '{name}': after_resolved references unknown step '{seq_step}'"
                     )
 
             # Check after_any_of references
@@ -1304,6 +1317,13 @@ class WorkflowDefinition:
                         f"'{seq}' but no 'when' condition — it will run after "
                         f"the first iteration, not after the loop exits"
                     )
+            for seq in step.after_resolved:
+                if seq in loop_steps:
+                    warns.append(
+                        f"\u26a0 Step '{name}': has 'after_resolved' on looping step "
+                        f"'{seq}' but no 'when' condition — it will run after "
+                        f"the first iteration, not after the loop exits"
+                    )
 
         # Premature launch detection: steps downstream of a loop body
         # without a dependency on the loop exit step.
@@ -1324,6 +1344,11 @@ class WorkflowDefinition:
                     if not _b.optional:
                         _hard_fwd[_src].add(_sn)
             for _a in _sd.after:
+                if _a in self.steps:
+                    _all_fwd[_a].add(_sn)
+                    _all_rev[_sn].add(_a)
+                    _hard_fwd[_a].add(_sn)
+            for _a in _sd.after_resolved:
                 if _a in self.steps:
                     _all_fwd[_a].add(_sn)
                     _all_rev[_sn].add(_a)
@@ -1370,6 +1395,9 @@ class WorkflowDefinition:
                         if _b.source_step != "$job" and _b.source_step in self.steps:
                             direct.add(_b.source_step)
                     for _a in ds.after:
+                        if _a in self.steps:
+                            direct.add(_a)
+                    for _a in ds.after_resolved:
                         if _a in self.steps:
                             direct.add(_a)
                     if ds.for_each and ds.for_each.source_step in self.steps:
@@ -1475,7 +1503,7 @@ class WorkflowDefinition:
                 for b in step.inputs
             )
             has_for_each_dep = step.for_each is not None
-            if not has_step_deps and not has_any_of_deps and not step.after and not has_for_each_dep:
+            if not has_step_deps and not has_any_of_deps and not step.after and not step.after_resolved and not has_for_each_dep:
                 result.append(name)
         return result
 
@@ -1535,6 +1563,8 @@ class WorkflowDefinition:
                         depended_on.add(binding.source_step)
             for seq in step.after:
                 depended_on.add(seq)
+            for seq in step.after_resolved:
+                depended_on.add(seq)
             if step.for_each:
                 depended_on.add(step.for_each.source_step)
 
@@ -1577,6 +1607,8 @@ class WorkflowDefinition:
                         if binding.source_step != step.name and not binding.optional:
                             non_li_depended.add(binding.source_step)
                 for seq in step.after:
+                    non_li_depended.add(seq)
+                for seq in step.after_resolved:
                     non_li_depended.add(seq)
                 if step.for_each:
                     non_li_depended.add(step.for_each.source_step)
@@ -1630,6 +1662,8 @@ class WorkflowDefinition:
                 elif binding.source_step != "$job":
                     deps.add((binding.source_step, marked_be))
             for seq in step.after:
+                deps.add((seq, False))
+            for seq in step.after_resolved:
                 deps.add((seq, False))
             if step.for_each:
                 deps.add((step.for_each.source_step, False))
@@ -1726,6 +1760,8 @@ class WorkflowDefinition:
                 return f"input: {binding.local_name}"
         if src in dst_step.after:
             return "after"
+        if src in dst_step.after_resolved:
+            return "after_resolved"
         if dst_step.for_each and dst_step.for_each.source_step == src:
             return "for_each"
         return "dep"

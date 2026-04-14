@@ -115,6 +115,7 @@ def test_load_yaml_flow_with_after_any_of(tmp_path):
     """Full YAML load round-trip: a flow with mixed after.any_of parses correctly."""
     flow_yaml = """\
 name: test-after-any-of
+author: test
 steps:
   a:
     run: |
@@ -142,6 +143,7 @@ def test_load_yaml_flow_with_mixed_after(tmp_path):
     """Mixed list form: a regular dep + an any_of group."""
     flow_yaml = """\
 name: test-mixed
+author: test
 steps:
   x:
     run: |
@@ -176,6 +178,7 @@ def test_load_yaml_flow_rejects_empty_any_of(tmp_path):
     """Parse-time validation propagates from YAML load."""
     flow_yaml = """\
 name: test-empty-any-of
+author: test
 steps:
   a:
     run: 'echo "{}"'

@@ -20,6 +20,7 @@ from stepwise.cli import EXIT_SUCCESS, EXIT_USAGE_ERROR, main
 
 SIMPLE_FLOW = """\
 name: my-flow
+author: test
 steps:
   hello:
     run: 'echo "{\\"msg\\": \\"hi\\"}"'

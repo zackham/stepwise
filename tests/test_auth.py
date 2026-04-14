@@ -417,7 +417,7 @@ class TestCmdShareAuth:
         flows_dir.mkdir(exist_ok=True)
         flow_file = flows_dir / "test.flow.yaml"
         flow_file.write_text(
-            "name: test-flow\nsteps:\n  a:\n    run: echo done\n    outputs: [result]\n"
+            "name: test-flow\nauthor: test\nsteps:\n  a:\n    run: echo done\n    outputs: [result]\n"
         )
         return flow_file
 
