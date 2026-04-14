@@ -60,7 +60,136 @@ class ACPBackend:
             is_eq=self._config_eq,
             factory=self._spawn_process,
             teardown=self._kill_process,
+            is_alive=self._is_alive,
         )
+
+    @staticmethod
+    def _register_client_handlers(transport: JsonRpcTransport) -> None:
+        """Register handlers for ACP client-side requests.
+
+        The ACP agent (server) sends requests to the client for:
+        - Permission approval (session/request_permission)
+        - File I/O (fs/read_text_file, fs/write_text_file)
+        - Terminal/shell execution (terminal/create, terminal/output, etc.)
+
+        Without these, the agent hangs waiting for responses that never come.
+        """
+        # Track active terminals (terminal_id -> Popen)
+        terminals: dict[str, subprocess.Popen] = {}
+
+        def handle_request_permission(params: dict) -> dict:
+            # Auto-approve: pick the allow option from the request's options
+            options = params.get("options", [])
+            for opt in options:
+                if opt.get("optionId") in ("allow_once", "allow_always"):
+                    return {"outcome": {"outcome": "selected", "optionId": opt["optionId"]}}
+            # Fallback: select first option
+            if options:
+                return {"outcome": {"outcome": "selected", "optionId": options[0]["optionId"]}}
+            return {"outcome": {"outcome": "cancelled"}}
+
+        def handle_read_text_file(params: dict) -> dict:
+            file_path = params.get("path", "")
+            try:
+                content = Path(file_path).read_text()
+                return {"content": content}
+            except Exception as exc:
+                raise RuntimeError(f"Cannot read {file_path}: {exc}")
+
+        def handle_write_text_file(params: dict) -> dict:
+            file_path = params.get("path", "")
+            content = params.get("content", "")
+            try:
+                p = Path(file_path)
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(content)
+                return {}
+            except Exception as exc:
+                raise RuntimeError(f"Cannot write {file_path}: {exc}")
+
+        def handle_terminal_create(params: dict) -> dict:
+            from uuid import uuid4
+            cmd = params.get("command", "")
+            cwd = params.get("cwd")
+            terminal_id = str(uuid4())
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    shell=True,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    cwd=cwd,
+                )
+                terminals[terminal_id] = proc
+                return {"terminalId": terminal_id, "pid": proc.pid}
+            except Exception as exc:
+                raise RuntimeError(f"Terminal create failed: {exc}")
+
+        def handle_terminal_output(params: dict) -> dict:
+            import select as _select
+            terminal_id = params.get("terminalId", "")
+            proc = terminals.get(terminal_id)
+            if not proc or not proc.stdout:
+                return {"output": "", "isEof": True}
+            # Non-blocking read of available output
+            ready, _, _ = _select.select([proc.stdout], [], [], 0.1)
+            if ready:
+                chunk = proc.stdout.read(65536) if proc.stdout.readable() else ""
+                is_eof = chunk == "" and proc.poll() is not None
+                return {"output": chunk or "", "isEof": is_eof}
+            return {"output": "", "isEof": proc.poll() is not None}
+
+        def handle_terminal_wait(params: dict) -> dict:
+            terminal_id = params.get("terminalId", "")
+            timeout_ms = params.get("timeoutMs", 30000)
+            proc = terminals.get(terminal_id)
+            if not proc:
+                return {"exitCode": -1}
+            try:
+                proc.wait(timeout=timeout_ms / 1000)
+                # Read remaining output
+                remaining = proc.stdout.read() if proc.stdout else ""
+                return {"exitCode": proc.returncode, "output": remaining}
+            except subprocess.TimeoutExpired:
+                return {"exitCode": None, "timedOut": True}
+
+        def handle_terminal_kill(params: dict) -> dict:
+            terminal_id = params.get("terminalId", "")
+            proc = terminals.get(terminal_id)
+            if proc:
+                proc.kill()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
+            return {}
+
+        def handle_terminal_release(params: dict) -> dict:
+            terminal_id = params.get("terminalId", "")
+            proc = terminals.pop(terminal_id, None)
+            if proc and proc.poll() is None:
+                proc.kill()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
+            return {}
+
+        transport.on_request("session/request_permission", handle_request_permission)
+        transport.on_request("fs/read_text_file", handle_read_text_file)
+        transport.on_request("fs/write_text_file", handle_write_text_file)
+        transport.on_request("terminal/create", handle_terminal_create)
+        transport.on_request("terminal/output", handle_terminal_output)
+        transport.on_request("terminal/wait_for_exit", handle_terminal_wait)
+        transport.on_request("terminal/kill", handle_terminal_kill)
+        transport.on_request("terminal/release", handle_terminal_release)
+
+    @staticmethod
+    def _is_alive(acp_proc: ACPProcess) -> bool:
+        """Check if the ACP subprocess is still running."""
+        return acp_proc.process.poll() is None
 
     @staticmethod
     def _config_eq(a: ResolvedAgentConfig, b: ResolvedAgentConfig) -> bool:
@@ -113,6 +242,11 @@ class ACPBackend:
             )
 
         transport = JsonRpcTransport(proc)
+
+        # Register client-side request handlers that the ACP agent expects.
+        # Without these, the agent hangs when it sends tool execution requests.
+        self._register_client_handlers(transport)
+
         transport.start()
         client = ACPClient(transport)
 
@@ -120,14 +254,22 @@ class ACPBackend:
         try:
             caps = client.initialize()
         except Exception as exc:
-            # Kill process on handshake failure
+            # Capture stderr for diagnostics before killing
+            stderr_text = ""
+            try:
+                import os as _os
+                _os.set_blocking(proc.stderr.fileno(), False)
+                stderr_text = (proc.stderr.read() or "").strip()
+            except Exception:
+                pass
             try:
                 proc.kill()
                 proc.wait(timeout=2)
             except Exception:
                 pass
+            detail = f": {stderr_text}" if stderr_text else ""
             raise RuntimeError(
-                f"ACP handshake failed for agent {config.name!r}: {exc}"
+                f"ACP handshake failed for agent {config.name!r}: {exc}{detail}"
             ) from exc
 
         # Write PID file for crash recovery
@@ -220,24 +362,20 @@ class ACPBackend:
         if fork_from:
             session_id = acp_proc.client.fork_session(fork_from, working_dir)
         elif session_uuid:
-            # Try direct prompt first (session may still be in ACP process memory).
-            # Only fall back to load_session (which triggers expensive resume-from-disk)
-            # if the session was lost (e.g., subprocess crash mid-step).
+            # Use the session's original working_dir for loading — sessions are
+            # stored per-project by Claude Code, so a session created under one
+            # working_dir won't be found if loaded from a different one.
+            load_dir = config.get("_session_working_dir") or working_dir
             try:
-                # Probe: check if session is alive by sending a lightweight RPC.
-                # If the session exists in-memory, this succeeds instantly.
-                # If not, it throws and we fall back to load_session.
-                future = acp_proc.client.transport.send_request(
-                    "session/update",
-                    {"sessionId": session_uuid, "update": {}},
+                logger.info("[%s] loading session %s from disk (load_dir=%s)", step_id, session_uuid[:8], load_dir)
+                acp_proc.client.load_session(session_uuid, load_dir)
+                session_id = session_uuid
+            except Exception as exc:
+                logger.warning(
+                    "[%s] load_session failed (%s), creating new session",
+                    step_id, exc,
                 )
-                future.result(timeout=5)
-                session_id = session_uuid
-                logger.info("[%s] session %s still alive in-process, skipping load", step_id, session_uuid[:8])
-            except Exception:
-                logger.info("[%s] session %s not in process memory, loading from disk", step_id, session_uuid[:8])
-                acp_proc.client.load_session(session_uuid, working_dir)
-                session_id = session_uuid
+                session_id = acp_proc.client.new_session(working_dir, session_name)
         else:
             session_id = acp_proc.client.new_session(working_dir, session_name)
 
@@ -256,10 +394,13 @@ class ACPBackend:
             / (context.job_id or "local")
         )
         step_io.mkdir(parents=True, exist_ok=True)
-        output_path = step_io / f"{context.step_name}-{context.attempt}.output.jsonl"
+        # Include session_name in file paths to prevent cross-contamination
+        # when multiple agent steps run concurrently with different sessions.
+        session_suffix = f"-{session_name}" if session_name else ""
+        output_path = step_io / f"{context.step_name}{session_suffix}-{context.attempt}.output.jsonl"
 
         # Write prompt file (for debugging/replay)
-        prompt_file = step_io / f"{context.step_name}-{context.attempt}.prompt.md"
+        prompt_file = step_io / f"{context.step_name}{session_suffix}-{context.attempt}.prompt.md"
         prompt_file.write_text(prompt)
 
         # Build env vars for the step (STEPWISE_* vars)
@@ -276,7 +417,21 @@ class ACPBackend:
                 (Path(working_dir) / output_filename).resolve()
             )
 
+        # Publish output_path to DB BEFORE blocking so the stream monitor can
+        # start tailing while the agent is still running.
+        if context.state_update_fn:
+            context.state_update_fn({
+                "pid": acp_proc.process.pid,
+                "pgid": os.getpgid(acp_proc.process.pid),
+                "output_path": str(output_path),
+                "working_dir": working_dir,
+                "session_id": session_id,
+                "session_name": session_name,
+                "agent": agent_name,
+            })
+
         # Send prompt (blocking — runs in thread pool via AsyncEngine)
+        prompt_error: str | None = None
         try:
             acp_proc.client.prompt(
                 session_id,
@@ -284,9 +439,24 @@ class ACPBackend:
                 output_path=str(output_path),
             )
         except AcpError as exc:
+            prompt_error = f"ACP error: {exc}"
             logger.warning("[%s] ACP prompt error: %s", step_id, exc)
         except Exception as exc:
+            prompt_error = f"Prompt failed: {exc}"
             logger.warning("[%s] Prompt failed: %s", step_id, exc)
+
+        # Capture any stderr the ACP process emitted during the prompt
+        try:
+            import os as _os
+            _os.set_blocking(acp_proc.process.stderr.fileno(), False)
+            stderr = (acp_proc.process.stderr.read() or "").strip()
+            if stderr:
+                logger.warning("[%s] Agent stderr: %s", step_id, stderr[:500])
+                # Also write stderr to step-io for post-mortem debugging
+                stderr_path = step_io / f"{context.step_name}{session_suffix}-{context.attempt}.output.jsonl.stderr"
+                stderr_path.write_text(stderr)
+        except Exception:
+            pass
 
         elapsed = time.monotonic() - t0
         logger.info(
@@ -297,7 +467,7 @@ class ACPBackend:
             elapsed,
         )
 
-        return AgentProcess(
+        process = AgentProcess(
             pid=acp_proc.process.pid,
             pgid=os.getpgid(acp_proc.process.pid),
             output_path=str(output_path),
@@ -307,6 +477,8 @@ class ACPBackend:
             capture_transcript=False,
             agent=agent_name,
         )
+        process.prompt_error = prompt_error
+        return process
 
     def wait(
         self, process: AgentProcess, on_usage_limit: Any = None,
@@ -320,12 +492,53 @@ class ACPBackend:
         cost = extract_cost(process.output_path)
         error = read_last_error(process.output_path)
 
+        # Check for prompt-level transport errors (agent killed, connection lost)
+        prompt_error = process.prompt_error
+
         if error:
             return AgentStatus(
                 state="failed",
                 exit_code=-1,
                 session_id=session_id or process.session_id,
                 error=error,
+                cost_usd=cost,
+            )
+
+        if prompt_error:
+            return AgentStatus(
+                state="failed",
+                exit_code=-1,
+                session_id=session_id or process.session_id,
+                error=prompt_error,
+                cost_usd=cost,
+            )
+
+        # Verify the output has a completed result (stopReason).
+        # Without this, a killed agent would be falsely marked completed.
+        has_stop_reason = False
+        try:
+            with open(process.output_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                        result = data.get("result", {})
+                        if isinstance(result, dict) and "stopReason" in result:
+                            has_stop_reason = True
+                            break
+                    except json.JSONDecodeError:
+                        continue
+        except FileNotFoundError:
+            pass
+
+        if not has_stop_reason:
+            return AgentStatus(
+                state="failed",
+                exit_code=-1,
+                session_id=session_id or process.session_id,
+                error="Agent terminated without completing (no stopReason in output)",
                 cost_usd=cost,
             )
 

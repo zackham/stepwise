@@ -57,6 +57,7 @@ class AgentProcess:
     session_name: str | None = None
     capture_transcript: bool = True
     agent: str | None = None
+    prompt_error: str | None = None  # Transport error from prompt() call
 
 
 @dataclass
@@ -757,10 +758,8 @@ class AgentExecutor(Executor):
 
                 case "stream_result":
                     # Extract text from ACP agent_message_chunk events
-                    if hasattr(self.backend, '_extract_final_text'):
-                        text = self.backend._extract_final_text(state["output_path"])
-                    else:
-                        text = ""
+                    from stepwise.acp_ndjson import extract_final_text
+                    text = extract_final_text(state["output_path"])
                     artifact = {"result": text}
 
                 case _:  # "effect"

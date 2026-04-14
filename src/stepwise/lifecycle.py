@@ -41,10 +41,12 @@ class ResourceLifecycleManager(Generic[R]):
         is_eq: Callable[[Any, Any], bool],
         factory: Callable[[Any], R],
         teardown: Callable[[R], None],
+        is_alive: Callable[[R], bool] | None = None,
     ):
         self.is_eq = is_eq
         self.factory = factory
         self.teardown = teardown
+        self.is_alive = is_alive
         self.active: list[ManagedResource[R]] = []
 
     def acquire(
@@ -52,11 +54,20 @@ class ResourceLifecycleManager(Generic[R]):
     ) -> ManagedResource[R]:
         """Get or create a resource for this config.
 
-        If a compatible resource exists (is_eq returns True), reuse it.
-        Otherwise create a new one via factory().
+        If a compatible resource exists (is_eq returns True), reuse it
+        (after verifying it's still alive). Otherwise create a new one.
         """
         for managed in self.active:
             if self.is_eq(managed.config, config):
+                # Verify the resource is still alive before reusing
+                if self.is_alive and not self.is_alive(managed.resource):
+                    logger.warning("Resource is dead, removing and creating new one")
+                    try:
+                        self.teardown(managed.resource)
+                    except Exception:
+                        pass
+                    self.active.remove(managed)
+                    break  # Fall through to factory()
                 if session_name:
                     managed.session_names.add(session_name)
                 return managed

@@ -21,8 +21,8 @@ logger = logging.getLogger("stepwise.process_lifecycle")
 # Override globally via config (agent_process_ttl) or env (STEPWISE_AGENT_TTL).
 DEFAULT_AGENT_TTL_SECONDS = 0
 
-# Health check interval: 60 seconds
-HEALTH_CHECK_INTERVAL_SECONDS = 60
+# Health check interval: 15 seconds (aggressive to catch zombie steps quickly)
+HEALTH_CHECK_INTERVAL_SECONDS = 15
 
 
 def _is_pid_alive(pid: int) -> bool:

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
+import threading
 from typing import Any, Callable
 
 from stepwise.acp_transport import JsonRpcTransport
@@ -77,18 +79,43 @@ class ACPClient:
             on_update: Called for each session/update notification.
             output_path: If set, write all ACP messages to this NDJSON file.
         """
-        output_file = open(output_path, "a") if output_path else None
+        # Use a write queue to decouple pipe reading from file I/O.
+        # The reader thread must drain the pipe as fast as possible to prevent
+        # backpressure stalls. File writes happen in a dedicated writer thread.
+        write_queue: queue.Queue[str | None] = queue.Queue(maxsize=0)
+        writer_thread = None
+
+        if output_path:
+            output_file = open(output_path, "a", buffering=65536)
+
+            def _writer():
+                """Drain write queue to output file."""
+                while True:
+                    item = write_queue.get()
+                    if item is None:
+                        break  # Sentinel: prompt done
+                    output_file.write(item)
+                    # Flush after every batch drain for UI responsiveness
+                    if write_queue.empty():
+                        output_file.flush()
+
+            writer_thread = threading.Thread(
+                target=_writer, daemon=True, name="ndjson-writer"
+            )
+            writer_thread.start()
+        else:
+            output_file = None
 
         def _on_session_update(params: dict) -> None:
             if output_file:
-                output_file.write(
+                line = (
                     json.dumps(
                         {"jsonrpc": "2.0", "method": "session/update", "params": params},
                         separators=(",", ":"),
                     )
                     + "\n"
                 )
-                output_file.flush()
+                write_queue.put_nowait(line)
             if on_update:
                 on_update(params)
 
@@ -103,18 +130,21 @@ class ACPClient:
 
             # Write the final response to NDJSON
             if output_file:
-                output_file.write(
+                write_queue.put(
                     json.dumps(
                         {"jsonrpc": "2.0", "id": 0, "result": result},
                         separators=(",", ":"),
                     )
                     + "\n"
                 )
-                output_file.flush()
 
             return result
         finally:
+            if writer_thread:
+                write_queue.put(None)  # Signal writer to exit
+                writer_thread.join(timeout=5)
             if output_file:
+                output_file.flush()
                 output_file.close()
 
     def cancel(self, session_id: str) -> None:

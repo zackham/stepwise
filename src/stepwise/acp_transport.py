@@ -39,9 +39,17 @@ class JsonRpcTransport:
         self._next_id = 1
         self._pending: dict[int, Future] = {}
         self._notification_handlers: dict[str, Callable] = {}
+        self._request_handlers: dict[str, Callable] = {}
         self._reader_thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._closed = False
+        # Increase pipe buffer to reduce backpressure stalls
+        try:
+            import fcntl
+            F_SETPIPE_SZ = 1031
+            fcntl.fcntl(process.stdout.fileno(), F_SETPIPE_SZ, 1048576)  # 1MB
+        except (OSError, AttributeError):
+            pass
 
     def start(self) -> None:
         """Start the background reader thread."""
@@ -77,6 +85,14 @@ class JsonRpcTransport:
         """Register a handler for incoming notifications."""
         self._notification_handlers[method] = handler
 
+    def on_request(self, method: str, handler: Callable) -> None:
+        """Register a handler for incoming requests (server→client).
+
+        Handler receives (params) and should return a result dict.
+        The transport sends the JSON-RPC response automatically.
+        """
+        self._request_handlers[method] = handler
+
     def close(self) -> None:
         """Signal reader thread to stop and cancel pending futures."""
         self._closed = True
@@ -109,8 +125,48 @@ class JsonRpcTransport:
                 except json.JSONDecodeError:
                     continue  # Skip non-JSON lines (stdout pollution)
 
-                if "id" in msg and "method" not in msg:
-                    # Response to a request
+                if "id" in msg and "method" in msg:
+                    # Incoming request from the agent (server→client)
+                    req_id = msg["id"]
+                    method = msg["method"]
+                    handler = self._request_handlers.get(method)
+                    if handler:
+                        try:
+                            result = handler(msg.get("params", {}))
+                            self._write({
+                                "jsonrpc": "2.0",
+                                "id": req_id,
+                                "result": result if result is not None else {},
+                            })
+                        except Exception as exc:
+                            logger.debug(
+                                "Request handler error for %s: %s",
+                                method, exc,
+                            )
+                            self._write({
+                                "jsonrpc": "2.0",
+                                "id": req_id,
+                                "error": {
+                                    "code": -32000,
+                                    "message": str(exc),
+                                },
+                            })
+                    else:
+                        # No handler — return method-not-found
+                        logger.warning(
+                            "Unhandled incoming request: %s (id=%s)",
+                            method, req_id,
+                        )
+                        self._write({
+                            "jsonrpc": "2.0",
+                            "id": req_id,
+                            "error": {
+                                "code": -32601,
+                                "message": f"Method not found: {method}",
+                            },
+                        })
+                elif "id" in msg and "method" not in msg:
+                    # Response to a request we sent
                     req_id = msg["id"]
                     with self._lock:
                         future = self._pending.pop(req_id, None)
