@@ -253,6 +253,49 @@ class VMManagerDaemon:
         """Start a virtiofsd process for a directory share."""
         socket_path = str(vm_dir / f"virtiofs-{tag}.sock")
 
+        # The caller may pass a job workspace path that hasn't been
+        # materialized yet — stepwise's engine creates workspace
+        # directories lazily when the first step runs, but containment
+        # tries to mount before then. Create the dir here defensively
+        # so virtiofsd doesn't exit with "does not exist" and leave us
+        # waiting for a socket that will never appear.
+        #
+        # vmmd runs as root, so mkdir leaves the dir root-owned and
+        # unprivileged stepwise can't write into it. Chown back to the
+        # invoking user (SUDO_UID/SUDO_GID) so the engine's subsequent
+        # mkdirs (e.g. <workspace>/.stepwise/step-io) don't hit EPERM.
+        # Sibling bug found during Tier 3 containment staircase
+        # (2026-04-14).
+        host_dir = Path(host_path)
+        try:
+            created = not host_dir.exists()
+            host_dir.mkdir(parents=True, exist_ok=True)
+            if created:
+                sudo_uid = os.environ.get("SUDO_UID")
+                sudo_gid = os.environ.get("SUDO_GID")
+                if sudo_uid and sudo_gid:
+                    try:
+                        os.chown(host_path, int(sudo_uid), int(sudo_gid))
+                    except OSError as exc:
+                        logger.warning(
+                            "Could not chown pre-created shared-dir %s to %s:%s — %s",
+                            host_path, sudo_uid, sudo_gid, exc,
+                        )
+        except OSError as exc:
+            logger.warning(
+                "Could not pre-create shared-dir %s: %s (letting virtiofsd try anyway)",
+                host_path, exc,
+            )
+
+        # Keep stderr going to a per-VM log file so failures are
+        # diagnosable post-mortem. Earlier we piped stderr to PIPE
+        # without draining it, which could deadlock; and DEVNULL
+        # throws away crash reasons. A file on disk is a good middle
+        # ground — `stepwise vmmd` operators can tail it when a boot
+        # flakes.
+        stderr_path = vm_dir / f"virtiofs-{tag}.stderr.log"
+        stderr_f = open(stderr_path, "wb")
+
         proc = subprocess.Popen(
             [
                 self.virtiofsd_path,
@@ -263,11 +306,35 @@ class VMManagerDaemon:
                 "--log-level=error",
             ],
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stderr=stderr_f,
             start_new_session=True,
         )
 
-        self._wait_for_socket(socket_path, timeout=5.0)
+        # 5s was historically enough for tiny test dirs but real-world
+        # working_dirs (git repos with thousands of files) need more —
+        # virtiofsd does an upfront traversal when the shared-dir is
+        # large and sandbox=chroot is on. 30s matches the guest-agent
+        # wait below and is still cheap for small repos.
+        try:
+            self._wait_for_socket(socket_path, timeout=30.0)
+        except RuntimeError:
+            # Socket never appeared — capture whether virtiofsd exited
+            # and what its stderr looked like. Operators often miss
+            # these because the PID is already defunct by the time
+            # they look.
+            rc = proc.poll()
+            stderr_tail = ""
+            try:
+                stderr_f.flush()
+                with open(stderr_path, "r", errors="replace") as f:
+                    stderr_tail = f.read().strip()[-2000:]
+            except OSError:
+                pass
+            logger.error(
+                "virtiofsd startup failed: exit=%s, stderr_tail=%r, cmd_args=%r",
+                rc, stderr_tail, [self.virtiofsd_path, socket_path, host_path],
+            )
+            raise
         self._make_accessible(socket_path)
 
         return VirtiofsMount(

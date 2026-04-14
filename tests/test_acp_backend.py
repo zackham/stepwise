@@ -212,6 +212,50 @@ class TestCleanup:
         backend.cleanup()
 
 
+# ── Lazy containment backend init ─────────────────────────────────────
+
+
+class TestLazyContainmentInit:
+    """Regression pin for the bug caught in the Tier 3 containment staircase
+    (2026-04-14): flow-YAML `containment: cloud-hypervisor` silently no-op'd
+    because ACPBackend.containment was only set from stepwise-level config.
+    Agents ran on the host regardless, and Tier 1 + 2 "passed" without any
+    real VM being spun up.
+    """
+
+    def test_no_containment_requested_no_backend_created(self):
+        b = ACPBackend()
+        assert b.containment is None
+
+    def test_ensure_creates_cloud_hypervisor_backend(self, monkeypatch):
+        b = ACPBackend()
+        assert b.containment is None
+
+        # Stub the import so we don't actually try to talk to vmmd.
+        import stepwise.containment.cloud_hypervisor as ch_module
+
+        class StubBackend:
+            pass
+
+            def __init__(self):
+                self.instantiated = True
+
+        monkeypatch.setattr(ch_module, "CloudHypervisorBackend", StubBackend)
+
+        result = b._ensure_containment_backend("cloud-hypervisor")
+        assert result is b.containment
+        assert isinstance(result, StubBackend)
+
+        # Second call should return the cached backend, not re-instantiate.
+        result2 = b._ensure_containment_backend("cloud-hypervisor")
+        assert result2 is result
+
+    def test_ensure_rejects_unknown_mode(self):
+        b = ACPBackend()
+        with pytest.raises(RuntimeError, match="Unknown containment mode"):
+            b._ensure_containment_backend("docker-desktop")
+
+
 # ── NDJSON output compatibility ───────────────────────────────────────
 
 

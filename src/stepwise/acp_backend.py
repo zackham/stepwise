@@ -67,12 +67,46 @@ class ACPBackend:
         containment: Any | None = None,
     ):
         self.default_permissions = default_permissions
+        # Containment can come from two places:
+        #   1. Eagerly injected at registry setup via stepwise-level
+        #      `agent_containment` config (registry_factory.py).
+        #   2. Lazily created in `_spawn_process` when a step's resolved
+        #      config carries `containment: cloud-hypervisor` (either via
+        #      flow-level propagation in yaml_loader, or a step-level
+        #      override, or a CLI `--containment` flag).
+        # The second path used to silently no-op — flow YAMLs asked for
+        # containment and spawned on the host anyway. Now we detect it
+        # and initialize a real backend on demand.
         self.containment = containment  # ContainmentBackend or None
         self.lifecycle: ResourceLifecycleManager[ACPProcess] = ResourceLifecycleManager(
             is_eq=self._config_eq,
             factory=self._spawn_process,
             teardown=self._kill_process,
             is_alive=self._is_alive,
+        )
+
+    def _ensure_containment_backend(self, mode: str) -> Any:
+        """Lazily create a containment backend for the requested mode.
+
+        Called from `_spawn_process` when a step requests containment but
+        `self.containment` is None. The resulting backend is cached on
+        `self.containment` so subsequent steps in the same process reuse
+        it (and its VM pool).
+        """
+        if self.containment is not None:
+            return self.containment
+        if mode == "cloud-hypervisor":
+            from stepwise.containment.cloud_hypervisor import CloudHypervisorBackend
+
+            logger.info(
+                "Lazily initializing cloud-hypervisor containment backend "
+                "(flow requested containment but stepwise config has no "
+                "agent_containment global default)"
+            )
+            self.containment = CloudHypervisorBackend()
+            return self.containment
+        raise RuntimeError(
+            f"Unknown containment mode {mode!r} — expected 'cloud-hypervisor'"
         )
 
     @staticmethod
@@ -287,7 +321,16 @@ class ACPBackend:
 
         bridge_client: BridgeClient | None = None
 
-        if self.containment and getattr(config, "containment", None):
+        # Lazy-init if the step requested containment and we don't yet
+        # have a backend. This unblocks flow-YAML-level `containment:`
+        # without requiring the user to ALSO set `agent_containment` in
+        # stepwise config — the ergonomic bug caught in Tier 3 of the
+        # containment staircase (2026-04-14).
+        requested_mode = getattr(config, "containment", None)
+        if requested_mode and not self.containment:
+            self._ensure_containment_backend(requested_mode)
+
+        if self.containment and requested_mode:
             from stepwise.containment.backend import ContainmentConfig
 
             containment_config = ContainmentConfig(
