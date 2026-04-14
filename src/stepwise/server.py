@@ -898,6 +898,20 @@ async def lifespan(app: FastAPI):
     _cleanup_zombie_jobs(store)
     # Auto-adopt CLI-owned jobs with stale heartbeats (>120s) — their runner is gone
     adopted = _auto_adopt_stale_cli_jobs(_engine, max_age_seconds=120)
+    # Drain dead-process reaping synchronously before HTTP starts accepting.
+    # The periodic _process_health_check task runs reap_dead_processes every 15s,
+    # which can race with the first inbound create_job for the SQLite write lock
+    # and wedge the request. Running it eagerly here ensures the cold-start backlog
+    # is cleared before any client request arrives. Catches dead PIDs that
+    # _cleanup_zombie_jobs skipped (jobs with suspended steps) and dead PIDs in
+    # newly-adopted CLI jobs.
+    from stepwise.process_lifecycle import reap_dead_processes as _reap
+    try:
+        _reaped = _reap(store, engine=None)
+        if _reaped:
+            logger.info("Startup reap: cleaned %d dead-PID run(s)", len(_reaped))
+    except Exception:
+        logger.error("Startup reap_dead_processes failed", exc_info=True)
     # Re-evaluate surviving RUNNING jobs (settle any that completed pre-crash).
     # This also covers newly adopted jobs since they're now server-owned.
     _engine.recover_jobs()
