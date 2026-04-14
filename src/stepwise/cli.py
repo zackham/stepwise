@@ -2091,6 +2091,78 @@ def cmd_vmmd(args: argparse.Namespace) -> int:
         args.action = "start"
         return cmd_vmmd(args)
 
+    elif action == "clean":
+        # Reap stale sw-* workspace dirs. Prefers asking the running daemon
+        # (which knows which IDs are live AND runs as root so it can delete
+        # root-owned per-VM dirs). Falls back to a standalone sweep only
+        # when the CLI itself is root — unprivileged users can't delete
+        # the root-owned rootfs copies that vmmd left behind.
+        import os as _os
+        from stepwise.containment.vmmd_client import (
+            VMManagerClient, is_vmmd_running,
+        )
+
+        if is_vmmd_running():
+            try:
+                client = VMManagerClient(auto_start=False)
+                result = client.clean_orphans()
+                client.close()
+            except Exception as e:
+                io.log("error", f"Cannot talk to vmmd: {e}")
+                return 1
+        elif _os.geteuid() == 0:
+            # Running as root without vmmd — nothing is live by definition,
+            # so every sw-* dir is orphaned. Sweep directly.
+            import shutil
+            from stepwise.containment.vmmd import _default_vmm_dir
+            work_dir = _default_vmm_dir()
+            removed: list[str] = []
+            freed = 0
+            if work_dir.exists():
+                for entry in work_dir.iterdir():
+                    if not entry.is_dir() or not entry.name.startswith("sw-"):
+                        continue
+                    # Pre-tally before removal; only credit bytes for dirs
+                    # we actually wipe out.
+                    pre = 0
+                    try:
+                        for p in entry.rglob("*"):
+                            if p.is_file():
+                                try:
+                                    pre += p.stat().st_size
+                                except OSError:
+                                    pass
+                    except OSError:
+                        continue
+                    shutil.rmtree(entry, ignore_errors=True)
+                    if not entry.exists():
+                        removed.append(entry.name)
+                        freed += pre
+            result = {"removed": removed, "kept_live": [], "freed_bytes": freed}
+        else:
+            io.log(
+                "error",
+                "Cannot clean orphans unprivileged while vmmd is stopped — "
+                "per-VM dirs are owned by root. Either:\n"
+                "    sudo stepwise vmmd start --detach && stepwise vmmd clean\n"
+                "  or:\n"
+                "    sudo stepwise vmmd clean",
+            )
+            return 1
+
+        removed = result.get("removed", [])
+        kept = result.get("kept_live", [])
+        freed_mb = result.get("freed_bytes", 0) / 1024 / 1024
+        if not removed:
+            io.log("info", "No orphaned VM workspaces found.")
+        else:
+            io.log("info", f"Removed {len(removed)} orphaned VM workspace(s), freed {freed_mb:.1f} MB.")
+            for name in removed:
+                io.log("info", f"  - {name}")
+        if kept:
+            io.log("info", f"Kept {len(kept)} live: {', '.join(kept)}")
+        return EXIT_SUCCESS
+
     return EXIT_SUCCESS
 
 
@@ -5295,8 +5367,9 @@ def build_parser() -> argparse.ArgumentParser:
                                    "  sudo stepwise vmmd start           # start in foreground\n"
                                    "  sudo stepwise vmmd start --detach  # start in background\n"
                                    "  stepwise vmmd status               # show daemon status\n"
+                                   "  stepwise vmmd clean                # reap orphaned sw-* workspace dirs\n"
                                    "  stepwise vmmd stop                 # stop the daemon")
-    p_vmmd.add_argument("action", choices=["start", "stop", "status", "restart"],
+    p_vmmd.add_argument("action", choices=["start", "stop", "status", "restart", "clean"],
                         help="Daemon action")
     p_vmmd.add_argument("--detach", action="store_true", help="Run in background (daemonize)")
     p_vmmd.add_argument("--work-dir", help="Override VMM work directory")

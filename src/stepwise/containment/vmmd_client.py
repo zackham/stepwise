@@ -219,6 +219,13 @@ class VMManagerClient:
         """Detailed daemon status."""
         return self._call("status")
 
+    def clean_orphans(self) -> dict:
+        """Reap `sw-*` workspace dirs not attached to a live VM.
+
+        Returns {"removed": [...], "kept_live": [...], "freed_bytes": int}.
+        """
+        return self._call("clean_orphans")
+
     def close(self) -> None:
         """Close the client connection."""
         self._disconnect()

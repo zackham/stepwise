@@ -409,6 +409,68 @@ class TestDefaultVmmDir:
         assert _default_vmm_dir() == Path.home() / ".stepwise" / "vmm"
 
 
+class TestCleanOrphans:
+    """`VMManagerDaemon.clean_orphans` reaps sw-* workspace dirs that
+    are not attached to any live VM. Validates the disk-leak fix for
+    crashed VMs + pre-fix teardowns that never rmtree'd the per-VM dir.
+    """
+
+    def _make_daemon(self, work_dir):
+        from stepwise.containment.vmmd import VMManagerDaemon
+
+        return VMManagerDaemon(work_dir=work_dir)
+
+    def test_removes_orphans(self, tmp_path):
+        daemon = self._make_daemon(tmp_path)
+        (tmp_path / "sw-aaa111").mkdir()
+        (tmp_path / "sw-aaa111" / "rootfs.ext4").write_bytes(b"fake" * 1024)
+        (tmp_path / "sw-bbb222").mkdir()
+
+        result = daemon.clean_orphans()
+
+        assert sorted(result["removed"]) == ["sw-aaa111", "sw-bbb222"]
+        assert result["kept_live"] == []
+        assert result["freed_bytes"] >= 4 * 1024
+        assert not (tmp_path / "sw-aaa111").exists()
+        assert not (tmp_path / "sw-bbb222").exists()
+
+    def test_keeps_live_vms(self, tmp_path):
+        from stepwise.containment.vmmd import MicroVM
+
+        daemon = self._make_daemon(tmp_path)
+        live = MicroVM(
+            vm_id="sw-live001",
+            vm_dir=str(tmp_path / "sw-live001"),
+            vsock_socket="", api_socket="", cid=5,
+        )
+        daemon._vms["sw-live001"] = live
+        (tmp_path / "sw-live001").mkdir()
+        (tmp_path / "sw-orphan").mkdir()
+
+        result = daemon.clean_orphans()
+
+        assert result["removed"] == ["sw-orphan"]
+        assert result["kept_live"] == ["sw-live001"]
+        assert (tmp_path / "sw-live001").exists()  # live VM survived
+
+    def test_ignores_non_sw_entries(self, tmp_path):
+        daemon = self._make_daemon(tmp_path)
+        (tmp_path / "rootfs.ext4").write_bytes(b"x")  # base rootfs
+        (tmp_path / "random-dir").mkdir()  # unrelated
+        (tmp_path / "sw-kill").mkdir()
+
+        result = daemon.clean_orphans()
+
+        assert result["removed"] == ["sw-kill"]
+        assert (tmp_path / "rootfs.ext4").exists()
+        assert (tmp_path / "random-dir").exists()
+
+    def test_no_work_dir_returns_zero(self, tmp_path):
+        daemon = self._make_daemon(tmp_path / "doesnotexist")
+        result = daemon.clean_orphans()
+        assert result == {"removed": [], "kept_live": [], "freed_bytes": 0}
+
+
 # ── KVM integration tests ───────────────────────────────────────
 
 kvm_available = Path("/dev/kvm").exists()

@@ -388,9 +388,71 @@ class VMManagerDaemon:
                     except Exception:
                         pass
 
+        # Reap the per-VM workspace dir (rootfs copy + sockets + serial log).
+        # Without this every booted VM leaks ~the size of the rootfs (≈360MB
+        # on a non-reflink FS) and a handful of stale Unix sockets. Best-
+        # effort: a missing dir or a permissions issue shouldn't break
+        # destroy_vm.
+        import shutil
+        try:
+            shutil.rmtree(vm.vm_dir, ignore_errors=True)
+        except Exception:
+            logger.debug("Failed to remove vm_dir %s", vm.vm_dir, exc_info=True)
+
     def list_vms(self) -> dict:
         with self._lock:
             return {"vms": [vm.to_info() for vm in self._vms.values()]}
+
+    def clean_orphans(self) -> dict:
+        """Reap stale `sw-*` workspace dirs not associated with a live VM.
+
+        Crashed cloud-hypervisor processes, killed test runs, and pre-fix
+        teardowns (which never rmtree'd) all leave per-VM directories on
+        disk. Each holds a ~360 MB rootfs copy on filesystems without
+        reflink. This method enumerates the work_dir, drops anything that
+        looks like a VM workspace and is not currently tracked, and
+        returns counts + freed-bytes for the operator log.
+        """
+        import shutil
+        with self._lock:
+            live_ids = set(self._vms.keys())
+
+        try:
+            entries = list(self.work_dir.iterdir())
+        except OSError:
+            return {"removed": [], "kept_live": sorted(live_ids), "freed_bytes": 0}
+
+        removed: list[str] = []
+        freed = 0
+        for entry in entries:
+            if not entry.is_dir() or not entry.name.startswith("sw-"):
+                continue
+            if entry.name in live_ids:
+                continue
+            pre = 0
+            try:
+                for path in entry.rglob("*"):
+                    if path.is_file():
+                        try:
+                            pre += path.stat().st_size
+                        except OSError:
+                            pass
+            except OSError:
+                continue
+            shutil.rmtree(entry, ignore_errors=True)
+            # Only credit removal + bytes when the dir is actually gone.
+            # rmtree(ignore_errors=True) would otherwise silently lie.
+            if not entry.exists():
+                removed.append(entry.name)
+                freed += pre
+            else:
+                logger.debug("clean_orphans: %s still present after rmtree", entry)
+
+        return {
+            "removed": removed,
+            "kept_live": sorted(live_ids),
+            "freed_bytes": freed,
+        }
 
     def ping(self) -> dict:
         return {
@@ -508,6 +570,7 @@ class VMManagerDaemon:
             "list": lambda _: self.list_vms(),
             "ping": lambda _: self.ping(),
             "status": lambda _: self.status(),
+            "clean_orphans": lambda _: self.clean_orphans(),
         }
         handler = handlers.get(method)
         if not handler:
