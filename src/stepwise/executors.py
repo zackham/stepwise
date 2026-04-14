@@ -549,6 +549,167 @@ class ScriptExecutor(Executor):
     def cancel(self, state: dict) -> None:
         pass  # M1: synchronous, nothing to cancel
 
+    def finalize_surviving(self, executor_state: dict) -> ExecutorResult:
+        """Finalize a script subprocess that survived a server restart.
+
+        Reattach contract:
+        - Poll the recorded PID until the subprocess exits (it is no longer
+          our child, so os.waitpid won't work — fall back to liveness checks).
+        - Read whatever stdout/stderr was captured to disk during the run.
+        - If an exitcode file was written, use it to decide success vs failure.
+          Otherwise treat the run as failed (we can't know if the script
+          completed cleanly without an exit code).
+        """
+        from stepwise.process_lifecycle import _is_pid_alive
+
+        pid = (executor_state or {}).get("pid")
+        stdout_path_s = (executor_state or {}).get("stdout_path")
+        stderr_path_s = (executor_state or {}).get("stderr_path")
+
+        if not stdout_path_s or not stderr_path_s:
+            return ExecutorResult(
+                type="data",
+                envelope=HandoffEnvelope(
+                    artifact={},
+                    sidecar=Sidecar(),
+                    workspace="",
+                    timestamp=_now(),
+                    executor_meta={
+                        "failed": True,
+                        "error": "Script reattach missing stdout_path/stderr_path in executor_state",
+                    },
+                ),
+                executor_state={
+                    **(executor_state or {}),
+                    "failed": True,
+                    "error": "Script reattach missing stdout_path/stderr_path",
+                },
+            )
+
+        stdout_path = Path(stdout_path_s)
+        stderr_path = Path(stderr_path_s)
+        exitcode_path = stdout_path.with_suffix(".exitcode")
+
+        # Wait for the subprocess to exit, polling its liveness.
+        if pid:
+            poll_interval = 0.5
+            max_wait_seconds = 24 * 3600
+            waited = 0.0
+            while _is_pid_alive(int(pid)):
+                if waited >= max_wait_seconds:
+                    break
+                time.sleep(poll_interval)
+                waited += poll_interval
+                poll_interval = min(5.0, poll_interval * 1.5)
+
+        # Read whatever the subprocess wrote (may be partial if it crashed).
+        try:
+            stdout = stdout_path.read_text().strip()
+        except (FileNotFoundError, OSError):
+            stdout = ""
+        try:
+            stderr = stderr_path.read_text().strip()
+        except (FileNotFoundError, OSError):
+            stderr = ""
+
+        return_code: int | None = None
+        try:
+            return_code = int(exitcode_path.read_text().strip())
+        except (FileNotFoundError, OSError, ValueError):
+            return_code = None
+
+        base_meta: dict = {"shell_mode": "shell", "reattached": True}
+        if stdout:
+            base_meta["stdout"] = stdout
+        if stderr:
+            base_meta["stderr"] = stderr
+        if return_code is not None:
+            base_meta["return_code"] = return_code
+
+        # No exit code recorded → cannot confirm success. Treat as failed and
+        # preserve whatever output we have so the user can debug.
+        if return_code is None:
+            error = stderr or (
+                "Script process exited during server restart; exit code not "
+                "captured. Stepwise cannot confirm success."
+            )
+            return ExecutorResult(
+                type="data",
+                envelope=HandoffEnvelope(
+                    artifact={"stdout": stdout},
+                    sidecar=Sidecar(),
+                    workspace="",
+                    timestamp=_now(),
+                    executor_meta={**base_meta, "failed": True, "error": error},
+                ),
+                executor_state={
+                    **executor_state,
+                    "failed": True,
+                    "error": error,
+                },
+            )
+
+        if return_code != 0:
+            error = stderr or f"Exit code {return_code}"
+            return ExecutorResult(
+                type="data",
+                envelope=HandoffEnvelope(
+                    artifact={"stdout": stdout},
+                    sidecar=Sidecar(),
+                    workspace="",
+                    timestamp=_now(),
+                    executor_meta={**base_meta, "failed": True},
+                ),
+                executor_state={
+                    **executor_state,
+                    "failed": True,
+                    "error": error,
+                },
+            )
+
+        # Success — parse stdout the same way start() does.
+        artifact: dict
+        try:
+            parsed = json.loads(stdout) if stdout else {}
+            if isinstance(parsed, dict):
+                if "_watch" in parsed:
+                    error = (
+                        "Script reattach: cannot resume watch suspension "
+                        "after server restart"
+                    )
+                    return ExecutorResult(
+                        type="data",
+                        envelope=HandoffEnvelope(
+                            artifact={},
+                            sidecar=Sidecar(),
+                            workspace="",
+                            timestamp=_now(),
+                            executor_meta={**base_meta, "failed": True, "error": error},
+                        ),
+                        executor_state={
+                            **executor_state,
+                            "failed": True,
+                            "error": error,
+                        },
+                    )
+                artifact = parsed
+            else:
+                artifact = {"stdout": stdout}
+        except (json.JSONDecodeError, ValueError):
+            artifact = {"stdout": stdout} if stdout else {"stdout": ""}
+
+        return ExecutorResult(
+            type="data",
+            envelope=HandoffEnvelope(
+                artifact=artifact,
+                sidecar=Sidecar(),
+                workspace="",
+                timestamp=_now(),
+                executor_meta=base_meta,
+            ),
+            executor_state=executor_state,
+        )
+
 
 # ── PollExecutor ───────────────────────────────────────────────────────
 
@@ -1125,3 +1286,34 @@ class LLMExecutor(Executor):
 
     def cancel(self, state: dict) -> None:
         pass
+
+    def finalize_surviving(self, executor_state: dict) -> ExecutorResult:
+        """LLM API calls cannot be reattached after a server restart.
+
+        There is no PID to wait on and no partial-response stream to recover
+        from most LLM APIs. Mark the run as failed with a clear, recoverable
+        error so downstream retry logic (RetryDecorator, exit rules) can
+        reschedule the call cleanly.
+        """
+        error = "LLM call interrupted by server restart, cannot recover"
+        return ExecutorResult(
+            type="data",
+            envelope=HandoffEnvelope(
+                artifact={},
+                sidecar=Sidecar(),
+                workspace="",
+                timestamp=_now(),
+                executor_meta={
+                    "failed": True,
+                    "error": error,
+                    "reattached": True,
+                    "model": self.model,
+                },
+            ),
+            executor_state={
+                **(executor_state or {}),
+                "failed": True,
+                "error": error,
+                "error_category": "infra_failure",
+            },
+        )
