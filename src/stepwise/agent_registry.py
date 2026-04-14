@@ -179,10 +179,20 @@ BUILTIN_AGENTS: dict[str, AgentConfig] = {
         config={
             "model": ConfigKey(flag="--model", default="minimax-m2.5"),
             "mode": ConfigKey(acp="set_session_mode"),
+            # NB: `aloop serve` accepts only --model / --provider. Tool
+            # filtering is controlled by aloop's own .aloop/config.json +
+            # skills + hooks, not by CLI flags. We keep the default tool
+            # list so `ResolvedAgentConfig.tools` still populates for
+            # containment-config equality (same tool set → shared VM) —
+            # but we don't attach a delivery flag, so `resolve_config`
+            # falls through and nothing gets passed to the subprocess.
             "tools": ConfigKey(
-                flag="--tools",
                 default=["read_file", "write_file", "edit_file", "bash", "load_skill"],
             ),
+            # ALOOP_ALLOWED_PATHS is advisory — aloop doesn't read it today
+            # (grep returns empty), but it's harmless as an env var and the
+            # default still populates `ResolvedAgentConfig.allowed_paths`
+            # for the containment layer.
             "allowed_paths": ConfigKey(
                 env="ALOOP_ALLOWED_PATHS",
                 default=["${working_dir}"],
@@ -199,13 +209,20 @@ BUILTIN_AGENTS: dict[str, AgentConfig] = {
         name="codex",
         command=["npx", "@zed-industries/codex-acp"],
         config={
-            "model": ConfigKey(flag="--model"),
-            "sandbox": ConfigKey(flag="--sandbox", default="workspace-write"),
-            "tools": ConfigKey(flag="--tools"),
-            "allowed_paths": ConfigKey(
-                flag="--allowed-paths",
-                default=["${working_dir}"],
-            ),
+            # codex-acp (@zed-industries/codex-acp) does NOT accept
+            # traditional CLI flags like --model / --sandbox /
+            # --allowed-paths — its only argv surface is `-c key=value`
+            # overrides and `--help`. All other settings come from
+            # ~/.codex/config.toml. Until stepwise grows a translator
+            # that maps these ConfigKeys onto `-c key=value`, we leave
+            # the delivery mechanism OFF and keep defaults only for
+            # containment-config grouping (VMs share when tool sets and
+            # path scopes match). The user's config.toml holds model,
+            # sandbox mode, and project trust levels.
+            "model": ConfigKey(),
+            "sandbox": ConfigKey(default="workspace-write"),
+            "tools": ConfigKey(),
+            "allowed_paths": ConfigKey(default=["${working_dir}"]),
         },
     ),
 }

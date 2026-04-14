@@ -101,11 +101,16 @@ class TestFlagDelivery:
         idx = resolved.command.index("--allowedTools")
         assert resolved.command[idx + 1] == "Read,Write"
 
-    def test_default_flag_value_used(self):
-        resolved = resolve_config("codex", {}, "/tmp/work")
-        assert "--sandbox" in resolved.command
-        idx = resolved.command.index("--sandbox")
-        assert resolved.command[idx + 1] == "workspace-write"
+    def test_default_flag_value_used(self, monkeypatch):
+        # codex no longer carries real CLI flags (its adapter takes only
+        # `-c key=value`), so the generic "does the default flag value
+        # get serialized?" check moves to claude, which still has a real
+        # flag surface (--model opus is the registered default).
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        resolved = resolve_config("claude", {}, "/tmp/work")
+        assert "--model" in resolved.command
+        idx = resolved.command.index("--model")
+        assert resolved.command[idx + 1] == "opus"
 
 
 # ── Config Resolution: Env Delivery ───────────────────────────────────
@@ -145,16 +150,18 @@ class TestAcpDelivery:
 
 
 class TestDefaults:
-    def test_default_used_when_no_override(self):
-        resolved = resolve_config("codex", {}, "/tmp/work")
-        assert "--sandbox" in resolved.command
-        idx = resolved.command.index("--sandbox")
-        assert resolved.command[idx + 1] == "workspace-write"
+    def test_default_used_when_no_override(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        resolved = resolve_config("claude", {}, "/tmp/work")
+        assert "--model" in resolved.command
+        idx = resolved.command.index("--model")
+        assert resolved.command[idx + 1] == "opus"
 
-    def test_step_override_wins_over_default(self):
-        resolved = resolve_config("codex", {"sandbox": "network"}, "/tmp/work")
-        idx = resolved.command.index("--sandbox")
-        assert resolved.command[idx + 1] == "network"
+    def test_step_override_wins_over_default(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        resolved = resolve_config("claude", {"model": "sonnet"}, "/tmp/work")
+        idx = resolved.command.index("--model")
+        assert resolved.command[idx + 1] == "sonnet"
 
 
 # ── Config Resolution: Env Var Expansion ──────────────────────────────
@@ -203,15 +210,19 @@ class TestRequiredValidation:
 
 
 class TestListValues:
-    def test_list_default_for_flag(self):
-        resolved = resolve_config("codex", {}, "/tmp/work")
-        assert "--allowed-paths" in resolved.command
-        idx = resolved.command.index("--allowed-paths")
+    def test_list_default_for_flag(self, monkeypatch):
+        # claude still uses --allowedPaths (codex's --allowed-paths went
+        # away when codex-acp's flag surface collapsed to `-c key=value`).
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        resolved = resolve_config("claude", {}, "/tmp/work")
+        assert "--allowedPaths" in resolved.command
+        idx = resolved.command.index("--allowedPaths")
         assert "/tmp/work" in resolved.command[idx + 1]
 
-    def test_list_override_for_flag(self):
-        resolved = resolve_config("codex", {"allowed_paths": ["/a", "/b"]}, "/tmp/work")
-        idx = resolved.command.index("--allowed-paths")
+    def test_list_override_for_flag(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        resolved = resolve_config("claude", {"allowed_paths": ["/a", "/b"]}, "/tmp/work")
+        idx = resolved.command.index("--allowedPaths")
         assert resolved.command[idx + 1] == "/a,/b"
 
 
@@ -228,6 +239,33 @@ class TestOptionalKeys:
         resolved = resolve_config("codex", {}, "/tmp/work")
         # "tools" has no default on codex, should not appear
         assert "--tools" not in resolved.command
+
+    def test_aloop_tools_not_passed_as_flag(self):
+        # `aloop serve` accepts only --model / --provider. The registry's
+        # tools default is kept for containment-config grouping, but no
+        # CLI flag delivery — otherwise the adapter dies on `unrecognized
+        # arguments: --tools ...` at handshake.
+        resolved = resolve_config("aloop", {}, "/tmp/work")
+        assert "--tools" not in resolved.command
+        # But tools still track in the resolved config so VMs with
+        # matching tool sets can share.
+        assert resolved.tools == [
+            "read_file", "write_file", "edit_file", "bash", "load_skill",
+        ]
+
+    def test_codex_has_no_legacy_flags(self):
+        # codex-acp's only argv surface is `-c key=value` + `--help`.
+        # Passing --model / --sandbox / --tools / --allowed-paths makes
+        # the adapter die at handshake with "unexpected argument". The
+        # registry defaults still feed `ResolvedAgentConfig` for
+        # containment grouping but do not get serialized into argv.
+        resolved = resolve_config("codex", {}, "/tmp/work")
+        assert "--model" not in resolved.command
+        assert "--sandbox" not in resolved.command
+        assert "--tools" not in resolved.command
+        assert "--allowed-paths" not in resolved.command
+        # Grouping defaults still populate.
+        assert resolved.allowed_paths == ["/tmp/work"]
 
 
 # ── Grouping Fields ───────────────────────────────────────────────────
