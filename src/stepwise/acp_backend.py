@@ -367,9 +367,17 @@ class ACPBackend:
             env["npm_config_cache"] = "/tmp/.npm-cache"
             # XDG_* and VIRTUAL_ENV pointing at host paths are also
             # traps inside the VM. Drop them and let the process use
-            # defaults rooted at /root.
+            # defaults rooted at /root. Also drop EMPTY auth env vars
+            # — claude-agent-acp treats `ANTHROPIC_API_KEY=""` as an
+            # explicit external-API-key auth selection and rejects
+            # the mounted OAuth credential file with "Invalid API key
+            # · Fix external API key". Unsetting lets it fall through
+            # to the credentials file at /root/.claude/.credentials.json
+            # (virtiofs-mounted from host ~/.claude).
             for k in list(env):
                 if k.startswith("XDG_") or k in ("VIRTUAL_ENV", "PYTHONPATH"):
+                    env.pop(k, None)
+                elif k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY") and not env[k]:
                     env.pop(k, None)
 
             # Per-agent credential mounts. claude and codex adapters
@@ -542,6 +550,21 @@ class ACPBackend:
         managed = self.lifecycle.acquire(resolved, session_name)
         acp_proc = managed.resource
 
+        # When the adapter is running INSIDE a containment VM, its
+        # filesystem only has `/mnt/workspace` (the virtiofs projection
+        # of the host working_dir). Passing the host path to
+        # session/new or session/load makes the adapter try to
+        # chdir or stat a path that doesn't exist in the guest and
+        # crash/timeout. The session stays logically tied to the host
+        # workspace (virtiofs bytes are identical), we're just naming
+        # the in-VM cwd the adapter uses. session storage under
+        # ~/.claude/projects/... still encodes /mnt/workspace as the
+        # project key — that's stable per VM config, so subsequent
+        # spawns for the same host workspace reuse the session file.
+        adapter_cwd = working_dir
+        if resolved.containment:
+            adapter_cwd = "/mnt/workspace"
+
         # Create or continue session
         fork_from = config.get("_fork_from_session_id")
         session_uuid = config.get("_session_uuid")
@@ -553,12 +576,16 @@ class ACPBackend:
         )
 
         if fork_from:
-            session_id = acp_proc.client.fork_session(fork_from, working_dir)
+            session_id = acp_proc.client.fork_session(fork_from, adapter_cwd)
         elif session_uuid:
             # Use the session's original working_dir for loading — sessions are
             # stored per-project by Claude Code, so a session created under one
-            # working_dir won't be found if loaded from a different one.
-            load_dir = config.get("_session_working_dir") or working_dir
+            # working_dir won't be found if loaded from a different one. For
+            # containment, the stored project key is /mnt/workspace (since
+            # that's what new_session saw when creating the session).
+            load_dir = config.get("_session_working_dir") or adapter_cwd
+            if resolved.containment and load_dir == working_dir:
+                load_dir = "/mnt/workspace"
             try:
                 logger.info("[%s] loading session %s from disk (load_dir=%s)", step_id, session_uuid[:8], load_dir)
                 acp_proc.client.load_session(session_uuid, load_dir)
@@ -568,9 +595,9 @@ class ACPBackend:
                     "[%s] load_session failed (%s), creating new session",
                     step_id, exc,
                 )
-                session_id = acp_proc.client.new_session(working_dir, session_name)
+                session_id = acp_proc.client.new_session(adapter_cwd, session_name)
         else:
-            session_id = acp_proc.client.new_session(working_dir, session_name)
+            session_id = acp_proc.client.new_session(adapter_cwd, session_name)
 
         # Execute ACP method calls (mode, model overrides)
         for method_name, value in resolved.acp_calls:

@@ -206,39 +206,59 @@ def _generate_dockerfile(
     extra_pip_packages: list[str],
 ) -> str:
     """Generate a Dockerfile for the rootfs."""
+    # Why debian-slim, not alpine:
+    # Alpine uses musl libc. @zed-industries/codex-acp ships a prebuilt
+    # glibc-linked binary (codex-acp-linux-x64/bin/codex-acp) with no
+    # musl variant. Alpine's `gcompat` shim covers basic glibc symbols
+    # but not codex's full set (fcntl64, __res_init, cap_from_name all
+    # missing, plus libcap.so.2 needs an extra package, plus libstdc++
+    # linkage issues). Debian slim has glibc natively — no compat
+    # layer, binaries just work. The rootfs grows from ~360MB Alpine
+    # to ~500MB debian-slim, which is fine on our 2GB budget.
+    # debian:trixie ships Python 3.13 (aloop requires >=3.12).
+    # bookworm's 3.11 is too old.
     lines = [
-        f"FROM alpine:{ALPINE_VERSION}",
+        "FROM debian:trixie-slim",
         "",
-        "# Base system",
-        "RUN apk add --no-cache bash coreutils util-linux mount socat",
+        "# Base system + basic tools used by init.sh + healthchecks.",
+        "RUN apt-get update && apt-get install -y --no-install-recommends "
+        "bash coreutils util-linux mount procps iproute2 wget ca-certificates "
+        "&& rm -rf /var/lib/apt/lists/*",
         "",
     ]
 
     if include_python:
         lines.extend([
             "# Python",
-            "RUN apk add --no-cache python3 py3-pip",
+            "RUN apt-get update && apt-get install -y --no-install-recommends "
+            "python3 python3-pip && rm -rf /var/lib/apt/lists/*",
             "",
         ])
 
     if include_node:
         lines.extend([
             "# Node.js",
-            "RUN apk add --no-cache nodejs npm",
+            "RUN apt-get update && apt-get install -y --no-install-recommends "
+            "nodejs npm && rm -rf /var/lib/apt/lists/*",
             "",
         ])
 
     if extra_packages:
         lines.extend([
             "# Extra packages",
-            f"RUN apk add --no-cache {' '.join(extra_packages)}",
+            "RUN apt-get update && apt-get install -y --no-install-recommends "
+            f"{' '.join(extra_packages)} && rm -rf /var/lib/apt/lists/*",
             "",
         ])
 
     if include_node:
-        # Pre-install ACP adapters
+        # Pre-install ACP adapters. Baking them into the rootfs avoids
+        # a multi-minute npx download on every fresh VM boot (would
+        # otherwise redownload per-VM to the ephemeral npm_config_cache
+        # on /tmp/.npm-cache tmpfs).
         npm_packages = [
             "@agentclientprotocol/claude-agent-acp",
+            "@zed-industries/codex-acp",
         ]
         npm_packages.extend(extra_npm_packages)
         lines.extend([
@@ -328,6 +348,19 @@ def _tar_to_ext4(tar_path: Path, output: Path, size_mb: int) -> None:
         subprocess.run(
             ["sudo", "ln", "-sf", "/tmp/resolv.conf",
              f"{mount_dir}/etc/resolv.conf"],
+            check=True, capture_output=True,
+        )
+        # Same trick for /root/.claude.json. Claude Code (the child
+        # process spawned by claude-agent-acp during session/new) looks
+        # for ~/.claude.json — a FLAT FILE at HOME, not inside
+        # ~/.claude/. virtiofs mounts a directory, not a file, so we
+        # can't project ~/.claude.json directly from the host. Instead
+        # we symlink to /tmp and have init.sh populate /tmp/.claude.json
+        # at boot from the latest backup in /root/.claude/backups/
+        # (claude-code auto-maintains these).
+        subprocess.run(
+            ["sudo", "ln", "-sf", "/tmp/.claude.json",
+             f"{mount_dir}/root/.claude.json"],
             check=True, capture_output=True,
         )
     finally:

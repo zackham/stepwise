@@ -204,6 +204,20 @@ if grep -q virtiofs /proc/filesystems 2>/dev/null; then
     fi
 fi
 
+# Restore /root/.claude.json from the most recent backup inside
+# /root/.claude/backups/. Claude Code writes this flat-file config
+# at HOME root (not inside ~/.claude), so virtiofs can't project it
+# directly. /root/.claude.json in the rootfs is a symlink to
+# /tmp/.claude.json (writable tmpfs). Without this file claude-code
+# child process spawned by claude-agent-acp session/new exits with
+# "Query closed before response received".
+if [ -d /root/.claude/backups ]; then
+    backup=$(ls -1t /root/.claude/backups/.claude.json.backup.* 2>/dev/null | head -1)
+    if [ -n "$backup" ] && [ -f "$backup" ]; then
+        cp "$backup" /tmp/.claude.json
+    fi
+fi
+
 # ── Network config from kernel cmdline ────────────────────────────
 # vmmd.py puts ch_ip=10.X.Y.2/24 ch_gw=10.X.Y.1 ch_dns=1.1.1.1 on
 # the cmdline when it sets up a tap + MASQUERADE. The guest parses
