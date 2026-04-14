@@ -1178,10 +1178,16 @@ class TestCLIServerRouting:
 
 
 class TestConditionalTranscriptCapture:
-    """Tests that transcript capture is skipped for agent steps not in a chain."""
+    """Transcript capture used to be conditional on `ExecutionContext.chain`
+    (commit 1263d10) — capture on for chain members, off otherwise. The
+    chains concept was replaced by named sessions + fork support in
+    commit 35f46a7, and `agent.py` now disables capture unconditionally
+    for every agent step (see `AgentExecutor.start`). This test pins
+    that invariant so nobody re-introduces the pre-migration branching
+    without also re-adding a context signal for it.
+    """
 
-    def test_agent_executor_sets_capture_from_chain(self):
-        """AgentExecutor.start() sets capture_transcript based on context.chain."""
+    def test_agent_executor_disables_transcript_capture_unconditionally(self):
         from stepwise.agent import AgentExecutor, MockAgentBackend
         from stepwise.executors import ExecutionContext
 
@@ -1190,20 +1196,9 @@ class TestConditionalTranscriptCapture:
 
         executor = AgentExecutor(backend=backend, prompt="Do stuff", output_mode="effect")
 
-        # No chain → capture_transcript should be False
-        ctx_no_chain = ExecutionContext(
+        ctx = ExecutionContext(
             job_id="j1", step_name="test", attempt=1,
             workspace_path="/tmp", idempotency="allow_restart",
-            chain=None,
         )
-        result = executor.start({}, ctx_no_chain)
+        result = executor.start({}, ctx)
         assert result.executor_state["capture_transcript"] is False
-
-        # With chain → capture_transcript should be True
-        ctx_with_chain = ExecutionContext(
-            job_id="j1", step_name="test", attempt=1,
-            workspace_path="/tmp", idempotency="allow_restart",
-            chain="my-chain",
-        )
-        result = executor.start({}, ctx_with_chain)
-        assert result.executor_state["capture_transcript"] is True

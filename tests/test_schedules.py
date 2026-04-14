@@ -643,58 +643,53 @@ class TestCronDescription:
 
 
 class TestPollEvalAsync:
-    """Test the async evaluate_poll_command."""
+    """Test the async evaluate_poll_command.
 
-    def test_async_ready(self, tmp_path):
+    These were originally written against `asyncio.get_event_loop()` which
+    stopped working reliably in Python 3.12 once any earlier test in the
+    suite cleans up its event loop. They run as proper `async def` tests
+    under pytest-asyncio AUTO mode, which is already enabled project-wide.
+    """
+
+    async def test_async_ready(self, tmp_path):
         from stepwise.poll_eval import evaluate_poll_command
-        result = asyncio.get_event_loop().run_until_complete(
-            evaluate_poll_command(
-                command='echo \'{"status": "ok"}\'',
-                cwd=str(tmp_path),
-            )
+        result = await evaluate_poll_command(
+            command='echo \'{"status": "ok"}\'',
+            cwd=str(tmp_path),
         )
         assert result.ready is True
         assert result.output == {"status": "ok"}
 
-    def test_async_not_ready(self, tmp_path):
+    async def test_async_not_ready(self, tmp_path):
         from stepwise.poll_eval import evaluate_poll_command
-        result = asyncio.get_event_loop().run_until_complete(
-            evaluate_poll_command(command="echo ''", cwd=str(tmp_path))
-        )
+        result = await evaluate_poll_command(command="echo ''", cwd=str(tmp_path))
         assert result.ready is False
 
-    def test_async_error(self, tmp_path):
+    async def test_async_error(self, tmp_path):
         from stepwise.poll_eval import evaluate_poll_command
-        result = asyncio.get_event_loop().run_until_complete(
-            evaluate_poll_command(command="exit 1", cwd=str(tmp_path))
-        )
+        result = await evaluate_poll_command(command="exit 1", cwd=str(tmp_path))
         assert result.ready is False
         assert result.error is not None
 
-    def test_async_timeout(self, tmp_path):
+    async def test_async_timeout(self, tmp_path):
         from stepwise.poll_eval import evaluate_poll_command
-        result = asyncio.get_event_loop().run_until_complete(
-            evaluate_poll_command(
-                command="sleep 10",
-                cwd=str(tmp_path),
-                timeout_seconds=1,
-            )
+        result = await evaluate_poll_command(
+            command="sleep 10",
+            cwd=str(tmp_path),
+            timeout_seconds=1,
         )
         assert result.ready is False
         assert "timeout" in result.error.lower()
 
-    def test_async_env_and_cursor(self, tmp_path):
+    async def test_async_env_and_cursor(self, tmp_path):
         from stepwise.poll_eval import evaluate_poll_command
-        # Script reads STEPWISE_POLL_CURSOR
         script = tmp_path / "check.sh"
         script.write_text('#!/bin/sh\necho "{\\\"cursor\\\": \\\"$STEPWISE_POLL_CURSOR\\\"}"')
         script.chmod(0o755)
-        result = asyncio.get_event_loop().run_until_complete(
-            evaluate_poll_command(
-                command=str(script),
-                cwd=str(tmp_path),
-                env={"STEPWISE_POLL_CURSOR": "prev_value"},
-            )
+        result = await evaluate_poll_command(
+            command=str(script),
+            cwd=str(tmp_path),
+            env={"STEPWISE_POLL_CURSOR": "prev_value"},
         )
         assert result.ready is True
         assert result.output["cursor"] == "prev_value"

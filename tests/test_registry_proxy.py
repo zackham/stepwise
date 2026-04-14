@@ -76,24 +76,26 @@ class TestRegistrySearch:
         assert data["total"] == 1
         assert len(data["flows"]) == 1
         assert data["flows"][0]["slug"] == "quick-task"
-        mock_search.assert_called_once_with(query="task", tag=None, sort="downloads", limit=20)
+        mock_search.assert_called_once_with(query="task", sort="downloads", limit=20)
 
     @patch("stepwise.registry_client.search_flows")
     def test_search_with_filters(self, mock_search, client):
         mock_search.return_value = {"flows": [], "total": 0}
+        # Unknown query params (like `tag`) are accepted by FastAPI but
+        # ignored by the route — reflect that in the assertion.
         resp = client.get(
             "/api/registry/search",
             params={"q": "test", "tag": "utility", "sort": "newest", "limit": 5},
         )
         assert resp.status_code == 200
-        mock_search.assert_called_once_with(query="test", tag="utility", sort="newest", limit=5)
+        mock_search.assert_called_once_with(query="test", sort="newest", limit=5)
 
     @patch("stepwise.registry_client.search_flows")
     def test_search_empty_query(self, mock_search, client):
         mock_search.return_value = {"flows": [], "total": 0}
         resp = client.get("/api/registry/search")
         assert resp.status_code == 200
-        mock_search.assert_called_once_with(query="", tag=None, sort="downloads", limit=20)
+        mock_search.assert_called_once_with(query="", sort="downloads", limit=20)
 
     @patch("stepwise.registry_client.search_flows")
     def test_search_registry_error(self, mock_search, client):

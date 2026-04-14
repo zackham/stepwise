@@ -65,6 +65,8 @@ def evaluate_poll_command_sync(
 
     if result.returncode != 0:
         error_msg = result.stderr.strip() or result.stdout.strip().split("\n")[-1]
+        if not error_msg:
+            error_msg = f"command exited with code {result.returncode}"
         return PollResult(ready=False, error=error_msg[:1000], duration_ms=elapsed)
 
     stdout = result.stdout.strip()
@@ -132,7 +134,9 @@ async def evaluate_poll_command(
     stderr = stderr_bytes.decode("utf-8", errors="replace").strip() if stderr_bytes else ""
 
     if process.returncode != 0:
-        error_msg = stderr or stdout.split("\n")[-1] if stdout else "non-zero exit"
+        error_msg = stderr or (stdout.split("\n")[-1] if stdout else "")
+        if not error_msg:
+            error_msg = f"command exited with code {process.returncode}"
         return PollResult(ready=False, error=error_msg[:1000], duration_ms=elapsed)
 
     if not stdout:

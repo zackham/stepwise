@@ -651,8 +651,11 @@ class Engine:
         job = self.store.load_job(job_id)
         if job.status != JobStatus.PENDING:
             raise ValueError(f"Cannot start job in status {job.status.value}")
-        # Resolve cross-job data references before running
+        # Resolve cross-job data references before running. _resolve_job_ref_inputs
+        # mutates job.inputs in place; persist so downstream loaders see the
+        # resolved values, not the raw {"$job_ref": ...} markers.
         self._resolve_job_ref_inputs(job)
+        self.store.save_job(job)
         # Build named session registry
         self._ensure_session_registry(job)
         # Extract rerun_steps from job metadata
@@ -4206,8 +4209,11 @@ class AsyncEngine(Engine):
                     job_id, job.job_group, group_limit, group_limit,
                 )
                 return
-        # Resolve cross-job data references before running
+        # Resolve cross-job data references before running. _resolve_job_ref_inputs
+        # mutates job.inputs in place; persist so downstream loaders see the
+        # resolved values, not the raw {"$job_ref": ...} markers.
         self._resolve_job_ref_inputs(job)
+        self.store.save_job(job)
         # Build named session registry
         self._ensure_session_registry(job)
         # Atomic status transition: only set RUNNING if still PENDING
