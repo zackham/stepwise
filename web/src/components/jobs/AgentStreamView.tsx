@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { useAgentStream, buildSegmentsFromEvents } from "@/hooks/useAgentStream";
 import { useAgentOutput } from "@/hooks/useStepwise";
-import { SegmentRow } from "./StreamSegments";
+import { SegmentList } from "./StreamSegments";
 import { formatCost } from "@/lib/utils";
 
 interface AgentStreamViewProps {
@@ -77,12 +77,7 @@ export function AgentStreamView({ runId, isLive, startedAt, costUsd, billingMode
   return (
     <div>
       <div className={compact ? "px-3 pt-1 pb-3" : "p-3"}>
-        {segments.map((seg, i) => (
-          <SegmentRow
-            key={seg.type === "tool" ? seg.tool.id : i}
-            segment={seg}
-          />
-        ))}
+        <SegmentList segments={segments} />
         {isLive && !hasRunningTool && (
           <span className="inline-block w-0.5 h-4 bg-blue-400 animate-pulse align-middle ml-0.5" />
         )}

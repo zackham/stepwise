@@ -227,3 +227,9 @@
 .dark * {
   scrollbar-color: oklch(0.4 0 0) transparent;
 }
+
+/* Dependency highlighting for job list rows (applied via DOM manipulation, not React state) */
+.dep-highlighted {
+  background: oklch(0.25 0.05 250 / 20%) !important;
+  border-left: 2px solid oklch(0.6 0.15 250) !important;
+}

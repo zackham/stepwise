@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useState, useEffect, useRef, type ReactNode } from "react";
 import type { StepDefinition, OutputFieldSchema } from "@/lib/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -14,10 +14,15 @@ import {
   Clock,
   RefreshCw,
   Shield,
+  Copy,
+  Check,
+  Maximize2,
 } from "lucide-react";
 import { cn, safeRenderValue } from "@/lib/utils";
 import { executorIcon } from "@/lib/executor-utils";
 import { useConfig } from "@/hooks/useConfig";
+import { ContentModal } from "@/components/ui/content-modal";
+import { copyToClipboard } from "@/hooks/useCopyFeedback";
 
 interface StepDefinitionPanelProps {
   stepDef: StepDefinition;
@@ -26,6 +31,7 @@ interface StepDefinitionPanelProps {
   onViewFile?: (path: string) => void;
   onViewSource?: (field: string) => void;
   onSelectStep?: (stepName: string) => void;
+  rawYaml?: string;
 }
 
 const EXEC_TYPE_COLORS: Record<string, string> = {
@@ -48,6 +54,97 @@ const EXIT_ACTION_COLORS: Record<string, string> = {
 function extractFilePaths(command: string): string[] {
   const matches = command.match(/\b[\w./-]+\.(py|sh|js|ts|rb|yaml|yml|json)\b/g);
   return matches ? [...new Set(matches)] : [];
+}
+
+/**
+ * Extract a single step's YAML fragment from the full flow YAML.
+ * Finds the step key under `steps:` at the expected indentation and captures
+ * all lines until the next sibling key or end of the steps block.
+ */
+function extractStepYaml(rawYaml: string, stepName: string): string | null {
+  const lines = rawYaml.split("\n");
+
+  // Find all `steps:` blocks and their indentation levels
+  // A step could be top-level (under root `steps:`) or inside a sub-flow
+  // We search for the step name as a key at any level
+  const escapedName = stepName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  for (let i = 0; i < lines.length; i++) {
+    // Match the step name as a YAML key (e.g., "  step-name:" or "      step-name:")
+    const match = lines[i].match(new RegExp(`^(\\s+)${escapedName}:\\s*(?:#.*)?$`));
+    if (!match) continue;
+
+    const indent = match[1].length;
+    const resultLines = [lines[i]];
+
+    // Collect all subsequent lines that are more indented or blank
+    for (let j = i + 1; j < lines.length; j++) {
+      const line = lines[j];
+      // Blank lines or comment-only lines — include them
+      if (line.trim() === "" || line.match(/^\s*#/)) {
+        // But stop if we hit a blank line followed by a non-indented line
+        // Peek ahead for context
+        resultLines.push(line);
+        continue;
+      }
+      // Check indentation: if the line is at the same or lesser indent, it's a sibling/parent
+      const lineIndent = line.match(/^(\s*)/)?.[1].length ?? 0;
+      if (lineIndent <= indent) break;
+      resultLines.push(line);
+    }
+
+    // Trim trailing blank lines
+    while (resultLines.length > 0 && resultLines[resultLines.length - 1].trim() === "") {
+      resultLines.pop();
+    }
+
+    if (resultLines.length > 0) {
+      // Dedent to remove the common leading whitespace
+      const minIndent = Math.min(
+        ...resultLines.filter((l) => l.trim() !== "").map((l) => (l.match(/^(\s*)/)?.[1].length ?? 0))
+      );
+      return resultLines.map((l) => (l.trim() === "" ? "" : l.slice(minIndent))).join("\n");
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Find the start and end line indices of a step's section in the full flow YAML.
+ * Returns [startLine, endLine) indices (0-based) for slicing.
+ */
+function findStepRange(rawYaml: string, stepName: string): [number, number] | null {
+  const lines = rawYaml.split("\n");
+  const escapedName = stepName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  for (let i = 0; i < lines.length; i++) {
+    const match = lines[i].match(new RegExp(`^(\\s+)${escapedName}:\\s*(?:#.*)?$`));
+    if (!match) continue;
+
+    const indent = match[1].length;
+    let end = i + 1;
+
+    for (let j = i + 1; j < lines.length; j++) {
+      const line = lines[j];
+      if (line.trim() === "" || line.match(/^\s*#/)) {
+        end = j + 1;
+        continue;
+      }
+      const lineIndent = line.match(/^(\s*)/)?.[1].length ?? 0;
+      if (lineIndent <= indent) break;
+      end = j + 1;
+    }
+
+    // Trim trailing blank lines
+    while (end > i && lines[end - 1].trim() === "") {
+      end--;
+    }
+
+    return [i, end];
+  }
+
+  return null;
 }
 
 /** Collapsible section with label + chevron. */
@@ -81,29 +178,29 @@ function Section({
   );
 }
 
-/** Read-only pre block for commands/prompts. */
-function CodeBlock({
+/** Clickable truncated text that opens a ContentModal on click. */
+function ClickableText({
   children,
-  tint,
+  title,
 }: {
   children: string;
-  tint?: "green" | "cyan";
+  title: string;
 }) {
-  const tintClass =
-    tint === "green"
-      ? "border-emerald-200 dark:border-emerald-900/50 bg-emerald-50 dark:bg-emerald-950/20"
-      : tint === "cyan"
-        ? "border-cyan-200 dark:border-cyan-900/50 bg-cyan-50 dark:bg-cyan-950/20"
-        : "border-zinc-300 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50";
+  const [modalOpen, setModalOpen] = useState(false);
   return (
-    <pre
-      className={cn(
-        "text-xs font-mono text-zinc-600 dark:text-zinc-400 border rounded px-2.5 py-2 whitespace-pre-wrap break-words max-h-[200px] overflow-y-auto leading-relaxed",
-        tintClass
-      )}
-    >
-      {children}
-    </pre>
+    <>
+      <div
+        className="cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800/30 rounded px-1 py-0.5 -mx-1 transition-colors"
+        onClick={() => setModalOpen(true)}
+      >
+        <div className="text-xs font-mono text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap break-words line-clamp-10">
+          {children}
+        </div>
+      </div>
+      <ContentModal open={modalOpen} onOpenChange={setModalOpen} title={title} copyContent={children}>
+        <pre className="whitespace-pre-wrap text-sm text-zinc-300 font-mono p-2">{children}</pre>
+      </ContentModal>
+    </>
   );
 }
 
@@ -190,6 +287,68 @@ function OutputSchemaTable({
   );
 }
 
+/** Full flow YAML modal with the selected step highlighted. */
+function FullYamlModal({
+  open,
+  onOpenChange,
+  rawYaml,
+  stepName,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  rawYaml: string;
+  stepName: string;
+}) {
+  const highlightRef = useRef<HTMLDivElement>(null);
+  const range = findStepRange(rawYaml, stepName);
+
+  useEffect(() => {
+    if (open && highlightRef.current) {
+      // Small delay to let the modal render
+      const timer = setTimeout(() => {
+        highlightRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [open]);
+
+  const lines = rawYaml.split("\n");
+
+  let beforeText: string | null = null;
+  let stepText: string | null = null;
+  let afterText: string | null = null;
+
+  if (range) {
+    const [start, end] = range;
+    beforeText = lines.slice(0, start).join("\n");
+    stepText = lines.slice(start, end).join("\n");
+    afterText = lines.slice(end).join("\n");
+  }
+
+  return (
+    <ContentModal
+      open={open}
+      onOpenChange={onOpenChange}
+      title={`FLOW.yaml \u2014 ${stepName}`}
+      copyContent={rawYaml}
+    >
+      <pre className="whitespace-pre-wrap text-xs text-zinc-300 font-mono p-3 leading-relaxed">
+        {range && beforeText !== null && stepText !== null && afterText !== null ? (
+          <>
+            {beforeText && <span>{beforeText}{"\n"}</span>}
+            <div ref={highlightRef} className="bg-amber-500/10 -mx-3 px-3 rounded">
+              {stepText}
+            </div>
+            {afterText && <span>{"\n"}{afterText}</span>}
+          </>
+        ) : (
+          rawYaml
+        )}
+      </pre>
+    </ContentModal>
+  );
+}
+
 export function StepDefinitionPanel({
   stepDef,
   onClose,
@@ -197,8 +356,14 @@ export function StepDefinitionPanel({
   onViewFile,
   onViewSource,
   onSelectStep,
+  rawYaml,
 }: StepDefinitionPanelProps) {
   const { data: configData } = useConfig();
+  const [activeTab, setActiveTab] = useState<"details" | "yaml">("details");
+  const [copied, setCopied] = useState(false);
+  const [yamlModalOpen, setYamlModalOpen] = useState(false);
+
+  const stepYaml = rawYaml ? extractStepYaml(rawYaml, stepDef.name) : null;
   const execType = stepDef.executor.type;
   const config = stepDef.executor.config as Record<string, unknown>;
 
@@ -211,9 +376,12 @@ export function StepDefinitionPanel({
   // Determine which sections to show
   const hasOutputSchema =
     stepDef.output_schema && Object.keys(stepDef.output_schema).length > 0;
+  const hasDerivedOutputs =
+    stepDef.derived_outputs && Object.keys(stepDef.derived_outputs).length > 0;
   const hasDataFlow =
     stepDef.outputs.length > 0 ||
     hasOutputSchema ||
+    hasDerivedOutputs ||
     stepDef.inputs.length > 0;
   const hasControlFlow =
     stepDef.exit_rules.length > 0 ||
@@ -298,7 +466,87 @@ export function StepDefinitionPanel({
         )}
       </div>
 
-      {/* Content area */}
+      {/* Tab bar */}
+      {stepYaml && (
+        <div className="flex border-b border-border shrink-0">
+          <button
+            onClick={() => setActiveTab("details")}
+            className={cn(
+              "px-3 py-1.5 text-xs font-medium transition-colors",
+              activeTab === "details"
+                ? "text-foreground border-b-2 border-foreground"
+                : "text-zinc-500 hover:text-foreground"
+            )}
+          >
+            Details
+          </button>
+          <button
+            onClick={() => setActiveTab("yaml")}
+            className={cn(
+              "px-3 py-1.5 text-xs font-medium transition-colors",
+              activeTab === "yaml"
+                ? "text-foreground border-b-2 border-foreground"
+                : "text-zinc-500 hover:text-foreground"
+            )}
+          >
+            YAML
+          </button>
+        </div>
+      )}
+
+      {/* YAML tab content */}
+      {activeTab === "yaml" && stepYaml ? (
+        <>
+        <ScrollArea className="flex-1 min-h-0">
+          <div className="p-3">
+            <div className="flex items-center justify-end gap-2 mb-2">
+              {rawYaml && (
+                <button
+                  onClick={() => setYamlModalOpen(true)}
+                  className="text-zinc-500 hover:text-foreground transition-colors p-0.5"
+                  title="View full YAML"
+                >
+                  <Maximize2 className="w-3 h-3" />
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  copyToClipboard(stepYaml);
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                }}
+                className="inline-flex items-center gap-1 text-[11px] text-zinc-500 hover:text-foreground transition-colors"
+                title="Copy to clipboard"
+              >
+                {copied ? (
+                  <>
+                    <Check className="w-3 h-3" />
+                    Copied
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3 h-3" />
+                    Copy
+                  </>
+                )}
+              </button>
+            </div>
+            <div className="text-xs font-mono text-zinc-300 whitespace-pre-wrap break-words leading-relaxed">
+              {stepYaml}
+            </div>
+          </div>
+        </ScrollArea>
+        {rawYaml && (
+          <FullYamlModal
+            open={yamlModalOpen}
+            onOpenChange={setYamlModalOpen}
+            rawYaml={rawYaml}
+            stepName={stepDef.name}
+          />
+        )}
+        </>
+      ) : (
+      /* Details tab content */
       <ScrollArea className="flex-1 min-h-0">
           <div className="py-2 space-y-1 divide-y divide-zinc-200/50 dark:divide-zinc-800/50">
             {/* ── Executor Config ── */}
@@ -308,7 +556,7 @@ export function StepDefinitionPanel({
                 const filePaths = extractFilePaths(cmd);
                 return (
                   <div className="space-y-2">
-                    <CodeBlock tint="green">{cmd}</CodeBlock>
+                    <ClickableText title="Command">{cmd}</ClickableText>
                     {onViewFile && filePaths.length > 0 && (
                       <div className="flex flex-wrap gap-1.5">
                         {filePaths.map((fp) => (
@@ -338,7 +586,7 @@ export function StepDefinitionPanel({
                           onViewSource={onViewSource}
                         />
                       </div>
-                      <CodeBlock>{String(config.prompt)}</CodeBlock>
+                      <ClickableText title="Prompt">{String(config.prompt)}</ClickableText>
                     </div>
                   )}
                   {config.system != null && (
@@ -352,7 +600,7 @@ export function StepDefinitionPanel({
                           onViewSource={onViewSource}
                         />
                       </div>
-                      <CodeBlock>{String(config.system)}</CodeBlock>
+                      <ClickableText title="System Prompt">{String(config.system)}</ClickableText>
                     </div>
                   )}
                   {modelValue && (
@@ -391,7 +639,7 @@ export function StepDefinitionPanel({
                           onViewSource={onViewSource}
                         />
                       </div>
-                      <CodeBlock>{String(config.prompt)}</CodeBlock>
+                      <ClickableText title="Prompt">{String(config.prompt)}</ClickableText>
                     </div>
                   )}
                   <div className="flex flex-wrap gap-1.5">
@@ -422,7 +670,7 @@ export function StepDefinitionPanel({
                           onViewSource={onViewSource}
                         />
                       </div>
-                      <CodeBlock>{String(config.prompt)}</CodeBlock>
+                      <ClickableText title="Prompt / Instructions">{String(config.prompt)}</ClickableText>
                     </div>
                   )}
                   {hasOutputSchema && stepDef.output_schema && (
@@ -443,9 +691,9 @@ export function StepDefinitionPanel({
                       <span className="text-xs text-zinc-500">
                         Check Command
                       </span>
-                      <CodeBlock tint="cyan">
+                      <ClickableText title="Check Command">
                         {String(config.check_command)}
-                      </CodeBlock>
+                      </ClickableText>
                     </div>
                   )}
                   {config.interval_seconds != null && (
@@ -458,7 +706,7 @@ export function StepDefinitionPanel({
                       <span className="text-xs text-zinc-500">
                         Waiting Message
                       </span>
-                      <CodeBlock>{String(config.prompt)}</CodeBlock>
+                      <ClickableText title="Waiting Message">{String(config.prompt)}</ClickableText>
                     </div>
                   )}
                 </div>
@@ -501,10 +749,36 @@ export function StepDefinitionPanel({
                     <OutputSchemaTable schema={stepDef.output_schema} />
                   </div>
                 )}
+                {hasDerivedOutputs && stepDef.derived_outputs && (
+                  <div className="space-y-1.5">
+                    <span className="text-xs text-zinc-500">Derived Outputs</span>
+                    <div className="space-y-0.5">
+                      {Object.entries(stepDef.derived_outputs).map(([name, expr]) => {
+                        const exprStr = String(expr);
+                        return (
+                          <div key={name}>
+                            <div className="text-[10px] font-mono text-violet-400 mb-0.5">{name}</div>
+                            <ClickableText title={name}>{exprStr}</ClickableText>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
                 {stepDef.when && (
                   <div className="space-y-1.5">
                     <span className="text-xs text-zinc-500">Activation Condition</span>
-                    <CodeBlock>{stepDef.when}</CodeBlock>
+                    <ClickableText title="Activation Condition">{typeof stepDef.when === "string"
+                      ? stepDef.when
+                      : (() => {
+                          const w = stepDef.when as Record<string, unknown>;
+                          const input = w.input as string || "?";
+                          if (w.eq != null) return `${input} == "${w.eq}"`;
+                          if (w.in != null) return `${input} in [${(w.in as string[]).map(v => `"${v}"`).join(", ")}]`;
+                          if (w.is_null) return `${input} is null`;
+                          if (w.is_present) return `${input} is present`;
+                          return JSON.stringify(w);
+                        })()}</ClickableText>
                   </div>
                 )}
                 {stepDef.inputs.length > 0 && (
@@ -741,6 +1015,7 @@ export function StepDefinitionPanel({
             )}
           </div>
         </ScrollArea>
+      )}
     </div>
   );
 }

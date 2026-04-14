@@ -76,7 +76,7 @@ function computeMiniLayout(
   const loopTargets = new Set<string>();
   const edgeSet = new Set<string>();
   for (const [name, step] of Object.entries(workflow.steps)) {
-    for (const binding of step.inputs) {
+    for (const binding of step.inputs ?? []) {
       if (binding.any_of_sources) {
         for (const src of binding.any_of_sources) {
           if (!src.step || src.step === "$job") continue;
@@ -94,7 +94,7 @@ function computeMiniLayout(
         }
       }
     }
-    for (const seq of step.after) {
+    for (const seq of step.after ?? []) {
       const key = `${seq}->${name}`;
       if (!edgeSet.has(key)) {
         g.setEdge(seq, name);
@@ -102,7 +102,7 @@ function computeMiniLayout(
       }
     }
     // Collect loop targets
-    for (const rule of step.exit_rules) {
+    for (const rule of step.exit_rules ?? []) {
       if (rule.config.action === "loop" && rule.config.target) {
         loopTargets.add(`${name}->${rule.config.target}`);
       }

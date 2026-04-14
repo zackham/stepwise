@@ -119,7 +119,7 @@ export function ContentModal({
             </div>
             {copyContent !== undefined && (
               <button
-                onClick={() => copy(copyContent)}
+                onClick={(e) => { e.stopPropagation(); copy(copyContent); }}
                 className="text-zinc-500 hover:text-zinc-300 transition-colors p-1 rounded hover:bg-zinc-800"
                 title="Copy to clipboard"
               >

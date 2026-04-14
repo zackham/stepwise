@@ -15,6 +15,7 @@ import {
   Check,
 } from "lucide-react";
 import { ContentModal } from "@/components/ui/content-modal";
+import { copyToClipboard } from "@/hooks/useCopyFeedback";
 import { StepStatusBadge } from "@/components/StatusBadge";
 import { STEP_STATUS_COLORS, STEP_PENDING_COLORS } from "@/lib/status-colors";
 import { EntityContextMenu } from "@/components/menus/EntityContextMenu";
@@ -30,7 +31,7 @@ function CopyButton({ text }: { text: string }) {
     <button
       onClick={(e) => {
         e.stopPropagation();
-        navigator.clipboard.writeText(text);
+        copyToClipboard(text);
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
       }}
@@ -480,7 +481,7 @@ function StepTooltip({
         </span>
         {stepDef.when && (
           <span className="ml-auto text-[9px] font-mono text-amber-400/80 bg-amber-500/10 rounded px-1 py-0.5">
-            when: {stepDef.when.length > 30 ? stepDef.when.slice(0, 28) + "..." : stepDef.when}
+            when: {typeof stepDef.when === "string" ? (stepDef.when.length > 30 ? stepDef.when.slice(0, 28) + "..." : stepDef.when) : JSON.stringify(stepDef.when)}
           </span>
         )}
       </div>

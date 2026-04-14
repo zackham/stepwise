@@ -43,6 +43,7 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { copyToClipboard } from "@/hooks/useCopyFeedback";
 
 function timeAgo(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -549,13 +550,13 @@ export function AppLayout() {
                             <span
                               className="truncate hover:text-zinc-400 cursor-copy"
                               title="Click to copy path"
-                              onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(server.project_path); }}
+                              onClick={(e) => { e.stopPropagation(); copyToClipboard(server.project_path); }}
                             >{server.project_path}</span>
                             <span className="shrink-0">·</span>
                             <span
                               className="shrink-0 hover:text-zinc-400 cursor-copy"
                               title="Click to copy PID"
-                              onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(String(server.pid)); }}
+                              onClick={(e) => { e.stopPropagation(); copyToClipboard(String(server.pid)); }}
                             >pid {server.pid}</span>
                             <span className="shrink-0">·</span>
                             <span className="shrink-0">up {timeAgo(server.started_at)}</span>

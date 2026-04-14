@@ -118,8 +118,8 @@ export function EditorPage() {
   const isCompact = useMediaQuery("(max-width: 1023px)");
   const isMobile = useIsMobile();
 
-  const params = useParams({ strict: false }) as { flowName?: string };
-  const flowName = params.flowName;
+  const params = useParams({ strict: false }) as { flowName?: string; kitName?: string };
+  const flowName = params.kitName ? `${params.kitName}/${params.flowName}` : params.flowName;
   const searchParams = useSearch({ strict: false }) as { step?: string };
 
   // Sub-flow expand/collapse
@@ -136,7 +136,14 @@ export function EditorPage() {
   // Fetch local flows to resolve path from name
   const { data: flows = [], isLoading: flowsLoading } = useLocalFlows();
   const selectedFlow = useMemo(
-    () => (flowName ? flows.find((f) => f.name === flowName) : undefined),
+    () => {
+      if (!flowName) return undefined;
+      // Match kit flows (swdev/council-plan) or standalone flows (council)
+      return flows.find((f) => {
+        const fullName = f.kit_name ? `${f.kit_name}/${f.name}` : f.name;
+        return fullName === flowName || f.name === flowName;
+      });
+    },
     [flowName, flows]
   );
 
@@ -731,6 +738,7 @@ export function EditorPage() {
               <StepDefinitionPanel
                 stepDef={selectedStepDef}
                 onSelectStep={handleSelectStep}
+                rawYaml={yamlContent}
                 onClose={() => {
                   setSelectedStep(null);
                   setEditingPrompt(null);
@@ -762,6 +770,7 @@ export function EditorPage() {
               {selectedStepDef && (
                 <StepDefinitionPanel
                   stepDef={selectedStepDef}
+                  rawYaml={yamlContent}
                   onClose={() => {
                     setSelectedStep(null);
                     setEditingPrompt(null);
@@ -785,6 +794,7 @@ export function EditorPage() {
               <StepDefinitionPanel
                 stepDef={selectedStepDef}
                 onSelectStep={handleSelectStep}
+                rawYaml={yamlContent}
                 onClose={() => {
                   setSelectedStep(null);
                   setEditingPrompt(null);

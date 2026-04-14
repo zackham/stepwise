@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { X, Copy, Check, ArrowRight, ArrowDown, ArrowUp } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { copyToClipboard } from "@/hooks/useCopyFeedback";
 import { JsonView } from "@/components/JsonView";
 import type { DagSelection } from "@/lib/dag-layout";
 import type { ExitRule, InputBinding, Job, StepDefinition, StepRun } from "@/lib/types";
@@ -30,7 +31,7 @@ function CopyButton({ value }: { value: unknown }) {
   return (
     <button
       onClick={() => {
-        navigator.clipboard.writeText(
+        copyToClipboard(
           typeof value === "string"
             ? value
             : JSON.stringify(value, null, 2) ?? String(value),

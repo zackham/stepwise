@@ -122,8 +122,9 @@ const flowsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/flows",
   component: FlowsPage,
-  validateSearch: (search: Record<string, unknown>): { selected?: string } => ({
+  validateSearch: (search: Record<string, unknown>): { selected?: string; kit?: string } => ({
     selected: typeof search.selected === "string" && search.selected ? search.selected : undefined,
+    kit: typeof search.kit === "string" && search.kit ? search.kit : undefined,
   }),
 });
 
@@ -139,6 +140,14 @@ function validateEditorSearch(search: Record<string, unknown>): EditorSearch {
 const flowEditorRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/flows/$flowName",
+  component: EditorPage,
+  validateSearch: validateEditorSearch,
+});
+
+// Kit flow editor: /flows/kitName/flowName
+const kitFlowEditorRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/flows/$kitName/$flowName",
   component: EditorPage,
   validateSearch: validateEditorSearch,
 });
@@ -196,6 +205,7 @@ const routeTree = rootRoute.addChildren([
   jobsRoute,
   jobDetailRoute,
   flowsRoute,
+  kitFlowEditorRoute,
   flowEditorRoute,
   schedulesRoute,
   scheduleDetailRoute,

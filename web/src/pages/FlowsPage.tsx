@@ -1,9 +1,11 @@
-import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef, memo } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { CreateFlowDialog } from "@/components/editor/CreateFlowDialog";
 import { MiniFlowDag } from "@/components/canvas/MiniFlowDag";
 import {
   useLocalFlows,
+  useLocalFlow,
   useKits,
   useDeleteFlow,
   useForkFlow,
@@ -13,9 +15,13 @@ import {
 } from "@/hooks/useEditor";
 import { useStepwiseMutations } from "@/hooks/useStepwise";
 import {
+  ArrowLeft,
+  Bot,
   Check,
   ChevronRight,
+  Code2,
   Download,
+  ExternalLink,
   Eye,
   GitFork,
   FileText,
@@ -25,20 +31,28 @@ import {
   LayoutGrid,
   List,
   Loader2,
+  MessageSquare,
   Minus,
   Package,
+  Play,
   Plus,
   Search,
+  Terminal,
   Trash2,
   User,
+  Variable,
   WifiOff,
   X,
+  Workflow,
 } from "lucide-react";
 import { ActionContextProvider } from "@/components/menus/ActionContextProvider";
 import { EntityContextMenu } from "@/components/menus/EntityContextMenu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { Markdown } from "@/components/ui/markdown";
+import { SidebarSection } from "@/components/jobs/RunSections";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ComboBox } from "@/components/ui/ComboBox";
 import {
   Dialog,
@@ -52,7 +66,7 @@ import { ConfirmDialog } from "@/components/menus/ConfirmDialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import { Badge } from "@/components/ui/badge";
-import { cn } from "@/lib/utils";
+import { cn, flowEditorPath } from "@/lib/utils";
 import { ContentModal } from "@/components/ui/content-modal";
 import type { Kit, LocalFlow, RegistryFlow } from "@/lib/types";
 import {
@@ -207,10 +221,82 @@ function KitFolderRow({ kit, flowCount, onOpen, onInfo, statsMap }: {
   );
 }
 
-function FlowGridCard({ flow, statsMap, onSelect }: {
+function KitHeader({ kit, onBack, onInfo }: {
+  kit: Kit;
+  onBack: () => void;
+  onInfo: () => void;
+}) {
+  const [usageModalOpen, setUsageModalOpen] = useState(false);
+
+  return (
+    <div className="px-3 sm:px-4 pt-2 pb-3 shrink-0">
+      <button onClick={onBack} className="flex items-center gap-1 text-[10px] text-zinc-600 hover:text-foreground transition-colors group cursor-pointer mb-1.5">
+        <ArrowLeft className="w-2.5 h-2.5 transition-transform group-hover:-translate-x-0.5" />
+        All Flows
+      </button>
+      <div className="flex gap-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/40 p-3">
+        {/* Left: kit info */}
+        <div className="flex-1 min-w-0 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <Package className="w-4 h-4 text-amber-500 shrink-0" />
+              <h2 className="text-base font-semibold text-foreground">{kit.name}</h2>
+              <button onClick={onInfo} className="text-zinc-600 hover:text-foreground transition-colors cursor-pointer">
+                <Info className="w-3 h-3" />
+              </button>
+            </div>
+            {kit.description && (
+              <p className="text-xs text-zinc-400 mt-1 leading-relaxed line-clamp-2">{kit.description}</p>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-2 text-[10px] text-zinc-500">
+            {kit.author && <span className="flex items-center gap-1"><User className="w-2.5 h-2.5" />{kit.author}</span>}
+            {kit.category && <span className="flex items-center gap-1"><FolderOpen className="w-2.5 h-2.5" />{kit.category}</span>}
+            <span className="flex items-center gap-1"><Workflow className="w-2.5 h-2.5" />{kit.flow_count} flows</span>
+          </div>
+        </div>
+
+        {/* Right: usage guide */}
+        {kit.usage && (
+          <div
+            className="flex-1 min-w-0 hidden lg:block cursor-pointer px-3 py-2 max-h-40 overflow-hidden relative hover:opacity-80 transition-opacity"
+            onClick={() => setUsageModalOpen(true)}
+            title="Click to expand"
+          >
+            <div className="text-[10px] uppercase tracking-wider text-zinc-600 font-medium mb-1">Usage</div>
+            <div
+              className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed [&_h1]:text-[11px] [&_h2]:text-[11px] [&_h3]:text-[11px] [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold [&_h1]:text-zinc-300 [&_h2]:text-zinc-300 [&_h3]:text-zinc-300 [&_h1]:mb-0.5 [&_h2]:mb-0.5 [&_h3]:mb-0.5 [&_p]:mb-0.5 [&_ul]:mb-0.5 [&_ul]:pl-4 [&_li]:text-[11px] max-h-[8.5rem] overflow-hidden"
+              style={{ maskImage: "linear-gradient(to bottom, black 65%, transparent 100%)", WebkitMaskImage: "linear-gradient(to bottom, black 65%, transparent 100%)" }}
+            >
+              <Markdown>{kit.usage}</Markdown>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Usage guide modal */}
+      {kit.usage && (
+        <ContentModal
+          open={usageModalOpen}
+          onOpenChange={setUsageModalOpen}
+          title={`${kit.name} — Usage Guide`}
+          copyContent={kit.usage}
+        >
+          <div className="p-4 text-sm text-zinc-300 leading-relaxed">
+            <Markdown>{kit.usage}</Markdown>
+          </div>
+        </ContentModal>
+      )}
+    </div>
+  );
+}
+
+function FlowGridCard({ flow, statsMap, active, onSelect, onDoubleClick }: {
   flow: LocalFlow;
   statsMap: Map<string, { job_count: number; last_run_at?: string | null }>;
+  active?: boolean;
   onSelect: (flow: LocalFlow) => void;
+  onDoubleClick?: (flow: LocalFlow) => void;
 }) {
   const stats = statsMap.get(flowDirKey(flow.path));
   const jobCount = stats?.job_count ?? 0;
@@ -220,7 +306,13 @@ function FlowGridCard({ flow, statsMap, onSelect }: {
     <EntityContextMenu type="flow" data={flow}>
       <button
         onClick={() => onSelect(flow)}
-        className="w-full h-full text-left rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/80 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-white dark:hover:bg-zinc-900 transition-all overflow-hidden flex flex-col group"
+        onDoubleClick={() => onDoubleClick?.(flow)}
+        className={cn(
+          "w-full h-full text-left rounded-lg border bg-white/80 dark:bg-zinc-900/80 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-white dark:hover:bg-zinc-900 transition-all overflow-hidden flex flex-col group",
+          active
+            ? "border-blue-500/50 dark:border-blue-500/40 ring-1 ring-blue-500/20"
+            : "border-zinc-200 dark:border-zinc-800",
+        )}
       >
         <div className="px-3 pt-2.5 pb-1 flex items-start gap-2">
           <div className="flex-1 min-w-0">
@@ -261,11 +353,13 @@ function FlowGridCard({ flow, statsMap, onSelect }: {
   );
 }
 
-function FlowListRow({ flow, statsMap, selected, onSelect, onToggleSelect }: {
+const FlowListRow = memo(function FlowListRow({ flow, statsMap, selected, active, onSelect, onDoubleClick, onToggleSelect }: {
   flow: LocalFlow;
   statsMap: Map<string, { job_count: number; last_run_at?: string | null }>;
   selected: boolean;
+  active?: boolean;
   onSelect: (flow: LocalFlow) => void;
+  onDoubleClick?: (flow: LocalFlow) => void;
   onToggleSelect: (path: string, shiftKey: boolean) => void;
 }) {
   const stats = statsMap.get(flowDirKey(flow.path));
@@ -280,9 +374,11 @@ function FlowListRow({ flow, statsMap, selected, onSelect, onToggleSelect }: {
           if ((e.target as HTMLElement).closest("[data-flow-link]")) return;
           onSelect(flow);
         }}
+        onDoubleClick={() => onDoubleClick?.(flow)}
         className={cn(
           "w-full text-left px-4 sm:px-6 py-3 flex items-center gap-3 transition-none hover:bg-zinc-50/80 dark:hover:bg-zinc-800/40 group cursor-pointer",
           selected && "bg-blue-50/50 dark:bg-blue-950/20",
+          active && !selected && "bg-blue-950/30 border-l-2 border-l-blue-500",
         )}
       >
         <button
@@ -344,6 +440,27 @@ function FlowListRow({ flow, statsMap, selected, onSelect, onToggleSelect }: {
       </div>
     </EntityContextMenu>
   );
+});
+
+/* ── Executor type icon + color mapping ──────────────────────────────── */
+const EXECUTOR_META: Record<string, { icon: typeof Bot; color: string; label: string }> = {
+  agent: { icon: Bot, color: "text-blue-400 bg-blue-500/10 ring-blue-500/20", label: "Agent" },
+  llm: { icon: MessageSquare, color: "text-violet-400 bg-violet-500/10 ring-violet-500/20", label: "LLM" },
+  script: { icon: Code2, color: "text-emerald-400 bg-emerald-500/10 ring-emerald-500/20", label: "Script" },
+  external: { icon: ExternalLink, color: "text-amber-400 bg-amber-500/10 ring-amber-500/20", label: "External" },
+  poll: { icon: Terminal, color: "text-cyan-400 bg-cyan-500/10 ring-cyan-500/20", label: "Poll" },
+  mock_llm: { icon: MessageSquare, color: "text-violet-400 bg-violet-500/10 ring-violet-500/20", label: "Mock LLM" },
+};
+
+function ExecutorBadge({ type }: { type: string }) {
+  const meta = EXECUTOR_META[type] ?? { icon: Terminal, color: "text-zinc-400 bg-zinc-500/10 ring-zinc-500/20", label: type };
+  const Icon = meta.icon;
+  return (
+    <span className={cn("inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-md ring-1", meta.color)}>
+      <Icon className="w-3 h-3" />
+      {meta.label}
+    </span>
+  );
 }
 
 export function FlowsPage() {
@@ -387,8 +504,17 @@ export function FlowsPage() {
   const forkFlowMutation = useForkFlow();
   const mutations = useStepwiseMutations();
 
-  // Kit state — folder navigation
-  const [activeKit, setActiveKit] = useState<string | null>(null);
+  // Kit state — folder navigation (URL-backed)
+  const { kit: urlKit } = useSearch({ from: "/flows" });
+  const [activeKit, _setActiveKit] = useState<string | null>(urlKit ?? null);
+  // Sync state when URL changes (back/forward navigation)
+  useEffect(() => {
+    _setActiveKit(urlKit ?? null);
+  }, [urlKit]);
+  const setActiveKit = useCallback((kit: string | null) => {
+    _setActiveKit(kit);
+    navigate({ to: "/flows", search: (prev: Record<string, unknown>) => ({ ...prev, kit: kit || undefined }) });
+  }, [navigate]);
   const [kitDetailName, setKitDetailName] = useState<string | null>(null);
   const [showKitYamlModal, setShowKitYamlModal] = useState(false);
   const kitDetailData = kits.find((k) => k.name === kitDetailName) ?? null;
@@ -550,6 +676,36 @@ export function FlowsPage() {
   // Ordered flow IDs for shift+click range selection
   const orderedFlowPaths = useMemo(() => filtered.map((f) => f.path), [filtered]);
 
+  // Virtual rendering for list view
+  const listScrollRef = useRef<HTMLDivElement>(null);
+  const FLOW_ROW_HEIGHT = 64;
+  const KIT_ROW_HEIGHT = 44;
+
+  // Flat row array: kit rows (at top level) + flow rows
+  type FlatFlowRow =
+    | { type: "kit"; kit: Kit }
+    | { type: "flow"; flow: LocalFlow };
+
+  const flatFlowRows = useMemo(() => {
+    const rows: FlatFlowRow[] = [];
+    if (!activeKit) {
+      for (const kit of visibleKits) {
+        rows.push({ type: "kit", kit });
+      }
+    }
+    for (const flow of filtered) {
+      rows.push({ type: "flow", flow });
+    }
+    return rows;
+  }, [filtered, visibleKits, activeKit]);
+
+  const flowVirtualizer = useVirtualizer({
+    count: flatFlowRows.length,
+    getScrollElement: () => listScrollRef.current,
+    estimateSize: (index) => flatFlowRows[index]?.type === "kit" ? KIT_ROW_HEIGHT : FLOW_ROW_HEIGHT,
+    overscan: 8,
+  });
+
   const handleSelectAll = useCallback(() => {
     setSelectedIds(new Set(filtered.map((f) => f.path)));
   }, [filtered]);
@@ -603,7 +759,14 @@ export function FlowsPage() {
 
   const handleSelectLocalFlow = useCallback(
     (flow: LocalFlow) => {
-      navigate({ to: "/flows/$flowName", params: { flowName: flow.name } });
+      navigate({ to: flowEditorPath(flow) });
+    },
+    [navigate]
+  );
+
+  const handleOpenInEditor = useCallback(
+    (flow: LocalFlow) => {
+      navigate({ to: flowEditorPath(flow) });
     },
     [navigate]
   );
@@ -676,7 +839,11 @@ export function FlowsPage() {
     <>
       <TooltipProvider>
         <div className="h-full flex flex-col">
-          {/* Header */}
+          {/* Kit header — above everything when browsing a kit */}
+          {activeKit && activeKitData && (
+            <KitHeader kit={activeKitData} onBack={() => setActiveKit(null)} onInfo={() => setKitDetailName(activeKit)} />
+          )}
+          {/* Toolbar */}
           <div className="flex flex-wrap items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2 border-b border-border shrink-0 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-sm">
             {/* Grid/List toggle */}
             <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5 bg-zinc-100/50 dark:bg-zinc-900/50">
@@ -842,7 +1009,8 @@ export function FlowsPage() {
               }}
               extraMutations={{ deleteFlow: deleteFlowMutation }}
             >
-              <div className="flex-1 overflow-y-auto">
+              <div className="flex-1 flex flex-col overflow-hidden">
+                <div className="flex-1 overflow-y-auto">
                 {filtered.length === 0 && visibleKits.length === 0 ? (
                   <div className="flex flex-col items-center justify-center h-full px-4 max-w-sm mx-auto text-center">
                     {flows.length === 0 ? (
@@ -869,29 +1037,8 @@ export function FlowsPage() {
                     )}
                   </div>
                 ) : viewMode === "grid" ? (
-                  <div className="p-4 sm:p-6 space-y-4">
-                    {activeKit && activeKitData && (
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => setActiveKit(null)}
-                          className="text-xs text-zinc-500 hover:text-foreground transition-colors"
-                        >
-                          Flows
-                        </button>
-                        <ChevronRight className="w-3 h-3 text-zinc-400" />
-                        <div className="flex items-center gap-1.5">
-                          <FolderOpen className="w-3.5 h-3.5 text-amber-500" />
-                          <span className="text-xs font-medium text-foreground">{activeKitData.name}</span>
-                        </div>
-                        <button
-                          onClick={() => setKitDetailName(activeKit)}
-                          className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 transition-colors"
-                          title="Kit details"
-                        >
-                          <Info className="w-3 h-3" />
-                        </button>
-                      </div>
-                    )}
+                  <div className="space-y-0">
+                    <div className="p-4 sm:p-6 space-y-4">
                     {!activeKit && visibleKits.length > 0 && (
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
                         {visibleKits.map((kit) => (
@@ -907,84 +1054,100 @@ export function FlowsPage() {
                     )}
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
                       {filtered.map((flow) => (
-                        <FlowGridCard key={flow.path} flow={flow} statsMap={statsMap} onSelect={handleSelectLocalFlow} />
+                        <FlowGridCard key={flow.path} flow={flow} statsMap={statsMap} active={selectedLocalFlow?.name === flow.name} onSelect={handleSelectLocalFlow} onDoubleClick={handleOpenInEditor} />
                       ))}
+                    </div>
                     </div>
                   </div>
                 ) : (
-                  <div className="flex-1 overflow-y-auto">
-                    <div className="divide-y divide-border">
-                      {/* Header row */}
-                      <div className="hidden sm:flex items-center px-4 sm:px-6 py-2 gap-3 text-[10px] uppercase tracking-wider text-zinc-500 font-medium select-none">
-                        <button
-                          onClick={() => {
-                            if (selectedIds.size === filtered.length && filtered.length > 0) {
-                              handleClearSelection();
-                            } else {
-                              handleSelectAll();
-                            }
-                          }}
-                          className={cn(
-                            "w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-all duration-150",
-                            selectedIds.size > 0
-                              ? "bg-blue-500 border-blue-500 text-white"
-                              : "border-zinc-400 dark:border-zinc-600 hover:border-blue-400 opacity-40 hover:opacity-100",
-                          )}
-                        >
-                          {selectedIds.size > 0 && selectedIds.size === filtered.length
-                            ? <Check className="w-2.5 h-2.5" />
-                            : selectedIds.size > 0
-                              ? <Minus className="w-2.5 h-2.5" />
-                              : null}
-                        </button>
-                        <SortHeader col="name" label="Name" current={sortCol} asc={sortAsc} onSort={handleSort} className="flex-1" />
-                        <SortHeader col="steps" label="Steps" current={sortCol} asc={sortAsc} onSort={handleSort} className="w-12 text-right" />
-                        <SortHeader col="jobs" label="Jobs" current={sortCol} asc={sortAsc} onSort={handleSort} className="w-14 text-right" />
-                        <SortHeader col="last_run" label="Last Run" current={sortCol} asc={sortAsc} onSort={handleSort} className="w-16 text-right" />
-                        <SortHeader col="updated" label="Updated" current={sortCol} asc={sortAsc} onSort={handleSort} className="w-16 text-right" />
+                  <div className="flex-1 flex flex-col min-h-0">
+                    {/* Header row */}
+                    <div className="hidden sm:flex items-center px-4 sm:px-6 py-2 gap-3 text-[10px] uppercase tracking-wider text-zinc-500 font-medium select-none border-b border-border shrink-0">
+                      <button
+                        onClick={() => {
+                          if (selectedIds.size === filtered.length && filtered.length > 0) {
+                            handleClearSelection();
+                          } else {
+                            handleSelectAll();
+                          }
+                        }}
+                        className={cn(
+                          "w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-all duration-150",
+                          selectedIds.size > 0
+                            ? "bg-blue-500 border-blue-500 text-white"
+                            : "border-zinc-400 dark:border-zinc-600 hover:border-blue-400 opacity-40 hover:opacity-100",
+                        )}
+                      >
+                        {selectedIds.size > 0 && selectedIds.size === filtered.length
+                          ? <Check className="w-2.5 h-2.5" />
+                          : selectedIds.size > 0
+                            ? <Minus className="w-2.5 h-2.5" />
+                            : null}
+                      </button>
+                      <SortHeader col="name" label="Name" current={sortCol} asc={sortAsc} onSort={handleSort} className="flex-1" />
+                      <SortHeader col="steps" label="Steps" current={sortCol} asc={sortAsc} onSort={handleSort} className="w-12 text-right" />
+                      <SortHeader col="jobs" label="Jobs" current={sortCol} asc={sortAsc} onSort={handleSort} className="w-14 text-right" />
+                      <SortHeader col="last_run" label="Last Run" current={sortCol} asc={sortAsc} onSort={handleSort} className="w-16 text-right" />
+                      <SortHeader col="updated" label="Updated" current={sortCol} asc={sortAsc} onSort={handleSort} className="w-16 text-right" />
+                    </div>
+                    {/* Virtualized scrollable area */}
+                    <div ref={listScrollRef} className="flex-1 min-h-0 overflow-y-auto">
+                      <div
+                        style={{ height: flowVirtualizer.getTotalSize(), position: "relative" }}
+                      >
+                        {flowVirtualizer.getVirtualItems().map((virtualRow) => {
+                          const row = flatFlowRows[virtualRow.index];
+                          if (!row) return null;
+
+                          if (row.type === "kit") {
+                            return (
+                              <div
+                                key={`kit-${row.kit.name}`}
+                                style={{
+                                  position: "absolute",
+                                  top: 0,
+                                  left: 0,
+                                  width: "100%",
+                                  transform: `translateY(${virtualRow.start}px)`,
+                                }}
+                              >
+                                <KitFolderRow
+                                  kit={row.kit}
+                                  flowCount={kitFlowCounts.get(row.kit.name) ?? 0}
+                                  onOpen={() => setActiveKit(row.kit.name)}
+                                  onInfo={() => setKitDetailName(row.kit.name)}
+                                  statsMap={statsMap}
+                                />
+                              </div>
+                            );
+                          }
+
+                          // Flow row
+                          const flow = row.flow;
+                          return (
+                            <div
+                              key={flow.path}
+                              style={{
+                                position: "absolute",
+                                top: 0,
+                                left: 0,
+                                width: "100%",
+                                transform: `translateY(${virtualRow.start}px)`,
+                              }}
+                            >
+                              <FlowListRow
+                                flow={flow}
+                                statsMap={statsMap}
+                                selected={selectedIds.has(flow.path)}
+                                active={selectedLocalFlow?.name === flow.name}
+                                onSelect={handleSelectLocalFlow}
+                                onDoubleClick={handleOpenInEditor}
+                                onToggleSelect={handleToggleSelect}
+                              />
+                            </div>
+                          );
+                        })}
                       </div>
-                      {activeKit && activeKitData && (
-                        <div className="flex items-center gap-2 px-4 sm:px-6 py-2 bg-zinc-50/50 dark:bg-zinc-900/30 border-b border-border">
-                          <button
-                            onClick={() => setActiveKit(null)}
-                            className="text-xs text-zinc-500 hover:text-foreground transition-colors"
-                          >
-                            Flows
-                          </button>
-                          <ChevronRight className="w-3 h-3 text-zinc-400" />
-                          <div className="flex items-center gap-1.5">
-                            <FolderOpen className="w-3.5 h-3.5 text-amber-500" />
-                            <span className="text-xs font-medium text-foreground">{activeKitData.name}</span>
-                          </div>
-                          <button
-                            onClick={() => setKitDetailName(activeKit)}
-                            className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 transition-colors"
-                            title="Kit details"
-                          >
-                            <Info className="w-3 h-3" />
-                          </button>
-                        </div>
-                      )}
-                      {!activeKit && visibleKits.map((kit) => (
-                        <KitFolderRow
-                          key={kit.name}
-                          kit={kit}
-                          flowCount={kitFlowCounts.get(kit.name) ?? 0}
-                          onOpen={() => setActiveKit(kit.name)}
-                          onInfo={() => setKitDetailName(kit.name)}
-                          statsMap={statsMap}
-                        />
-                      ))}
-                      {filtered.map((flow) => (
-                        <FlowListRow
-                          key={flow.path}
-                          flow={flow}
-                          statsMap={statsMap}
-                          selected={selectedIds.has(flow.path)}
-                          onSelect={handleSelectLocalFlow}
-                          onToggleSelect={handleToggleSelect}
-                        />
-                      ))}
                     </div>
 
                     {/* Bulk action bar for flows */}
@@ -1031,6 +1194,7 @@ export function FlowsPage() {
                     )}
                   </div>
                 )}
+              </div>
               </div>
             </ActionContextProvider>
           ) : (
@@ -1232,74 +1396,93 @@ export function FlowsPage() {
 
       {/* Kit Detail Sheet */}
       <Sheet open={!!kitDetailName} onOpenChange={(open) => { if (!open) setKitDetailName(null); }}>
-        <SheetContent side="right" className="w-full sm:max-w-md overflow-y-auto">
+        <SheetContent side="right" className="w-full sm:max-w-md overflow-y-auto p-0">
           {kitDetailData && (
-            <>
-              <SheetHeader>
-                <SheetTitle className="flex items-center gap-2">
-                  <Package className="w-4 h-4" />
-                  {kitDetailData.name}
-                </SheetTitle>
-              </SheetHeader>
-              <div className="mt-4 space-y-4">
-                <p className="text-sm text-muted-foreground">{kitDetailData.description}</p>
-
-                <div className="flex flex-wrap gap-2">
+            <div className="flex flex-col h-full">
+              {/* Header */}
+              <div className="px-4 pt-5 pb-2">
+                <div className="flex items-center gap-2 mb-1">
+                  <Package className="w-4 h-4 text-amber-500 shrink-0" />
+                  <h2 className="text-base font-semibold text-foreground truncate">{kitDetailData.name}</h2>
+                </div>
+                {kitDetailData.description && (
+                  <p className="text-xs text-zinc-500 leading-relaxed mt-1.5">{kitDetailData.description}</p>
+                )}
+                <div className="flex items-center gap-2 mt-2.5 text-[10px] text-zinc-500">
                   {kitDetailData.author && (
-                    <Badge variant="outline" className="text-xs">
-                      <User className="w-3 h-3 mr-1" />
+                    <span className="flex items-center gap-1">
+                      <User className="w-2.5 h-2.5" />
                       {kitDetailData.author}
-                    </Badge>
+                    </span>
                   )}
                   {kitDetailData.category && (
-                    <Badge variant="outline" className="text-xs">{kitDetailData.category}</Badge>
+                    <>
+                      <span className="text-zinc-600">·</span>
+                      <span>{kitDetailData.category}</span>
+                    </>
                   )}
-                  <Badge variant="secondary" className="text-xs">
-                    {kitDetailData.flow_count} flow{kitDetailData.flow_count !== 1 ? "s" : ""}
-                  </Badge>
-                  {kitDetailData.tags.map((tag) => (
-                    <Badge key={tag} variant="outline" className="text-[10px]">{tag}</Badge>
-                  ))}
+                  <span className="text-zinc-600">·</span>
+                  <span>{kitDetailData.flow_count} flow{kitDetailData.flow_count !== 1 ? "s" : ""}</span>
                 </div>
-
-                {kitDetailData.usage && (
-                  <div className="pt-2 border-t border-border">
-                    <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Usage</h4>
-                    <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed bg-zinc-50 dark:bg-zinc-900/50 rounded-md p-3 border border-border">
-                      {kitDetailData.usage}
-                    </div>
-                  </div>
-                )}
-                {kitDetailData.raw_yaml && (
-                  <div className="pt-2 border-t border-border">
-                    <button
-                      onClick={() => setShowKitYamlModal(true)}
-                      className="text-xs text-blue-500 hover:text-blue-400 transition-colors"
-                    >
-                      View KIT.yaml
-                    </button>
-                  </div>
-                )}
-
-                <div className="pt-2 border-t border-border">
-                  <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Flows</h4>
-                  <div className="space-y-1">
-                    {kitDetailData.flow_names.map((name) => (
-                      <button
-                        key={name}
-                        onClick={() => {
-                          setKitDetailName(null);
-                          navigate({ to: "/flows/$flowName", params: { flowName: name } });
-                        }}
-                        className="w-full text-left px-2 py-1.5 text-sm rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors text-foreground"
-                      >
-                        {name}
-                      </button>
+                {kitDetailData.tags.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-2">
+                    {kitDetailData.tags.map((tag) => (
+                      <span key={tag} className="text-[9px] px-1.5 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-500 border border-zinc-200 dark:border-zinc-700">{tag}</span>
                     ))}
                   </div>
-                </div>
+                )}
               </div>
-            </>
+
+              {/* Tabs */}
+              <Tabs defaultValue="overview">
+                <TabsList variant="line" className="px-4">
+                  <TabsTrigger value="overview">Overview</TabsTrigger>
+                  <TabsTrigger value="yaml">YAML</TabsTrigger>
+                </TabsList>
+                <TabsContent value="overview" className="flex-1 overflow-y-auto">
+                  <div className="p-3 space-y-3">
+                    <SidebarSection title="Flows" detail={<span className="text-[10px] text-zinc-600">{kitDetailData.flow_count}</span>}>
+                      <div className="space-y-0.5 mt-2">
+                        {kitDetailData.flow_names.map((name) => {
+                          const flowData = flows.find((f) => f.name === name && f.kit_name === kitDetailName);
+                          return (
+                            <button
+                              key={name}
+                              onClick={() => {
+                                setKitDetailName(null);
+                                navigate({ to: flowEditorPath({ name, kit_name: kitDetailName }) });
+                              }}
+                              className="w-full text-left px-2.5 py-2 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800/50 transition-colors group cursor-pointer"
+                            >
+                              <div className="flex items-center gap-2">
+                                <Workflow className="w-3 h-3 text-zinc-600 group-hover:text-cyan-500 transition-colors shrink-0" />
+                                <span className="text-xs font-mono text-zinc-300 group-hover:text-zinc-100">{name}</span>
+                              </div>
+                              {flowData?.description && (
+                                <p className="text-[10px] text-zinc-600 mt-0.5 ml-5 line-clamp-1">{flowData.description}</p>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </SidebarSection>
+
+                    {kitDetailData.usage && (
+                      <SidebarSection title="Usage Guide">
+                        <div className="text-xs text-zinc-400 leading-relaxed mt-2">
+                          <Markdown>{kitDetailData.usage}</Markdown>
+                        </div>
+                      </SidebarSection>
+                    )}
+                  </div>
+                </TabsContent>
+                <TabsContent value="yaml" className="flex-1 overflow-y-auto">
+                  <pre className="text-xs font-mono text-zinc-400 whitespace-pre-wrap p-4 leading-relaxed">
+                    {kitDetailData.raw_yaml || "No KIT.yaml available"}
+                  </pre>
+                </TabsContent>
+              </Tabs>
+            </div>
           )}
         </SheetContent>
       </Sheet>

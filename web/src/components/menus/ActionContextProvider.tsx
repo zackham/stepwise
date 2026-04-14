@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { useStepwiseMutations } from "@/hooks/useStepwise";
 import type { useDeleteFlow } from "@/hooks/useEditor";
 import type { ActionContext, SideEffects } from "@/lib/actions/types";
+import { copyToClipboard } from "@/hooks/useCopyFeedback";
 
 const ActionCtx = React.createContext<ActionContext | null>(null);
 
@@ -30,7 +31,7 @@ export function ActionContextProvider({
   );
 
   const clipboard = useCallback((text: string, label?: string) => {
-    navigator.clipboard.writeText(text);
+    copyToClipboard(text);
     toast.success(label ? `Copied ${label}` : "Copied to clipboard");
   }, []);
 

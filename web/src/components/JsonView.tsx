@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ChevronRight, ChevronDown, Copy, Check, Maximize2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ContentModal } from "@/components/ui/content-modal";
+import { copyToClipboard } from "@/hooks/useCopyFeedback";
 import {
   Tooltip,
   TooltipTrigger,
@@ -36,7 +37,7 @@ function BlockString({ value, name }: { value: string; name?: string }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(value);
+    copyToClipboard(value);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
@@ -267,7 +268,7 @@ export function JsonView({
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+    copyToClipboard(JSON.stringify(data, null, 2));
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };

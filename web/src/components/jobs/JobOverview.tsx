@@ -4,7 +4,7 @@ import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 import { Button } from "@/components/ui/button";
 import type { Job } from "@/lib/types";
 import { cn, formatDuration, formatCost } from "@/lib/utils";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { Terminal, Monitor, Play, Pause, RotateCcw, XCircle, RefreshCw, AlertTriangle } from "lucide-react";
 import { useMemo, useState } from "react";
 import { SidebarSection, JobInputsSection, JobOutputsSection } from "./RunSections";
@@ -47,6 +47,7 @@ function normalizeOutputValue(value: unknown): unknown {
 
 export function JobOverview({ job }: JobOverviewProps) {
   const { copy: copyId, justCopied: idCopied } = useCopyFeedback();
+  const navigate = useNavigate();
   const mutations = useStepwiseMutations();
   const isTerminal =
     job.status === "completed" || job.status === "failed" || job.status === "cancelled";
@@ -126,13 +127,24 @@ export function JobOverview({ job }: JobOverviewProps) {
         {meta?.name && (
           <div className="flex items-center gap-2">
             <span className="text-zinc-500 w-16">Flow</span>
-            <Link
-              to="/flows/$flowName"
-              params={{ flowName: meta.name }}
-              className="font-mono text-blue-400 hover:text-blue-300 transition-colors"
-            >
-              {meta.name}
-            </Link>
+            {(() => {
+              const srcDir = (job.workflow as unknown as Record<string, string>)?.source_dir || "";
+              const match = srcDir.match(/flows\/([^/]+)\/([^/]+)$/);
+              if (match && match[2] === meta.name) {
+                return (
+                  <Link to="/flows/$kitName/$flowName" params={{ kitName: match[1], flowName: match[2] }}
+                    className="font-mono text-blue-400 hover:text-blue-300 transition-colors">
+                    {match[1]}/{meta.name}
+                  </Link>
+                );
+              }
+              return (
+                <Link to="/flows/$flowName" params={{ flowName: meta.name }}
+                  className="font-mono text-blue-400 hover:text-blue-300 transition-colors">
+                  {meta.name}
+                </Link>
+              );
+            })()}
           </div>
         )}
         <div className="flex items-center gap-2">

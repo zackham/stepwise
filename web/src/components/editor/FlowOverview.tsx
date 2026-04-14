@@ -148,7 +148,7 @@ export function FlowOverview({
   const navigate = useNavigate();
   const { data: kits = [] } = useKits();
   const kitData = flow.kit_name ? kits.find((k) => k.name === flow.kit_name) : null;
-  const [showKitYaml, setShowKitYaml] = useState(false);
+  // Kit YAML modal removed — info button navigates to /flows?kit=name
 
   // Recent jobs for this flow
   const flowDir = flow.path.includes("/") ? flow.path.substring(0, flow.path.lastIndexOf("/")) : flow.path;
@@ -176,20 +176,18 @@ export function FlowOverview({
             <FolderOpen className="w-3 h-3 text-amber-500" />
             <span className="text-[10px] text-zinc-500">Kit:</span>
             <button
-              onClick={() => navigate({ to: "/flows", search: {} })}
-              className="text-[11px] font-medium text-foreground hover:text-amber-600 transition-colors"
+              onClick={() => navigate({ to: "/flows", search: { kit: kitData.name } })}
+              className="text-[11px] font-medium text-foreground hover:text-amber-600 transition-colors cursor-pointer"
             >
               {kitData.name}
             </button>
-            {kitData.raw_yaml && (
-              <button
-                onClick={() => setShowKitYaml(true)}
-                className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 transition-colors ml-auto"
-                title="View KIT.yaml"
-              >
-                <Info className="w-3 h-3" />
-              </button>
-            )}
+            <button
+              onClick={() => navigate({ to: "/flows", search: { kit: kitData.name } })}
+              className="p-0.5 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 transition-colors ml-auto cursor-pointer"
+              title="View kit details"
+            >
+              <Info className="w-3 h-3" />
+            </button>
           </div>
           {kitData.description && (
             <p className="text-[10px] text-zinc-500 mt-0.5">{kitData.description}</p>
@@ -197,17 +195,7 @@ export function FlowOverview({
         </div>
       )}
 
-      {/* Kit YAML modal */}
-      {kitData?.raw_yaml && (
-        <ContentModal
-          open={showKitYaml}
-          onOpenChange={setShowKitYaml}
-          title={`${kitData.name} — KIT.yaml`}
-          copyContent={kitData.raw_yaml}
-        >
-          <pre className="text-xs font-mono whitespace-pre-wrap">{kitData.raw_yaml}</pre>
-        </ContentModal>
-      )}
+      {/* Kit detail is now accessed via /flows?kit=name */}
 
       {/* Scrollable content */}
       <ScrollArea className="flex-1 min-h-0">

@@ -2,7 +2,7 @@ import type { StepDefinition } from "@/lib/types";
 import { JsonView } from "@/components/JsonView";
 import { executorIcon, executorLabel } from "@/lib/executor-utils";
 import { cn, safeRenderValue } from "@/lib/utils";
-import { useState } from "react";
+import React, { useState } from "react";
 import { ContentModal } from "@/components/ui/content-modal";
 import { Gauge } from "lucide-react";
 
@@ -120,6 +120,32 @@ export function StepConfigView({ stepDef }: StepConfigViewProps) {
         </div>
       )}
 
+      {/* 3b. Derived output fields */}
+      {stepDef.derived_outputs && Object.keys(stepDef.derived_outputs).length > 0 && (
+        <div className="space-y-1.5">
+          <SectionHeading>Derived Outputs</SectionHeading>
+          <div className="space-y-0.5">
+            {Object.entries(stepDef.derived_outputs).map(([name, expr]) => {
+              const [open, setOpen] = useState(false);
+              return (
+                <React.Fragment key={name}>
+                  <div
+                    className="cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800/30 rounded px-1 py-0.5 -mx-1 transition-colors"
+                    onClick={() => setOpen(true)}
+                  >
+                    <div className="text-[10px] font-mono text-violet-400">{name}</div>
+                    <div className="text-xs font-mono text-zinc-700 dark:text-zinc-300 line-clamp-2 mt-0.5">{String(expr)}</div>
+                  </div>
+                  <ContentModal open={open} onOpenChange={setOpen} title={name} copyContent={String(expr)}>
+                    <pre className="whitespace-pre-wrap text-sm text-zinc-300 font-mono p-2">{String(expr)}</pre>
+                  </ContentModal>
+                </React.Fragment>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* 4. Prompt template */}
       {hasPrompt && (
         <div className="space-y-1.5">
@@ -153,7 +179,17 @@ export function StepConfigView({ stepDef }: StepConfigViewProps) {
         <div className="space-y-1.5">
           <SectionHeading>When</SectionHeading>
           <code className="text-xs font-mono text-amber-400/80 bg-zinc-900/50 px-1.5 py-0.5 rounded">
-            {stepDef.when}
+            {typeof stepDef.when === "string"
+              ? stepDef.when
+              : (() => {
+                  const w = stepDef.when as Record<string, unknown>;
+                  const input = w.input as string || "?";
+                  if (w.eq != null) return `${input} == "${w.eq}"`;
+                  if (w.in != null) return `${input} in [${(w.in as string[]).map(v => `"${v}"`).join(", ")}]`;
+                  if (w.is_null) return `${input} is null`;
+                  if (w.is_present) return `${input} is present`;
+                  return JSON.stringify(w);
+                })()}
           </code>
         </div>
       )}

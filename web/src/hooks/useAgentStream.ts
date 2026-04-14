@@ -110,6 +110,13 @@ export function useAgentStream(
               status: "running",
             },
           });
+        } else if (ev.t === "tool_title") {
+          for (const seg of state.segments) {
+            if (seg.type === "tool" && seg.tool.id === ev.id) {
+              seg.tool.title = ev.title;
+              break;
+            }
+          }
         } else if (ev.t === "tool_end") {
           for (const seg of state.segments) {
             if (seg.type === "tool" && seg.tool.id === ev.id) {
@@ -118,6 +125,8 @@ export function useAgentStream(
               break;
             }
           }
+        } else if (ev.t === "prompt") {
+          state.segments.push({ type: "prompt", text: ev.text });
         } else if (ev.t === "usage") {
           state.usage = { used: ev.used, size: ev.size };
         }
