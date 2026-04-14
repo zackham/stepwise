@@ -37,6 +37,18 @@ class TestClassifyApiError:
     def test_unknown_unchanged(self):
         assert classify_api_error("something weird") == "unknown"
 
+    def test_acp_transport_closed_is_infra_failure(self):
+        # Server restart kills the ACP JSON-RPC transport mid-prompt.
+        # The agent's retry decorator must treat this as transient so a
+        # fresh agent is re-spawned on the next attempt.
+        assert classify_api_error("ACP error: Transport closed") == "infra_failure"
+        assert classify_api_error("Transport closed") == "infra_failure"
+
+    def test_broken_pipe_is_infra_failure(self):
+        # IO error mid-prompt (e.g. agent subprocess died unexpectedly).
+        assert classify_api_error("BrokenPipeError: [Errno 32] Broken pipe") == "infra_failure"
+        assert classify_api_error("broken pipe") == "infra_failure"
+
 
 class TestParseUsageResetTime:
     def test_3pm_pacific(self):

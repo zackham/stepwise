@@ -159,6 +159,13 @@ def classify_api_error(error_msg: str) -> str:
     if "capacity" in lower:
         return "infra_failure"
 
+    # ACP / IPC transport failures — transient. Most commonly caused by a
+    # stepwise server restart killing the ACP JSON-RPC transport mid-prompt,
+    # or by an agent subprocess dying unexpectedly. The retry decorator will
+    # re-spawn a fresh agent on the next attempt.
+    if "transport closed" in lower or "broken pipe" in lower:
+        return "infra_failure"
+
     return "unknown"
 
 
