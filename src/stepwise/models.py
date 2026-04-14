@@ -223,6 +223,10 @@ class ForEachSpec:
     source_field: str  # which output field is the list
     item_var: str = "item"  # variable name for current element (default: "item")
     on_error: str = "fail_fast"  # "fail_fast" | "continue"
+    # Watchdog: re-dispatch sub-jobs stuck in PENDING for longer than this
+    # many seconds. Belt-and-suspenders against orphan-spawn races (e.g.
+    # max_concurrent_jobs blocking a sub-job that then never gets retried).
+    stale_pending_timeout_seconds: int = 60
 
     def to_dict(self) -> dict:
         return {
@@ -230,6 +234,7 @@ class ForEachSpec:
             "source_field": self.source_field,
             "item_var": self.item_var,
             "on_error": self.on_error,
+            "stale_pending_timeout_seconds": self.stale_pending_timeout_seconds,
         }
 
     @classmethod
@@ -239,6 +244,7 @@ class ForEachSpec:
             source_field=d["source_field"],
             item_var=d.get("item_var", "item"),
             on_error=d.get("on_error", "fail_fast"),
+            stale_pending_timeout_seconds=d.get("stale_pending_timeout_seconds", 60),
         )
 
 

@@ -39,5 +39,6 @@ JOB_DEPS_CHANGED = "job.deps_changed"
 # For-each events
 FOR_EACH_STARTED = "for_each.started"
 FOR_EACH_COMPLETED = "for_each.completed"
+FOR_EACH_RECOVERED = "for_each.recovered"  # Watchdog re-dispatched orphaned sub-jobs
 
 

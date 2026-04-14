@@ -1187,11 +1187,20 @@ def _parse_for_each(
     # Error policy
     on_error = step_data.get("on_error", "fail_fast")
 
+    # Watchdog timeout for stale pending sub-jobs (seconds)
+    stale_pending_timeout = step_data.get("stale_pending_timeout", 60)
+    if not isinstance(stale_pending_timeout, int) or stale_pending_timeout <= 0:
+        raise ValueError(
+            f"Step '{step_name}': 'stale_pending_timeout' must be a positive integer (seconds), "
+            f"got {stale_pending_timeout!r}"
+        )
+
     for_each_spec = ForEachSpec(
         source_step=source_step,
         source_field=source_field,
         item_var=item_var,
         on_error=on_error,
+        stale_pending_timeout_seconds=stale_pending_timeout,
     )
 
     # Parse embedded flow (can be dict or file ref string)

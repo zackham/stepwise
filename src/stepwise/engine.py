@@ -19,6 +19,7 @@ from stepwise.events import (
     CONTEXT_INJECTED,
     EXIT_RESOLVED,
     FOR_EACH_COMPLETED,
+    FOR_EACH_RECOVERED,
     FOR_EACH_STARTED,
     EXTERNAL_RERUN,
     JOB_APPROVED,
@@ -2964,9 +2965,19 @@ class Engine:
             "cached_count": len(cached_results),
         })
 
-        # Start all sub-jobs
+        # Start all sub-jobs. Wrap each call individually so that one
+        # failure does not orphan the rest of the batch — any sub-job left
+        # PENDING here is recoverable by the watchdog in
+        # AsyncEngine._poll_external_changes (and by _start_queued_jobs
+        # when a slot frees).
         for sub_job_id in actual_sub_job_ids:
-            self.start_job(sub_job_id)
+            try:
+                self.start_job(sub_job_id)
+            except Exception as e:
+                _engine_logger.warning(
+                    "for_each '%s': start_job(%s) raised %s — sub-job left PENDING for watchdog recovery",
+                    step_name, sub_job_id, e,
+                )
 
         return run
 
@@ -4158,6 +4169,14 @@ class AsyncEngine(Engine):
             self._dispatch_ready(job.id)
             self._check_job_terminal(job.id)
 
+        # Watchdog: re-dispatch for_each sub-jobs stuck in PENDING.
+        try:
+            self._recover_orphaned_for_each_sub_jobs()
+        except Exception:
+            _async_logger.error(
+                "Watchdog _recover_orphaned_for_each_sub_jobs raised", exc_info=True,
+            )
+
     # ── Job lifecycle overrides ──────────────────────────────────────────
 
     def start_job(self, job_id: str) -> None:
@@ -5088,8 +5107,11 @@ class AsyncEngine(Engine):
         for pending_job in self.store.pending_jobs_with_deps_met():
             if self.max_concurrent_jobs > 0 and active_count >= self.max_concurrent_jobs:
                 break
-            # Only auto-start top-level pending jobs (sub-jobs are managed by parent)
-            if pending_job.parent_job_id:
+            # Sub-jobs are normally managed by their parent step. EXCEPTION:
+            # for_each sub-jobs that hit max_concurrent_jobs / group capacity
+            # during the parent's launch loop need to be auto-started here,
+            # otherwise they orphan and the parent for_each waits forever.
+            if pending_job.parent_job_id and not self._is_for_each_sub_job(pending_job):
                 continue
             # Check group concurrency limit
             grp = pending_job.job_group
@@ -5105,6 +5127,88 @@ class AsyncEngine(Engine):
                     group_active[grp] = group_active.get(grp, 0) + 1
             except ValueError:
                 pass  # job status changed between query and start
+
+    def _is_for_each_sub_job(self, job: Job) -> bool:
+        """True if this job is a sub-job spawned by a for_each step.
+
+        Detected by inspecting the parent step run's executor_state for the
+        for_each marker. Used so _start_queued_jobs and the watchdog can
+        recover for_each sub-jobs that hit a capacity gate during launch.
+        """
+        if not job.parent_step_run_id:
+            return False
+        try:
+            parent_run = self.store.load_run(job.parent_step_run_id)
+        except KeyError:
+            return False
+        return bool(parent_run.executor_state and parent_run.executor_state.get("for_each"))
+
+    def _recover_orphaned_for_each_sub_jobs(self) -> None:
+        """Watchdog: re-dispatch for_each sub-jobs stuck in PENDING.
+
+        A sub-job can orphan in PENDING if the parent's launch loop tried
+        to start it while max_concurrent_jobs / group capacity was full.
+        The primary fix is in _start_queued_jobs (which now considers
+        for_each sub-jobs), but this watchdog catches any case the primary
+        path misses (e.g. a transient ValueError during start_job).
+
+        Timeout is configured per-for_each-step via
+        ForEachSpec.stale_pending_timeout_seconds (default 60s) and is
+        measured against the parent step run's started_at.
+        """
+        for parent_job in self.store.active_jobs():
+            if parent_job.status != JobStatus.RUNNING:
+                continue
+            for run in self.store.delegated_runs(parent_job.id):
+                if not run.executor_state or not run.executor_state.get("for_each"):
+                    continue
+                sub_job_ids = run.executor_state.get("sub_job_ids", [])
+                if not sub_job_ids:
+                    continue
+                step_def = parent_job.workflow.steps.get(run.step_name)
+                if not step_def or not step_def.for_each:
+                    continue
+                timeout = step_def.for_each.stale_pending_timeout_seconds
+                if not run.started_at:
+                    continue
+                age = (_now() - run.started_at).total_seconds()
+                if age < timeout:
+                    continue
+
+                orphaned: list[str] = []
+                for sub_id in sub_job_ids:
+                    try:
+                        sub = self.store.load_job(sub_id)
+                    except KeyError:
+                        continue
+                    if sub.status == JobStatus.PENDING:
+                        orphaned.append(sub_id)
+
+                if not orphaned:
+                    continue
+
+                _async_logger.warning(
+                    "Watchdog: for_each %s/%s has %d sub-job(s) stuck PENDING beyond %ds — re-dispatching: %s",
+                    parent_job.id, run.step_name, len(orphaned), timeout, orphaned,
+                )
+                self._emit(parent_job.id, FOR_EACH_RECOVERED, {
+                    "step": run.step_name,
+                    "orphaned_sub_jobs": orphaned,
+                    "age_seconds": age,
+                })
+                for sub_id in orphaned:
+                    try:
+                        self.start_job(sub_id)
+                    except ValueError as e:
+                        _async_logger.warning(
+                            "Watchdog: failed to re-dispatch %s (status changed?): %s",
+                            sub_id, e,
+                        )
+                    except Exception as e:
+                        _async_logger.error(
+                            "Watchdog: unexpected error re-dispatching %s: %s",
+                            sub_id, e, exc_info=True,
+                        )
 
     def _broadcast(self, event: dict) -> None:
         """Fire the on_broadcast callback if set."""
