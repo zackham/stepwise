@@ -95,6 +95,63 @@ class AgentBackend(Protocol):
 # ── Agent environment builder ─────────────────────────────────────
 
 
+# Host toolchain variables to strip when spawning an agent. If the stepwise
+# server itself runs inside a venv / conda env / node project and the agent
+# subprocess inherits those, any `pip install`, `npm install`, `poetry add`,
+# etc. the agent runs can modify the HOST's tool installation — corrupting
+# the server's own dependencies. Strip these so the agent starts with a
+# neutral baseline and picks up whatever toolchain is configured in its
+# own working_dir (or the system default).
+#
+# PATH is not dropped but filtered below — we only strip segments that
+# point inside the host `VIRTUAL_ENV` or `CONDA_PREFIX`, since a bare
+# drop would break every command the agent tries to run.
+_HOST_TOOLCHAIN_VARS_TO_STRIP = frozenset({
+    # Python
+    "VIRTUAL_ENV",
+    "VIRTUAL_ENV_PROMPT",
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "PYTHONSTARTUP",
+    # Conda
+    "CONDA_DEFAULT_ENV",
+    "CONDA_PREFIX",
+    "CONDA_PROMPT_MODIFIER",
+    "CONDA_PYTHON_EXE",
+    "CONDA_SHLVL",
+    # Poetry / pipenv
+    "POETRY_ACTIVE",
+    "PIPENV_ACTIVE",
+    # Node / npm
+    "NODE_PATH",
+    "NODE_OPTIONS",
+    "NPM_CONFIG_PREFIX",
+    # uv
+    "UV_PROJECT_ENVIRONMENT",
+})
+
+
+def _filter_path(
+    path_value: str,
+    host_venv: str | None,
+    host_conda: str | None,
+) -> str:
+    """Drop PATH segments that live inside the host venv / conda prefix."""
+    if not path_value:
+        return path_value
+    segments = path_value.split(os.pathsep)
+    keep = []
+    for seg in segments:
+        if not seg:
+            continue
+        if host_venv and (seg == host_venv or seg.startswith(host_venv + os.sep)):
+            continue
+        if host_conda and (seg == host_conda or seg.startswith(host_conda + os.sep)):
+            continue
+        keep.append(seg)
+    return os.pathsep.join(keep)
+
+
 def _build_agent_env(
     config: dict,
     context: ExecutionContext,
@@ -103,11 +160,33 @@ def _build_agent_env(
 ) -> dict[str, str]:
     """Build environment variables for an agent subprocess.
 
-    Mirrors ScriptExecutor's STEPWISE_* env vars and adds
+    Strips host toolchain variables so the agent cannot accidentally corrupt
+    the stepwise server's own venv / node_modules / conda environment via
+    tool commands. Mirrors ScriptExecutor's STEPWISE_* env vars and adds
     STEPWISE_OUTPUT_FILE when the step declares outputs.
+
+    The step config may set `inherit_host_toolchain: true` to opt out of
+    filtering — useful for agents that legitimately need the same toolchain
+    as the server.
     """
-    env = {k: v for k, v in os.environ.items()
-           if k not in ("CLAUDECODE", "STEPWISE_OUTPUT_FILE")}
+    inherit_host = bool(config.get("inherit_host_toolchain", False))
+    host_venv = os.environ.get("VIRTUAL_ENV") or None
+    host_conda = os.environ.get("CONDA_PREFIX") or None
+
+    env: dict[str, str] = {}
+    for k, v in os.environ.items():
+        if k in ("CLAUDECODE", "STEPWISE_OUTPUT_FILE"):
+            continue
+        if not inherit_host:
+            if k in _HOST_TOOLCHAIN_VARS_TO_STRIP:
+                continue
+            if k.startswith("npm_config_"):
+                continue
+        env[k] = v
+
+    # Filter PATH so entries inside the host venv / conda prefix don't leak.
+    if not inherit_host and "PATH" in env:
+        env["PATH"] = _filter_path(env["PATH"], host_venv, host_conda)
 
     # Stepwise env vars for agent processes (parity with ScriptExecutor)
     env["STEPWISE_STEP_NAME"] = context.step_name
