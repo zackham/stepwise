@@ -269,12 +269,11 @@ def test_watchdog_recovers_pending_sub_job(store, registry):
     job.status = JobStatus.RUNNING
     engine.store.save_job(job)
 
-    # 2. Run the produce step so its result exists
-    engine._launch(job, "produce")
-    # produce is a callable that completes synchronously inside _launch's
-    # to_thread call, but we're not running the event loop here, so we
-    # need to drive the produce step manually.
-    # Simpler: just stash a fake completed StepRun for produce.
+    # 2. Stash a fake completed StepRun for produce. We don't call _launch
+    #    here because without a running asyncio event loop AsyncEngine._launch
+    #    raises before the step's to_thread callable ever runs — and the
+    #    test only needs produce's *output* to exist, not to exercise the
+    #    launch machinery.
     from stepwise.models import HandoffEnvelope, Sidecar, StepRun
 
     fake_produce = StepRun(
@@ -292,12 +291,6 @@ def test_watchdog_recovers_pending_sub_job(store, registry):
             timestamp=_now(),
         ),
     )
-    # Cancel any in-flight runs from the _launch above
-    for r in engine.store.runs_for_job(job.id):
-        if r.step_name == "produce":
-            r.status = StepRunStatus.CANCELLED
-            r.completed_at = _now()
-            engine.store.save_run(r)
     engine.store.save_run(fake_produce)
 
     # 3. Launch the for_each step (creates 2 sub-jobs and tries to start them).
