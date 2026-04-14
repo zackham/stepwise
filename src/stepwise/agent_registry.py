@@ -154,9 +154,12 @@ BUILTIN_AGENTS: dict[str, AgentConfig] = {
         name="claude",
         command=["npx", "@agentclientprotocol/claude-agent-acp"],
         config={
-            "model": ConfigKey(flag="--model"),
+            "model": ConfigKey(flag="--model", default="opus"),
             "max_turns": ConfigKey(flag="--max-turns"),
-            "tools": ConfigKey(flag="--allowedTools"),
+            "tools": ConfigKey(
+                flag="--allowedTools",
+                default=["Read", "Edit", "Write", "Bash", "Glob", "Grep"],
+            ),
             "disallowed_tools": ConfigKey(flag="--disallowedTools"),
             "allowed_paths": ConfigKey(
                 flag="--allowedPaths",
@@ -164,6 +167,8 @@ BUILTIN_AGENTS: dict[str, AgentConfig] = {
             ),
             "api_key": ConfigKey(
                 env="ANTHROPIC_API_KEY",
+                default="${ANTHROPIC_API_KEY}",
+                required=True,
             ),
         },
         capabilities=AgentCapabilities(fork=True, resume=True),
@@ -174,6 +179,14 @@ BUILTIN_AGENTS: dict[str, AgentConfig] = {
         config={
             "model": ConfigKey(flag="--model", default="minimax-m2.5"),
             "mode": ConfigKey(acp="set_session_mode"),
+            "tools": ConfigKey(
+                flag="--tools",
+                default=["read_file", "write_file", "edit_file", "bash", "load_skill"],
+            ),
+            "allowed_paths": ConfigKey(
+                env="ALOOP_ALLOWED_PATHS",
+                default=["${working_dir}"],
+            ),
             "api_key": ConfigKey(
                 env="OPENROUTER_API_KEY",
                 default="${OPENROUTER_API_KEY}",
@@ -186,7 +199,13 @@ BUILTIN_AGENTS: dict[str, AgentConfig] = {
         name="codex",
         command=["npx", "@zed-industries/codex-acp"],
         config={
-            "model": ConfigKey(flag="-c"),
+            "model": ConfigKey(flag="--model"),
+            "sandbox": ConfigKey(flag="--sandbox", default="workspace-write"),
+            "tools": ConfigKey(flag="--tools"),
+            "allowed_paths": ConfigKey(
+                flag="--allowed-paths",
+                default=["${working_dir}"],
+            ),
         },
     ),
 }
