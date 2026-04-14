@@ -4557,18 +4557,57 @@ async def event_stream(ws: WebSocket):
 # ── WebSocket ─────────────────────────────────────────────────────────
 
 
+WS_HEARTBEAT_INTERVAL_SECONDS = 30
+WS_RECEIVE_TIMEOUT_SECONDS = 90
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
+    """Job watcher stream.
+
+    Why heartbeats: long-running jobs can go quiet for minutes (a single agent
+    step working, a paused job, external approval waits). Cloud proxies / load
+    balancers / firewalls typically kill idle WebSocket connections after
+    ~30-60 seconds, silently — no close frame reaches the client. Without a
+    heartbeat the client thinks the stream is still live, React Query's cached
+    state stays stale, and the UI freezes on whatever was last rendered.
+
+    The server emits `{"type":"heartbeat"}` every 30s so the connection is
+    never idle, and wraps `receive_text()` in a 90s timeout so a wedged reader
+    task doesn't pin a dead socket indefinitely. Clients that don't recognise
+    the heartbeat type silently ignore it (safe by construction in
+    `useStepwiseWebSocket`).
+    """
     await ws.accept()
     _ws_clients.add(ws)
+
+    async def _send_heartbeats() -> None:
+        try:
+            while True:
+                await asyncio.sleep(WS_HEARTBEAT_INTERVAL_SECONDS)
+                await ws.send_json({"type": "heartbeat"})
+        except (asyncio.CancelledError, WebSocketDisconnect, RuntimeError):
+            pass
+
+    heartbeat_task = asyncio.create_task(_send_heartbeats())
     try:
         while True:
-            # Keep connection alive, handle client messages if needed
-            data = await ws.receive_text()
-            # Could handle ping/pong or client commands here
+            try:
+                await asyncio.wait_for(
+                    ws.receive_text(), timeout=WS_RECEIVE_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                # No message from client in WS_RECEIVE_TIMEOUT_SECONDS.
+                # Treat as dead connection and let the finally block clean up.
+                break
     except WebSocketDisconnect:
         pass
     finally:
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except (asyncio.CancelledError, Exception):
+            pass
         _ws_clients.discard(ws)
 
 
