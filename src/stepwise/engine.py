@@ -41,6 +41,7 @@ from stepwise.events import (
     STEP_STARTED,
     STEP_STARTED_ASYNC,
     STEP_SUSPENDED,
+    STEP_THROTTLED,
     WATCH_FULFILLED,
 )
 from stepwise.executors import (
@@ -4747,16 +4748,31 @@ class AsyncEngine(Engine):
         if ready:
             _async_logger.info(f"Dispatching {len(ready)} ready step(s) for job {job_id}: {ready}")
         throttled = False
+        throttled_details: list[tuple[str, str, int, int]] = []
         for step_name in ready:
             step_def = job.workflow.steps[step_name]
             exec_type = step_def.executor.type
             if self._executor_at_capacity(exec_type):
-                _async_logger.debug(
-                    "Step %s throttled: %s at capacity (%d/%d)",
-                    step_name, exec_type,
-                    self._running_count_for_type(exec_type),
-                    self._executor_limits.get(exec_type, 0),
+                running = self._running_count_for_type(exec_type)
+                limit = self._executor_limits.get(exec_type, 0)
+                # INFO (was DEBUG): this is the visibility operators need to
+                # tell "job stalled" from "job throttled, waiting for a slot".
+                _async_logger.info(
+                    "Step %s throttled: %s at capacity (%d/%d) — waiting for slot",
+                    step_name, exec_type, running, limit,
                 )
+                # Emit a step.throttled event for WebSocket subscribers so the
+                # UI can render a "waiting for agent" indicator instead of
+                # looking frozen. Only emit on first throttle for this
+                # (job, step) — re-dispatches would duplicate.
+                if job_id not in self._throttled_jobs:
+                    self._emit(job_id, STEP_THROTTLED, {
+                        "step": step_name,
+                        "executor_type": exec_type,
+                        "running": running,
+                        "limit": limit,
+                    })
+                throttled_details.append((step_name, exec_type, running, limit))
                 throttled = True
                 continue
             self._launch(job, step_name)

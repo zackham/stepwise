@@ -41,4 +41,9 @@ FOR_EACH_STARTED = "for_each.started"
 FOR_EACH_COMPLETED = "for_each.completed"
 FOR_EACH_RECOVERED = "for_each.recovered"  # Watchdog re-dispatched orphaned sub-jobs
 
+# Executor capacity throttling — a step was ready but its executor type was
+# at the configured per-type limit. Surfaces "silent waits" to logs / UI so
+# operators can tell a stalled job from a throttled one.
+STEP_THROTTLED = "step.throttled"
+
 
