@@ -188,10 +188,43 @@ mount -t devpts devpts /dev/pts 2>/dev/null || true
 mount -t tmpfs tmpfs /dev/shm 2>/dev/null || true
 mount -t tmpfs tmpfs /tmp 2>/dev/null || true
 
-# Mount virtiofs shares
+# Mount virtiofs shares. The primary share is always "workspace"; the
+# host may also mount per-agent credential dirs like claude_home and
+# codex_home. Bind them into the corresponding dotfile paths in /root
+# so the adapters find their OAuth creds without having to re-read
+# the cmdline.
 if grep -q virtiofs /proc/filesystems 2>/dev/null; then
     mkdir -p /mnt/workspace
     mount -t virtiofs workspace /mnt/workspace 2>/dev/null
+    if [ -d /root ] && mount -t virtiofs claude_home /root/.claude 2>/dev/null; then
+        :  # claude creds + projects mounted
+    fi
+    if mount -t virtiofs codex_home /root/.codex 2>/dev/null; then
+        :  # codex creds mounted
+    fi
+fi
+
+# ── Network config from kernel cmdline ────────────────────────────
+# vmmd.py puts ch_ip=10.X.Y.2/24 ch_gw=10.X.Y.1 ch_dns=1.1.1.1 on
+# the cmdline when it sets up a tap + MASQUERADE. The guest parses
+# those and configures eth0 statically. If any token is missing or
+# there's no eth0, we skip silently — aloop is the only agent that
+# NEEDS network today (kimi via OpenRouter), and claude/codex will
+# need it once they run in-VM. Without this stanza the VM has no
+# route and API calls fail with ENETUNREACH.
+if [ -e /sys/class/net/eth0 ]; then
+    CMDLINE=$(cat /proc/cmdline)
+    CH_IP=$(echo "$CMDLINE" | sed -n 's/.*\bch_ip=\([^ ]*\).*/\1/p')
+    CH_GW=$(echo "$CMDLINE" | sed -n 's/.*\bch_gw=\([^ ]*\).*/\1/p')
+    CH_DNS=$(echo "$CMDLINE" | sed -n 's/.*\bch_dns=\([^ ]*\).*/\1/p')
+    if [ -n "$CH_IP" ] && [ -n "$CH_GW" ]; then
+        ip link set eth0 up
+        ip addr add "$CH_IP" dev eth0
+        ip route add default via "$CH_GW"
+        if [ -n "$CH_DNS" ]; then
+            echo "nameserver $CH_DNS" > /etc/resolv.conf
+        fi
+    fi
 fi
 
 # Start the ACP containment bridge in the background (vsock port 9998).

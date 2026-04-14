@@ -28,6 +28,28 @@ from pathlib import Path
 from stepwise.containment.acp_bridge import ACP_BRIDGE_SCRIPT
 from stepwise.containment.guest_agent import GUEST_AGENT_SCRIPT, GUEST_INIT_SCRIPT
 
+
+def _find_local_aloop_wheel() -> Path | None:
+    """Locate a local aloop wheel to bake into the rootfs.
+
+    aloop 0.3+ isn't on public PyPI. Bio-zack builds wheels under
+    ~/work/aloop/dist/ via its own pyproject. We prefer the highest
+    version we find. Returns None if the tree isn't there, in which
+    case callers fall through and the rootfs goes without aloop —
+    the claude/codex agents still work, but aloop-under-containment
+    fails at spawn with "aloop: not found".
+    """
+    for candidate_base in (
+        Path.home() / "work" / "aloop" / "dist",
+        Path.home() / ".local" / "share" / "aloop" / "dist",
+    ):
+        if not candidate_base.is_dir():
+            continue
+        wheels = sorted(candidate_base.glob("aloop-*.whl"))
+        if wheels:
+            return wheels[-1]  # highest version (lexical sort on semver)
+    return None
+
 logger = logging.getLogger("stepwise.containment.rootfs")
 
 DEFAULT_VMM_DIR = Path.home() / ".stepwise" / "vmm"
@@ -99,6 +121,25 @@ def build_rootfs(
 
     with tempfile.TemporaryDirectory(prefix="stepwise-rootfs-") as build_dir:
         build_path = Path(build_dir)
+
+        # Copy local aloop wheel into the build context if present, so
+        # the Dockerfile can `pip install` it. aloop isn't on public PyPI
+        # in a version we use; bio-zack's local tree at ~/work/aloop
+        # ships wheels under dist/. Without this the in-VM aloop agent
+        # errors with "aloop: not found" at spawn time.
+        aloop_wheel = _find_local_aloop_wheel()
+        if aloop_wheel:
+            shutil.copy2(aloop_wheel, build_path / aloop_wheel.name)
+            extra_pip_packages = list(extra_pip_packages or [])
+            extra_pip_packages.append(f"/build/{aloop_wheel.name}")
+            # Regenerate Dockerfile now that we have the extra pip pkg.
+            dockerfile = _generate_dockerfile(
+                include_node=include_node,
+                include_python=include_python,
+                extra_packages=[],
+                extra_npm_packages=[],
+                extra_pip_packages=extra_pip_packages,
+            )
 
         # Write Dockerfile
         (build_path / "Dockerfile").write_text(dockerfile)
@@ -207,11 +248,27 @@ def _generate_dockerfile(
         ])
 
     if include_python and extra_pip_packages:
-        lines.extend([
-            "# Python packages",
-            f"RUN pip install --break-system-packages {' '.join(extra_pip_packages)}",
-            "",
-        ])
+        # Split between PyPI names (pip install NAME) and local files
+        # (need COPY into image first, then pip install <path>). Both
+        # run with --break-system-packages because alpine's py3-pip
+        # refuses otherwise. Ugly, not exploitable — the rootfs is
+        # read-only at runtime.
+        pypi_pkgs = [p for p in extra_pip_packages if not p.startswith("./") and not p.endswith(".whl") and not p.endswith(".tar.gz")]
+        file_pkgs = [p for p in extra_pip_packages if p not in pypi_pkgs]
+        if pypi_pkgs:
+            lines.extend([
+                "# Python packages (PyPI)",
+                f"RUN pip install --break-system-packages {' '.join(pypi_pkgs)}",
+                "",
+            ])
+        for f in file_pkgs:
+            basename = Path(f).name
+            lines.extend([
+                f"# Python package from local build: {basename}",
+                f"COPY {basename} /tmp/{basename}",
+                f"RUN pip install --break-system-packages /tmp/{basename} && rm /tmp/{basename}",
+                "",
+            ])
 
     lines.extend([
         "# Guest agent + ACP containment bridge",
@@ -221,8 +278,11 @@ def _generate_dockerfile(
         "COPY init.sh /init.sh",
         "RUN chmod +x /init.sh /opt/stepwise/guest-agent.py /opt/stepwise/acp-bridge.py",
         "",
-        "# Create workspace mount point",
-        "RUN mkdir -p /mnt/workspace",
+        "# Mount points — workspace (virtiofs from host job workspace) and",
+        "# per-agent credential homes. init.sh mounts claude_home and",
+        "# codex_home virtiofs shares here when the host opts in via",
+        "# ContainmentConfig.host_auth_mounts.",
+        "RUN mkdir -p /mnt/workspace /root/.claude /root/.codex",
     ])
 
     return "\n".join(lines) + "\n"
@@ -257,6 +317,18 @@ def _tar_to_ext4(tar_path: Path, output: Path, size_mb: int) -> None:
             ["sudo", "tar", "xf", str(tar_path), "-C", mount_dir],
             check=True,
             capture_output=True,
+        )
+        # Post-extract fixup: make /etc/resolv.conf a symlink into
+        # /tmp (tmpfs mounted by init.sh). We can't do this via
+        # Dockerfile RUN because Docker bind-mounts /etc/resolv.conf
+        # read-only during build. We can't do it at VM runtime either
+        # because cloud-hypervisor write-protects the rootfs disk
+        # (sector 0 deny). The only writable window is here, while
+        # we hold the mounted ext4 image.
+        subprocess.run(
+            ["sudo", "ln", "-sf", "/tmp/resolv.conf",
+             f"{mount_dir}/etc/resolv.conf"],
+            check=True, capture_output=True,
         )
     finally:
         subprocess.run(

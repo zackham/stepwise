@@ -306,12 +306,18 @@ class CloudHypervisorBackend:
 
     @staticmethod
     def _config_key(config: ContainmentConfig) -> str:
-        """Generate a hashable key for VM reuse."""
+        """Generate a hashable key for VM reuse.
+
+        Includes host_auth_mounts so claude (mounts ~/.claude) and
+        codex (mounts ~/.codex) don't share a VM — same tools + paths
+        but different credential shapes.
+        """
         return json.dumps({
             "tools": config.tools,
             "allowed_paths": config.allowed_paths,
             "credentials": config.credentials,
             "network": config.network,
+            "host_auth_mounts": getattr(config, "_host_auth_mounts", None) or [],
         }, sort_keys=True)
 
     def release_if_unused(

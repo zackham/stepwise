@@ -106,6 +106,7 @@ class JsonRpcTransport:
         """Write a JSON-RPC message to subprocess stdin."""
         try:
             line = json.dumps(msg, separators=(",", ":")) + "\n"
+            logger.info("[acp tx] %s", line.strip()[:500])
             self.process.stdin.write(line)
             self.process.stdin.flush()
         except (BrokenPipeError, OSError) as exc:
@@ -120,9 +121,11 @@ class JsonRpcTransport:
                 line = line.strip()
                 if not line:
                     continue
+                logger.info("[acp rx] %s", line[:500])
                 try:
                     msg = json.loads(line)
                 except json.JSONDecodeError:
+                    logger.info("[acp rx non-json] %s", line[:200])
                     continue  # Skip non-JSON lines (stdout pollution)
 
                 if "id" in msg and "method" in msg:

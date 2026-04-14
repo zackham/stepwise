@@ -188,6 +188,12 @@ class VMManagerClient:
 
     def boot(self, config: ContainmentConfig) -> dict:
         """Boot a VM (or reuse existing). Returns {vm_id, vsock_socket, cid, reused}."""
+        # _host_auth_mounts is an attribute ACPBackend tacks on per
+        # agent (claude/codex need their OAuth dirs mounted into the
+        # VM). It's intentionally not on the dataclass surface because
+        # it's per-instance state, not a stable config shape. vmmd
+        # reads the key as "host_auth_mounts".
+        host_auth_mounts = getattr(config, "_host_auth_mounts", None) or []
         return self._call("boot", {
             "tools": config.tools,
             "allowed_paths": config.allowed_paths,
@@ -196,6 +202,7 @@ class VMManagerClient:
             "memory_mb": config.memory_mb,
             "cpus": config.cpus,
             "working_dir": config.working_dir,
+            "host_auth_mounts": host_auth_mounts,
         }, timeout=300)
 
     def destroy(self, vm_id: str) -> dict:

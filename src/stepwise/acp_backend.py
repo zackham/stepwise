@@ -25,15 +25,13 @@ from stepwise.containment.acp_bridge import BridgeClient, BridgeError, translate
 from stepwise.executors import ExecutionContext
 from stepwise.lifecycle import ResourceLifecycleManager
 
-# Agents that handle their own tool execution internally and should run
-# entirely inside the containment VM. Everything else (claude, codex,
-# any npx-based ACP adapter) stays on the host and proxies filesystem
-# and terminal operations to the in-VM bridge — see _register_client_handlers.
-_IN_VM_AGENTS = frozenset({"aloop"})
-
-
-def _runs_in_vm(agent_name: str) -> bool:
-    return agent_name in _IN_VM_AGENTS
+# Containment strategy: when enabled, ALL agents run inside the
+# microVM via VMSpawnContext.spawn. The previous host-adapter + bridge
+# split (pre-2026-04-14) relied on claude-agent-acp / codex-acp
+# delegating fs/terminal calls via ACP, which they don't actually do —
+# their Read/Write/Bash tools run in-process, so a host-spawned
+# adapter defeats containment. See
+# data/reports/2026-04-14-containment-tier-3-findings.md.
 
 logger = logging.getLogger("stepwise.acp_backend")
 
@@ -304,13 +302,24 @@ class ACPBackend:
         inside a hardware-isolated environment (microVM). The stdio
         streams are bridged via vsock, transparent to the ACP protocol.
 
-        Per-agent containment strategy:
-        - aloop runs entirely inside the VM (tools handled internally).
-        - claude/codex spawn on the host (they need API keys + network)
-          but their fs/terminal tool requests are proxied into the VM
-          via a BridgeClient, so the sandbox is real. The bridge runs
-          alongside the guest agent inside the VM — see
-          `stepwise.containment.acp_bridge.ACP_BRIDGE_SCRIPT`.
+        Containment strategy (post-2026-04-14 rewrite):
+        All agents — aloop, claude, codex — run inside the microVM
+        when containment is enabled. The pre-rewrite bridge model
+        (host adapter + in-VM bridge for fs/terminal proxy) turned
+        out to be ineffective: claude-agent-acp and codex-acp run
+        their Read/Write/Bash tools internally on the host process
+        rather than delegating via ACP. Putting the adapter itself
+        in the VM is the only way to contain its tool subprocesses.
+
+        For claude/codex to work inside the VM, we mount the host's
+        ~/.claude and ~/.codex dirs via per-agent virtiofs shares so
+        OAuth creds are readable. The VM also needs network egress —
+        vmmd sets up a tap + NAT per-VM; see vmmd.py _setup_network.
+
+        The BridgeClient machinery still exists in the codebase but
+        is no longer exercised in the default path. Kept for future
+        ACP adapters that DO delegate fs/terminal requests (aloop
+        itself delegates nothing; its tools are internal-in-VM).
         """
         env = {
             k: v
@@ -333,40 +342,75 @@ class ACPBackend:
         if self.containment and requested_mode:
             from stepwise.containment.backend import ContainmentConfig
 
+            # Override HOME-related env for in-VM execution. The VM
+            # rootfs has no /home/zack — npx tries to mkdir ~/.npm/_logs
+            # and dies with ENOENT. virtiofs mounts the host credential
+            # dirs at /root/.claude and /root/.codex, so HOME=/root
+            # points the adapter at its OAuth + session storage.
+            env["HOME"] = "/root"
+            env["USER"] = "root"
+            env["LOGNAME"] = "root"
+            # Alpine's default PATH omits /usr/local/bin, but that's
+            # where `npm install -g` drops bin stubs for our pre-baked
+            # claude-agent-acp + codex-acp. Override PATH in the VM
+            # env so adapters are reachable without a full npx round-
+            # trip through the registry.
+            env["PATH"] = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+            # npm needs a writable cache. The VM rootfs is mounted
+            # read-only (cloud-hypervisor sector-0 protection), so the
+            # default ~/.npm cache dir lives on ro fs and EROFSs.
+            # /tmp is a fresh tmpfs per boot. Do NOT override
+            # npm_config_prefix — the rootfs pre-installs the ACP
+            # adapters at /usr/local (the default prefix), and pointing
+            # npx at a different prefix makes it re-download everything
+            # on each spawn.
+            env["npm_config_cache"] = "/tmp/.npm-cache"
+            # XDG_* and VIRTUAL_ENV pointing at host paths are also
+            # traps inside the VM. Drop them and let the process use
+            # defaults rooted at /root.
+            for k in list(env):
+                if k.startswith("XDG_") or k in ("VIRTUAL_ENV", "PYTHONPATH"):
+                    env.pop(k, None)
+
+            # Per-agent credential mounts. claude and codex adapters
+            # read OAuth from their dotfile dirs; we mount those into
+            # the VM read-write (the adapter may write session files
+            # to ~/.claude/projects/...). aloop uses OPENROUTER_API_KEY
+            # env var, no mount needed.
+            auth_mounts: list[dict] = []
+            if config.name == "claude":
+                claude_home = Path.home() / ".claude"
+                if claude_home.is_dir():
+                    auth_mounts.append(
+                        {"tag": "claude_home", "path": str(claude_home)}
+                    )
+            elif config.name == "codex":
+                codex_home = Path.home() / ".codex"
+                if codex_home.is_dir():
+                    auth_mounts.append(
+                        {"tag": "codex_home", "path": str(codex_home)}
+                    )
+
             containment_config = ContainmentConfig(
                 mode=config.containment,
                 tools=config.tools,
                 allowed_paths=config.allowed_paths,
                 working_dir=config.allowed_paths[0] if config.allowed_paths else ".",
             )
+            # Pass auth_mounts via an attribute the cloud-hypervisor
+            # backend will thread into vmmd.boot's config. This is
+            # per-agent-instance state that doesn't belong in the
+            # VM-grouping config_key (grouping is on tools/paths).
+            containment_config._host_auth_mounts = auth_mounts  # type: ignore[attr-defined]
             spawn_ctx = self.containment.get_spawn_context(containment_config)
-            cwd = config.allowed_paths[0] if config.allowed_paths else "."
-
-            if _runs_in_vm(config.name):
-                # Tools handled inside the VM — no host-side bridge needed.
-                proc = spawn_ctx.spawn(config.command, env, cwd)
-            else:
-                # Host-spawn the adapter, open a bridge into the VM for
-                # fs/terminal operations. `spawn_ctx` must expose
-                # `open_bridge`; the cloud-hypervisor backend does.
-                open_bridge = getattr(spawn_ctx, "open_bridge", None)
-                if open_bridge is None:
-                    raise RuntimeError(
-                        f"containment backend {type(spawn_ctx).__name__} does not "
-                        f"support host-adapter bridging required by agent {config.name!r}"
-                    )
-                bridge_client = open_bridge(cwd)
-                proc = subprocess.Popen(
-                    config.command,
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    bufsize=1,
-                    env=env,
-                    cwd=cwd,
-                    start_new_session=True,
-                )
+            # Inside the VM, the host workspace lives at /mnt/workspace
+            # (virtiofs mount from guest-agent's init.sh). Passing the
+            # host path as cwd would make guest-agent os.makedirs a
+            # fresh empty dir inside the VM rootfs, which then breaks
+            # adapters that expect workspace files or a writable HOME
+            # under that path. Diagnosed during Tier 1 in-VM smoke
+            # (2026-04-14).
+            proc = spawn_ctx.spawn(config.command, env, "/mnt/workspace")
         else:
             proc = subprocess.Popen(
                 config.command,
@@ -567,11 +611,18 @@ class ACPBackend:
             )
 
         # Publish output_path to DB BEFORE blocking so the stream monitor can
-        # start tailing while the agent is still running.
+        # start tailing while the agent is still running. When the adapter
+        # is running inside a containment VM, `process.pid` is the guest
+        # PID — `os.getpgid` can't look it up on the host and raises
+        # ProcessLookupError. Fall back to 0 (sentinel "pgid unknown").
+        try:
+            pgid = os.getpgid(acp_proc.process.pid)
+        except (ProcessLookupError, OSError):
+            pgid = 0
         if context.state_update_fn:
             context.state_update_fn({
                 "pid": acp_proc.process.pid,
-                "pgid": os.getpgid(acp_proc.process.pid),
+                "pgid": pgid,
                 "output_path": str(output_path),
                 "working_dir": working_dir,
                 "session_id": session_id,
@@ -616,9 +667,14 @@ class ACPBackend:
             elapsed,
         )
 
+        # pgid unknown for VM-running adapters (pid is guest-side).
+        try:
+            ap_pgid = os.getpgid(acp_proc.process.pid)
+        except (ProcessLookupError, OSError):
+            ap_pgid = 0
         process = AgentProcess(
             pid=acp_proc.process.pid,
-            pgid=os.getpgid(acp_proc.process.pid),
+            pgid=ap_pgid,
             output_path=str(output_path),
             working_dir=working_dir,
             session_id=session_id,

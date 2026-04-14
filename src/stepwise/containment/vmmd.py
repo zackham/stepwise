@@ -59,6 +59,25 @@ class VirtiofsMount:
 
 
 @dataclass
+class NetworkConfig:
+    """Per-VM TAP + NAT setup so adapters running in-VM can reach
+    the internet (claude/codex API calls, aloop OpenRouter calls).
+
+    Each VM gets a /30-style subnet keyed on its cid:
+      host-side:  10.<hi>.<lo>.1
+      guest-side: 10.<hi>.<lo>.2
+    where (hi, lo) = divmod(cid, 256). cid >= 3 (vsock reserves 0-2).
+    This scales to ~65k VMs before the /8 runs out, way beyond any
+    realistic concurrent count.
+    """
+    tap_name: str
+    host_ip: str
+    guest_ip: str
+    cidr: str
+    mac: str
+
+
+@dataclass
 class MicroVM:
     vm_id: str
     vm_dir: str
@@ -67,6 +86,7 @@ class MicroVM:
     cid: int
     ch_process: subprocess.Popen | None = None
     virtiofs_mounts: list[VirtiofsMount] = field(default_factory=list)
+    network: NetworkConfig | None = None
     config: dict = field(default_factory=dict)
     boot_time: float = 0.0
 
@@ -196,12 +216,46 @@ class VMManagerDaemon:
             mount = self._start_virtiofsd(vm_dir, "workspace", working_dir)
             virtiofs_mounts.append(mount)
 
+        # Optional credential mounts (claude/codex need their host
+        # OAuth/config dirs visible inside the VM). Keyed by config
+        # entries `host_auth_mounts: [{"tag": "claude_home", "path": "..."}]`.
+        for m in config.get("host_auth_mounts", []) or []:
+            try:
+                mount = self._start_virtiofsd(vm_dir, m["tag"], m["path"])
+                virtiofs_mounts.append(mount)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to mount host_auth %s=%s: %s (continuing without)",
+                    m.get("tag"), m.get("path"), exc,
+                )
+
+        # Set up per-VM tap + NAT so the in-VM adapter can reach the
+        # internet. vmmd runs as root so the ip/iptables commands here
+        # are legal. Opt-out by passing network=="none" in the boot
+        # config; the ContainmentConfig.network default of None means
+        # "NAT please" (required for claude/codex/aloop to make API
+        # calls from inside the VM).
+        network = None
+        if config.get("network") != "none":
+            try:
+                network = self._setup_network(cid)
+            except Exception as exc:
+                logger.warning(
+                    "Could not set up NAT networking for VM %s (cid=%d): %s "
+                    "— VM will boot without network",
+                    vm_id, cid, exc,
+                )
+
         # Build cloud-hypervisor CLI command
+        cmdline = "console=ttyS0 root=/dev/vda ro quiet init=/init.sh"
+        if network:
+            # Parsed in init.sh (rootfs/init-net stanza) to configure eth0.
+            cmdline += f" ch_ip={network.guest_ip}/24 ch_gw={network.host_ip} ch_dns=1.1.1.1"
         ch_cmd = [
             "cloud-hypervisor",
             "--api-socket", f"path={api_socket}",
             "--kernel", str(self.kernel_path),
-            "--cmdline", "console=ttyS0 root=/dev/vda ro quiet init=/init.sh",
+            "--cmdline", cmdline,
             "--disk", f"path={rootfs_copy}",
             "--vsock", f"cid={cid},socket={vsock_socket}",
             "--memory", f"size={config.get('memory_mb', 512)}M,shared=on",
@@ -209,17 +263,30 @@ class VMManagerDaemon:
             "--serial", f"file={serial_log}",
             "--console", "off",
         ]
-        for mount in virtiofs_mounts:
+        if network:
             ch_cmd.extend([
-                "--fs",
-                f"tag={mount.tag},socket={mount.socket_path},"
-                f"num_queues=1,queue_size=1024",
+                "--net", f"tap={network.tap_name},mac={network.mac}",
             ])
+        # cloud-hypervisor wants `--fs <spec1> <spec2> ...` — a single
+        # switch with multiple positional args, NOT `--fs X --fs Y`.
+        # Repeating --fs gives "cannot be used multiple times".
+        if virtiofs_mounts:
+            ch_cmd.append("--fs")
+            for mount in virtiofs_mounts:
+                ch_cmd.append(
+                    f"tag={mount.tag},socket={mount.socket_path},"
+                    f"num_queues=1,queue_size=1024"
+                )
 
+        # Capture cloud-hypervisor stderr to a file — PIPE-without-drain
+        # deadlocks when CH writes more than the pipe buffer; DEVNULL
+        # throws away crash reasons (we need these to debug boot flakes).
+        ch_stderr_path = vm_dir / "cloud-hypervisor.stderr.log"
+        ch_stderr_f = open(ch_stderr_path, "wb")
         ch_proc = subprocess.Popen(
             ch_cmd,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stderr=ch_stderr_f,
             start_new_session=True,
         )
 
@@ -231,12 +298,30 @@ class VMManagerDaemon:
             cid=cid,
             ch_process=ch_proc,
             virtiofs_mounts=virtiofs_mounts,
+            network=network,
             config=config,
             boot_time=time.monotonic(),
         )
 
-        # Wait for vsock socket and make it accessible to unprivileged user
-        self._wait_for_socket(vsock_socket, timeout=10.0)
+        # Wait for vsock socket and make it accessible to unprivileged user.
+        # 10s was enough for a single-VM dev test; real concurrent boots
+        # under virtiofsd + net-setup contention need more headroom.
+        try:
+            self._wait_for_socket(vsock_socket, timeout=30.0)
+        except RuntimeError:
+            rc = ch_proc.poll()
+            stderr_tail = ""
+            try:
+                ch_stderr_f.flush()
+                with open(ch_stderr_path, "r", errors="replace") as f:
+                    stderr_tail = f.read().strip()[-2000:]
+            except OSError:
+                pass
+            logger.error(
+                "cloud-hypervisor boot failed for VM %s: exit=%s stderr_tail=%r",
+                vm_id, rc, stderr_tail,
+            )
+            raise
         self._make_accessible(vsock_socket)
         self._make_accessible(api_socket)
 
@@ -341,6 +426,124 @@ class VMManagerDaemon:
             tag=tag, host_path=host_path,
             socket_path=socket_path, process=proc,
         )
+
+    # ── Per-VM NAT networking ───────────────────────────────────────
+
+    def _host_egress_iface(self) -> str | None:
+        """Best-effort guess at the host's default-route interface.
+
+        Used as the MASQUERADE outbound device. If we can't parse it,
+        a bare MASQUERADE (no -o) still works — the kernel will
+        figure out the route — but picking an interface is tighter.
+        """
+        try:
+            r = subprocess.run(
+                ["ip", "-4", "route", "show", "default"],
+                capture_output=True, text=True, check=True, timeout=2,
+            )
+            for line in r.stdout.splitlines():
+                parts = line.split()
+                if "dev" in parts:
+                    return parts[parts.index("dev") + 1]
+        except (subprocess.SubprocessError, OSError):
+            pass
+        return None
+
+    def _setup_network(self, cid: int) -> NetworkConfig:
+        """Create a tap device + NAT rule for a VM.
+
+        Uses 10.<hi>.<lo>.0/24 keyed on cid so concurrent VMs have
+        non-overlapping subnets. Host-side .1, guest-side .2. The
+        guest configures itself at boot via kernel cmdline — see
+        init.sh's `ch_ip=` / `ch_gw=` parsing.
+        """
+        hi, lo = divmod(cid, 256)
+        tap_name = f"ch-tap{cid}"
+        host_ip = f"10.{hi}.{lo}.1"
+        guest_ip = f"10.{hi}.{lo}.2"
+        cidr = f"10.{hi}.{lo}.0/24"
+        mac = f"52:54:00:00:{hi:02x}:{lo:02x}"
+
+        # Idempotent cleanup of any leftover tap from a prior crash.
+        subprocess.run(
+            ["ip", "link", "del", tap_name],
+            capture_output=True,
+        )
+        subprocess.run(
+            ["ip", "tuntap", "add", "mode", "tap", "name", tap_name],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["ip", "addr", "add", f"{host_ip}/24", "dev", tap_name],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["ip", "link", "set", tap_name, "up"],
+            check=True, capture_output=True,
+        )
+
+        # Enable IP forwarding (idempotent).
+        try:
+            Path("/proc/sys/net/ipv4/ip_forward").write_text("1")
+        except OSError as exc:
+            logger.warning("Could not enable ip_forward: %s", exc)
+
+        # NAT outbound traffic from this VM's subnet. Using iptables
+        # here for broad compatibility; nftables users get shimmed via
+        # iptables-nft on modern distros.
+        iface = self._host_egress_iface()
+        nat_rule = ["-t", "nat", "-A", "POSTROUTING", "-s", cidr]
+        if iface:
+            nat_rule += ["-o", iface]
+        nat_rule += ["!", "-d", cidr, "-j", "MASQUERADE"]
+        subprocess.run(
+            ["iptables", *nat_rule],
+            check=True, capture_output=True,
+        )
+
+        # Allow forwarding between the tap and the egress iface. On
+        # strict default-DROP FORWARD policies (uncommon on dev
+        # desktops but common in hardened setups) this is required.
+        for fwd_rule in (
+            ["-I", "FORWARD", "-i", tap_name, "-j", "ACCEPT"],
+            ["-I", "FORWARD", "-o", tap_name, "-m", "conntrack",
+             "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"],
+        ):
+            subprocess.run(
+                ["iptables", *fwd_rule],
+                capture_output=True,  # best-effort; don't fail boot
+            )
+
+        logger.info(
+            "Network up for VM cid=%d: tap=%s host=%s guest=%s egress_iface=%s",
+            cid, tap_name, host_ip, guest_ip, iface or "(auto)",
+        )
+        return NetworkConfig(
+            tap_name=tap_name, host_ip=host_ip,
+            guest_ip=guest_ip, cidr=cidr, mac=mac,
+        )
+
+    def _teardown_network(self, network: NetworkConfig) -> None:
+        """Reverse _setup_network. Best-effort — failures logged + swallowed."""
+        iface = self._host_egress_iface()
+        nat_rule = ["-t", "nat", "-D", "POSTROUTING", "-s", network.cidr]
+        if iface:
+            nat_rule += ["-o", iface]
+        nat_rule += ["!", "-d", network.cidr, "-j", "MASQUERADE"]
+        subprocess.run(["iptables", *nat_rule], capture_output=True)
+
+        for fwd_rule in (
+            ["-D", "FORWARD", "-i", network.tap_name, "-j", "ACCEPT"],
+            ["-D", "FORWARD", "-o", network.tap_name, "-m", "conntrack",
+             "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"],
+        ):
+            subprocess.run(["iptables", *fwd_rule], capture_output=True)
+
+        subprocess.run(
+            ["ip", "link", "del", network.tap_name],
+            capture_output=True,
+        )
+        logger.debug("Network torn down for tap=%s", network.tap_name)
 
     def _wait_for_socket(self, path: str, timeout: float = 10.0) -> None:
         deadline = time.monotonic() + timeout
@@ -454,6 +657,16 @@ class VMManagerDaemon:
                         mount.process.kill()
                     except Exception:
                         pass
+
+        # Tear down per-VM network (tap + NAT rules). Best-effort.
+        if vm.network:
+            try:
+                self._teardown_network(vm.network)
+            except Exception:
+                logger.debug(
+                    "Network teardown failed for VM %s (tap=%s)",
+                    vm.vm_id, vm.network.tap_name, exc_info=True,
+                )
 
         # Reap the per-VM workspace dir (rootfs copy + sockets + serial log).
         # Without this every booted VM leaks ~the size of the rootfs (≈360MB
