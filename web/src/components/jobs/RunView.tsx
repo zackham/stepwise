@@ -863,6 +863,17 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onViewFul
             />
           )}
 
+          {/* Prompt (interpolated) — agent branch. The non-agent branch
+              below has the same block; the agent branch was previously
+              missing it, so running agent steps showed no Prompt panel.
+              _interpolated_config is persisted at step-prepare time so
+              this works the moment a run dispatches. */}
+          {runPrompt && (
+            <SidebarSection title="Prompt">
+              <PromptBlock prompt={runPrompt} />
+            </SidebarSection>
+          )}
+
           {/* Error */}
           {run && isFailed && run.error && (
             <div className="space-y-1.5">
