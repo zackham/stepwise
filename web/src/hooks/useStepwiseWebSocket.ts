@@ -80,9 +80,22 @@ function isJobsQueryKey(key: readonly unknown[]): key is JobsQueryKey {
   return Array.isArray(key) && key[0] === "jobs";
 }
 
-function jobMatchesFilter(job: Job, statusFilter: string | undefined): boolean {
-  if (!statusFilter) return true;
-  return (job.status as JobStatus) === statusFilter;
+function jobMatchesFilter(
+  job: Job,
+  statusFilter: string | undefined,
+  topLevelOnly: boolean | undefined,
+  includeArchived: boolean | undefined,
+): boolean {
+  // status filter
+  if (statusFilter && (job.status as JobStatus) !== statusFilter) return false;
+  // top-level filter — sub-jobs (for_each fan-out, sub_flow children)
+  // have a parent_job_id and must be hidden from top-level lists.
+  // Without this gate the patch-in-place path on tick prepends every
+  // changed sub-job into the /jobs list cache.
+  if (topLevelOnly && job.parent_job_id) return false;
+  // archived filter — server hides archived from non-archived lists.
+  if (!includeArchived && (job.status as JobStatus) === "archived") return false;
+  return true;
 }
 
 export function useStepwiseWebSocket(): StepwiseWebSocketState {
@@ -124,10 +137,14 @@ export function useStepwiseWebSocket(): StepwiseWebSocketState {
         if (!isJobsQueryKey(queryKey)) continue;
         if (!oldData) continue;
         const statusFilter = queryKey[1];
+        const topLevelOnly = queryKey[2];
+        const includeArchived = queryKey[3];
         const list: Job[] = Array.isArray(oldData) ? oldData : oldData.jobs;
         if (!Array.isArray(list)) continue;
         const idx = list.findIndex((j) => j.id === updated.id);
-        const belongs = jobMatchesFilter(updated, statusFilter);
+        const belongs = jobMatchesFilter(
+          updated, statusFilter, topLevelOnly, includeArchived,
+        );
         let newList: Job[] | null = null;
         if (idx >= 0 && belongs) {
           newList = list.slice();
