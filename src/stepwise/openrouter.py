@@ -53,12 +53,22 @@ class OpenRouterClient:
         if not model:
             raise ValueError("model name is empty — check that $variable references resolved correctly")
 
+        # Support provider routing via suffix: "model-id:provider/tag"
+        # e.g. "moonshotai/kimi-k2.5:moonshotai/int4" routes to that specific provider
+        provider_order = None
+        if ":" in model:
+            parts = model.split(":", 1)
+            if "/" in parts[0]:  # only if the base looks like a model ID
+                model, provider_order = parts[0], [parts[1]]
+
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        if provider_order:
+            payload["provider"] = {"order": provider_order}
         if tools:
             payload["tools"] = tools
             # Use tool_choice "required" rather than the named-function form
