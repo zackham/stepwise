@@ -62,8 +62,9 @@ export function fetchJobs(status?: string, topLevel?: boolean, includeArchived?:
   return request<JobsResponse>(`/jobs${qs ? `?${qs}` : ""}`);
 }
 
-export function fetchJob(jobId: string): Promise<Job> {
-  return request<Job>(`/jobs/${jobId}`);
+export function fetchJob(jobId: string, summary: boolean = false): Promise<Job> {
+  const qs = summary ? "?summary=true" : "";
+  return request<Job>(`/jobs/${jobId}${qs}`);
 }
 
 export function createJob(data: {

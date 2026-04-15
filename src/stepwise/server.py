@@ -1003,7 +1003,7 @@ async def lifespan(app: FastAPI):
     # ── PID-file guard: prevent duplicate server processes ──
     dot_dir = _project_dir / ".stepwise"
     dot_dir.mkdir(parents=True, exist_ok=True)
-    _port = int(os.environ.get("STEPWISE_PORT", "8340"))
+    _port = int(os.environ.get("STEPWISE_PORT", "8341"))
     from stepwise.server_detect import acquire_pidfile_guard, ServerAlreadyRunning
     try:
         acquire_pidfile_guard(dot_dir, _port)
@@ -1399,13 +1399,27 @@ def list_suspended_jobs_route(
 
 
 @app.get("/api/jobs/{job_id}")
-def get_job(job_id: str):
+def get_job(job_id: str, summary: bool = False):
+    """Return a single job. With `?summary=true` the response shape
+    matches the list endpoint (current_step, has_suspended_steps,
+    completed_steps, lightweight workflow, cost_usd) so the web UI's
+    React Query cache for `["jobs", ...]` lists can splice this
+    response in directly without a full list refetch when a tick
+    arrives. Default `summary=false` keeps the legacy full-job
+    response for callers that want the verbose to_dict() shape.
+    """
     engine = _get_engine()
     try:
         job = engine.get_job(job_id)
-        return _serialize_job(job)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    if summary:
+        # Compute the same summary fields the list endpoint uses,
+        # using the per-job (non-batched) fallbacks since this is a
+        # single-job call. cost_usd via batch helper for one id.
+        cost = engine.store.batch_job_costs([job.id]).get(job.id, 0.0)
+        return _serialize_job(job, summary=True, cost_usd=cost)
+    return _serialize_job(job)
 
 
 @app.post("/api/jobs/{job_id}/start")

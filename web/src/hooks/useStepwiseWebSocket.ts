@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, createContext, useContext } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { AgentOutputMessage, ScriptOutputMessage, TickMessage, FlowSourceChangedMessage } from "@/lib/types";
+import type { AgentOutputMessage, ScriptOutputMessage, TickMessage, FlowSourceChangedMessage, Job, JobStatus } from "@/lib/types";
+import * as api from "@/lib/api";
 
 export type WsStatus = "connected" | "disconnected" | "reconnecting";
 export interface StepwiseWebSocketState {
@@ -53,12 +54,134 @@ export function subscribeFlowSourceChanged(fn: (msg: FlowSourceChangedMessage) =
 
 // ── WebSocket connection ────────────────────────────────────────────
 
+// In-flight `/api/jobs/{id}?summary=true` requests, keyed by job_id.
+// Multiple ticks for the same job arrive in bursts during a fast
+// step transition; this dedupes them so we issue one HTTP call per
+// job per burst window instead of N.
+const inFlightJobFetches = new Map<string, Promise<Job | null>>();
+
+// Safety-net broad refetch interval. The patch-in-place path covers
+// updates to jobs already in the list, but new jobs created on the
+// server (or status-filter membership changes) need an occasional
+// list refetch to reconcile. Once every few seconds is plenty.
+const BROAD_REFETCH_SAFETY_NET_MS = 5000;
+
+/** Match the queryKey shape used by useJobs(): ["jobs", status, topLevel, includeArchived] */
+type JobsQueryKey = readonly [
+  "jobs",
+  string | undefined,
+  boolean | undefined,
+  boolean | undefined,
+];
+
+type JobsQueryData = { jobs: Job[]; total: number } | Job[];
+
+function isJobsQueryKey(key: readonly unknown[]): key is JobsQueryKey {
+  return Array.isArray(key) && key[0] === "jobs";
+}
+
+function jobMatchesFilter(job: Job, statusFilter: string | undefined): boolean {
+  if (!statusFilter) return true;
+  return (job.status as JobStatus) === statusFilter;
+}
+
 export function useStepwiseWebSocket(): StepwiseWebSocketState {
   const queryClient = useQueryClient();
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const shouldReconnectRef = useRef(true);
   const [wsState, setWsState] = useState<WsStatus>("disconnected");
+
+  // Long-interval safety-net: even with patch-in-place, occasional
+  // full refetches catch new jobs / filter membership changes that
+  // pure splicing can't infer.
+  const safetyNetRef = useRef<{
+    lastFired: number;
+    timer: ReturnType<typeof setTimeout> | null;
+  }>({ lastFired: 0, timer: null });
+
+  /** Fetch a single job in summary form; dedupe concurrent fetches for the same id. */
+  const fetchJobDeduped = useCallback((jobId: string): Promise<Job | null> => {
+    const existing = inFlightJobFetches.get(jobId);
+    if (existing) return existing;
+    const promise = api
+      .fetchJob(jobId, true)
+      .catch(() => null)
+      .finally(() => {
+        inFlightJobFetches.delete(jobId);
+      });
+    inFlightJobFetches.set(jobId, promise);
+    return promise;
+  }, []);
+
+  /** Splice an updated job into every cached list query. */
+  const patchJobIntoLists = useCallback(
+    (updated: Job) => {
+      const entries = queryClient.getQueriesData<JobsQueryData>({
+        queryKey: ["jobs"],
+      });
+      for (const [queryKey, oldData] of entries) {
+        if (!isJobsQueryKey(queryKey)) continue;
+        if (!oldData) continue;
+        const statusFilter = queryKey[1];
+        const list: Job[] = Array.isArray(oldData) ? oldData : oldData.jobs;
+        if (!Array.isArray(list)) continue;
+        const idx = list.findIndex((j) => j.id === updated.id);
+        const belongs = jobMatchesFilter(updated, statusFilter);
+        let newList: Job[] | null = null;
+        if (idx >= 0 && belongs) {
+          newList = list.slice();
+          newList[idx] = updated;
+        } else if (idx >= 0 && !belongs) {
+          newList = list.filter((j) => j.id !== updated.id);
+        } else if (idx < 0 && belongs) {
+          // New job (or job that just transitioned into this filter).
+          // Prepend — the list is sorted created_at DESC and a brand-
+          // new job is by definition the newest.
+          newList = [updated, ...list];
+        }
+        if (newList === null) continue;
+        const newData: JobsQueryData = Array.isArray(oldData)
+          ? newList
+          : { jobs: newList, total: newList.length };
+        queryClient.setQueryData(queryKey, newData);
+      }
+    },
+    [queryClient],
+  );
+
+  /** Tick handler: fetch each changed job in summary form (deduped),
+   *  splice into all cached job lists, no broad refetch. */
+  const handleChangedJobs = useCallback(
+    (jobIds: string[]) => {
+      for (const jobId of jobIds) {
+        fetchJobDeduped(jobId).then((job) => {
+          if (job) patchJobIntoLists(job);
+        });
+      }
+    },
+    [fetchJobDeduped, patchJobIntoLists],
+  );
+
+  /** Long-interval safety net: throttled to max once per N seconds.
+   *  Catches things patch-in-place can't infer (new jobs created
+   *  outside the WS connection, count drifts, etc.). */
+  const scheduleSafetyNetRefetch = useCallback(() => {
+    const state = safetyNetRef.current;
+    const now = Date.now();
+    const elapsed = now - state.lastFired;
+    if (elapsed >= BROAD_REFETCH_SAFETY_NET_MS) {
+      queryClient.invalidateQueries({ queryKey: ["status"] });
+      state.lastFired = now;
+      return;
+    }
+    if (state.timer) return;
+    state.timer = setTimeout(() => {
+      queryClient.invalidateQueries({ queryKey: ["status"] });
+      state.lastFired = Date.now();
+      state.timer = null;
+    }, BROAD_REFETCH_SAFETY_NET_MS - elapsed);
+  }, [queryClient]);
 
   const connect = useCallback(() => {
     if (
@@ -90,28 +213,28 @@ export function useStepwiseWebSocket(): StepwiseWebSocketState {
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === "tick" && msg.changed_jobs?.length > 0) {
-          queryClient.invalidateQueries({ queryKey: ["jobs"] });
-          queryClient.invalidateQueries({ queryKey: ["status"] });
-          queryClient.invalidateQueries({ queryKey: ["recentFlows"] });
-          // Invalidate all run-level queries too (stepEvents, runCost)
-          queryClient.invalidateQueries({ queryKey: ["stepEvents"] });
-          queryClient.invalidateQueries({ queryKey: ["runCost"] });
+          // Smart per-job updates: fetch ONLY the changed jobs (one
+          // small request per job, deduped) and splice them into the
+          // cached job-list queries via setQueryData. No more
+          // /api/jobs?limit=500 refetch on every tick.
+          handleChangedJobs(msg.changed_jobs);
+          // Step-detail caches stay fresh via cheap scoped invalidates.
           for (const jobId of msg.changed_jobs) {
-            queryClient.invalidateQueries({ queryKey: ["job", jobId] });
             queryClient.invalidateQueries({ queryKey: ["runs", jobId] });
             queryClient.invalidateQueries({ queryKey: ["events", jobId] });
             queryClient.invalidateQueries({ queryKey: ["jobTree", jobId] });
             queryClient.invalidateQueries({ queryKey: ["sessions", jobId] });
             queryClient.invalidateQueries({ queryKey: ["sessionTranscript", jobId] });
           }
+          // Long-interval safety net for status counts, etc. — throttled
+          // to once every few seconds, NOT once per tick.
+          scheduleSafetyNetRefetch();
           for (const fn of tickListeners) fn(msg as TickMessage);
         } else if (msg.type === "stale_jobs") {
-          // Stale job detection — refresh job list so UI shows stale indicators
-          queryClient.invalidateQueries({ queryKey: ["jobs"] });
+          // Stale jobs: patch each one into the lists rather than
+          // refetching the entire list.
           if (msg.jobs?.length > 0) {
-            for (const stale of msg.jobs) {
-              queryClient.invalidateQueries({ queryKey: ["job", stale.id] });
-            }
+            handleChangedJobs(msg.jobs.map((s: { id: string }) => s.id));
           }
         } else if (msg.type === "flow_source_changed") {
           for (const fn of flowSourceListeners) fn(msg as FlowSourceChangedMessage);
