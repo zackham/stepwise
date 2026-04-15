@@ -2178,6 +2178,27 @@ def cancel_run(run_id: str):
     return {"status": "cancelled", "run_id": run_id}
 
 
+def _prompt_event_for_run(run) -> dict | None:
+    """If the run has a persisted interpolated prompt (agent step),
+    return a synthesized `{t: "prompt", text: ...}` stream event.
+
+    Rationale: the ACP NDJSON only has the `session/prompt` method
+    call when stepwise's adapter drives it — but stepwise writes
+    NDJSON by tailing the adapter's stdout, so the outgoing prompt
+    (sent via JSON-RPC request) doesn't land in the file.
+    `_interpolated_config.prompt` captures the exact text we sent,
+    so we inject it into the event stream for the frontend to
+    render via PromptSegmentRow (FadedText) at the top of the
+    session. Applies to both live and completed runs.
+    """
+    state = run.executor_state or {}
+    ic = state.get("_interpolated_config") or {}
+    prompt = ic.get("prompt")
+    if isinstance(prompt, str) and prompt:
+        return {"t": "prompt", "text": prompt}
+    return None
+
+
 @app.get("/api/runs/{run_id}/agent-output")
 def get_agent_output(run_id: str):
     """Get condensed agent output events for a completed run."""
@@ -2187,14 +2208,19 @@ def get_agent_output(run_id: str):
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
     output_path = (run.executor_state or {}).get("output_path")
+    events: list[dict] = []
+    prompt_event = _prompt_event_for_run(run)
+    if prompt_event:
+        events.append(prompt_event)
     if not output_path:
-        return {"events": []}
+        return {"events": events}
     try:
         with open(output_path) as f:
             raw = f.read()
-        return {"events": _parse_ndjson_events(raw)}
+        events.extend(_parse_ndjson_events(raw))
     except FileNotFoundError:
-        return {"events": []}
+        pass
+    return {"events": events}
 
 
 @app.get("/api/runs/{run_id}/script-output")
@@ -2428,6 +2454,13 @@ def get_session_transcript(job_id: str, session_name: str):
             "status": run.status.value,
             "tokens_used": 0,
         })
+        # Prepend the interpolated prompt as a stream event for each
+        # step in the session so the faded-prompt panel renders at
+        # the top of every step's output in the Session tab. Without
+        # this the transcript shows only the agent's responses.
+        prompt_event = _prompt_event_for_run(run)
+        if prompt_event:
+            all_events.append(prompt_event)
         output_path = (run.executor_state or {}).get("output_path")
         if output_path:
             try:

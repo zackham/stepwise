@@ -908,16 +908,11 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onViewFul
             />
           )}
 
-          {/* Prompt (interpolated) — agent branch. The non-agent branch
-              below has the same block; the agent branch was previously
-              missing it, so running agent steps showed no Prompt panel.
-              _interpolated_config is persisted at step-prepare time so
-              this works the moment a run dispatches. */}
-          {runPrompt && (
-            <SidebarSection title="Prompt">
-              <PromptBlock prompt={runPrompt} />
-            </SidebarSection>
-          )}
+          {/* Prompt is rendered inside the session transcript itself
+              via PromptSegmentRow (FadedText) at the top of each
+              step's events — synthesized server-side from
+              executor_state._interpolated_config.prompt and prepended
+              to the agent-output stream. Don't duplicate it here. */}
 
           {/* Error */}
           {run && isFailed && run.error && (
@@ -1194,8 +1189,12 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onViewFul
             />
           )}
 
-          {/* Prompt (interpolated) */}
-          {runPrompt && (
+          {/* Prompt is rendered via PromptSegmentRow (FadedText) at
+              the top of the agent output stream — see the agent
+              branch above and the server-side _prompt_event_for_run.
+              Non-agent steps that display prompts (script / poll)
+              don't stream, so keep the inline PromptBlock for them. */}
+          {runPrompt && !isAgent && (
             <SidebarSection title="Prompt">
               <PromptBlock prompt={runPrompt} />
             </SidebarSection>
