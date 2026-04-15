@@ -4753,7 +4753,7 @@ class AsyncEngine(Engine):
             except KeyError:
                 return
 
-            # Latest run per step (rerun_step works on the latest)
+            # Latest run per step
             runs = self.store.runs_for_job(jid)
             latest_per_step: dict[str, StepRun] = {}
             for r in runs:
@@ -4761,41 +4761,69 @@ class AsyncEngine(Engine):
                 if cur is None or r.attempt > cur.attempt:
                     latest_per_step[r.step_name] = r
 
-            # First pass: walk delegated FAILED runs into sub-jobs and
-            # collect the parent runs that need resetting after recursion.
+            # ── Pass 1: delegated step runs that point at sub-jobs ──
+            # Walk INTO sub-jobs whenever the delegated step run has
+            # failed/cancelled/paused sub-jobs underneath, regardless
+            # of whether the delegated run itself is FAILED, DELEGATED,
+            # or COMPLETED. A previous Retry click may have already
+            # reset a FAILED parent to DELEGATED, but the sub-jobs
+            # never actually got retried because we only matched
+            # FAILED parents. Now we drill into any delegated-style
+            # run that has retryable descendants.
             delegated_to_reset: list[StepRun] = []
             for name, latest in latest_per_step.items():
-                if latest.status not in (
+                es = latest.executor_state or {}
+                is_for_each = bool(es.get("for_each"))
+                has_single_sub = bool(latest.sub_job_id)
+                if not (is_for_each or has_single_sub):
+                    continue
+
+                # Find sub-jobs that need retrying.
+                sub_ids: list[str] = []
+                if is_for_each:
+                    sub_ids = list(es.get("sub_job_ids") or [])
+                elif has_single_sub:
+                    sub_ids = [latest.sub_job_id]
+
+                broken_sub_ids: list[str] = []
+                for sid in sub_ids:
+                    try:
+                        sub = self.store.load_job(sid)
+                    except KeyError:
+                        continue
+                    if sub.status in (
+                        JobStatus.FAILED, JobStatus.CANCELLED,
+                        JobStatus.PAUSED,
+                    ):
+                        broken_sub_ids.append(sid)
+                    elif sub.status == JobStatus.COMPLETED:
+                        # A completed sub-job may still contain failed
+                        # internal steps from earlier loop iterations
+                        # — those don't need retry, so skip.
+                        pass
+
+                if not broken_sub_ids:
+                    # All sub-jobs are healthy — nothing to do for
+                    # this step run, even if its own status is FAILED.
+                    # This can happen when the failure cascaded from
+                    # somewhere else and was already cleaned up.
+                    continue
+
+                for sid in broken_sub_ids:
+                    _visit(sid)
+
+                # If the parent's run is FAILED/CANCELLED, reset to
+                # DELEGATED so _handle_sub_job_done re-fires completion
+                # check when the freshly-retried sub-jobs settle.
+                # If the parent's run is already DELEGATED (a previous
+                # retry click already reset it), leave it — we just
+                # need the sub-jobs to actually run.
+                if latest.status in (
                     StepRunStatus.FAILED, StepRunStatus.CANCELLED,
                 ):
-                    continue
-                es = latest.executor_state or {}
-                if es.get("for_each"):
-                    sub_ids = es.get("sub_job_ids") or []
-                    for sid in sub_ids:
-                        try:
-                            sub = self.store.load_job(sid)
-                        except KeyError:
-                            continue
-                        if sub.status in (
-                            JobStatus.FAILED, JobStatus.CANCELLED,
-                            JobStatus.PAUSED, JobStatus.COMPLETED,
-                        ):
-                            _visit(sid)
-                    delegated_to_reset.append(latest)
-                elif latest.sub_job_id:
-                    try:
-                        sub = self.store.load_job(latest.sub_job_id)
-                        if sub.status in (
-                            JobStatus.FAILED, JobStatus.CANCELLED,
-                            JobStatus.PAUSED, JobStatus.COMPLETED,
-                        ):
-                            _visit(latest.sub_job_id)
-                    except KeyError:
-                        pass
                     delegated_to_reset.append(latest)
 
-            # Set the job back to RUNNING if it's in a terminal state.
+            # ── Pass 2: set the job back to RUNNING if terminal ──
             if job.status in (
                 JobStatus.FAILED, JobStatus.PAUSED,
                 JobStatus.CANCELLED, JobStatus.COMPLETED,
@@ -4805,15 +4833,13 @@ class AsyncEngine(Engine):
                 self.store.save_job(job)
                 self._emit(jid, JOB_RESUMED)
                 counts["jobs_resumed"] += 1
-                # Recreate the wait_for_job asyncio.Event so callers
-                # who already saw the previous terminal state can wait
-                # again. Without this, a second wait_for_job returns
-                # immediately because the old event is still set.
+                # Recreate the asyncio.Event so a subsequent
+                # wait_for_job blocks until the new run terminates,
+                # rather than returning immediately on the previous
+                # already-set event.
                 self._job_done[jid] = asyncio.Event()
 
-            # Reset failed delegated parent runs to DELEGATED so the
-            # existing sub-job-done handler re-evaluates completion
-            # when the freshly retried sub-jobs settle.
+            # ── Pass 3: reset collected delegated parent runs ──
             for run in delegated_to_reset:
                 run.status = StepRunStatus.DELEGATED
                 run.error = None
@@ -4821,10 +4847,7 @@ class AsyncEngine(Engine):
                 self.store.save_run(run)
                 counts["delegated_reset"] += 1
 
-            # Re-run each failed/cancelled non-delegated step. rerun_step
-            # rejects RUNNING/SUSPENDED/DELEGATED, but FAILED + CANCELLED
-            # + COMPLETED are all valid. We only target FAILED/CANCELLED
-            # since the user's intent is "retry what broke."
+            # ── Pass 4: re-run regular failed/cancelled non-delegated steps ──
             for name, latest in latest_per_step.items():
                 if latest.status not in (
                     StepRunStatus.FAILED, StepRunStatus.CANCELLED,
@@ -4832,7 +4855,7 @@ class AsyncEngine(Engine):
                     continue
                 es = latest.executor_state or {}
                 if es.get("for_each") or latest.sub_job_id:
-                    continue  # already handled above
+                    continue  # already handled in pass 1
                 try:
                     self.rerun_step(jid, name)
                     counts["steps_rerun"] += 1
@@ -4842,13 +4865,35 @@ class AsyncEngine(Engine):
                         jid, name, e,
                     )
 
+            # ── Pass 5: nudge the engine ──
             # rerun_step already calls dispatch + terminal_check, but
-            # call again to cover the no-rerun case (delegated-only
-            # branch) where we just reset state.
+            # we also call them here for the delegated-only branch
+            # (where no rerun_step happened in this job).
             self._dispatch_ready(jid)
             self._check_job_terminal(jid)
 
         _visit(job_id)
+
+        # ── Final pass: bubble-up completion checks ──
+        # When a sub-job's step is freshly rerun, its completion
+        # eventually fires _handle_sub_job_done which re-evaluates
+        # the parent's _check_for_each_completion. But if the
+        # sub-jobs were ALREADY completed (somehow), the bubble
+        # never re-fires. Force-fire the completion check on every
+        # parent we touched whose delegated run still has all-
+        # complete sub-jobs.
+        for jid in visited:
+            try:
+                job = self.store.load_job(jid)
+            except KeyError:
+                continue
+            if job.status != JobStatus.RUNNING:
+                continue
+            for run in self.store.delegated_runs(jid):
+                if run.executor_state and run.executor_state.get("for_each"):
+                    if self._check_for_each_completion(job, run):
+                        self._after_step_change(jid)
+
         return counts
 
     def reset_job(self, job_id: str) -> None:
