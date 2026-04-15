@@ -7,6 +7,7 @@ import { SessionTab } from "@/components/jobs/SessionTab";
 import { StepSessionView } from "@/components/jobs/StepSessionView";
 import { FlowDagView } from "@/components/dag/FlowDagView";
 import { TimelineView } from "@/components/jobs/TimelineView";
+import { WorkspaceView } from "@/components/jobs/WorkspaceView";
 import { RunView } from "@/components/jobs/RunView";
 import { StepDefinitionPanel } from "@/components/editor/StepDefinitionPanel";
 import { JobOverview } from "@/components/jobs/JobOverview";
@@ -22,6 +23,7 @@ import {
   Workflow,
   ScrollText,
   GanttChart,
+  FolderOpen,
 } from "lucide-react";
 import { ResizablePanel } from "@/components/ui/ResizablePanel";
 import type { JobTreeNode, StepDefinition } from "@/lib/types";
@@ -450,6 +452,10 @@ export function JobDetailPage() {
                   <ScrollText className="w-3.5 h-3.5" />
                   {!isMobile && "Events"}
                 </TabsTrigger>
+                <TabsTrigger value="workspace" className="text-xs gap-1 px-2.5">
+                  <FolderOpen className="w-3.5 h-3.5" />
+                  {!isMobile && "Workspace"}
+                </TabsTrigger>
               </TabsList>
             </div>
 
@@ -569,6 +575,9 @@ export function JobDetailPage() {
                   )}
                 </div>
               </ScrollArea>
+            </TabsContent>
+            <TabsContent value="workspace" className={cn("flex-1 min-h-0", viewMode !== "workspace" && "hidden")}>
+              <WorkspaceView jobId={job.id} />
             </TabsContent>
           </Tabs>
         </div>

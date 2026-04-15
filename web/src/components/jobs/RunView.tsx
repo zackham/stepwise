@@ -17,6 +17,7 @@ import {
   Copy,
   Check,
   Maximize2,
+  ArrowDown,
 } from "lucide-react";
 import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 import { ContentModal } from "@/components/ui/content-modal";
@@ -127,16 +128,50 @@ function RunDetailsTable({
 }) {
   const { copy: copyWs, justCopied: wsCopied } = useCopyFeedback();
   const [metaModalOpen, setMetaModalOpen] = useState(false);
+  const [rawResponseModalOpen, setRawResponseModalOpen] = useState(false);
 
   const hasCost = showCost && (isSubscription || (costUsd != null && costUsd > 0));
   const filteredMeta = useMemo(() => {
     if (!executorMeta) return null;
-    const skip = new Set(["stdout", "stderr", "return_code", "cost_usd"]);
+    const skip = new Set([
+      "stdout",
+      "stderr",
+      "return_code",
+      "cost_usd",
+      // These are shown inline in the parse-failure block below.
+      "raw_content",
+      "raw_tool_calls",
+      "raw_response",
+    ]);
     const entries = Object.entries(executorMeta).filter(([k]) => !skip.has(k));
     return entries.length > 0 ? Object.fromEntries(entries) : null;
   }, [executorMeta]);
 
-  const hasAnything = !!exitRes || hasCost || !!filteredMeta || !!workspace;
+  // LLM parse failure: surface raw_content / raw_tool_calls / raw_response
+  // inline so diagnosing "Output parse failure" doesn't require clicking
+  // through the Meta modal. One click to expand in a modal; click the
+  // preview chip to open.
+  const parseFailureDetails = useMemo(() => {
+    if (!executorMeta) return null;
+    if (!executorMeta.failed) return null;
+    const rawContent = executorMeta.raw_content as string | null | undefined;
+    const rawToolCalls = executorMeta.raw_tool_calls as unknown;
+    const rawResponse = executorMeta.raw_response as Record<string, unknown> | null | undefined;
+    const errorText = (executorMeta.error as string | undefined) ?? "failed";
+    if (!rawContent && !rawToolCalls && !rawResponse) {
+      return { errorText, hasBody: false } as const;
+    }
+    return {
+      errorText,
+      hasBody: true,
+      rawContent,
+      rawToolCalls,
+      rawResponse,
+    } as const;
+  }, [executorMeta]);
+
+  const hasAnything =
+    !!exitRes || hasCost || !!filteredMeta || !!workspace || !!parseFailureDetails;
   if (!hasAnything) return null;
 
   // Shorten workspace for display
@@ -193,6 +228,58 @@ function RunDetailsTable({
           >
             {displayWs}
           </span>
+        </div>
+      )}
+      {parseFailureDetails && (
+        <div className="mt-1 rounded border border-red-900/40 bg-red-950/20 p-2 space-y-1.5">
+          <div className="flex items-baseline gap-2">
+            <span className="text-red-400 font-medium text-[11px] uppercase tracking-wide">
+              Parse failure
+            </span>
+            <span className="text-zinc-400 truncate">{parseFailureDetails.errorText}</span>
+          </div>
+          {parseFailureDetails.hasBody ? (
+            <>
+              {typeof parseFailureDetails.rawContent === "string" && parseFailureDetails.rawContent.length > 0 && (
+                <div>
+                  <div className="text-[10px] text-zinc-500 uppercase tracking-wide mb-0.5">Raw content</div>
+                  <pre className="font-mono text-[11px] text-zinc-300 whitespace-pre-wrap max-h-40 overflow-auto bg-zinc-950/60 rounded p-1.5">
+                    {parseFailureDetails.rawContent}
+                  </pre>
+                </div>
+              )}
+              {parseFailureDetails.rawToolCalls != null && (
+                <div>
+                  <div className="text-[10px] text-zinc-500 uppercase tracking-wide mb-0.5">Raw tool_calls</div>
+                  <pre className="font-mono text-[11px] text-zinc-300 whitespace-pre-wrap max-h-40 overflow-auto bg-zinc-950/60 rounded p-1.5">
+                    {JSON.stringify(parseFailureDetails.rawToolCalls, null, 2)}
+                  </pre>
+                </div>
+              )}
+              {parseFailureDetails.rawResponse && (
+                <div>
+                  <button
+                    onClick={() => setRawResponseModalOpen(true)}
+                    className="text-[11px] text-blue-400 hover:text-blue-300 underline"
+                  >
+                    Open full API response →
+                  </button>
+                  <ContentModal
+                    open={rawResponseModalOpen}
+                    onOpenChange={setRawResponseModalOpen}
+                    title="Raw API response"
+                    copyContent={JSON.stringify(parseFailureDetails.rawResponse, null, 2)}
+                  >
+                    <JsonView data={parseFailureDetails.rawResponse} defaultExpanded={true} />
+                  </ContentModal>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="text-[11px] text-zinc-500 italic">
+              No raw content, tool calls, or API response captured. Re-run to capture.
+            </div>
+          )}
         </div>
       )}
       {filteredMeta && (
@@ -479,6 +566,64 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onViewFul
 
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // ── Jump-to-bottom FAB for streaming runs ─────────────────────────
+  // Track whether the user is scrolled to the bottom of the run view.
+  // When true + the stream is live, we auto-scroll to follow new
+  // content ("pinned"). Scrolling up unpins and reveals a FAB that
+  // re-pins (and scrolls to bottom) when clicked.
+  const BOTTOM_EPSILON_PX = 40;
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const [pinnedToBottom, setPinnedToBottom] = useState(true);
+
+  const measureBottom = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const distance = el.scrollHeight - (el.scrollTop + el.clientHeight);
+    setIsAtBottom(distance <= BOTTOM_EPSILON_PX);
+  }, []);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const distance = el.scrollHeight - (el.scrollTop + el.clientHeight);
+      const atBottom = distance <= BOTTOM_EPSILON_PX;
+      setIsAtBottom(atBottom);
+      // If the user scrolls away from the bottom while pinned, unpin.
+      if (!atBottom && pinnedToBottom) setPinnedToBottom(false);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [pinnedToBottom]);
+
+  const scrollToBottom = useCallback((smooth = true) => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+    setIsAtBottom(true);
+    setPinnedToBottom(true);
+  }, []);
+
+  // Auto-follow: when pinned and content grows, scroll to bottom.
+  // We observe the scroll container's height changes via ResizeObserver
+  // so every new streamed segment triggers a follow.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      if (pinnedToBottom) {
+        el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
+      }
+      measureBottom();
+    });
+    ro.observe(el);
+    // Also observe the first child (the content wrapper) — the container
+    // itself doesn't change size, but its scrollHeight does when children
+    // grow. Watching a child directly fires on every append.
+    if (el.firstElementChild) ro.observe(el.firstElementChild);
+    return () => ro.disconnect();
+  }, [pinnedToBottom, measureBottom]);
+
   // Constrain container to viewport height
   const [maxHeight, setMaxHeight] = useState<string>("100%");
   useEffect(() => {
@@ -602,7 +747,10 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onViewFul
   const runPrompt = run ? getRunPrompt(run) : undefined;
   const exitRes = run ? exitResolutions[run.attempt] : undefined;
 
+  const showJumpFAB = !isAtBottom;
+
   return (
+    <div className="relative h-full">
     <div ref={containerRef} className="px-3 pb-4 space-y-3 animate-step-fade overflow-y-auto" style={{ maxHeight }}>
       {/* 1. Header bar — run navigator */}
       <div className="sticky top-0 z-10 -mx-3 px-3 pt-3 pb-2 border-b border-border bg-zinc-50/80 dark:bg-zinc-950/80 backdrop-blur-sm">
@@ -1147,6 +1295,23 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onViewFul
           )}
         </>
       )}
+    </div>
+    {showJumpFAB && (
+      <button
+        onClick={() => scrollToBottom(true)}
+        className={cn(
+          "absolute bottom-4 right-4 z-20",
+          "flex items-center gap-1.5 px-3 py-1.5 rounded-full",
+          "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/40",
+          "text-xs font-medium transition-all",
+          "animate-in fade-in slide-in-from-bottom-2 duration-200",
+        )}
+        title={isRunning ? "Jump to bottom and follow live" : "Jump to bottom"}
+      >
+        <ArrowDown className="w-3.5 h-3.5" />
+        {isRunning ? "Follow live" : "Jump to bottom"}
+      </button>
+    )}
     </div>
   );
 }

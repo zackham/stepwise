@@ -15,6 +15,13 @@ class LLMResponse:
     model: str = ""
     cost_usd: float | None = None
     latency_ms: int = 0
+    # Raw API response body (the parsed JSON dict before normalization).
+    # Populated so the UI can show *exactly* what came back from the
+    # provider when parsing fails — including provider-specific fields
+    # like `reasoning`, `reasoning_content`, non-standard finish reasons,
+    # or unexpected `choices[0].message` shapes. None for clients that
+    # don't persist it (tests, mocks).
+    raw_response: dict[str, Any] | None = None
 
 
 class LLMClient(Protocol):

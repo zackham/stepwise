@@ -60,13 +60,13 @@ function validateJobsSearch(search: Record<string, unknown>): JobsRouteSearch {
 }
 
 const JOB_DETAIL_TAB_VALUES = new Set(["run", "step", "session"]);
-const JOB_VIEW_VALUES = new Set(["dag", "events", "timeline", "tree"]);
+const JOB_VIEW_VALUES = new Set(["dag", "events", "timeline", "tree", "workspace"]);
 
 export type JobDetailSearch = JobsRouteSearch & {
   step?: string;
   tab?: "run" | "step" | "session";
   panel?: "open";
-  view?: "dag" | "events" | "timeline" | "tree";
+  view?: "dag" | "events" | "timeline" | "tree" | "workspace";
   sidebar?: "0";
 };
 

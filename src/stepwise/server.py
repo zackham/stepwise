@@ -8,7 +8,7 @@ import logging
 import os
 import signal
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone as _tz
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -1793,6 +1793,129 @@ def get_children(job_id: str):
         return [j.to_dict() for j in children]
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+
+
+# ── Workspace browser ────────────────────────────────────────────────
+# Browse files the job wrote to its workspace. Used by the Workspace
+# tab in the job view so users can see what ended up on disk.
+
+_WORKSPACE_MAX_LIST_ENTRIES = 2000
+_WORKSPACE_MAX_READ_BYTES = 512 * 1024  # 512 KB cap per read
+
+
+def _job_workspace_root(job_id: str) -> Path:
+    engine = _get_engine()
+    try:
+        job = engine.store.load_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    ws = job.workspace_path or str(
+        Path(engine.jobs_dir) / job_id / "workspace"
+    )
+    root = Path(ws).resolve()
+    return root
+
+
+def _resolve_workspace_path(root: Path, rel: str) -> Path:
+    """Resolve a user-provided relative path against the workspace root,
+    rejecting traversal (..) and absolute paths."""
+    if not rel:
+        return root
+    # Reject absolute paths and explicit '..' segments outright.
+    candidate = (root / rel).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="path escapes workspace")
+    return candidate
+
+
+@app.get("/api/jobs/{job_id}/workspace")
+def get_job_workspace_listing(job_id: str, path: str = ""):
+    """Return a flat listing of the job's workspace under `path`.
+
+    Entries are sorted dir-first, then by name. Each entry has:
+      - name, path (relative to workspace root), is_dir, size (bytes)
+    Hidden dotfiles and __pycache__ are omitted by default.
+    """
+    root = _job_workspace_root(job_id)
+    if not root.exists():
+        return {"root": str(root), "exists": False, "entries": []}
+    target = _resolve_workspace_path(root, path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"path not found: {path}")
+    if not target.is_dir():
+        raise HTTPException(status_code=400, detail=f"path is a file, use /file endpoint: {path}")
+
+    entries: list[dict[str, Any]] = []
+    try:
+        for entry in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name)):
+            name = entry.name
+            # Hide Python/OS noise by default.
+            if name in ("__pycache__", ".DS_Store"):
+                continue
+            try:
+                stat = entry.stat()
+            except OSError:
+                continue
+            rel = str(entry.resolve().relative_to(root))
+            entries.append({
+                "name": name,
+                "path": rel,
+                "is_dir": entry.is_dir(),
+                "size": stat.st_size if entry.is_file() else None,
+                "modified": datetime.fromtimestamp(
+                    stat.st_mtime, tz=_tz.utc,
+                ).isoformat(),
+            })
+            if len(entries) >= _WORKSPACE_MAX_LIST_ENTRIES:
+                break
+    except PermissionError:
+        raise HTTPException(status_code=403, detail=f"permission denied: {path}")
+
+    return {
+        "root": str(root),
+        "exists": True,
+        "path": str(target.resolve().relative_to(root)) if target != root else "",
+        "entries": entries,
+        "truncated": len(entries) >= _WORKSPACE_MAX_LIST_ENTRIES,
+    }
+
+
+@app.get("/api/jobs/{job_id}/workspace/file")
+def get_job_workspace_file(job_id: str, path: str):
+    """Return the contents of a single workspace file.
+
+    Caps at _WORKSPACE_MAX_READ_BYTES; binary files get a truncation
+    marker instead of decoded text. Clients can use this for previewing
+    artifacts agents produced during the run.
+    """
+    if not path:
+        raise HTTPException(status_code=400, detail="path required")
+    root = _job_workspace_root(job_id)
+    target = _resolve_workspace_path(root, path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"file not found: {path}")
+    if target.is_dir():
+        raise HTTPException(status_code=400, detail=f"path is a directory, use listing endpoint: {path}")
+
+    size = target.stat().st_size
+    truncated = size > _WORKSPACE_MAX_READ_BYTES
+    raw = target.read_bytes()[:_WORKSPACE_MAX_READ_BYTES]
+    try:
+        content = raw.decode("utf-8")
+        is_binary = False
+    except UnicodeDecodeError:
+        content = None
+        is_binary = True
+
+    return {
+        "path": str(target.resolve().relative_to(root)),
+        "size": size,
+        "truncated": truncated,
+        "is_binary": is_binary,
+        "content": content,
+    }
 
 
 @app.post("/api/jobs/{job_id}/steps/{step_name}/rerun")

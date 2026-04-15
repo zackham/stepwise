@@ -998,6 +998,11 @@ class LLMExecutor(Executor):
                         "prompt": prompt,
                         "raw_content": response.content,
                         "raw_tool_calls": response.tool_calls,
+                        # Full provider response body — so the UI can show
+                        # exactly what came back (including non-standard
+                        # fields like reasoning_content, finish_reason, etc.)
+                        # when neither content nor tool_calls were parseable.
+                        "raw_response": response.raw_response,
                         "usage": response.usage,
                         "cost_usd": response.cost_usd,
                         "latency_ms": response.latency_ms,

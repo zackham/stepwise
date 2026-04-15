@@ -66,6 +66,12 @@ class OpenRouterClient:
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
+            # Ask OpenRouter to include `usage.cost` in the response body.
+            # Without this flag the usage object only has prompt/completion
+            # token counts and `usage.cost` is missing, so cost tracking
+            # silently rolls up to $0.00. BYOK users still get cost reported
+            # when this flag is set.
+            "usage": {"include": True},
         }
         if provider_order:
             payload["provider"] = {"order": provider_order}
@@ -137,8 +143,15 @@ class OpenRouterClient:
                     "arguments": json.loads(tc["function"]["arguments"]),
                 })
 
+        # Some models (reasoning models, Kimi variants) return their output
+        # in `reasoning_content` or `reasoning` rather than `content`. Fall
+        # back to those so the parser downstream has something to work with.
+        content = choice.get("content")
+        if not content:
+            content = choice.get("reasoning_content") or choice.get("reasoning") or None
+
         return LLMResponse(
-            content=choice.get("content"),
+            content=content,
             tool_calls=tool_calls,
             usage={
                 "prompt_tokens": usage.get("prompt_tokens", 0),
@@ -147,4 +160,5 @@ class OpenRouterClient:
             model=data.get("model", model),
             cost_usd=cost,
             latency_ms=elapsed_ms,
+            raw_response=data,
         )

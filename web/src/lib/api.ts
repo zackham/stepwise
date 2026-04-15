@@ -771,6 +771,49 @@ export function setAgentConcurrencyLimit(
   });
 }
 
+// ── Job workspace browser ────────────────────────────────────────────
+
+export interface WorkspaceEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number | null;
+  modified: string;
+}
+
+export interface WorkspaceListing {
+  root: string;
+  exists: boolean;
+  path?: string;
+  entries: WorkspaceEntry[];
+  truncated?: boolean;
+}
+
+export interface WorkspaceFile {
+  path: string;
+  size: number;
+  truncated: boolean;
+  is_binary: boolean;
+  content: string | null;
+}
+
+export function fetchJobWorkspace(
+  jobId: string,
+  path: string = "",
+): Promise<WorkspaceListing> {
+  const qs = path ? `?path=${encodeURIComponent(path)}` : "";
+  return request<WorkspaceListing>(`/jobs/${encodeURIComponent(jobId)}/workspace${qs}`);
+}
+
+export function fetchJobWorkspaceFile(
+  jobId: string,
+  path: string,
+): Promise<WorkspaceFile> {
+  return request<WorkspaceFile>(
+    `/jobs/${encodeURIComponent(jobId)}/workspace/file?path=${encodeURIComponent(path)}`,
+  );
+}
+
 // ── Agents ──────────────────────────────────────────────────────────
 
 export interface AgentConfigKey {
