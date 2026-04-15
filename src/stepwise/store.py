@@ -591,8 +591,19 @@ class SQLiteStore:
         """, (limit,)).fetchall()
         return [self._row_to_job(r) for r in rows]
 
-    def all_jobs(self, status: JobStatus | None = None, top_level_only: bool = False, limit: int = 0, meta_filters: dict[str, str] | None = None, include_archived: bool = False) -> list[Job]:
-        clauses = []
+    def _all_jobs_where_clause(
+        self,
+        status: JobStatus | None = None,
+        top_level_only: bool = False,
+        meta_filters: dict[str, str] | None = None,
+        include_archived: bool = False,
+    ) -> tuple[str, list]:
+        """Build the WHERE clause + params shared by all_jobs and count_jobs.
+
+        Returns (where_sql, params) where where_sql is either an empty string
+        or `" WHERE <clauses>"`.
+        """
+        clauses: list[str] = []
         params: list = []
         if status:
             clauses.append("status = ?")
@@ -607,15 +618,65 @@ class SQLiteStore:
                 clauses.append("json_extract(metadata, ?) = ?")
                 params.extend([f"$.{key}", value])
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        return where, params
+
+    def all_jobs(self, status: JobStatus | None = None, top_level_only: bool = False, limit: int = 0, meta_filters: dict[str, str] | None = None, include_archived: bool = False) -> list[Job]:
+        where, params = self._all_jobs_where_clause(
+            status=status,
+            top_level_only=top_level_only,
+            meta_filters=meta_filters,
+            include_archived=include_archived,
+        )
         limit_clause = f" LIMIT {int(limit)}" if limit > 0 else ""
         rows = self._conn.execute(
             f"SELECT * FROM jobs{where} ORDER BY created_at DESC{limit_clause}",
             params,
         ).fetchall()
         jobs = [self._row_to_job(r) for r in rows]
-        for job in jobs:
-            job.depends_on = self.get_job_dependencies(job.id)
+        # Batch-load dependencies: one GROUP BY query instead of N+1
+        # per-job lookups. At 2500 jobs + ~35 deps, the old per-job
+        # loop dominated /api/jobs load time on the live server even
+        # though it looked cheap in a cold-start benchmark.
+        if jobs:
+            job_ids = [j.id for j in jobs]
+            placeholders = ",".join("?" for _ in job_ids)
+            dep_rows = self._conn.execute(
+                f"""SELECT job_id, depends_on_job_id FROM job_dependencies
+                    WHERE job_id IN ({placeholders})""",
+                job_ids,
+            ).fetchall()
+            deps_by_job: dict[str, list[str]] = {jid: [] for jid in job_ids}
+            for row in dep_rows:
+                deps_by_job[row["job_id"]].append(row["depends_on_job_id"])
+            for job in jobs:
+                job.depends_on = deps_by_job.get(job.id, [])
         return jobs
+
+    def count_jobs(
+        self,
+        status: JobStatus | None = None,
+        top_level_only: bool = False,
+        meta_filters: dict[str, str] | None = None,
+        include_archived: bool = False,
+    ) -> int:
+        """Count jobs matching filters without loading rows.
+
+        Used by /api/jobs?include_total=true to avoid running a second
+        full `all_jobs(limit=0)` just to `len()` the result. A plain
+        COUNT(*) is three orders of magnitude faster than loading +
+        deserializing + hydrating dependencies for every row.
+        """
+        where, params = self._all_jobs_where_clause(
+            status=status,
+            top_level_only=top_level_only,
+            meta_filters=meta_filters,
+            include_archived=include_archived,
+        )
+        row = self._conn.execute(
+            f"SELECT COUNT(*) AS cnt FROM jobs{where}",
+            params,
+        ).fetchone()
+        return int(row["cnt"]) if row else 0
 
     # ── Step Runs ─────────────────────────────────────────────────────────
 

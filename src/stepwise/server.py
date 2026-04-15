@@ -1272,11 +1272,14 @@ def list_jobs(request: Request, status: str | None = None, top_level: bool = Fal
         for j in jobs
     ]
     if include_total:
-        total = len(engine.store.all_jobs(
-            job_status, top_level_only=top_level, limit=0,
+        # COUNT(*) instead of loading every matching row — the old
+        # `len(all_jobs(limit=0))` triggered a SECOND full N+1 just
+        # to compute the number.
+        total = engine.store.count_jobs(
+            job_status, top_level_only=top_level,
             meta_filters=meta_filters or None,
             include_archived=include_archived,
-        ))
+        )
         return {"jobs": serialized, "total": total}
     return serialized
 
@@ -1786,30 +1789,53 @@ class UpdateGroupRequest(BaseModel):
 
 @app.get("/api/groups")
 def list_groups():
-    """List all known groups with settings and job counts."""
+    """List all known groups with settings and job counts.
+
+    Pre-fix: called `all_jobs()` TWICE, each time loading 2500+ rows
+    with full dependency hydration — just to build a group→count
+    dict. Now reads job_group + status + parent_job_id directly in
+    one query and aggregates in Python.
+    """
     engine = _get_engine()
     settings = engine.store.list_group_settings()
     all_groups: dict[str, dict] = {}
-    for job in engine.store.all_jobs():
-        grp = job.job_group
-        if grp and grp not in all_groups:
-            all_groups[grp] = {"group": grp, "max_concurrent": 0,
-                               "active_count": 0, "pending_count": 0, "total_count": 0}
+    # Single SQL query, only the columns we actually need.
+    rows = engine.store._conn.execute(
+        "SELECT job_group, status, parent_job_id FROM jobs "
+        "WHERE job_group IS NOT NULL"
+    ).fetchall()
+    for row in rows:
+        grp = row["job_group"]
+        if not grp:
+            continue
+        g = all_groups.setdefault(
+            grp,
+            {
+                "group": grp,
+                "max_concurrent": 0,
+                "active_count": 0,
+                "pending_count": 0,
+                "total_count": 0,
+            },
+        )
+        g["total_count"] += 1
+        st = row["status"]
+        if st == JobStatus.RUNNING.value and not row["parent_job_id"]:
+            g["active_count"] += 1
+        elif st == JobStatus.PENDING.value:
+            g["pending_count"] += 1
     for grp, limit in settings.items():
-        if grp not in all_groups:
-            all_groups[grp] = {"group": grp, "max_concurrent": limit,
-                               "active_count": 0, "pending_count": 0, "total_count": 0}
-        else:
-            all_groups[grp]["max_concurrent"] = limit
-    for job in engine.store.all_jobs():
-        grp = job.job_group
-        if grp and grp in all_groups:
-            g = all_groups[grp]
-            g["total_count"] += 1
-            if job.status == JobStatus.RUNNING and not job.parent_job_id:
-                g["active_count"] += 1
-            elif job.status == JobStatus.PENDING:
-                g["pending_count"] += 1
+        g = all_groups.setdefault(
+            grp,
+            {
+                "group": grp,
+                "max_concurrent": 0,
+                "active_count": 0,
+                "pending_count": 0,
+                "total_count": 0,
+            },
+        )
+        g["max_concurrent"] = limit
     return list(all_groups.values())
 
 
@@ -2535,8 +2561,12 @@ def _parse_server_duration(s: str) -> float | None:
 @app.get("/api/status")
 def engine_status():
     engine = _get_engine()
+    # Count instead of loading. The web UI polls /api/status; loading
+    # every row (with its workflow JSON + batched dependencies) just
+    # to call len() on the list was a multi-second operation on live
+    # DBs and blocked the same SQLite connection other endpoints need.
+    total_jobs = engine.store.count_jobs(include_archived=True)
     active = engine.store.active_jobs()
-    all_jobs = engine.store.all_jobs()
     from importlib.metadata import version
     try:
         ver = version("stepwise-run")
@@ -2544,7 +2574,7 @@ def engine_status():
         ver = "unknown"
     return {
         "active_jobs": len(active),
-        "total_jobs": len(all_jobs),
+        "total_jobs": total_jobs,
         "registered_executors": list(engine.registry._factories.keys()),
         "cwd": os.getcwd(),
         "version": ver,
