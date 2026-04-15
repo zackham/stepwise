@@ -669,6 +669,9 @@ export interface ConfigResponse {
   default_agent: string;
   labels: LabelInfo[];
   billing_mode: string;
+  // Project-wide default containment for agent steps. null = no
+  // default (agent steps run unisolated unless overridden).
+  agent_containment?: string | null;
   concurrency_limits?: Record<string, number>;
   concurrency_running?: Record<string, number>;
 }
@@ -733,6 +736,25 @@ export function setDefaultAgent(agent: string): Promise<{ status: string }> {
   return request("/config/default-agent", {
     method: "PUT",
     body: JSON.stringify({ agent }),
+  });
+}
+
+export function setAgentContainmentDefault(
+  containment: string | null,
+): Promise<{ status: string; agent_containment: string | null }> {
+  return request("/config/containment", {
+    method: "PUT",
+    body: JSON.stringify({ containment }),
+  });
+}
+
+export function setAgentContainment(
+  agentName: string,
+  containment: string | null,
+): Promise<{ status: string; name: string; containment: string | null }> {
+  return request(`/agents/${encodeURIComponent(agentName)}/containment`, {
+    method: "PUT",
+    body: JSON.stringify({ containment }),
   });
 }
 

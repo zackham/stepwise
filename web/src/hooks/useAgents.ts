@@ -91,6 +91,17 @@ export function useAgentMutations() {
     },
   });
 
+  const setAgentContainment = useMutation({
+    mutationFn: ({ name, containment }: { name: string; containment: string | null }) =>
+      api.setAgentContainment(name, containment),
+    onSuccess: invalidateAll,
+    onError: (error) => {
+      toast.error("Failed to update agent containment", {
+        description: error.message,
+      });
+    },
+  });
+
   return {
     updateAgent,
     createAgent,
@@ -98,5 +109,6 @@ export function useAgentMutations() {
     disableAgent,
     enableAgent,
     resetAgent,
+    setAgentContainment,
   };
 }

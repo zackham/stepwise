@@ -2424,6 +2424,13 @@ class UpdateConcurrencyRequest(BaseModel):
     limit: int  # 0 = remove limit (unlimited)
 
 
+class UpdateContainmentRequest(BaseModel):
+    # Project-wide default containment for agent steps. None disables
+    # containment by default; "cloud-hypervisor" makes every agent step
+    # contained unless overridden at agent / flow / step / CLI level.
+    containment: str | None = None
+
+
 @app.get("/api/config")
 def get_config():
     cs = load_config_with_sources(_project_dir)
@@ -2440,6 +2447,7 @@ def get_config():
         "default_agent": cfg.default_agent,
         "labels": [li.to_dict() for li in cs.label_info],
         "billing_mode": cfg.billing,
+        "agent_containment": cfg.agent_containment,
         "concurrency_limits": cfg.resolved_executor_limits(),
         "concurrency_running": {
             t: sum(1 for v in _engine._task_exec_types.values() if v == t)
@@ -2672,6 +2680,41 @@ def reload_config_endpoint():
     return {"status": "reloaded", "limits": cfg.resolved_executor_limits()}
 
 
+_VALID_CONTAINMENT = {None, "cloud-hypervisor"}
+
+
+@app.put("/api/config/containment")
+def update_agent_containment_default(req: UpdateContainmentRequest):
+    """Set the project-wide default containment for agent steps.
+
+    Writes to .stepwise/config.local.yaml. Setting None clears the
+    default (agent steps run unisolated unless flow/step/agent
+    override). Per-agent overrides via PUT /api/agents/{name} take
+    precedence over this default.
+    """
+    value = req.containment
+    if value not in _VALID_CONTAINMENT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid containment mode {value!r}. Allowed: null, 'cloud-hypervisor'.",
+        )
+
+    import yaml as yaml_lib
+    path = _project_dir / ".stepwise" / "config.local.yaml"
+    data: dict[str, Any] = {}
+    if path.exists():
+        data = yaml_lib.safe_load(path.read_text()) or {}
+    if value is None:
+        data.pop("agent_containment", None)
+    else:
+        data["agent_containment"] = value
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml_lib.dump(data, default_flow_style=False, sort_keys=False))
+
+    new_cfg = _reload_engine_config()
+    return {"status": "updated", "agent_containment": new_cfg.agent_containment}
+
+
 # ── Agent settings endpoints ──────────────────────────────────────────
 
 import re as _re
@@ -2792,6 +2835,50 @@ def update_agent(name: str, req: UpdateAgentRequest):
     save_agents_to_local_config(_project_dir, local_agents)
     _reload_and_inject()
     return {"status": "updated", "name": name}
+
+
+@app.put("/api/agents/{name}/containment")
+def update_agent_containment(name: str, req: UpdateContainmentRequest):
+    """Set or clear a per-agent containment override.
+
+    Distinct from PUT /api/agents/{name} because that endpoint treats
+    `containment: null` as "don't touch", which makes it impossible to
+    clear an existing override. Here `null` explicitly removes the
+    override (agent falls back to the project-wide `agent_containment`
+    default, which itself defaults to no containment).
+    """
+    from stepwise.agent_registry import BUILTIN_AGENTS
+
+    if req.containment not in _VALID_CONTAINMENT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid containment mode {req.containment!r}. Allowed: null, 'cloud-hypervisor'.",
+        )
+
+    is_builtin = name in BUILTIN_AGENTS
+    local_agents = _read_local_agents_raw()
+    entry = local_agents.get(name, {})
+    if not isinstance(entry, dict):
+        entry = {}
+
+    if not is_builtin and name not in local_agents:
+        raise HTTPException(status_code=404, detail=f"Agent '{name}' not found.")
+
+    if req.containment is None:
+        entry.pop("containment", None)
+    else:
+        entry["containment"] = req.containment
+
+    # If the override entry is now empty AND the agent is a builtin,
+    # drop the entry entirely so the builtin defaults apply cleanly.
+    if is_builtin and not entry:
+        local_agents.pop(name, None)
+    else:
+        local_agents[name] = entry
+
+    save_agents_to_local_config(_project_dir, local_agents)
+    _reload_and_inject()
+    return {"status": "updated", "name": name, "containment": req.containment}
 
 
 @app.post("/api/agents")

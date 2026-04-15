@@ -415,6 +415,8 @@ def load_config(project_dir: Path | None = None) -> StepwiseConfig:
              if l.agent_process_ttl != 0),
             0,
         ),
+        agent_containment=(local.agent_containment or project.agent_containment
+                           or user.agent_containment),
     )
 
 
@@ -483,6 +485,8 @@ def load_config_with_sources(project_dir: Path | None = None) -> ConfigWithSourc
         notify_url=(local.notify_url or project.notify_url or user.notify_url),
         notify_context=(local.notify_context or project.notify_context
                         or user.notify_context),
+        agent_containment=(local.agent_containment or project.agent_containment
+                           or user.agent_containment),
     )
 
     return ConfigWithSources(config=config, label_info=label_info, api_key_source=api_key_source)

@@ -36,7 +36,7 @@ import { Label } from "@/components/ui/label";
 
 // ── Types ──────────────────────────────────────────────────────────
 
-type SectionId = "general" | "agents" | "api-keys" | "models" | "labels";
+type SectionId = "general" | "agents" | "containment" | "api-keys" | "models" | "labels";
 
 interface NavItem {
   id: SectionId;
@@ -47,6 +47,7 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { id: "general", label: "General", icon: Settings2 },
   { id: "agents", label: "Agents", icon: Bot },
+  { id: "containment", label: "Containment", icon: Shield },
   { id: "api-keys", label: "API Keys", icon: Key },
   { id: "models", label: "Models", icon: Database },
   { id: "labels", label: "Labels", icon: Tag },
@@ -1263,6 +1264,155 @@ function AgentsSection() {
   );
 }
 
+// ── Containment section ─────────────────────────────────────────────
+
+function ContainmentSection({
+  config,
+  agents,
+  mutations,
+}: {
+  config: NonNullable<ReturnType<typeof useConfig>["data"]>;
+  agents: AgentInfo[] | undefined;
+  mutations: ReturnType<typeof useConfigMutations>;
+}) {
+  const agentMutations = useAgentMutations();
+  const projectDefault = config.agent_containment ?? null;
+
+  // Effective containment for an agent = explicit per-agent override
+  // when set, otherwise the project-wide default.
+  function effectiveFor(agent: AgentInfo): { value: string | null; source: string } {
+    if (agent.containment) return { value: agent.containment, source: "agent" };
+    if (projectDefault) return { value: projectDefault, source: "project" };
+    return { value: null, source: "default" };
+  }
+
+  return (
+    <div>
+      <SectionHeader
+        title="Containment"
+        description={
+          "Hardware-isolated agent execution via Cloud-Hypervisor microVMs. " +
+          "Set a project-wide default below, then override per agent if needed. " +
+          "Override chain at run time: CLI flag > flow YAML > step YAML > agent override > project default."
+        }
+      />
+
+      <div className="space-y-6">
+        {/* ── Project-wide default ───────────────────────────────────── */}
+        <div className="border border-zinc-200 dark:border-zinc-800 rounded-lg p-4">
+          <div className="flex items-start gap-3">
+            <div className="flex-1">
+              <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                Project default
+              </div>
+              <p className="text-xs text-zinc-500 dark:text-zinc-500 mt-0.5">
+                Applied to every agent step in this project unless overridden.
+                Stored in <code className="text-[10px] bg-zinc-100 dark:bg-zinc-900 px-1 rounded">.stepwise/config.local.yaml</code>.
+              </p>
+            </div>
+            <select
+              value={projectDefault ?? ""}
+              onChange={(e) => {
+                const v = e.target.value === "" ? null : e.target.value;
+                mutations.setAgentContainmentDefault.mutate(v);
+              }}
+              disabled={mutations.setAgentContainmentDefault.isPending}
+              className="text-xs bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1.5 text-zinc-700 dark:text-zinc-300 min-w-[12rem]"
+            >
+              <option value="">None (no containment)</option>
+              <option value="cloud-hypervisor">cloud-hypervisor</option>
+            </select>
+          </div>
+          <div className="mt-3 text-[11px] text-zinc-500 dark:text-zinc-500 leading-relaxed">
+            <Shield className="w-3 h-3 inline-block mr-1 -mt-0.5" />
+            <span>
+              Containment requires a built rootfs and the vmmd daemon.
+              Run <code className="text-[10px] bg-zinc-100 dark:bg-zinc-900 px-1 rounded">stepwise doctor --containment</code> to check
+              prerequisites, then <code className="text-[10px] bg-zinc-100 dark:bg-zinc-900 px-1 rounded">stepwise build-rootfs</code> and{" "}
+              <code className="text-[10px] bg-zinc-100 dark:bg-zinc-900 px-1 rounded">sudo stepwise vmmd start --detach</code>.
+            </span>
+          </div>
+        </div>
+
+        {/* ── Per-agent overrides ─────────────────────────────────────── */}
+        <div className="border border-zinc-200 dark:border-zinc-800 rounded-lg overflow-hidden">
+          <div className="px-3 py-2 bg-zinc-50 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800">
+            <div className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
+              Per-agent override
+            </div>
+            <p className="text-[11px] text-zinc-500 dark:text-zinc-500 mt-0.5">
+              Pin a specific agent to a containment mode regardless of the project default.
+              Set "(use project default)" to remove the override.
+            </p>
+          </div>
+
+          {!agents || agents.length === 0 ? (
+            <div className="px-3 py-4 text-xs text-zinc-500 dark:text-zinc-600">
+              No agents registered.
+            </div>
+          ) : (
+            <div className="divide-y divide-zinc-200/50 dark:divide-zinc-800/50">
+              {agents.map((agent) => {
+                const effective = effectiveFor(agent);
+                const overrideValue = agent.containment ?? "";
+                return (
+                  <div
+                    key={agent.name}
+                    className="flex items-center gap-3 px-3 py-2"
+                  >
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <Bot className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-500 shrink-0" />
+                      <span className="text-xs font-mono text-zinc-700 dark:text-zinc-300 truncate">
+                        {agent.name}
+                      </span>
+                      {agent.is_disabled && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 dark:bg-red-950 text-red-600 dark:text-red-400">
+                          disabled
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-[10px] text-zinc-500 dark:text-zinc-600">
+                        effective:
+                      </span>
+                      {effective.value ? (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-950 text-green-600 dark:text-green-400 flex items-center gap-0.5">
+                          <Shield className="w-2.5 h-2.5" />
+                          {effective.value}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-900 text-zinc-500 dark:text-zinc-500">
+                          none
+                        </span>
+                      )}
+                      <SourceBadge source={effective.source} />
+                    </div>
+                    <select
+                      value={overrideValue}
+                      onChange={(e) => {
+                        const v = e.target.value === "" ? null : e.target.value;
+                        agentMutations.setAgentContainment.mutate({
+                          name: agent.name,
+                          containment: v,
+                        });
+                      }}
+                      disabled={agentMutations.setAgentContainment.isPending}
+                      className="text-xs bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-700 dark:text-zinc-300 min-w-[10rem]"
+                    >
+                      <option value="">(use project default)</option>
+                      <option value="cloud-hypervisor">cloud-hypervisor</option>
+                    </select>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── General section ─────────────────────────────────────────────────
 
 function GeneralSection({
@@ -1612,6 +1762,8 @@ export function SettingsPage() {
             <AgentsSection />
           </div>
         );
+      case "containment":
+        return <ContainmentSection config={config} agents={agents} mutations={mutations} />;
       case "api-keys":
         return <ApiKeysSection config={config} mutations={mutations} />;
       case "models":

@@ -80,6 +80,12 @@ export function useConfigMutations() {
     onSuccess: invalidateConfig,
   });
 
+  const setAgentContainmentDefault = useMutation({
+    mutationFn: (containment: string | null) =>
+      api.setAgentContainmentDefault(containment),
+    onSuccess: invalidateConfig,
+  });
+
   return {
     createLabel,
     updateLabel,
@@ -89,5 +95,6 @@ export function useConfigMutations() {
     setApiKey,
     setDefaultModel,
     setDefaultAgent,
+    setAgentContainmentDefault,
   };
 }
