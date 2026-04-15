@@ -86,6 +86,12 @@ export function useConfigMutations() {
     onSuccess: invalidateConfig,
   });
 
+  const setAgentConcurrencyLimit = useMutation({
+    mutationFn: ({ agent, limit }: { agent: string; limit: number }) =>
+      api.setAgentConcurrencyLimit(agent, limit),
+    onSuccess: invalidateConfig,
+  });
+
   return {
     createLabel,
     updateLabel,
@@ -96,5 +102,6 @@ export function useConfigMutations() {
     setDefaultModel,
     setDefaultAgent,
     setAgentContainmentDefault,
+    setAgentConcurrencyLimit,
   };
 }

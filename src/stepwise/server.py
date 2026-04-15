@@ -309,6 +309,10 @@ def _reload_engine_config() -> StepwiseConfig:
         _engine.max_concurrent_jobs = cfg.max_concurrent_jobs
         if hasattr(_engine, "_executor_limits"):
             _engine._executor_limits = cfg.resolved_executor_limits()
+        if hasattr(_engine, "_agent_limits"):
+            _engine._agent_limits = {
+                k: v for k, v in cfg.max_concurrent_by_agent.items() if v > 0
+            }
     return cfg
 
 
@@ -2453,6 +2457,11 @@ def get_config():
             t: sum(1 for v in _engine._task_exec_types.values() if v == t)
             for t in set(_engine._task_exec_types.values())
         } if _engine and hasattr(_engine, "_task_exec_types") else {},
+        "agent_concurrency_limits": dict(cfg.max_concurrent_by_agent),
+        "agent_concurrency_running": {
+            n: sum(1 for v in _engine._task_agent_names.values() if v == n)
+            for n in set(_engine._task_agent_names.values())
+        } if _engine and hasattr(_engine, "_task_agent_names") else {},
     }
 
 
@@ -2671,6 +2680,52 @@ def update_concurrency_limit(req: UpdateConcurrencyRequest):
     save_project_local_config(_project_dir, max_concurrent_by_executor=limits)
     new_cfg = _reload_engine_config()
     return {"status": "updated", "limits": new_cfg.resolved_executor_limits()}
+
+
+class UpdateAgentConcurrencyRequest(BaseModel):
+    agent: str  # agent NAME (claude, codex, aloop, ...)
+    limit: int  # 0 = remove per-agent cap (fall back to type cap only)
+
+
+@app.put("/api/config/agent-concurrency")
+def update_agent_concurrency_limit(req: UpdateAgentConcurrencyRequest):
+    """Set max concurrent steps for a specific agent NAME.
+
+    Per-agent caps are checked in ADDITION to the executor-type cap.
+    A step is throttled if either cap is hit. Set 0 to remove the
+    per-agent cap (the executor-type cap still applies).
+    """
+    if req.limit < 0:
+        raise HTTPException(
+            status_code=400, detail="Limit must be non-negative (0 = remove cap)",
+        )
+    if not req.agent:
+        raise HTTPException(status_code=400, detail="agent name required")
+
+    import yaml as yaml_lib
+    path = _project_dir / ".stepwise" / "config.local.yaml"
+    data: dict[str, Any] = {}
+    if path.exists():
+        data = yaml_lib.safe_load(path.read_text()) or {}
+    by_agent = data.get("max_concurrent_by_agent", {})
+    if not isinstance(by_agent, dict):
+        by_agent = {}
+    if req.limit == 0:
+        by_agent.pop(req.agent, None)
+    else:
+        by_agent[req.agent] = req.limit
+    if by_agent:
+        data["max_concurrent_by_agent"] = by_agent
+    else:
+        data.pop("max_concurrent_by_agent", None)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml_lib.dump(data, default_flow_style=False, sort_keys=False))
+
+    new_cfg = _reload_engine_config()
+    return {
+        "status": "updated",
+        "agent_concurrency_limits": dict(new_cfg.max_concurrent_by_agent),
+    }
 
 
 @app.post("/api/config/reload")

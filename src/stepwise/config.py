@@ -116,6 +116,14 @@ class StepwiseConfig:
     max_concurrent_jobs: int = 10
     max_concurrent_agents: int = 3
     max_concurrent_by_executor: dict[str, int] = field(default_factory=dict)
+    # Per-agent-NAME concurrency caps (claude, codex, aloop, ...).
+    # Distinct from max_concurrent_by_executor["agent"] which is a
+    # single cap across ALL agents regardless of which agent. Use this
+    # when you want "max 3 claude running at once even if there are
+    # codex + aloop slots free" — e.g. to protect a rate-limited
+    # subscription.
+    # 0 or missing = no per-agent cap (only the type-level cap applies).
+    max_concurrent_by_agent: dict[str, int] = field(default_factory=dict)
     agent_permissions: str = "approve_all"  # "approve_all" | "prompt" | "deny"
     agent_containment: str | None = None  # "cloud-hypervisor" | None
     agent_process_ttl: int = 0  # seconds; 0 = disabled (no limit). Safety net for zombie processes.
@@ -174,6 +182,8 @@ class StepwiseConfig:
             d["max_concurrent_agents"] = self.max_concurrent_agents
         if self.max_concurrent_by_executor:
             d["max_concurrent_by_executor"] = self.max_concurrent_by_executor
+        if self.max_concurrent_by_agent:
+            d["max_concurrent_by_agent"] = self.max_concurrent_by_agent
         if self.agent_permissions != "approve_all":
             d["agent_permissions"] = self.agent_permissions
         if self.agent_containment:
@@ -203,6 +213,14 @@ class StepwiseConfig:
             if isinstance(v, int) and v >= 0:
                 validated_limits[str(k)] = v
 
+        raw_agent_limits = d.get("max_concurrent_by_agent", {})
+        if not isinstance(raw_agent_limits, dict):
+            raw_agent_limits = {}
+        validated_agent_limits: dict[str, int] = {}
+        for k, v in raw_agent_limits.items():
+            if isinstance(v, int) and v > 0:
+                validated_agent_limits[str(k)] = v
+
         return StepwiseConfig(
             openrouter_api_key=d.get("openrouter_api_key"),
             anthropic_api_key=d.get("anthropic_api_key"),
@@ -216,6 +234,7 @@ class StepwiseConfig:
             max_concurrent_jobs=d.get("max_concurrent_jobs", 10),
             max_concurrent_agents=d.get("max_concurrent_agents", 3),
             max_concurrent_by_executor=validated_limits,
+            max_concurrent_by_agent=validated_agent_limits,
             agent_permissions=d.get("agent_permissions", "approve_all"),
             agent_containment=d.get("agent_containment"),
             agent_process_ttl=d.get("agent_process_ttl", 0),
@@ -369,6 +388,12 @@ def load_config(project_dir: Path | None = None) -> StepwiseConfig:
     executor_limits.update(project.max_concurrent_by_executor)
     executor_limits.update(local.max_concurrent_by_executor)
 
+    # Merge per-agent-name limits: user < project < local
+    agent_limits: dict[str, int] = {}
+    agent_limits.update(user.max_concurrent_by_agent)
+    agent_limits.update(project.max_concurrent_by_agent)
+    agent_limits.update(local.max_concurrent_by_agent)
+
     registry = list(user.model_registry)
     registry = _ensure_label_models_in_registry(registry, labels)
     registry = _ensure_defaults_in_registry(registry)
@@ -405,6 +430,7 @@ def load_config(project_dir: Path | None = None) -> StepwiseConfig:
             3,
         ),
         max_concurrent_by_executor=executor_limits,
+        max_concurrent_by_agent=agent_limits,
         agent_permissions=next(
             (l.agent_permissions for l in (local, project, user)
              if l.agent_permissions != "approve_all"),
@@ -487,6 +513,11 @@ def load_config_with_sources(project_dir: Path | None = None) -> ConfigWithSourc
                         or user.notify_context),
         agent_containment=(local.agent_containment or project.agent_containment
                            or user.agent_containment),
+        max_concurrent_by_agent={
+            **user.max_concurrent_by_agent,
+            **project.max_concurrent_by_agent,
+            **local.max_concurrent_by_agent,
+        },
     )
 
     return ConfigWithSources(config=config, label_info=label_info, api_key_source=api_key_source)

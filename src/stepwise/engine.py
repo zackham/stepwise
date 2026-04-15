@@ -2366,14 +2366,18 @@ class Engine:
 
         exec_ref = step_def.executor
 
-        # Interpolate $variable references in executor config from resolved inputs
+        # Interpolate $variable references in executor config from resolved inputs.
+        # Always persist the result to executor_state so the frontend can
+        # display the exact config (esp. the prompt) WHILE the step is still
+        # running — not only after completion. Previously this was gated on
+        # "interpolation actually changed something", which meant a static
+        # prompt (no $variables) had nothing to show during streaming.
         interpolated = _interpolate_config(exec_ref.config, inputs)
+        state = run.executor_state or {}
+        state["_interpolated_config"] = interpolated
+        run.executor_state = state
+        self.store.save_run(run)
         if interpolated != exec_ref.config:
-            # Persist interpolated config for frontend inspection
-            state = run.executor_state or {}
-            state["_interpolated_config"] = interpolated
-            run.executor_state = state
-            self.store.save_run(run)
             exec_ref = ExecutorRef(
                 type=exec_ref.type, config=interpolated,
                 decorators=exec_ref.decorators,
@@ -4065,9 +4069,19 @@ class AsyncEngine(Engine):
         # Per-executor-type dispatch gating
         self._executor_limits: dict[str, int] = {}
         self._task_exec_types: dict[str, str] = {}  # run_id → executor type name
+        # Per-agent-NAME dispatch gating. _agent_limits[name] = cap (>0);
+        # _task_agent_names[run_id] = agent name at launch time. Agent
+        # limits are checked ALONGSIDE executor-type limits: a step is
+        # throttled if either is at capacity.
+        self._agent_limits: dict[str, int] = {}
+        self._task_agent_names: dict[str, str] = {}
         self._throttled_jobs: set[str] = set()  # job IDs with steps waiting for executor capacity
         if config and hasattr(config, "resolved_executor_limits"):
             self._executor_limits = config.resolved_executor_limits()
+        if config and hasattr(config, "max_concurrent_by_agent"):
+            self._agent_limits = {
+                k: v for k, v in config.max_concurrent_by_agent.items() if v > 0
+            }
         self._agent_last_launch: float = 0.0  # monotonic timestamp
         self._agent_stagger_lock = asyncio.Lock()
         self._agent_stagger_seconds = 2.0
@@ -4080,6 +4094,7 @@ class AsyncEngine(Engine):
         for task in self._poll_tasks.values():
             task.cancel()
         self._task_exec_types.clear()
+        self._task_agent_names.clear()
         self._throttled_jobs.clear()
 
     # ── Main loop ────────────────────────────────────────────────────────
@@ -4131,7 +4146,7 @@ class AsyncEngine(Engine):
                             "no executor task found, routing through _fail_run",
                             job.id, run.step_name, run.id, age,
                         )
-                        self._task_exec_types.pop(run.id, None)
+                        self._untrack_task(run.id)
                         step_def = job.workflow.steps.get(run.step_name)
                         if step_def is None:
                             run.status = StepRunStatus.FAILED
@@ -4170,7 +4185,7 @@ class AsyncEngine(Engine):
                             task = self._tasks.pop(run.id, None)
                             if task:
                                 task.cancel()
-                            self._task_exec_types.pop(run.id, None)
+                            self._untrack_task(run.id)
                             step_def = job.workflow.steps.get(run.step_name)
                             if step_def:
                                 self._fail_run(
@@ -4570,7 +4585,10 @@ class AsyncEngine(Engine):
                         job.id, run.step_name, run.id, run.executor_state, exec_ref)
                 )
                 self._tasks[run.id] = task
-                self._task_exec_types[run.id] = exec_ref.type
+                step_def = job.workflow.steps.get(run.step_name)
+                self._track_task(
+                    run.id, exec_ref.type, self._step_agent_name(step_def),
+                )
                 reattached += 1
                 _async_logger.info(
                     "Reattaching surviving run %s (job %s step %s, PID %d)",
@@ -4613,7 +4631,7 @@ class AsyncEngine(Engine):
         # Cancel running async tasks before cancelling runs
         for run in running_runs:
             task = self._tasks.pop(run.id, None)
-            self._task_exec_types.pop(run.id, None)
+            self._untrack_task(run.id)
             if task:
                 task.cancel()
         # Cancel poll watch timers for suspended runs
@@ -4667,7 +4685,7 @@ class AsyncEngine(Engine):
         # Cancel running async tasks before pausing runs
         for run in running_runs:
             task = self._tasks.pop(run.id, None)
-            self._task_exec_types.pop(run.id, None)
+            self._untrack_task(run.id)
             if task:
                 task.cancel()
         # Cancel poll watch timers for suspended runs
@@ -4705,7 +4723,7 @@ class AsyncEngine(Engine):
         # Cancel running async tasks before clearing runs
         for run in self.store.runs_for_job(job_id):
             task = self._tasks.pop(run.id, None)
-            self._task_exec_types.pop(run.id, None)
+            self._untrack_task(run.id)
             if task:
                 task.cancel()
             self._cancel_poll_task(run.id)
@@ -4713,7 +4731,7 @@ class AsyncEngine(Engine):
         for descendant_id in self._collect_descendant_job_ids(job_id):
             for run in self.store.runs_for_job(descendant_id):
                 task = self._tasks.pop(run.id, None)
-                self._task_exec_types.pop(run.id, None)
+                self._untrack_task(run.id)
                 if task:
                     task.cancel()
                 self._cancel_poll_task(run.id)
@@ -4766,29 +4784,49 @@ class AsyncEngine(Engine):
         for step_name in ready:
             step_def = job.workflow.steps[step_name]
             exec_type = step_def.executor.type
+            agent_name = self._step_agent_name(step_def)
+
+            # Type-level cap check.
             if self._executor_at_capacity(exec_type):
                 running = self._running_count_for_type(exec_type)
                 limit = self._executor_limits.get(exec_type, 0)
-                # INFO (was DEBUG): this is the visibility operators need to
-                # tell "job stalled" from "job throttled, waiting for a slot".
                 _async_logger.info(
                     "Step %s throttled: %s at capacity (%d/%d) — waiting for slot",
                     step_name, exec_type, running, limit,
                 )
-                # Emit a step.throttled event for WebSocket subscribers so the
-                # UI can render a "waiting for agent" indicator instead of
-                # looking frozen. Only emit on first throttle for this
-                # (job, step) — re-dispatches would duplicate.
                 if job_id not in self._throttled_jobs:
                     self._emit(job_id, STEP_THROTTLED, {
                         "step": step_name,
                         "executor_type": exec_type,
                         "running": running,
                         "limit": limit,
+                        "reason": "executor_type",
                     })
                 throttled_details.append((step_name, exec_type, running, limit))
                 throttled = True
                 continue
+
+            # Per-agent cap check (only for agent steps with a cap set).
+            if agent_name and self._agent_at_capacity(agent_name):
+                running = self._running_count_for_agent(agent_name)
+                limit = self._agent_limits.get(agent_name, 0)
+                _async_logger.info(
+                    "Step %s throttled: agent %s at capacity (%d/%d) — waiting for slot",
+                    step_name, agent_name, running, limit,
+                )
+                if job_id not in self._throttled_jobs:
+                    self._emit(job_id, STEP_THROTTLED, {
+                        "step": step_name,
+                        "executor_type": exec_type,
+                        "agent_name": agent_name,
+                        "running": running,
+                        "limit": limit,
+                        "reason": "agent_name",
+                    })
+                throttled_details.append((step_name, f"agent:{agent_name}", running, limit))
+                throttled = True
+                continue
+
             self._launch(job, step_name)
             # Reload — _launch may change job status (for_each, route, sub_flow)
             job = self.store.load_job(job_id)
@@ -4862,7 +4900,9 @@ class AsyncEngine(Engine):
                 raise RuntimeError("AsyncEngine.run() must be started before dispatching steps")
             task = asyncio.run_coroutine_threadsafe(coro, self._loop)
         self._tasks[run.id] = task
-        self._task_exec_types[run.id] = step_def.executor.type
+        self._track_task(
+            run.id, step_def.executor.type, self._step_agent_name(step_def),
+        )
         return run
 
     async def _apply_agent_stagger(self) -> None:
@@ -4882,6 +4922,39 @@ class AsyncEngine(Engine):
         """Check if an executor type has hit its concurrency limit."""
         limit = self._executor_limits.get(exec_type, 0)
         return limit > 0 and self._running_count_for_type(exec_type) >= limit
+
+    def _running_count_for_agent(self, agent_name: str) -> int:
+        """Count in-flight agent tasks for a specific agent name."""
+        return sum(1 for n in self._task_agent_names.values() if n == agent_name)
+
+    def _agent_at_capacity(self, agent_name: str) -> bool:
+        """Check if a specific agent (by name) has hit its per-agent cap."""
+        limit = self._agent_limits.get(agent_name, 0)
+        return limit > 0 and self._running_count_for_agent(agent_name) >= limit
+
+    def _track_task(
+        self,
+        run_id: str,
+        exec_type: str,
+        agent_name: str | None = None,
+    ) -> None:
+        """Record that a run is in-flight for capacity accounting."""
+        self._task_exec_types[run_id] = exec_type
+        if agent_name:
+            self._task_agent_names[run_id] = agent_name
+
+    def _untrack_task(self, run_id: str) -> None:
+        """Drop a run from capacity accounting (on terminal or crash)."""
+        self._task_exec_types.pop(run_id, None)
+        self._task_agent_names.pop(run_id, None)
+
+    @staticmethod
+    def _step_agent_name(step_def) -> str | None:
+        """Extract the agent name from a step definition if it's an agent step."""
+        if not (step_def and step_def.executor and step_def.executor.type == "agent"):
+            return None
+        cfg = step_def.executor.config or {}
+        return cfg.get("agent")
 
     async def _run_executor(
         self,
@@ -4995,7 +5068,7 @@ class AsyncEngine(Engine):
         if event_type == "step_result":
             _, job_id, step_name, run_id, result = event
             self._tasks.pop(run_id, None)
-            self._task_exec_types.pop(run_id, None)
+            self._untrack_task(run_id)
 
             try:
                 job = self.store.load_job(job_id)
@@ -5021,7 +5094,7 @@ class AsyncEngine(Engine):
         elif event_type == "step_error":
             _, job_id, step_name, run_id, error = event
             self._tasks.pop(run_id, None)
-            self._task_exec_types.pop(run_id, None)
+            self._untrack_task(run_id)
 
             try:
                 job = self.store.load_job(job_id)

@@ -1334,15 +1334,16 @@ function ContainmentSection({
           </div>
         </div>
 
-        {/* ── Per-agent overrides ─────────────────────────────────────── */}
+        {/* ── Per-agent table: containment + concurrency ──────────────── */}
         <div className="border border-zinc-200 dark:border-zinc-800 rounded-lg overflow-hidden">
           <div className="px-3 py-2 bg-zinc-50 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800">
             <div className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
-              Per-agent override
+              Per-agent overrides
             </div>
             <p className="text-[11px] text-zinc-500 dark:text-zinc-500 mt-0.5">
-              Pin a specific agent to a containment mode regardless of the project default.
-              Set "(use project default)" to remove the override.
+              <strong>Containment</strong> — pin a specific agent to a mode regardless of the project default.
+              <strong className="ml-2">Concurrency</strong> — cap simultaneous in-flight steps for this agent.
+              Set 0 (empty) to remove. Per-agent caps are AND'd with the executor-type cap in General.
             </p>
           </div>
 
@@ -1351,60 +1352,94 @@ function ContainmentSection({
               No agents registered.
             </div>
           ) : (
-            <div className="divide-y divide-zinc-200/50 dark:divide-zinc-800/50">
-              {agents.map((agent) => {
-                const effective = effectiveFor(agent);
-                const overrideValue = agent.containment ?? "";
-                return (
-                  <div
-                    key={agent.name}
-                    className="flex items-center gap-3 px-3 py-2"
-                  >
-                    <div className="flex items-center gap-2 min-w-0 flex-1">
-                      <Bot className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-500 shrink-0" />
-                      <span className="text-xs font-mono text-zinc-700 dark:text-zinc-300 truncate">
-                        {agent.name}
-                      </span>
-                      {agent.is_disabled && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 dark:bg-red-950 text-red-600 dark:text-red-400">
-                          disabled
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span className="text-[10px] text-zinc-500 dark:text-zinc-600">
-                        effective:
-                      </span>
-                      {effective.value ? (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-950 text-green-600 dark:text-green-400 flex items-center gap-0.5">
-                          <Shield className="w-2.5 h-2.5" />
-                          {effective.value}
-                        </span>
-                      ) : (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-900 text-zinc-500 dark:text-zinc-500">
-                          none
-                        </span>
-                      )}
-                      <SourceBadge source={effective.source} />
-                    </div>
-                    <select
-                      value={overrideValue}
-                      onChange={(e) => {
-                        const v = e.target.value === "" ? null : e.target.value;
-                        agentMutations.setAgentContainment.mutate({
-                          name: agent.name,
-                          containment: v,
-                        });
-                      }}
-                      disabled={agentMutations.setAgentContainment.isPending}
-                      className="text-xs bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-700 dark:text-zinc-300 min-w-[10rem]"
+            <div>
+              <div className="px-3 py-1.5 border-b border-zinc-200/50 dark:border-zinc-800/50 grid grid-cols-[1fr_auto_auto_auto] items-center gap-3 text-[10px] uppercase tracking-wide font-medium text-zinc-500 dark:text-zinc-600">
+                <div>Agent</div>
+                <div>Effective</div>
+                <div className="min-w-[10rem] text-left">Containment</div>
+                <div className="w-20 text-left">Concurrency</div>
+              </div>
+              <div className="divide-y divide-zinc-200/50 dark:divide-zinc-800/50">
+                {agents.map((agent) => {
+                  const effective = effectiveFor(agent);
+                  const overrideValue = agent.containment ?? "";
+                  const concurrencyLimits = config.agent_concurrency_limits ?? {};
+                  const concurrencyRunning = config.agent_concurrency_running ?? {};
+                  const currentConcurrency = concurrencyLimits[agent.name] ?? 0;
+                  const running = concurrencyRunning[agent.name] ?? 0;
+                  return (
+                    <div
+                      key={agent.name}
+                      className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-3 px-3 py-2"
                     >
-                      <option value="">(use project default)</option>
-                      <option value="cloud-hypervisor">cloud-hypervisor</option>
-                    </select>
-                  </div>
-                );
-              })}
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Bot className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-500 shrink-0" />
+                        <span className="text-xs font-mono text-zinc-700 dark:text-zinc-300 truncate">
+                          {agent.name}
+                        </span>
+                        {agent.is_disabled && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 dark:bg-red-950 text-red-600 dark:text-red-400">
+                            disabled
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {effective.value ? (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-950 text-green-600 dark:text-green-400 flex items-center gap-0.5">
+                            <Shield className="w-2.5 h-2.5" />
+                            {effective.value}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-900 text-zinc-500 dark:text-zinc-500">
+                            none
+                          </span>
+                        )}
+                        <SourceBadge source={effective.source} />
+                      </div>
+                      <select
+                        value={overrideValue}
+                        onChange={(e) => {
+                          const v = e.target.value === "" ? null : e.target.value;
+                          agentMutations.setAgentContainment.mutate({
+                            name: agent.name,
+                            containment: v,
+                          });
+                        }}
+                        disabled={agentMutations.setAgentContainment.isPending}
+                        className="text-xs bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-700 dark:text-zinc-300 min-w-[10rem]"
+                      >
+                        <option value="">(use project default)</option>
+                        <option value="cloud-hypervisor">cloud-hypervisor</option>
+                      </select>
+                      <div className="flex items-center gap-1.5 w-20">
+                        <input
+                          type="number"
+                          min={0}
+                          max={999}
+                          value={currentConcurrency || ""}
+                          placeholder="∞"
+                          onChange={(e) => {
+                            const n = parseInt(e.target.value || "0", 10);
+                            if (Number.isNaN(n) || n < 0) return;
+                            mutations.setAgentConcurrencyLimit.mutate({
+                              agent: agent.name,
+                              limit: n,
+                            });
+                          }}
+                          disabled={mutations.setAgentConcurrencyLimit.isPending}
+                          className="text-xs bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded px-1.5 py-1 text-zinc-700 dark:text-zinc-300 w-12 text-center"
+                          title={currentConcurrency > 0 ? `max ${currentConcurrency} in flight` : "no cap"}
+                        />
+                        {currentConcurrency > 0 && (
+                          <span className="text-[9px] text-zinc-500 dark:text-zinc-600 font-mono">
+                            {running}/{currentConcurrency}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
         </div>

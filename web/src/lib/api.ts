@@ -674,6 +674,9 @@ export interface ConfigResponse {
   agent_containment?: string | null;
   concurrency_limits?: Record<string, number>;
   concurrency_running?: Record<string, number>;
+  // Per-agent-NAME concurrency caps. 0 / missing = no per-agent cap.
+  agent_concurrency_limits?: Record<string, number>;
+  agent_concurrency_running?: Record<string, number>;
 }
 
 export function fetchConfig(): Promise<ConfigResponse> {
@@ -755,6 +758,16 @@ export function setAgentContainment(
   return request(`/agents/${encodeURIComponent(agentName)}/containment`, {
     method: "PUT",
     body: JSON.stringify({ containment }),
+  });
+}
+
+export function setAgentConcurrencyLimit(
+  agent: string,
+  limit: number,
+): Promise<{ status: string; agent_concurrency_limits: Record<string, number> }> {
+  return request("/config/agent-concurrency", {
+    method: "PUT",
+    body: JSON.stringify({ agent, limit }),
   });
 }
 
