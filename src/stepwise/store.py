@@ -664,16 +664,32 @@ class SQLiteStore:
         self._conn.commit()
 
     def update_run_state(self, run_id: str, executor_state: dict, pid: int | None = None) -> None:
-        """Atomic UPDATE of executor_state and optionally pid.
+        """Atomic MERGE of executor_state and optional pid update.
 
-        Avoids the read-modify-write race in load_run + save_run by issuing
-        a single UPDATE.  COALESCE(?, pid) keeps the existing pid when the
-        caller passes None, so concurrent save_run calls on other columns
-        can't clobber a pid that was already written.
+        Uses SQLite's json_patch to merge the supplied keys into the
+        existing JSON object so concurrent writers from different
+        layers don't clobber each other. Examples of layered writes:
+
+        - engine._prepare_step_run writes `_interpolated_config` (the
+          resolved prompt + config) so the UI can show what was sent
+          while the step is still running.
+        - ACPBackend.spawn writes `pid`, `pgid`, `session_id`,
+          `working_dir`, `agent`, `in_vm`, etc. once the subprocess
+          starts.
+        - The ACP usage-limit handler writes `usage_limit_waiting`.
+
+        Pre-2026-04-15 this was a full-row OVERWRITE — every
+        state_update_fn call wiped out keys written by a different
+        caller, including `_interpolated_config`. json_patch is
+        atomic, key-level, and recursive, so the merge happens inside
+        the single UPDATE without a read-modify-write race.
         """
         self._conn.execute(
             """UPDATE step_runs
-               SET executor_state = ?,
+               SET executor_state = json_patch(
+                       COALESCE(executor_state, '{}'),
+                       ?
+                   ),
                    pid = COALESCE(?, pid)
              WHERE id = ?""",
             (
@@ -968,6 +984,100 @@ class SQLiteStore:
             (run_id,),
         ).fetchone()
         return float(row["total"]) if row and row["total"] else 0.0
+
+    def batch_completed_step_counts(self, job_ids: list[str]) -> dict[str, int]:
+        """Count distinct completed steps for many jobs in ONE query.
+
+        Replaces the N+1 loop of calling completed_step_count() per job
+        from the /api/jobs serializer. Only counts distinct step names
+        with at least one COMPLETED run, matching completed_step_count's
+        semantics.
+        """
+        if not job_ids:
+            return {}
+        placeholders = ",".join("?" for _ in job_ids)
+        rows = self._conn.execute(
+            f"""SELECT job_id, COUNT(DISTINCT step_name) AS cnt
+                FROM step_runs
+                WHERE job_id IN ({placeholders}) AND status = ?
+                GROUP BY job_id""",
+            (*job_ids, StepRunStatus.COMPLETED.value),
+        ).fetchall()
+        result = {jid: 0 for jid in job_ids}
+        for row in rows:
+            result[row["job_id"]] = row["cnt"]
+        return result
+
+    def batch_job_ids_with_suspended_runs(self, job_ids: list[str]) -> set[str]:
+        """Return the subset of job_ids that have at least one suspended run.
+
+        Single query replacing the N+1 of `bool(suspended_runs(job.id))`
+        called per job in /api/jobs.
+        """
+        if not job_ids:
+            return set()
+        placeholders = ",".join("?" for _ in job_ids)
+        rows = self._conn.execute(
+            f"""SELECT DISTINCT job_id FROM step_runs
+                WHERE job_id IN ({placeholders}) AND status = ?""",
+            (*job_ids, StepRunStatus.SUSPENDED.value),
+        ).fetchall()
+        return {row["job_id"] for row in rows}
+
+    def batch_first_running_run(self, job_ids: list[str]) -> dict[str, StepRun]:
+        """Return the first running run per job (by step_name) in one query.
+
+        Matches the `running[0]` semantic used by _serialize_job for the
+        `current_step` field on RUNNING jobs. Only returns one entry per
+        job — the MIN(step_name) ordering matches SQLite default order.
+        """
+        if not job_ids:
+            return {}
+        placeholders = ",".join("?" for _ in job_ids)
+        rows = self._conn.execute(
+            f"""SELECT * FROM step_runs
+                WHERE id IN (
+                    SELECT MIN(id) FROM step_runs
+                    WHERE job_id IN ({placeholders}) AND status = ?
+                    GROUP BY job_id
+                )""",
+            (*job_ids, StepRunStatus.RUNNING.value),
+        ).fetchall()
+        result: dict[str, StepRun] = {}
+        for row in rows:
+            run = self._row_to_run(row)
+            result[run.job_id] = run
+        return result
+
+    def batch_last_terminal_run(self, job_ids: list[str]) -> dict[str, StepRun]:
+        """Return the single most-recent terminal run (MAX(completed_at))
+        per job in one query. Matches the `last = max(terminal, key=...)`
+        semantic used by _serialize_job for the `current_step` field on
+        COMPLETED/FAILED/PAUSED/ARCHIVED jobs.
+        """
+        if not job_ids:
+            return {}
+        placeholders = ",".join("?" for _ in job_ids)
+        # Correlated subquery: for each job_id, find the row whose
+        # completed_at equals the job's max completed_at, limit to one.
+        rows = self._conn.execute(
+            f"""SELECT sr.* FROM step_runs sr
+                INNER JOIN (
+                    SELECT job_id, MAX(completed_at) AS max_ca
+                    FROM step_runs
+                    WHERE job_id IN ({placeholders}) AND completed_at IS NOT NULL
+                    GROUP BY job_id
+                ) m ON sr.job_id = m.job_id AND sr.completed_at = m.max_ca
+                GROUP BY sr.job_id""",
+            job_ids,
+        ).fetchall()
+        result: dict[str, StepRun] = {}
+        for row in rows:
+            run = self._row_to_run(row)
+            # GROUP BY may return an arbitrary row per tie — prefer
+            # what we already have (first wins).
+            result.setdefault(run.job_id, run)
+        return result
 
     def batch_job_costs(self, job_ids: list[str]) -> dict[str, float]:
         """Compute cost_usd for multiple jobs in minimal queries.

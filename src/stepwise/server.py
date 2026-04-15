@@ -32,6 +32,7 @@ from stepwise.models import (
     Job,
     JobConfig,
     JobStatus,
+    StepRun,
     StepRunStatus,
     WorkflowDefinition,
     _gen_id,
@@ -49,72 +50,145 @@ from stepwise.hooks import build_event_envelope
 logger = logging.getLogger("stepwise.server")
 
 
-class _LockedConnection:
-    """Proxy that serializes all sqlite3.Connection method calls via a lock."""
+class _ThreadLocalConnProxy:
+    """Per-thread sqlite3.Connection proxy.
 
-    def __init__(self, conn, lock):
-        self._conn = conn
-        self._lock = lock
+    sqlite3 Connection objects and their Cursors cannot safely be shared
+    across threads even with `check_same_thread=False` — the global
+    connection state advances on every operation, and a cursor opened in
+    thread A becomes invalid the moment thread B issues a new query on
+    the same connection. The symptom is the classic
+    `sqlite3.InterfaceError: bad parameter or other API misuse` when
+    thread A tries to fetch from its now-stale cursor.
 
-    def execute(self, *args, **kwargs):
-        with self._lock:
-            return self._conn.execute(*args, **kwargs)
+    The canonical sqlite3 multi-threading pattern is "one connection per
+    thread," which WAL mode supports with no writer contention for
+    readers (each connection sees a consistent MVCC snapshot). This
+    proxy forwards every attribute access to a `threading.local`
+    connection, lazily opening a new one on first use per thread and
+    applying the same PRAGMAs as the primary connection.
 
-    def executemany(self, *args, **kwargs):
-        with self._lock:
-            return self._conn.executemany(*args, **kwargs)
+    For `:memory:` databases the proxy switches to a shared-cache URI
+    (`file:mem-<id>?mode=memory&cache=shared`) so every thread opens
+    the SAME in-memory DB instead of getting its own empty one. This
+    keeps test fixtures that rely on `:memory:` working.
+    """
 
-    def executescript(self, *args, **kwargs):
-        with self._lock:
-            return self._conn.executescript(*args, **kwargs)
+    def __init__(self, db_path: str) -> None:
+        import sqlite3
+        import threading
+        # Rewrite :memory: to a shared-cache URI unique per proxy so
+        # test stores don't collide and each test gets its own fresh
+        # in-memory database shared across its threads. File-backed
+        # paths pass through unchanged.
+        if db_path == ":memory:":
+            self._connect_uri = f"file:swstore-{id(self)}?mode=memory&cache=shared"
+            self._use_uri = True
+            # Keep a "keepalive" connection open for the lifetime of
+            # the proxy — shared-cache memory DBs vanish the moment
+            # their last connection closes, which could otherwise
+            # happen between lazy per-thread conns.
+            self._keepalive = sqlite3.connect(
+                self._connect_uri, uri=True, check_same_thread=False,
+            )
+        else:
+            self._connect_uri = db_path
+            self._use_uri = False
+            self._keepalive = None
+        self._db_path = db_path
+        self._tls = threading.local()
+        # Track every live connection so the owning store can close
+        # them on shutdown. Access to the registry is serialized by
+        # the registry_lock; individual connections are never shared
+        # across threads.
+        self._all_conns: list[sqlite3.Connection] = []
+        self._registry_lock = threading.Lock()
 
-    def commit(self, *args, **kwargs):
-        with self._lock:
-            return self._conn.commit(*args, **kwargs)
+    def _make_conn(self):
+        import sqlite3
+        if self._use_uri:
+            conn = sqlite3.connect(
+                self._connect_uri, uri=True, check_same_thread=False,
+            )
+        else:
+            conn = sqlite3.connect(self._connect_uri, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        # WAL isn't meaningful for shared-cache memory DBs — skip it
+        # there to avoid the "cannot change into wal mode from within
+        # a transaction" gotcha on in-memory stores.
+        if not self._use_uri:
+            conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA busy_timeout=5000")
+        with self._registry_lock:
+            self._all_conns.append(conn)
+        return conn
 
-    def close(self, *args, **kwargs):
-        with self._lock:
-            return self._conn.close(*args, **kwargs)
+    def _current(self):
+        conn = getattr(self._tls, "conn", None)
+        if conn is None:
+            conn = self._make_conn()
+            self._tls.conn = conn
+        return conn
+
+    def close_all(self) -> None:
+        """Close every thread's connection. Called at server shutdown."""
+        with self._registry_lock:
+            for conn in self._all_conns:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self._all_conns.clear()
+
+    def __getattr__(self, name):
+        # Forward attribute access (execute, commit, executemany,
+        # executescript, cursor, rollback, in_transaction, ...) to
+        # the current thread's connection. Called only when `name`
+        # isn't found via normal attribute lookup, so internal
+        # attributes (_db_path, _tls, _all_conns) are handled first.
+        return getattr(self._current(), name)
 
     def __enter__(self):
-        self._lock.acquire()
-        return self._conn.__enter__()
+        return self._current().__enter__()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        try:
-            return self._conn.__exit__(exc_type, exc_val, exc_tb)
-        finally:
-            self._lock.release()
+        return self._current().__exit__(exc_type, exc_val, exc_tb)
 
     @property
     def row_factory(self):
-        return self._conn.row_factory
+        return self._current().row_factory
 
     @row_factory.setter
     def row_factory(self, value):
-        self._conn.row_factory = value
+        self._current().row_factory = value
 
 
 class ThreadSafeStore(SQLiteStore):
-    """SQLiteStore subclass that allows cross-thread access for the server.
+    """SQLiteStore variant that uses one connection per thread.
 
-    Wraps the sqlite3 connection with a threading.Lock proxy since API handlers
-    run in FastAPI's threadpool while the engine's to_thread() executor calls
-    also access the store concurrently.
+    Safe for cross-thread access because each thread gets its own
+    sqlite3.Connection via a `threading.local` proxy. WAL mode means
+    readers don't block each other (MVCC snapshot per transaction),
+    and writes are still serialized by SQLite at the file level.
+
+    Pre-2026-04-15 used a single shared connection with a lock around
+    each execute() call — that serialized reads fine but let cursors
+    from different threads collide mid-fetch, producing
+    sqlite3.InterfaceError under /api/jobs load. See roadmap entry
+    "Jobs list API N+1 query + SQLite threading crash" for the
+    diagnosis.
     """
 
     def __init__(self, db_path: str = ":memory:") -> None:
-        import sqlite3
-        import threading
-        lock = threading.RLock()
-        raw_conn = sqlite3.connect(db_path, check_same_thread=False)
-        raw_conn.row_factory = sqlite3.Row
-        raw_conn.execute("PRAGMA journal_mode=WAL")
-        raw_conn.execute("PRAGMA foreign_keys=ON")
-        raw_conn.execute("PRAGMA busy_timeout=5000")
         self._db_path = db_path
-        self._conn = _LockedConnection(raw_conn, lock)
+        self._conn = _ThreadLocalConnProxy(db_path)
         self._create_tables()
+
+    def close(self) -> None:
+        """Close all per-thread connections (server shutdown)."""
+        if isinstance(self._conn, _ThreadLocalConnProxy):
+            self._conn.close_all()
 
 
 # ── Pydantic request/response models ─────────────────────────────────
@@ -453,26 +527,49 @@ def _get_engine() -> AsyncEngine:
     return _engine
 
 
-def _serialize_job(job: Job, summary: bool = False, cost_usd: float | None = None) -> dict:
+def _serialize_job(
+    job: Job,
+    summary: bool = False,
+    cost_usd: float | None = None,
+    *,
+    # Precomputed per-job lookups — callers that serialize a LIST of
+    # jobs (e.g. /api/jobs) should batch these upfront via
+    # _build_summary_lookups() to avoid N+1 query storms. When None,
+    # _serialize_job falls back to per-job queries for the single-job
+    # callers that already hit hot code paths elsewhere.
+    suspended_ids: set[str] | None = None,
+    running_run_map: dict[str, StepRun] | None = None,
+    last_terminal_map: dict[str, StepRun] | None = None,
+    completed_step_counts: dict[str, int] | None = None,
+) -> dict:
     if summary:
         engine = _get_engine()
-        has_suspended = bool(engine.store.suspended_runs(job.id))
+        if suspended_ids is not None:
+            has_suspended = job.id in suspended_ids
+        else:
+            has_suspended = bool(engine.store.suspended_runs(job.id))
         # Include current/last step info for list view context
         current_step = None
         if job.status == JobStatus.RUNNING:
-            running = engine.store.running_runs(job.id)
-            if running:
-                r = running[0]
+            if running_run_map is not None:
+                r = running_run_map.get(job.id)
+            else:
+                running = engine.store.running_runs(job.id)
+                r = running[0] if running else None
+            if r is not None:
                 current_step = {
                     "name": r.step_name,
                     "status": r.status.value,
                     "started_at": r.started_at.isoformat() if r.started_at else None,
                 }
         elif job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.PAUSED, JobStatus.ARCHIVED):
-            runs = engine.store.runs_for_job(job.id)
-            terminal = [r for r in runs if r.completed_at]
-            if terminal:
-                last = max(terminal, key=lambda r: r.completed_at)
+            if last_terminal_map is not None:
+                last = last_terminal_map.get(job.id)
+            else:
+                runs = engine.store.runs_for_job(job.id)
+                terminal = [r for r in runs if r.completed_at]
+                last = max(terminal, key=lambda r: r.completed_at) if terminal else None
+            if last is not None:
                 current_step = {
                     "name": last.step_name,
                     "status": last.status.value,
@@ -485,6 +582,10 @@ def _serialize_job(job: Job, summary: bool = False, cost_usd: float | None = Non
         lightweight_workflow = {"steps": {name: {} for name in step_names}}
         if wf_meta:
             lightweight_workflow["metadata"] = wf_meta
+        if completed_step_counts is not None:
+            completed_steps = completed_step_counts.get(job.id, 0)
+        else:
+            completed_steps = engine.store.completed_step_count(job.id)
         result = {
             "id": job.id,
             "name": job.name,
@@ -501,7 +602,7 @@ def _serialize_job(job: Job, summary: bool = False, cost_usd: float | None = Non
             "current_step": current_step,
             "workflow": lightweight_workflow,
             "step_count": len(step_names),
-            "completed_steps": engine.store.completed_step_count(job.id),
+            "completed_steps": completed_steps,
             "job_group": job.job_group,
             "depends_on": job.depends_on,
         }
@@ -509,6 +610,27 @@ def _serialize_job(job: Job, summary: bool = False, cost_usd: float | None = Non
             result["cost_usd"] = round(cost_usd, 4)
         return result
     return job.to_dict()
+
+
+def _build_summary_lookups(store, jobs: list[Job]) -> dict:
+    """Precompute all per-job lookups needed by _serialize_job(summary=True)
+    in a constant number of batch queries. Eliminates the 4×N N+1 storm
+    from the /api/jobs serializer loop.
+    """
+    if not jobs:
+        return {
+            "suspended_ids": set(),
+            "running_run_map": {},
+            "last_terminal_map": {},
+            "completed_step_counts": {},
+        }
+    job_ids = [j.id for j in jobs]
+    return {
+        "suspended_ids": store.batch_job_ids_with_suspended_runs(job_ids),
+        "running_run_map": store.batch_first_running_run(job_ids),
+        "last_terminal_map": store.batch_last_terminal_run(job_ids),
+        "completed_step_counts": store.batch_completed_step_counts(job_ids),
+    }
 
 
 async def _broadcast(message: dict) -> None:
@@ -1119,7 +1241,11 @@ def list_jobs(request: Request, status: str | None = None, top_level: bool = Fal
                 raise HTTPException(status_code=400, detail=f"Invalid status '{status}'. Valid: {valid}")
             jobs = [j for j in jobs if j.status == job_status]
         cost_map = engine.store.batch_job_costs([j.id for j in jobs])
-        serialized = [_serialize_job(j, summary=True, cost_usd=cost_map.get(j.id, 0.0)) for j in jobs]
+        lookups = _build_summary_lookups(engine.store, jobs)
+        serialized = [
+            _serialize_job(j, summary=True, cost_usd=cost_map.get(j.id, 0.0), **lookups)
+            for j in jobs
+        ]
         if include_total:
             return {"jobs": serialized, "total": len(serialized)}
         return serialized
@@ -1140,7 +1266,11 @@ def list_jobs(request: Request, status: str | None = None, top_level: bool = Fal
         include_archived=include_archived,
     )
     cost_map = engine.store.batch_job_costs([j.id for j in jobs])
-    serialized = [_serialize_job(j, summary=True, cost_usd=cost_map.get(j.id, 0.0)) for j in jobs]
+    lookups = _build_summary_lookups(engine.store, jobs)
+    serialized = [
+        _serialize_job(j, summary=True, cost_usd=cost_map.get(j.id, 0.0), **lookups)
+        for j in jobs
+    ]
     if include_total:
         total = len(engine.store.all_jobs(
             job_status, top_level_only=top_level, limit=0,
