@@ -279,3 +279,87 @@ class TestNdjsonOutput:
 class TestSupportsResume:
     def test_supports_resume(self, backend):
         assert backend.supports_resume is True
+
+
+# ── aloop credentials resolution for containment ──────────────────────
+
+
+class TestResolveAloopOpenrouterKey:
+    """_resolve_aloop_openrouter_key reads host ~/.aloop/credentials.json
+    into env when OPENROUTER_API_KEY isn't already set. This is needed
+    because aloop inside a VM can't see the host credentials file."""
+
+    def test_reads_key_from_credentials_file(self, tmp_path, monkeypatch):
+        from stepwise.acp_backend import _resolve_aloop_openrouter_key
+
+        creds_dir = tmp_path / ".aloop"
+        creds_dir.mkdir()
+        (creds_dir / "credentials.json").write_text(
+            json.dumps({"api_key": "sk-or-v1-test-xyz"})
+        )
+        monkeypatch.setattr("stepwise.acp_backend.Path.home", lambda: tmp_path)
+
+        env: dict[str, str] = {}
+        _resolve_aloop_openrouter_key(env)
+        assert env.get("OPENROUTER_API_KEY") == "sk-or-v1-test-xyz"
+
+    def test_respects_env_precedence(self, tmp_path, monkeypatch):
+        """If OPENROUTER_API_KEY is already in env, don't overwrite."""
+        from stepwise.acp_backend import _resolve_aloop_openrouter_key
+
+        creds_dir = tmp_path / ".aloop"
+        creds_dir.mkdir()
+        (creds_dir / "credentials.json").write_text(
+            json.dumps({"api_key": "file-key"})
+        )
+        monkeypatch.setattr("stepwise.acp_backend.Path.home", lambda: tmp_path)
+
+        env = {"OPENROUTER_API_KEY": "env-key"}
+        _resolve_aloop_openrouter_key(env)
+        assert env["OPENROUTER_API_KEY"] == "env-key"
+
+    def test_noop_when_file_missing(self, tmp_path, monkeypatch):
+        from stepwise.acp_backend import _resolve_aloop_openrouter_key
+        monkeypatch.setattr("stepwise.acp_backend.Path.home", lambda: tmp_path)
+
+        env: dict[str, str] = {}
+        _resolve_aloop_openrouter_key(env)
+        assert "OPENROUTER_API_KEY" not in env
+
+    def test_noop_on_bad_json(self, tmp_path, monkeypatch):
+        from stepwise.acp_backend import _resolve_aloop_openrouter_key
+
+        creds_dir = tmp_path / ".aloop"
+        creds_dir.mkdir()
+        (creds_dir / "credentials.json").write_text("not valid json {")
+        monkeypatch.setattr("stepwise.acp_backend.Path.home", lambda: tmp_path)
+
+        env: dict[str, str] = {}
+        _resolve_aloop_openrouter_key(env)
+        assert "OPENROUTER_API_KEY" not in env
+
+    def test_noop_when_key_empty(self, tmp_path, monkeypatch):
+        """Credentials file exists but api_key is empty string — don't set."""
+        from stepwise.acp_backend import _resolve_aloop_openrouter_key
+
+        creds_dir = tmp_path / ".aloop"
+        creds_dir.mkdir()
+        (creds_dir / "credentials.json").write_text(json.dumps({"api_key": ""}))
+        monkeypatch.setattr("stepwise.acp_backend.Path.home", lambda: tmp_path)
+
+        env: dict[str, str] = {}
+        _resolve_aloop_openrouter_key(env)
+        assert "OPENROUTER_API_KEY" not in env
+
+    def test_noop_when_key_missing(self, tmp_path, monkeypatch):
+        """Credentials file exists but has no api_key field."""
+        from stepwise.acp_backend import _resolve_aloop_openrouter_key
+
+        creds_dir = tmp_path / ".aloop"
+        creds_dir.mkdir()
+        (creds_dir / "credentials.json").write_text(json.dumps({"other": "x"}))
+        monkeypatch.setattr("stepwise.acp_backend.Path.home", lambda: tmp_path)
+
+        env: dict[str, str] = {}
+        _resolve_aloop_openrouter_key(env)
+        assert "OPENROUTER_API_KEY" not in env

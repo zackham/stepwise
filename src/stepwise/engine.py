@@ -5308,8 +5308,14 @@ def _adopt_stale_cli_job(engine: AsyncEngine, job: Job) -> None:
         job.heartbeat_at.isoformat() if job.heartbeat_at else "never",
     )
 
-    # Fail all orphaned RUNNING steps whose process is dead
+    # Fail all orphaned RUNNING steps whose process is dead.
+    # Containment-VM runs are invisible here — their pid is a guest
+    # pid _is_pid_alive can't see — so we leave them as RUNNING and
+    # let the watchdog + reattach_surviving_runs logic handle them.
+    # Falsely marking them FAILED would discard a live VM's output.
     for run in engine.store.running_runs(job.id):
+        if run.executor_state and run.executor_state.get("in_vm"):
+            continue
         if run.pid and _is_pid_alive(run.pid):
             continue  # process still alive — leave it
         run.status = StepRunStatus.FAILED

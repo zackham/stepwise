@@ -758,6 +758,17 @@ def _cleanup_zombie_jobs(store: ThreadSafeStore) -> None:
         # Kill orphaned agent processes and fail running step runs
         running_runs = store.running_runs(job.id)
         for run in running_runs:
+            # Containment-VM runs: the stored pid is a guest pid; we
+            # can't probe it via os.kill on the host. vmmd is a
+            # separate daemon that survives server restarts, so the
+            # VM itself may still be running. Leave these alone for
+            # the engine's reattach_surviving_runs logic to handle.
+            if run.executor_state and run.executor_state.get("in_vm"):
+                logger.info(
+                    "Skipping in-VM run %s (job %s step %s) — containment VM survives server restart",
+                    run.id, job.id, run.step_name,
+                )
+                continue
             # Check if the agent process is still alive
             pid = run.pid or (run.executor_state or {}).get("pid")
             if pid:

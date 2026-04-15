@@ -71,6 +71,7 @@ def _make_run(
     pgid: int | None = None,
     started_at: datetime | None = None,
     status: StepRunStatus = StepRunStatus.RUNNING,
+    in_vm: bool = False,
 ) -> StepRun:
     """Create a StepRun with given PID/PGID for testing."""
     executor_state = {}
@@ -78,6 +79,8 @@ def _make_run(
         executor_state["pid"] = pid
     if pgid:
         executor_state["pgid"] = pgid
+    if in_vm:
+        executor_state["in_vm"] = True
 
     return StepRun(
         id=_gen_id("run"),
@@ -291,6 +294,32 @@ class TestReapDeadProcesses:
         cleaned = reap_dead_processes(store, engine=None)
         assert cleaned == []
 
+    def test_skips_in_vm_runs_with_unreachable_pid(self):
+        """Runs flagged in_vm=True keep RUNNING even with a pid the host
+        can't see — the pid is a guest pid, not reachable via os.kill."""
+        store = _make_store()
+        job = Job(
+            id=_gen_id("job"),
+            objective="test",
+            workflow=_make_simple_workflow(),
+            status=JobStatus.RUNNING,
+            inputs={},
+        )
+        store.save_job(job)
+
+        # Guest pids start low (typically 1, 2, 3...) — a small number is
+        # unlikely to match any host process and will look "dead" to
+        # _is_pid_alive. Without the in_vm skip, this would get reaped.
+        run = _make_run(job.id, pid=640, in_vm=True)
+        store.save_run(run)
+
+        cleaned = reap_dead_processes(store, engine=None)
+        assert cleaned == []
+
+        updated = store.load_run(run.id)
+        assert updated.status == StepRunStatus.RUNNING
+        assert updated.pid == 640  # pid preserved
+
 
 class TestReapExpiredProcesses:
     def test_kills_expired_run(self):
@@ -358,6 +387,29 @@ class TestReapExpiredProcesses:
 
         killed = reap_expired_processes(store, ttl_seconds=7200)
         assert killed == []
+
+    def test_skips_in_vm_runs_past_ttl(self):
+        """TTL reaper leaves in_vm=True runs alone even past TTL — killing
+        a containment-VM guest pid requires vmmd, not os.kill."""
+        store = _make_store()
+        job = Job(
+            id=_gen_id("job"),
+            objective="test",
+            workflow=_make_simple_workflow(),
+            status=JobStatus.RUNNING,
+            inputs={},
+        )
+        store.save_job(job)
+
+        old_start = datetime.now(timezone.utc) - timedelta(hours=3)
+        run = _make_run(job.id, pid=640, started_at=old_start, in_vm=True)
+        store.save_run(run)
+
+        killed = reap_expired_processes(store, ttl_seconds=7200)
+        assert killed == []
+
+        updated = store.load_run(run.id)
+        assert updated.status == StepRunStatus.RUNNING
 
     def test_kills_live_expired_process(self):
         """Actually kills a live process that has exceeded TTL."""

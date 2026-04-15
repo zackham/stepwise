@@ -3,6 +3,46 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.43.0] — 2026-04-14
+
+### Added
+- **Containment verification staircase** — four end-to-end flows (`containment-smoke`, `containment-toolbox`, `containment-boundary`, `containment-multistep`) that each cover a tier of the containment claim: ACP handshake under the boundary, fs/bash tools through virtiofs, hostile probes (with host-side ground-truth checks for `/etc/passwd` parity, `~/.ssh/id_rsa` reachability, host-`/tmp` escape markers), and multi-step session continuity with VM reuse. All four green for all three ACP adapters (`aloop`, `claude`, `codex`) in <3 minutes wall time
+
+### Changed
+- **Adapter-in-VM model (A1)** — the three ACP adapters (`aloop`, `claude-code-acp`, `codex-acp`) now run **inside** the guest VM, not as host processes that "delegate" tool calls. The earlier bridge design defeated containment because Read/Write/Bash tools execute in-process, so a host-spawned adapter ran with host privileges. Adapter-in-VM means every tool call lives inside the hardware boundary
+- **Rootfs base image** — switched from Alpine to Debian-trixie-slim. Better Python wheel availability for `aloop`, fewer musl-vs-glibc surprises with claude/codex npm packages
+- **Documentation** — `docs/containment.md` rewritten to cover adapter-in-VM model, per-agent credential mounts (virtiofs `~/.claude` / `~/.codex`, env-injected `OPENROUTER_API_KEY`), rootfs tmpfs symlink layout, and the verification staircase
+
+### Fixed
+- **aloop OPENROUTER_API_KEY threading into VMs** — `acp_backend._resolve_aloop_openrouter_key` reads host `~/.aloop/credentials.json` and injects the key into the VM spawn env when `OPENROUTER_API_KEY` isn't already in env. Without this, aloop sessions silently returned `{"stopReason":"end_turn","usage":{"inputTokens":0,...}}` because the in-VM aloop had no credentials path
+- **Guest-pid liveness false positives** — host-side `os.kill(pid, 0)` checks could not see guest pids, so every 15-second health tick marked containment runs "dead" and triggered a 22-attempt retry storm. `ACPBackend` now stamps `executor_state.in_vm = True` on containment spawns, and `process_lifecycle.reap_dead_processes`, `process_lifecycle.reap_expired_processes`, `engine._run_watchdog`, `engine._adopt_stale_cli_job`, and `server._cleanup_zombie_jobs` all skip in-VM runs (they survive host events because `vmmd` is a separate daemon)
+- **Probe-test heuristic on Debian rootfs** — `containment-boundary/verify` was prefix-matching the agent's reported `/etc/passwd` first line against `"root:x:0:0:root:/root"`, which Debian's default root line also matches. Verify now compares against the host's actual `/etc/passwd` first line for ground truth
+- **aloop session-state writes on read-only rootfs** — `/root/.aloop` symlinked to `/tmp/.aloop` (tmpfs); guest init creates `/tmp/.aloop/sessions/` so aloop's first `mkdir` succeeds. State is per-VM ephemeral, which is correct under containment (session continuity comes from VM reuse, not file persistence)
+- **Empty `ANTHROPIC_API_KEY` rejected by claude-agent-acp** — empty auth env vars (`ANTHROPIC_API_KEY=""`, `OPENAI_API_KEY=""`) are now stripped before VM spawn. claude-agent-acp treated the empty string as "external API key auth selected" and rejected the OAuth credentials file
+
+## [0.42.0] — 2026-04-13
+
+### Added
+- **Agent management API** — REST endpoints for listing, inspecting, and configuring registered ACP agents
+- **Job cost tracking** — per-job and per-step cost rollups in API + UI
+- **Settings UI overhaul** — agents, schedules, and project config managed in-app
+- **Flow/editor UI enhancements** — kit browsing, virtual scroll for long flows, step YAML view, in-flight job context
+
+### Fixed
+- **ACP reliability** — pipe backpressure handling, transport liveness checks, client request handler completeness
+- **`after_resolved` loop-invalidation** — dependencies marked `after_resolved` now invalidate across loop iterations instead of being treated as one-shot satisfied
+- **For-each sub-job orphan race** — stale-pending watchdog catches sub-jobs that lost their executor before completing
+- **Web dist sync** — `_web/` rebuilt and pruned so packaged wheels ship the matching frontend
+
+## [0.41.0] — 2026-04-11
+
+### Added
+- **Built-in scheduling** — cron schedules and poll triggers as first-class flow launchers. Cron fires on a time pattern; poll evaluates a shell condition on a cadence and only launches when the condition passes (no junk jobs from early-exit hacks). Cursor mechanism carries state between evaluations. Overlap policies (skip / queue / allow), cooldown windows, auto-pause on errors. Every tick logged. CLI: `stepwise schedule create/list/run`. UI: full schedule CRUD, last-job-status row, chat-agent template vars
+
+### Fixed
+- **ACP session continuity** — probe before load so reattach to a still-living adapter session works without spuriously re-creating one
+- **Overlap detection + diagnostics** — schedule-overlap rules + session diagnostics improvements
+
 ## [0.40.0] — 2026-04-11
 
 ### Added

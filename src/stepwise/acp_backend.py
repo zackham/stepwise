@@ -36,6 +36,27 @@ from stepwise.lifecycle import ResourceLifecycleManager
 logger = logging.getLogger("stepwise.acp_backend")
 
 
+def _resolve_aloop_openrouter_key(env: dict[str, str]) -> None:
+    """If OPENROUTER_API_KEY is unset, read host ~/.aloop/credentials.json.
+
+    aloop inside a containment VM has no access to the host's credential
+    file, so without this the agent session silently returns 0-token
+    end_turn results. We read the api_key host-side and pass it via env.
+    Mutates `env` in place when a key is found; no-op otherwise.
+    """
+    if env.get("OPENROUTER_API_KEY"):
+        return
+    creds = Path.home() / ".aloop" / "credentials.json"
+    if not creds.is_file():
+        return
+    try:
+        api_key = json.loads(creds.read_text()).get("api_key", "")
+    except (OSError, json.JSONDecodeError):
+        return
+    if api_key:
+        env["OPENROUTER_API_KEY"] = api_key
+
+
 @dataclass
 class ACPProcess:
     """A long-lived ACP server process hosting one or more sessions."""
@@ -388,15 +409,8 @@ class ACPBackend:
             # host's ~/.aloop/credentials.json so the VM (which has no
             # access to that file) can still authenticate.
             auth_mounts: list[dict] = []
-            if config.name == "aloop" and not env.get("OPENROUTER_API_KEY"):
-                aloop_creds = Path.home() / ".aloop" / "credentials.json"
-                if aloop_creds.is_file():
-                    try:
-                        api_key = json.loads(aloop_creds.read_text()).get("api_key", "")
-                        if api_key:
-                            env["OPENROUTER_API_KEY"] = api_key
-                    except (OSError, json.JSONDecodeError):
-                        pass
+            if config.name == "aloop":
+                _resolve_aloop_openrouter_key(env)
             if config.name == "claude":
                 claude_home = Path.home() / ".claude"
                 if claude_home.is_dir():

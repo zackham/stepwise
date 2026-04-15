@@ -294,6 +294,15 @@ def reap_expired_processes(
             if age_seconds < ttl_seconds:
                 continue
 
+            # Containment-VM runs: the stored pid is a guest pid that
+            # can't be looked up or killed from the host. TTL-killing
+            # them requires routing through vmmd.destroy_vm, which is
+            # a deliberate operation the flow-level `limits` already
+            # handles. Skip here to avoid false-positive "already dead"
+            # failures against live guest processes.
+            if run.executor_state and run.executor_state.get("in_vm"):
+                continue
+
             pid = run.pid
             pgid = None
             if run.executor_state:
