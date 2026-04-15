@@ -574,12 +574,27 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onViewFul
   const BOTTOM_EPSILON_PX = 40;
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [pinnedToBottom, setPinnedToBottom] = useState(true);
+  // Mirror pin state in a ref so the MutationObserver callback always
+  // reads the current value without having to re-subscribe on every
+  // state change. React state is captured by closure; the ref is
+  // read at call time.
+  const pinnedRef = useRef(pinnedToBottom);
+  useEffect(() => {
+    pinnedRef.current = pinnedToBottom;
+  }, [pinnedToBottom]);
+  // Set during programmatic scrollTo so the onScroll handler doesn't
+  // mistake intermediate animation positions for "user scrolled up"
+  // and unpin mid-animation.
+  const programmaticScrollRef = useRef(false);
 
   const measureBottom = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
     const distance = el.scrollHeight - (el.scrollTop + el.clientHeight);
-    setIsAtBottom(distance <= BOTTOM_EPSILON_PX);
+    setIsAtBottom((prev) => {
+      const atBottom = distance <= BOTTOM_EPSILON_PX;
+      return prev === atBottom ? prev : atBottom;
+    });
   }, []);
 
   useEffect(() => {
@@ -588,41 +603,71 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onViewFul
     const onScroll = () => {
       const distance = el.scrollHeight - (el.scrollTop + el.clientHeight);
       const atBottom = distance <= BOTTOM_EPSILON_PX;
-      setIsAtBottom(atBottom);
-      // If the user scrolls away from the bottom while pinned, unpin.
-      if (!atBottom && pinnedToBottom) setPinnedToBottom(false);
+      setIsAtBottom((prev) => (prev === atBottom ? prev : atBottom));
+      // Skip unpin during a programmatic scrollTo — smooth-scroll
+      // animation fires scroll events at every intermediate position,
+      // which would otherwise unpin immediately after we re-pin.
+      if (programmaticScrollRef.current) return;
+      if (!atBottom && pinnedRef.current) {
+        setPinnedToBottom(false);
+      }
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
-  }, [pinnedToBottom]);
+  }, []);
 
   const scrollToBottom = useCallback((smooth = true) => {
     const el = containerRef.current;
     if (!el) return;
+    programmaticScrollRef.current = true;
     el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
     setIsAtBottom(true);
     setPinnedToBottom(true);
+    pinnedRef.current = true;
+    // Smooth scrolls take a few hundred ms; clear the guard after a
+    // generous window so normal scroll detection resumes.
+    window.setTimeout(() => {
+      programmaticScrollRef.current = false;
+    }, 700);
   }, []);
 
   // Auto-follow: when pinned and content grows, scroll to bottom.
-  // We observe the scroll container's height changes via ResizeObserver
-  // so every new streamed segment triggers a follow.
+  // MutationObserver fires on DOM changes (subtree + childList +
+  // character data), which is the only reliable trigger for streamed
+  // content — a fixed-maxHeight scroll container's bounding box
+  // never changes size (ResizeObserver doesn't observe scrollHeight)
+  // and the sticky-header first child is static, so the old
+  // ResizeObserver-on-first-child approach missed every streamed
+  // append. Character-data mutations catch every text-delta update;
+  // childList mutations catch new segment inserts.
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => {
-      if (pinnedToBottom) {
-        el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
+    const onMutate = () => {
+      if (pinnedRef.current) {
+        programmaticScrollRef.current = true;
+        el.scrollTop = el.scrollHeight;
+        // "auto" behavior is instant, no scroll event storm, but still
+        // guard briefly in case a lingering smooth-scroll is in flight.
+        window.setTimeout(() => {
+          programmaticScrollRef.current = false;
+        }, 50);
       }
-      measureBottom();
+      const distance = el.scrollHeight - (el.scrollTop + el.clientHeight);
+      setIsAtBottom((prev) => {
+        const atBottom = distance <= BOTTOM_EPSILON_PX;
+        return prev === atBottom ? prev : atBottom;
+      });
+    };
+    const mo = new MutationObserver(onMutate);
+    mo.observe(el, {
+      childList: true,
+      subtree: true,
+      characterData: true,
     });
-    ro.observe(el);
-    // Also observe the first child (the content wrapper) — the container
-    // itself doesn't change size, but its scrollHeight does when children
-    // grow. Watching a child directly fires on every append.
-    if (el.firstElementChild) ro.observe(el.firstElementChild);
-    return () => ro.disconnect();
-  }, [pinnedToBottom, measureBottom]);
+    measureBottom();
+    return () => mo.disconnect();
+  }, [measureBottom]);
 
   // Constrain container to viewport height
   const [maxHeight, setMaxHeight] = useState<string>("100%");
@@ -1311,7 +1356,7 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onViewFul
       <button
         onClick={() => scrollToBottom(true)}
         className={cn(
-          "absolute bottom-4 right-4 z-20",
+          "absolute bottom-4 left-1/2 -translate-x-1/2 z-20",
           "flex items-center gap-1.5 px-3 py-1.5 rounded-full",
           "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/40",
           "text-xs font-medium transition-all",
