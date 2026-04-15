@@ -28,6 +28,10 @@ interface DagEdgesProps {
   onHoverLabel?: (info: HoveredLabelInfo) => void;
   onLeaveLabel?: () => void;
   criticalPath?: CriticalPathResult | null;
+  /** Job status. Pulse animations only flow when "running" — terminal
+   *  jobs (completed/failed/cancelled) freeze edges in their final
+   *  state instead of looping the dash-flow keyframes forever. */
+  isJobRunning?: boolean;
 }
 
 function formatPreviewValue(rawValue: unknown, maxLen: number): string {
@@ -140,7 +144,7 @@ function measureLabelWidth(text: string): number {
   return width;
 }
 
-export function DagEdges({ edges, loopEdges, width, height, onClickLabel, selectedLabel, latestRuns, onHoverLabel, onLeaveLabel, criticalPath }: DagEdgesProps) {
+export function DagEdges({ edges, loopEdges, width, height, onClickLabel, selectedLabel, latestRuns, onHoverLabel, onLeaveLabel, criticalPath, isJobRunning = true }: DagEdgesProps) {
   const theme = useTheme();
   const isDark = theme === "dark";
 
@@ -268,9 +272,10 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
         const sourceHasRun = sourceStatus === "completed" || sourceStatus === "failed";
         const isRunning = targetStatus === "running" || targetStatus === "delegated";
         const isSuspended = targetStatus === "suspended";
-        // Only pulse if source has actually executed (prevents false pulse for
-        // any_of edges from unexecuted loopback sources — matches loop edge behavior)
-        const isActive = sourceHasRun && (isRunning || isSuspended);
+        // Only pulse if source has actually executed AND the parent
+        // job is itself running. Terminal jobs freeze edges in their
+        // final state instead of looping the animation forever.
+        const isActive = isJobRunning && sourceHasRun && (isRunning || isSuspended);
         const isCompleted = sourceStatus === "completed" && (
           targetStatus === "completed" || targetStatus === "running" || targetStatus === "delegated"
         );
@@ -417,7 +422,9 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
         const targetStatus = latestRuns?.[le.to]?.status;
         const isRunning = targetStatus === "running";
         const isSuspended = targetStatus === "suspended";
-        const isActive = sourceHasRun && (isRunning || isSuspended);
+        // Same gating as data edges: only animate while the parent
+        // job is itself running.
+        const isActive = isJobRunning && sourceHasRun && (isRunning || isSuspended);
 
         // Loop edges stay orange when active (data edges go blue)
         const activeColor = "oklch(0.7 0.15 55)";

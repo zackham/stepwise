@@ -273,6 +273,29 @@ export function useStepwiseMutations() {
     },
   });
 
+  const retryFailedStepsMutation = useMutation({
+    mutationFn: api.retryFailedSteps,
+    onSuccess: (result) => {
+      invalidateAll();
+      const parts: string[] = [];
+      if (result.steps_rerun > 0) {
+        parts.push(`${result.steps_rerun} step${result.steps_rerun === 1 ? "" : "s"} rerun`);
+      }
+      if (result.delegated_reset > 0) {
+        parts.push(`${result.delegated_reset} delegated`);
+      }
+      if (result.jobs_resumed > 1) {
+        parts.push(`${result.jobs_resumed} jobs`);
+      }
+      toast.success(
+        parts.length > 0 ? `Retrying: ${parts.join(", ")}` : "Retrying job",
+      );
+    },
+    onError: (error) => {
+      toast.error("Failed to retry job", { description: error.message });
+    },
+  });
+
   const approveJobMutation = useMutation({
     mutationFn: api.approveJob,
     onSuccess: () => {
@@ -456,6 +479,7 @@ export function useStepwiseMutations() {
     resumeJob: resumeJobMutation,
     cancelJob: cancelJobMutation,
     resetJob: resetJobMutation,
+    retryFailedSteps: retryFailedStepsMutation,
     approveJob: approveJobMutation,
     rerunStep: rerunStepMutation,
     fulfillWatch: fulfillWatchMutation,

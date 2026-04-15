@@ -4719,6 +4719,138 @@ class AsyncEngine(Engine):
         self._check_job_terminal(job_id)
         return run
 
+    def retry_failed_steps(self, job_id: str) -> dict[str, int]:
+        """Recursively retry every failed/cancelled step in this job and
+        its descendants. Used by the "Retry" action in the web UI.
+
+        Walks the job tree (current job + sub-flow + for_each
+        descendants), and for each non-running job:
+          - sets the job back to RUNNING
+          - re-runs each FAILED or CANCELLED step run via rerun_step
+          - for delegated runs (for_each or single sub_flow): recurses
+            into the failing sub-jobs and resets the parent's failed
+            delegated run back to DELEGATED so the existing
+            _handle_sub_job_done / _check_for_each_completion path
+            picks up the new state when sub-jobs settle
+
+        Pre-fix the "Retry" UI button called resume_job, which only
+        flipped status to RUNNING — it never touched the failed step
+        runs, so the engine had nothing to dispatch and the job
+        immediately terminal-checked back to FAILED.
+
+        Returns a small counts dict for the API response:
+            {"jobs_resumed": N, "steps_rerun": M, "delegated_reset": D}
+        """
+        counts = {"jobs_resumed": 0, "steps_rerun": 0, "delegated_reset": 0}
+        visited: set[str] = set()
+
+        def _visit(jid: str) -> None:
+            if jid in visited:
+                return
+            visited.add(jid)
+            try:
+                job = self.store.load_job(jid)
+            except KeyError:
+                return
+
+            # Latest run per step (rerun_step works on the latest)
+            runs = self.store.runs_for_job(jid)
+            latest_per_step: dict[str, StepRun] = {}
+            for r in runs:
+                cur = latest_per_step.get(r.step_name)
+                if cur is None or r.attempt > cur.attempt:
+                    latest_per_step[r.step_name] = r
+
+            # First pass: walk delegated FAILED runs into sub-jobs and
+            # collect the parent runs that need resetting after recursion.
+            delegated_to_reset: list[StepRun] = []
+            for name, latest in latest_per_step.items():
+                if latest.status not in (
+                    StepRunStatus.FAILED, StepRunStatus.CANCELLED,
+                ):
+                    continue
+                es = latest.executor_state or {}
+                if es.get("for_each"):
+                    sub_ids = es.get("sub_job_ids") or []
+                    for sid in sub_ids:
+                        try:
+                            sub = self.store.load_job(sid)
+                        except KeyError:
+                            continue
+                        if sub.status in (
+                            JobStatus.FAILED, JobStatus.CANCELLED,
+                            JobStatus.PAUSED, JobStatus.COMPLETED,
+                        ):
+                            _visit(sid)
+                    delegated_to_reset.append(latest)
+                elif latest.sub_job_id:
+                    try:
+                        sub = self.store.load_job(latest.sub_job_id)
+                        if sub.status in (
+                            JobStatus.FAILED, JobStatus.CANCELLED,
+                            JobStatus.PAUSED, JobStatus.COMPLETED,
+                        ):
+                            _visit(latest.sub_job_id)
+                    except KeyError:
+                        pass
+                    delegated_to_reset.append(latest)
+
+            # Set the job back to RUNNING if it's in a terminal state.
+            if job.status in (
+                JobStatus.FAILED, JobStatus.PAUSED,
+                JobStatus.CANCELLED, JobStatus.COMPLETED,
+            ):
+                job.status = JobStatus.RUNNING
+                job.updated_at = _now()
+                self.store.save_job(job)
+                self._emit(jid, JOB_RESUMED)
+                counts["jobs_resumed"] += 1
+                # Recreate the wait_for_job asyncio.Event so callers
+                # who already saw the previous terminal state can wait
+                # again. Without this, a second wait_for_job returns
+                # immediately because the old event is still set.
+                self._job_done[jid] = asyncio.Event()
+
+            # Reset failed delegated parent runs to DELEGATED so the
+            # existing sub-job-done handler re-evaluates completion
+            # when the freshly retried sub-jobs settle.
+            for run in delegated_to_reset:
+                run.status = StepRunStatus.DELEGATED
+                run.error = None
+                run.completed_at = None
+                self.store.save_run(run)
+                counts["delegated_reset"] += 1
+
+            # Re-run each failed/cancelled non-delegated step. rerun_step
+            # rejects RUNNING/SUSPENDED/DELEGATED, but FAILED + CANCELLED
+            # + COMPLETED are all valid. We only target FAILED/CANCELLED
+            # since the user's intent is "retry what broke."
+            for name, latest in latest_per_step.items():
+                if latest.status not in (
+                    StepRunStatus.FAILED, StepRunStatus.CANCELLED,
+                ):
+                    continue
+                es = latest.executor_state or {}
+                if es.get("for_each") or latest.sub_job_id:
+                    continue  # already handled above
+                try:
+                    self.rerun_step(jid, name)
+                    counts["steps_rerun"] += 1
+                except ValueError as e:
+                    _async_logger.warning(
+                        "retry_failed_steps: skipping rerun of %s/%s: %s",
+                        jid, name, e,
+                    )
+
+            # rerun_step already calls dispatch + terminal_check, but
+            # call again to cover the no-rerun case (delegated-only
+            # branch) where we just reset state.
+            self._dispatch_ready(jid)
+            self._check_job_terminal(jid)
+
+        _visit(job_id)
+        return counts
+
     def reset_job(self, job_id: str) -> None:
         # Cancel running async tasks before clearing runs
         for run in self.store.runs_for_job(job_id):

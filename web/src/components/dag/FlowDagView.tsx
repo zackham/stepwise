@@ -658,8 +658,11 @@ export function FlowDagView({
           position: "relative",
         }}
       >
-        {/* WebGL energy pulse overlay (dark mode only — animation layer over SVG edges) */}
-        {webglSupported && isDark && (
+        {/* WebGL energy pulse overlay (dark mode only — animation
+            layer over SVG edges). Only rendered while the job is
+            running; terminal jobs (completed/failed/cancelled)
+            shouldn't have flowing pulses. */}
+        {webglSupported && isDark && jobStatus === "running" && (
           <Suspense fallback={null}>
             <WebGLEdgeLayer
               layout={layout}
@@ -680,6 +683,7 @@ export function FlowDagView({
           onHoverLabel={handleHoverLabel}
           onLeaveLabel={handleLeaveLabel}
           criticalPath={criticalPath}
+          isJobRunning={jobStatus === "running"}
         />
 
         {/* Flow port nodes (input/output) */}

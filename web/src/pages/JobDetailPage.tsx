@@ -520,14 +520,19 @@ export function JobDetailPage() {
                   onPauseJob: () => mutations.pauseJob.mutate(job.id),
                   onResumeJob: () => mutations.resumeJob.mutate(job.id),
                   onCancelJob: () => mutations.cancelJob.mutate(job.id),
-                  onRetryJob: () => mutations.resumeJob.mutate(job.id),
+                  // Retry: rerun every failed/cancelled step in this
+                  // job and its descendants (including for_each
+                  // sub-jobs). Pre-fix this called resumeJob, which
+                  // only flipped status to RUNNING and didn't actually
+                  // retry anything.
+                  onRetryJob: () => mutations.retryFailedSteps.mutate(job.id),
                   onStartJob: () => mutations.startJob.mutate(job.id),
                   onRerunStep: (stepName) => mutations.rerunStep.mutate({ jobId: job.id, stepName }),
                   onCancelRun: (runId) => mutations.cancelRun.mutate(runId),
                   isPausePending: mutations.pauseJob.isPending,
                   isResumePending: mutations.resumeJob.isPending || mutations.startJob.isPending,
                   isCancelPending: mutations.cancelJob.isPending,
-                  isRetryPending: mutations.resumeJob.isPending,
+                  isRetryPending: mutations.retryFailedSteps.isPending,
                 }}
                 jobInputs={job.inputs ?? null}
               />

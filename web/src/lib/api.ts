@@ -110,6 +110,15 @@ export function resetJob(jobId: string): Promise<{ status: string }> {
   return request(`/jobs/${jobId}/reset`, { method: "POST" });
 }
 
+export function retryFailedSteps(jobId: string): Promise<{
+  status: string;
+  jobs_resumed: number;
+  steps_rerun: number;
+  delegated_reset: number;
+}> {
+  return request(`/jobs/${jobId}/retry-failed`, { method: "POST" });
+}
+
 export function approveJob(jobId: string): Promise<{ status: string }> {
   return request(`/jobs/${jobId}/approve`, { method: "POST" });
 }

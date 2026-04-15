@@ -1473,6 +1473,28 @@ def cancel_job(job_id: str):
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
 
 
+@app.post("/api/jobs/{job_id}/retry-failed")
+def retry_failed_steps(job_id: str):
+    """Retry every failed/cancelled step in this job and its
+    descendants. Sets touched jobs back to RUNNING and re-launches
+    failed step runs via rerun_step semantics. For delegated for_each
+    parents whose sub-jobs failed, recurses into the sub-jobs and
+    resets the parent's failed delegated run to DELEGATED so the
+    completion handler re-evaluates when sub-jobs settle.
+
+    Returns counts: {jobs_resumed, steps_rerun, delegated_reset}.
+    """
+    engine = _get_engine()
+    try:
+        counts = engine.retry_failed_steps(job_id)
+        _notify_change(job_id)
+        return {"status": "retrying", **counts}
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.post("/api/jobs/{job_id}/reset")
 def reset_job(job_id: str):
     engine = _get_engine()

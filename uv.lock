@@ -496,7 +496,7 @@ wheels = [
 
 [[package]]
 name = "stepwise-run"
-version = "0.43.4"
+version = "0.43.7"
 source = { editable = "." }
 dependencies = [
     { name = "cron-descriptor" },

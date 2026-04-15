@@ -101,7 +101,12 @@ export const JOB_ACTIONS: ActionDefinition<Job>[] = [
     group: "lifecycle",
     groupOrder: 0,
     isAvailable: (job) => canRetry(job.status),
-    execute: (job, ctx) => ctx.mutations.resumeJob.mutate(job.id),
+    // Retries every failed/cancelled step in the job AND its
+    // descendants (for_each sub-jobs, single sub-flow delegations).
+    // Pre-fix this called resumeJob, which only flipped status to
+    // RUNNING and did nothing about the failed step runs — the job
+    // would terminal-check right back to FAILED.
+    execute: (job, ctx) => ctx.mutations.retryFailedSteps.mutate(job.id),
   },
   {
     id: "job.cancel",
