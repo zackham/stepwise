@@ -384,8 +384,19 @@ class ACPBackend:
             # read OAuth from their dotfile dirs; we mount those into
             # the VM read-write (the adapter may write session files
             # to ~/.claude/projects/...). aloop uses OPENROUTER_API_KEY
-            # env var, no mount needed.
+            # env var — if it's not already set, resolve it from the
+            # host's ~/.aloop/credentials.json so the VM (which has no
+            # access to that file) can still authenticate.
             auth_mounts: list[dict] = []
+            if config.name == "aloop" and not env.get("OPENROUTER_API_KEY"):
+                aloop_creds = Path.home() / ".aloop" / "credentials.json"
+                if aloop_creds.is_file():
+                    try:
+                        api_key = json.loads(aloop_creds.read_text()).get("api_key", "")
+                        if api_key:
+                            env["OPENROUTER_API_KEY"] = api_key
+                    except (OSError, json.JSONDecodeError):
+                        pass
             if config.name == "claude":
                 claude_home = Path.home() / ".claude"
                 if claude_home.is_dir():
@@ -646,6 +657,12 @@ class ACPBackend:
             pgid = os.getpgid(acp_proc.process.pid)
         except (ProcessLookupError, OSError):
             pgid = 0
+        # Flag containment runs so `process_lifecycle.reap_dead_processes`
+        # knows to skip its os.kill(pid, 0) health check. Guest pids
+        # can't be looked up on the host and would register as dead
+        # every tick, triggering a retry storm that looked like "codex
+        # keeps failing" in the Tier 3 run.
+        in_vm = bool(getattr(resolved, "containment", None))
         if context.state_update_fn:
             context.state_update_fn({
                 "pid": acp_proc.process.pid,
@@ -655,6 +672,7 @@ class ACPBackend:
                 "session_id": session_id,
                 "session_name": session_name,
                 "agent": agent_name,
+                "in_vm": in_vm,
             })
 
         # Send prompt (blocking — runs in thread pool via AsyncEngine)

@@ -4151,6 +4151,14 @@ class AsyncEngine(Engine):
                 # PID liveness check: task exists but subprocess is dead
                 # (e.g. process crashed but executor thread is stuck on I/O)
                 elif run.id in self._tasks and run.started_at:
+                    # Skip runs living inside a containment VM — the
+                    # recorded pid is a GUEST pid, not reachable via
+                    # os.kill on the host, so _is_pid_alive would
+                    # always return False and we'd falsely fail every
+                    # containment step. ACPBackend sets `in_vm: True`
+                    # in executor_state for these.
+                    if run.executor_state and run.executor_state.get("in_vm"):
+                        continue
                     pid = run.pid or (run.executor_state or {}).get("pid")
                     if pid and not _is_pid_alive(pid):
                         age = (_now() - run.started_at).total_seconds()

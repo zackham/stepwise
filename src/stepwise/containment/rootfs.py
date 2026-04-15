@@ -363,6 +363,16 @@ def _tar_to_ext4(tar_path: Path, output: Path, size_mb: int) -> None:
              f"{mount_dir}/root/.claude.json"],
             check=True, capture_output=True,
         )
+        # aloop stores its session state under ~/.aloop/sessions/<id>/
+        # and errors with "Read-only file system" on the ro rootfs.
+        # Point /root/.aloop at a tmpfs location; init.sh creates the
+        # target dir. State is per-VM ephemeral, fine for the
+        # containment use case (session continuity within a VM only).
+        subprocess.run(
+            ["sudo", "ln", "-sf", "/tmp/.aloop",
+             f"{mount_dir}/root/.aloop"],
+            check=True, capture_output=True,
+        )
     finally:
         subprocess.run(
             ["sudo", "umount", mount_dir],

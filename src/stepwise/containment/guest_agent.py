@@ -218,6 +218,11 @@ if [ -d /root/.claude/backups ]; then
     fi
 fi
 
+# aloop writes session state under ~/.aloop/sessions/. /root/.aloop
+# is a symlink to /tmp/.aloop (rootfs is read-only). Create the
+# target dir so aloop's first mkdir succeeds.
+mkdir -p /tmp/.aloop/sessions
+
 # ── Network config from kernel cmdline ────────────────────────────
 # vmmd.py puts ch_ip=10.X.Y.2/24 ch_gw=10.X.Y.1 ch_dns=1.1.1.1 on
 # the cmdline when it sets up a tap + MASQUERADE. The guest parses

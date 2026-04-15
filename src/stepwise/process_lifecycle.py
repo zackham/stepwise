@@ -233,6 +233,16 @@ def reap_dead_processes(store, engine) -> list[str]:
             if not pid:
                 continue
 
+            # Skip runs whose executor is living inside a containment
+            # VM. The recorded `pid` in that case is a GUEST pid that
+            # cannot be looked up on the host, so `os.kill(pid, 0)`
+            # would always raise ProcessLookupError and we'd
+            # falsely mark every containment run dead on every tick.
+            # ACPBackend sets `in_vm: True` in executor_state when
+            # spawning through VMSpawnContext.
+            if run.executor_state and run.executor_state.get("in_vm"):
+                continue
+
             if _is_pid_alive(pid):
                 continue
 
