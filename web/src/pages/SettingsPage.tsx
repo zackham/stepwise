@@ -43,7 +43,7 @@ type SectionId =
   | "agents"
   | "limits"
   | "containment"
-  | "api-keys"
+  | "integrations"
   | "models"
   | "labels";
 
@@ -58,7 +58,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: "agents", label: "Agents", icon: Bot },
   { id: "limits", label: "Limits", icon: Gauge },
   { id: "containment", label: "Containment", icon: Shield },
-  { id: "api-keys", label: "API Keys", icon: Key },
+  { id: "integrations", label: "Integrations", icon: Webhook },
   { id: "models", label: "Models", icon: Database },
   { id: "labels", label: "Labels", icon: Tag },
 ];
@@ -1793,9 +1793,161 @@ function GeneralSection({
   );
 }
 
-// ── API Keys section ────────────────────────────────────────────────
+// ── Integrations section ────────────────────────────────────────────
+//
+// Replaces the old "API Keys" section. Owns everything about how
+// Stepwise talks to external services: provider credentials and
+// lifecycle webhooks. Cost caps are the natural next addition when
+// the backend field lands.
 
-function ApiKeysSection({
+function WebhookBlock({
+  config,
+  mutations,
+}: {
+  config: NonNullable<ReturnType<typeof useConfig>["data"]>;
+  mutations: ReturnType<typeof useConfigMutations>;
+}) {
+  const [url, setUrl] = useState(config.notify_url ?? "");
+  const [contextText, setContextText] = useState(
+    config.notify_context && Object.keys(config.notify_context).length > 0
+      ? JSON.stringify(config.notify_context, null, 2)
+      : "",
+  );
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setUrl(config.notify_url ?? "");
+    setContextText(
+      config.notify_context && Object.keys(config.notify_context).length > 0
+        ? JSON.stringify(config.notify_context, null, 2)
+        : "",
+    );
+  }, [config.notify_url, config.notify_context]);
+
+  const handleSave = () => {
+    const trimmedUrl = url.trim();
+    if (trimmedUrl && !/^https?:\/\//.test(trimmedUrl)) {
+      setError("URL must start with http:// or https://");
+      return;
+    }
+
+    let context: Record<string, unknown> | null = null;
+    const trimmedCtx = contextText.trim();
+    if (trimmedCtx) {
+      try {
+        const parsed = JSON.parse(trimmedCtx);
+        if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
+          setError("Context must be a JSON object");
+          return;
+        }
+        context = parsed as Record<string, unknown>;
+      } catch {
+        setError("Context is not valid JSON");
+        return;
+      }
+    }
+
+    setError(null);
+    mutations.setNotifyWebhook.mutate({
+      url: trimmedUrl || null,
+      context: context ?? {},
+    });
+  };
+
+  const handleClear = () => {
+    setUrl("");
+    setContextText("");
+    setError(null);
+    mutations.setNotifyWebhook.mutate({ url: null, context: null });
+  };
+
+  const isDirty =
+    url !== (config.notify_url ?? "") ||
+    contextText !==
+      (config.notify_context && Object.keys(config.notify_context).length > 0
+        ? JSON.stringify(config.notify_context, null, 2)
+        : "");
+
+  return (
+    <div className="border border-zinc-200 dark:border-zinc-800 rounded-lg overflow-hidden">
+      <div className="px-3 py-2 bg-zinc-50 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800">
+        <div className="text-xs font-medium text-zinc-700 dark:text-zinc-300 flex items-center gap-1.5">
+          <Webhook className="w-3 h-3" />
+          Job lifecycle webhook
+        </div>
+        <p className="text-[11px] text-zinc-500 dark:text-zinc-500 mt-0.5">
+          POST'd on job state transitions (pending → running →
+          completed/failed). The context payload is sent alongside each
+          call — useful for Slack channel routing or tagging the target
+          team. Leave both blank to disable.
+        </p>
+      </div>
+
+      <div className="p-3 space-y-3">
+        <div className="space-y-1">
+          <label className="text-[11px] font-medium text-zinc-500 dark:text-zinc-600 uppercase tracking-wide">
+            URL
+          </label>
+          <input
+            type="url"
+            value={url}
+            onChange={(e) => {
+              setUrl(e.target.value);
+              setError(null);
+            }}
+            placeholder="https://hooks.slack.com/services/T/B/xxx"
+            className="w-full text-xs bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1.5 text-zinc-700 dark:text-zinc-300 font-mono"
+          />
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-[11px] font-medium text-zinc-500 dark:text-zinc-600 uppercase tracking-wide">
+            Context (JSON)
+          </label>
+          <textarea
+            value={contextText}
+            onChange={(e) => {
+              setContextText(e.target.value);
+              setError(null);
+            }}
+            placeholder='{"channel": "#stepwise-alerts"}'
+            rows={4}
+            className="w-full text-xs bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1.5 text-zinc-700 dark:text-zinc-300 font-mono resize-y"
+          />
+          <p className="text-[10px] text-zinc-500 dark:text-zinc-600">
+            Arbitrary object. Sent as-is alongside the event payload.
+          </p>
+        </div>
+
+        {error && (
+          <p className="text-[11px] text-red-500 dark:text-red-400">{error}</p>
+        )}
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleSave}
+            disabled={!isDirty || mutations.setNotifyWebhook.isPending}
+            className="text-xs px-3 py-1 rounded bg-zinc-800 dark:bg-zinc-200 text-zinc-100 dark:text-zinc-900 disabled:opacity-40"
+          >
+            {mutations.setNotifyWebhook.isPending ? "Saving..." : "Save"}
+          </button>
+          {(config.notify_url ||
+            (config.notify_context && Object.keys(config.notify_context).length > 0)) && (
+            <button
+              onClick={handleClear}
+              disabled={mutations.setNotifyWebhook.isPending}
+              className="text-xs px-3 py-1 rounded border border-zinc-300 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200 disabled:opacity-40"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function IntegrationsSection({
   config,
   mutations,
 }: {
@@ -1805,37 +1957,50 @@ function ApiKeysSection({
   return (
     <div>
       <SectionHeader
-        title="API Keys"
-        description="Provider credentials for model access."
+        title="Integrations"
+        description="How Stepwise talks to external services: provider credentials and lifecycle webhooks."
       />
 
-      <div className="border border-zinc-200 dark:border-zinc-800 rounded-lg overflow-hidden">
-        <ApiKeyRow
-          name="OpenRouter"
-          envVar="OPENROUTER_API_KEY"
-          hasKey={config.has_api_key}
-          currentValue={config.openrouter_api_key}
-          source={config.api_key_source}
-          onSet={(value, scope) =>
-            mutations.setApiKey.mutate({ key: "openrouter", value, scope })
-          }
-        />
-        <div className="border-t border-zinc-200/50 dark:border-zinc-800/50" />
-        <ApiKeyRow
-          name="Anthropic"
-          envVar="ANTHROPIC_API_KEY"
-          hasKey={config.has_anthropic_key}
-          currentValue={config.anthropic_api_key}
-          source={null}
-          onSet={(value, scope) =>
-            mutations.setApiKey.mutate({ key: "anthropic", value, scope })
-          }
-        />
-      </div>
+      <div className="space-y-6">
+        <div>
+          <div className="text-xs font-medium text-zinc-500 dark:text-zinc-600 uppercase tracking-wide mb-2">
+            API keys
+          </div>
+          <div className="border border-zinc-200 dark:border-zinc-800 rounded-lg overflow-hidden">
+            <ApiKeyRow
+              name="OpenRouter"
+              envVar="OPENROUTER_API_KEY"
+              hasKey={config.has_api_key}
+              currentValue={config.openrouter_api_key}
+              source={config.api_key_source}
+              onSet={(value, scope) =>
+                mutations.setApiKey.mutate({ key: "openrouter", value, scope })
+              }
+            />
+            <div className="border-t border-zinc-200/50 dark:border-zinc-800/50" />
+            <ApiKeyRow
+              name="Anthropic"
+              envVar="ANTHROPIC_API_KEY"
+              hasKey={config.has_anthropic_key}
+              currentValue={config.anthropic_api_key}
+              source={null}
+              onSet={(value, scope) =>
+                mutations.setApiKey.mutate({ key: "anthropic", value, scope })
+              }
+            />
+          </div>
+          <p className="text-[10px] text-zinc-500 dark:text-zinc-600 mt-2">
+            User = ~/.config/stepwise/ &nbsp;|&nbsp; Project = .stepwise/config.local.yaml (gitignored)
+          </p>
+        </div>
 
-      <p className="text-[10px] text-zinc-500 dark:text-zinc-600 mt-3">
-        User = ~/.config/stepwise/ &nbsp;|&nbsp; Project = .stepwise/config.local.yaml (gitignored)
-      </p>
+        <div>
+          <div className="text-xs font-medium text-zinc-500 dark:text-zinc-600 uppercase tracking-wide mb-2">
+            Webhooks
+          </div>
+          <WebhookBlock config={config} mutations={mutations} />
+        </div>
+      </div>
     </div>
   );
 }
@@ -2077,8 +2242,8 @@ export function SettingsPage() {
         return <LimitsSection config={config} agents={agents} mutations={mutations} />;
       case "containment":
         return <ContainmentSection config={config} agents={agents} mutations={mutations} />;
-      case "api-keys":
-        return <ApiKeysSection config={config} mutations={mutations} />;
+      case "integrations":
+        return <IntegrationsSection config={config} mutations={mutations} />;
       case "models":
         return (
           <ModelsSection
