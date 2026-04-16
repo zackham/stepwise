@@ -369,7 +369,32 @@ class ScriptExecutor(Executor):
         exitcode_path = step_io_dir / f"{context.step_name}-{context.attempt}.exitcode"
         _io_paths = {"stdout_path": str(stdout_path), "stderr_path": str(stderr_path)}
 
-        project_dir = str(Path(workspace).resolve())
+        # STEPWISE_PROJECT_DIR resolution — this is the directory where
+        # `stepwise` was invoked from (e.g. ~/work/vita), NOT the ephemeral
+        # per-job workspace copy. Documented contract in docs/executors.md
+        # and docs/yaml-format.md: "absolute path to the project root".
+        #
+        # Resolution order:
+        #   1. Inherit from the server/CLI env — set at startup by
+        #      cli.py and server_bg.py to the real project root. This is
+        #      the normal path for `stepwise run` / `stepwise server`.
+        #   2. Fall back to self.flow_dir — for direct invocations where
+        #      no server-level env was set (rare; single-file `stepwise
+        #      check` against an anonymous flow).
+        #   3. Last resort: resolved workspace — preserves prior behavior
+        #      for the truly-anonymous case (tests, inline YAML strings).
+        #
+        # Historical bug: we used to unconditionally set PROJECT_DIR to
+        # the workspace here, which masked the inherited value. Scripts
+        # that read secrets.toml, used relative paths to sibling files,
+        # or published outputs to project-rooted paths all silently
+        # broke because the workspace is a fresh copy with no project
+        # files in it.
+        project_dir = (
+            os.environ.get("STEPWISE_PROJECT_DIR")
+            or self.flow_dir
+            or str(Path(workspace).resolve())
+        )
         env = {
             **os.environ,
             "JOB_ENGINE_INPUTS": str(input_file),
@@ -378,10 +403,13 @@ class ScriptExecutor(Executor):
             "STEPWISE_PROJECT_DIR": project_dir,
             "STEPWISE_ATTEMPT": str(context.attempt),
         }
-        # Prepend project root to PYTHONPATH so flow scripts can import project modules
+        # Prepend project root to PYTHONPATH so flow scripts can import
+        # project modules (e.g. `from scripts.media.foo import bar`).
         existing_pypath = os.environ.get("PYTHONPATH", "")
         env["PYTHONPATH"] = project_dir + (":" + existing_pypath if existing_pypath else "")
-        # M10: Set STEPWISE_FLOW_DIR if flow_dir is available
+        # M10: Set STEPWISE_FLOW_DIR if flow_dir is available — this is
+        # the directory containing FLOW.yaml, distinct from PROJECT_DIR
+        # (the parent project root) and JOB_ENGINE_WORKSPACE (ephemeral).
         if self.flow_dir:
             env["STEPWISE_FLOW_DIR"] = self.flow_dir
         # Reject blocklisted input names, then pass all inputs as

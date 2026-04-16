@@ -595,3 +595,148 @@ steps:
         assert artifact["flow_dir"] == str(child_dir.resolve())
 
         store.close()
+
+
+# ── STEPWISE_PROJECT_DIR resolution ──────────────────────────────────
+#
+# Regression tests for the 0.43.5 fix: ScriptExecutor used to clobber
+# the inherited STEPWISE_PROJECT_DIR with the per-job workspace copy,
+# breaking scripts that read secrets.toml, used relative paths to
+# sibling project files, or published artifacts to project-rooted
+# output directories. Docs (docs/executors.md, docs/yaml-format.md)
+# have always said PROJECT_DIR is the "project root".
+
+
+class TestProjectDirResolution:
+    def test_inherits_server_project_dir(self, tmp_path, monkeypatch):
+        """PROJECT_DIR prefers the server-level env var over workspace.
+
+        When stepwise is launched via `stepwise server start` or
+        `stepwise run` inside a project, cli.py / server_bg.py set
+        STEPWISE_PROJECT_DIR to the real project root. The executor
+        must not clobber it.
+        """
+        project_root = tmp_path / "real-project"
+        project_root.mkdir()
+        (project_root / "secrets.toml").write_text("[api]\nkey = 'yes'\n")
+
+        flow_dir = project_root / "flows" / "my-flow"
+        flow_dir.mkdir(parents=True)
+        script = flow_dir / "check_project.sh"
+        script.write_text(
+            'echo "{\\"project_dir\\": \\"$STEPWISE_PROJECT_DIR\\", '
+            '\\"secrets_exists\\": \\"$(test -f $STEPWISE_PROJECT_DIR/secrets.toml && echo yes || echo no)\\"}"'
+        )
+        script.chmod(0o755)
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+
+        monkeypatch.setenv("STEPWISE_PROJECT_DIR", str(project_root))
+
+        executor = ScriptExecutor(
+            command="bash check_project.sh",
+            flow_dir=str(flow_dir),
+        )
+        ctx = ExecutionContext(
+            job_id="test-job",
+            step_name="test-step",
+            attempt=1,
+            workspace_path=str(workspace),
+            idempotency="idempotent",
+        )
+        result = executor.start({}, ctx)
+        artifact = result.envelope.artifact
+
+        assert artifact.get("project_dir") == str(project_root)
+        assert artifact.get("secrets_exists") == "yes"
+
+    def test_falls_back_to_flow_dir(self, tmp_path, monkeypatch):
+        """Without server env, PROJECT_DIR falls back to flow_dir."""
+        monkeypatch.delenv("STEPWISE_PROJECT_DIR", raising=False)
+
+        flow_dir = tmp_path / "my-flow"
+        flow_dir.mkdir()
+        script = flow_dir / "check.sh"
+        script.write_text('echo "{\\"project_dir\\": \\"$STEPWISE_PROJECT_DIR\\"}"')
+        script.chmod(0o755)
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+
+        executor = ScriptExecutor(
+            command="bash check.sh",
+            flow_dir=str(flow_dir),
+        )
+        ctx = ExecutionContext(
+            job_id="test-job",
+            step_name="test-step",
+            attempt=1,
+            workspace_path=str(workspace),
+            idempotency="idempotent",
+        )
+        result = executor.start({}, ctx)
+        artifact = result.envelope.artifact
+
+        assert artifact.get("project_dir") == str(flow_dir)
+
+    def test_last_resort_workspace(self, tmp_path, monkeypatch):
+        """Anonymous flow with no server env: PROJECT_DIR = workspace."""
+        monkeypatch.delenv("STEPWISE_PROJECT_DIR", raising=False)
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        script = workspace / "check.sh"
+        script.write_text('echo "{\\"project_dir\\": \\"$STEPWISE_PROJECT_DIR\\"}"')
+        script.chmod(0o755)
+
+        # No flow_dir: single-file flow or inline YAML string
+        executor = ScriptExecutor(command="bash check.sh")
+        ctx = ExecutionContext(
+            job_id="test-job",
+            step_name="test-step",
+            attempt=1,
+            workspace_path=str(workspace),
+            idempotency="idempotent",
+        )
+        result = executor.start({}, ctx)
+        artifact = result.envelope.artifact
+
+        assert artifact.get("project_dir") == str(Path(workspace).resolve())
+
+    def test_project_and_flow_dir_are_distinct(self, tmp_path, monkeypatch):
+        """PROJECT_DIR != FLOW_DIR when flow lives inside a project."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        flow_dir = project_root / "flows" / "foo"
+        flow_dir.mkdir(parents=True)
+
+        script = flow_dir / "both.sh"
+        script.write_text(
+            'echo "{\\"project\\": \\"$STEPWISE_PROJECT_DIR\\", '
+            '\\"flow\\": \\"$STEPWISE_FLOW_DIR\\"}"'
+        )
+        script.chmod(0o755)
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+
+        monkeypatch.setenv("STEPWISE_PROJECT_DIR", str(project_root))
+
+        executor = ScriptExecutor(
+            command="bash both.sh",
+            flow_dir=str(flow_dir),
+        )
+        ctx = ExecutionContext(
+            job_id="test-job",
+            step_name="test-step",
+            attempt=1,
+            workspace_path=str(workspace),
+            idempotency="idempotent",
+        )
+        result = executor.start({}, ctx)
+        artifact = result.envelope.artifact
+
+        assert artifact.get("project") == str(project_root)
+        assert artifact.get("flow") == str(flow_dir)
+        assert artifact.get("project") != artifact.get("flow")
