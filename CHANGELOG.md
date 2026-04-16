@@ -3,6 +3,17 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.43.5] — 2026-04-15
+
+### Fixed
+- **ACP spawn no longer leaks orphan subprocess on session/new failure** — when an upstream "Internal error" (Anthropic 5xx) failed `session/new` immediately after spawning a fresh `claude-agent-acp`, the subprocess was left running and the engine never reclaimed it. `acp_backend.spawn()` now wraps session creation; on `AcpError`, if the process was newly spawned for this step, `lifecycle.discard()` tears it down before the exception re-raises. The step still fails (correct behavior — upstream is down, retry later), but no orphan subprocess remains
+- **`ResourceLifecycleManager` is now thread-safe** — `acquire()`, `discard()`, `release_all()`, `release_if_unused()`, and `find()` all hold an `RLock`. Previously two executor threads racing on the same config could each see an empty `active` list, both call `factory()`, and orphan one of the spawned resources. `acquire()` now also returns `(managed, was_newly_created)` so callers can clean up on post-acquire failure
+- **Server default port is 8341** (was 8340) — aligns with vita's `./run` and avoids a port-mismatch where status checks reported "Not running" while the server was alive on a different port. CLI `stepwise server start`, `stepwise.server_bg --port`, and the `STEPWISE_PORT` env-var fallback all default to 8341
+- **Script-step `STEPWISE_PROJECT_DIR` now points at the flow's source directory** — previously it resolved to the isolated per-job workspace (a copy with no project files), so scripts that read `secrets.toml`, referenced sibling files with relative paths, or published artifacts to `data/` all silently broke under `stepwise run`. `ScriptExecutor.start` now prefers `self.flow_dir` when set and falls back to `workspace` only for anonymous flows. `STEPWISE_FLOW_DIR` is still exported separately so scripts that need the workspace copy can still get it via `JOB_ENGINE_WORKSPACE`
+
+### Changed
+- **Removed dead `_DIRECT_PROVIDERS` / `_resolve_direct_provider` path from `openrouter.py`** — superseded by the `model:provider/tag` provider-suffix routing added in `62d06c9`. The file-backed direct-provider scheme (`~/.config/vita/moonshot.json`) was unused; removing it drops 30+ lines of conditional wiring and a `json.loads` + filesystem branch from the hot `chat_completion` path
+
 ## [0.43.0] — 2026-04-14
 
 ### Added

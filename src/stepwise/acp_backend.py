@@ -572,7 +572,7 @@ class ACPBackend:
 
         # Acquire or reuse ACP process
         session_name = config.get("_session_name")
-        managed = self.lifecycle.acquire(resolved, session_name)
+        managed, was_new = self.lifecycle.acquire(resolved, session_name)
         acp_proc = managed.resource
 
         # When the adapter is running INSIDE a containment VM, its
@@ -595,34 +595,56 @@ class ACPBackend:
         session_uuid = config.get("_session_uuid")
 
         logger.info(
-            "[%s] session setup: name=%s uuid=%s fork_from=%s managed_id=%s active_count=%d",
+            "[%s] session setup: name=%s uuid=%s fork_from=%s managed_id=%s active_count=%d was_new=%s",
             step_id, session_name, session_uuid, fork_from,
-            id(acp_proc), len(self.lifecycle.active),
+            id(acp_proc), len(self.lifecycle.active), was_new,
         )
 
-        if fork_from:
-            session_id = acp_proc.client.fork_session(fork_from, adapter_cwd)
-        elif session_uuid:
-            # Use the session's original working_dir for loading — sessions are
-            # stored per-project by Claude Code, so a session created under one
-            # working_dir won't be found if loaded from a different one. For
-            # containment, the stored project key is /mnt/workspace (since
-            # that's what new_session saw when creating the session).
-            load_dir = config.get("_session_working_dir") or adapter_cwd
-            if resolved.containment and load_dir == working_dir:
-                load_dir = "/mnt/workspace"
-            try:
-                logger.info("[%s] loading session %s from disk (load_dir=%s)", step_id, session_uuid[:8], load_dir)
-                acp_proc.client.load_session(session_uuid, load_dir)
-                session_id = session_uuid
-            except Exception as exc:
+        # Wrap session creation so that an upstream failure (e.g. Anthropic
+        # returns "Internal error" during session/new) doesn't leak the
+        # subprocess we just spawned. If we created a fresh ACP process
+        # solely for this step, tear it down before re-raising — the
+        # engine will then fail this step cleanly without orphaning a
+        # claude-agent-acp process.
+        try:
+            if fork_from:
+                session_id = acp_proc.client.fork_session(fork_from, adapter_cwd)
+            elif session_uuid:
+                # Use the session's original working_dir for loading — sessions are
+                # stored per-project by Claude Code, so a session created under one
+                # working_dir won't be found if loaded from a different one. For
+                # containment, the stored project key is /mnt/workspace (since
+                # that's what new_session saw when creating the session).
+                load_dir = config.get("_session_working_dir") or adapter_cwd
+                if resolved.containment and load_dir == working_dir:
+                    load_dir = "/mnt/workspace"
+                try:
+                    logger.info("[%s] loading session %s from disk (load_dir=%s)", step_id, session_uuid[:8], load_dir)
+                    acp_proc.client.load_session(session_uuid, load_dir)
+                    session_id = session_uuid
+                except Exception as exc:
+                    logger.warning(
+                        "[%s] load_session failed (%s), creating new session",
+                        step_id, exc,
+                    )
+                    session_id = acp_proc.client.new_session(adapter_cwd, session_name)
+            else:
+                session_id = acp_proc.client.new_session(adapter_cwd, session_name)
+        except AcpError as exc:
+            if was_new:
                 logger.warning(
-                    "[%s] load_session failed (%s), creating new session",
+                    "[%s] session creation failed on freshly-spawned process "
+                    "(%s); tearing down to avoid orphan subprocess",
                     step_id, exc,
                 )
-                session_id = acp_proc.client.new_session(adapter_cwd, session_name)
-        else:
-            session_id = acp_proc.client.new_session(adapter_cwd, session_name)
+                self.lifecycle.discard(managed)
+            else:
+                logger.warning(
+                    "[%s] session creation failed on reused process (%s); "
+                    "leaving process intact for other consumers",
+                    step_id, exc,
+                )
+            raise
 
         # Execute ACP method calls (mode, model overrides)
         for method_name, value in resolved.acp_calls:

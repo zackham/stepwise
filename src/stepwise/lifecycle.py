@@ -8,6 +8,7 @@ and potentially for VM lifecycle in the future.
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Generic, TypeVar
 
@@ -48,38 +49,68 @@ class ResourceLifecycleManager(Generic[R]):
         self.teardown = teardown
         self.is_alive = is_alive
         self.active: list[ManagedResource[R]] = []
+        # Reentrant lock — factory/teardown may call back into the manager
+        # in future, and acquire() is called from many executor threads.
+        # Without this, two threads could each see an empty `active` list,
+        # both call factory(), and orphan one of the resources.
+        self._lock = threading.RLock()
 
     def acquire(
         self, config: Any, session_name: str | None = None,
-    ) -> ManagedResource[R]:
+    ) -> tuple[ManagedResource[R], bool]:
         """Get or create a resource for this config.
 
-        If a compatible resource exists (is_eq returns True), reuse it
-        (after verifying it's still alive). Otherwise create a new one.
-        """
-        for managed in self.active:
-            if self.is_eq(managed.config, config):
-                # Verify the resource is still alive before reusing
-                if self.is_alive and not self.is_alive(managed.resource):
-                    logger.warning("Resource is dead, removing and creating new one")
-                    try:
-                        self.teardown(managed.resource)
-                    except Exception:
-                        pass
-                    self.active.remove(managed)
-                    break  # Fall through to factory()
-                if session_name:
-                    managed.session_names.add(session_name)
-                return managed
+        Returns (managed, was_newly_created). If a compatible resource exists
+        (is_eq returns True), reuse it (after verifying it's still alive).
+        Otherwise create a new one.
 
-        resource = self.factory(config)
-        managed = ManagedResource(
-            config=config,
-            resource=resource,
-            session_names={session_name} if session_name else set(),
-        )
-        self.active.append(managed)
-        return managed
+        The `was_newly_created` flag lets callers clean up the resource if
+        their post-acquire setup (e.g. ACP session/new) fails — without it
+        we'd orphan the just-spawned subprocess.
+        """
+        with self._lock:
+            for managed in self.active:
+                if self.is_eq(managed.config, config):
+                    # Verify the resource is still alive before reusing
+                    if self.is_alive and not self.is_alive(managed.resource):
+                        logger.warning(
+                            "Resource is dead, removing and creating new one",
+                        )
+                        try:
+                            self.teardown(managed.resource)
+                        except Exception:
+                            pass
+                        self.active.remove(managed)
+                        break  # Fall through to factory()
+                    if session_name:
+                        managed.session_names.add(session_name)
+                    return managed, False
+
+            resource = self.factory(config)
+            managed = ManagedResource(
+                config=config,
+                resource=resource,
+                session_names={session_name} if session_name else set(),
+            )
+            self.active.append(managed)
+            return managed, True
+
+    def discard(self, managed: ManagedResource[R]) -> None:
+        """Tear down a managed resource and remove it from active.
+
+        Use when the caller's post-acquire setup failed and the resource
+        is unusable (e.g. ACP subprocess spawned but session/new errored).
+        Safe to call on a resource that's already been removed.
+        """
+        with self._lock:
+            try:
+                self.teardown(managed.resource)
+            except Exception:
+                logger.debug("Teardown error during discard", exc_info=True)
+            try:
+                self.active.remove(managed)
+            except ValueError:
+                pass
 
     def release_if_unused(
         self, remaining_steps_checker: Callable[[Any], bool],
@@ -89,32 +120,37 @@ class ResourceLifecycleManager(Generic[R]):
         remaining_steps_checker(config) returns True if there are still
         unexecuted steps that could use a resource with this config.
         """
-        still_active = []
-        for managed in self.active:
-            if not remaining_steps_checker(managed.config):
+        with self._lock:
+            still_active = []
+            for managed in self.active:
+                if not remaining_steps_checker(managed.config):
+                    try:
+                        self.teardown(managed.resource)
+                    except Exception:
+                        logger.debug(
+                            "Teardown error during release_if_unused",
+                            exc_info=True,
+                        )
+                else:
+                    still_active.append(managed)
+            self.active = still_active
+
+    def release_all(self) -> None:
+        """Release all resources (job completion or cleanup)."""
+        with self._lock:
+            for managed in self.active:
                 try:
                     self.teardown(managed.resource)
                 except Exception:
                     logger.debug(
-                        "Teardown error during release_if_unused",
-                        exc_info=True,
+                        "Teardown error during release_all", exc_info=True,
                     )
-            else:
-                still_active.append(managed)
-        self.active = still_active
-
-    def release_all(self) -> None:
-        """Release all resources (job completion or cleanup)."""
-        for managed in self.active:
-            try:
-                self.teardown(managed.resource)
-            except Exception:
-                logger.debug("Teardown error during release_all", exc_info=True)
-        self.active.clear()
+            self.active.clear()
 
     def find(self, config: Any) -> ManagedResource[R] | None:
         """Find existing resource matching config, without creating."""
-        for managed in self.active:
-            if self.is_eq(managed.config, config):
-                return managed
-        return None
+        with self._lock:
+            for managed in self.active:
+                if self.is_eq(managed.config, config):
+                    return managed
+            return None
