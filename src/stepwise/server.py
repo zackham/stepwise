@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone as _tz
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -2787,6 +2787,37 @@ class UpdateContainmentRequest(BaseModel):
     containment: str | None = None
 
 
+class UpdateMaxConcurrentJobsRequest(BaseModel):
+    # Global job-queue cap. AsyncEngine.max_concurrent_jobs — how many
+    # jobs can be RUNNING at once across the whole engine. Distinct
+    # from max_concurrent_by_executor (per-step-type) and
+    # max_concurrent_by_agent (per-agent-name). 0 = use default (10).
+    limit: int
+
+
+class UpdateAgentProcessTtlRequest(BaseModel):
+    # Safety net for zombie agent subprocesses. 0 = no timeout.
+    # Positive values kill agent subprocesses older than this many
+    # seconds during the reap sweep.
+    ttl_seconds: int
+
+
+class UpdateAgentPermissionsRequest(BaseModel):
+    # Project-wide agent approval policy. "approve_all" (default) lets
+    # every tool call through without prompting. "prompt" and "deny"
+    # are defined in the config model but not yet fully enforced in
+    # the engine — see docs/executors.md for the current behavior.
+    permissions: str  # "approve_all" | "prompt" | "deny"
+
+
+class UpdateNotifyWebhookRequest(BaseModel):
+    # Webhook URL called on job lifecycle events. None / empty clears.
+    # notify_context is sent as a constant payload prefix — useful for
+    # routing (Slack channel name, target team, etc.). Arbitrary JSON.
+    url: str | None = None
+    context: dict | None = None
+
+
 @app.get("/api/config")
 def get_config():
     cs = load_config_with_sources(_project_dir)
@@ -2804,6 +2835,11 @@ def get_config():
         "labels": [li.to_dict() for li in cs.label_info],
         "billing_mode": cfg.billing,
         "agent_containment": cfg.agent_containment,
+        "agent_permissions": cfg.agent_permissions,
+        "agent_process_ttl": cfg.agent_process_ttl,
+        "max_concurrent_jobs": cfg.max_concurrent_jobs,
+        "notify_url": cfg.notify_url,
+        "notify_context": cfg.notify_context,
         "concurrency_limits": cfg.resolved_executor_limits(),
         "concurrency_running": {
             t: sum(1 for v in _engine._task_exec_types.values() if v == t)
@@ -3120,6 +3156,129 @@ def update_agent_containment_default(req: UpdateContainmentRequest):
 
     new_cfg = _reload_engine_config()
     return {"status": "updated", "agent_containment": new_cfg.agent_containment}
+
+
+_VALID_AGENT_PERMISSIONS = {"approve_all", "prompt", "deny"}
+
+
+def _update_local_config_field(
+    field_name: str,
+    value: Any,
+    remove_when: Callable[[Any], bool] = lambda v: v is None,
+) -> None:
+    """Helper: set/unset a top-level field in .stepwise/config.local.yaml.
+
+    When ``remove_when(value)`` is truthy, the key is removed entirely
+    rather than written as its sentinel value (None / 0 / "").
+    """
+    import yaml as yaml_lib
+    path = _project_dir / ".stepwise" / "config.local.yaml"
+    data: dict[str, Any] = {}
+    if path.exists():
+        data = yaml_lib.safe_load(path.read_text()) or {}
+    if remove_when(value):
+        data.pop(field_name, None)
+    else:
+        data[field_name] = value
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml_lib.dump(data, default_flow_style=False, sort_keys=False))
+
+
+@app.put("/api/config/max-concurrent-jobs")
+def update_max_concurrent_jobs(req: UpdateMaxConcurrentJobsRequest):
+    """Set the global job-queue cap. 0 restores the default (10)."""
+    if req.limit < 0:
+        raise HTTPException(
+            status_code=400, detail="Limit must be non-negative (0 = default)",
+        )
+    _update_local_config_field(
+        "max_concurrent_jobs",
+        req.limit,
+        remove_when=lambda v: v == 0,
+    )
+    new_cfg = _reload_engine_config()
+    # Propagate into the live engine immediately so new jobs pick up
+    # the change without a restart.
+    if _engine is not None:
+        _engine.max_concurrent_jobs = new_cfg.max_concurrent_jobs
+    return {
+        "status": "updated",
+        "max_concurrent_jobs": new_cfg.max_concurrent_jobs,
+    }
+
+
+@app.put("/api/config/agent-process-ttl")
+def update_agent_process_ttl(req: UpdateAgentProcessTtlRequest):
+    """Set the agent-subprocess zombie reap TTL. 0 disables."""
+    if req.ttl_seconds < 0:
+        raise HTTPException(
+            status_code=400, detail="ttl_seconds must be non-negative (0 = disabled)",
+        )
+    _update_local_config_field(
+        "agent_process_ttl",
+        req.ttl_seconds,
+        remove_when=lambda v: v == 0,
+    )
+    new_cfg = _reload_engine_config()
+    return {
+        "status": "updated",
+        "agent_process_ttl": new_cfg.agent_process_ttl,
+    }
+
+
+@app.put("/api/config/agent-permissions")
+def update_agent_permissions(req: UpdateAgentPermissionsRequest):
+    """Set the project-wide agent approval policy."""
+    if req.permissions not in _VALID_AGENT_PERMISSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid permissions {req.permissions!r}. "
+                f"Allowed: {sorted(_VALID_AGENT_PERMISSIONS)}"
+            ),
+        )
+    _update_local_config_field(
+        "agent_permissions",
+        req.permissions,
+        remove_when=lambda v: v == "approve_all",
+    )
+    new_cfg = _reload_engine_config()
+    return {
+        "status": "updated",
+        "agent_permissions": new_cfg.agent_permissions,
+    }
+
+
+@app.put("/api/config/notify-webhook")
+def update_notify_webhook(req: UpdateNotifyWebhookRequest):
+    """Set the job-lifecycle webhook URL + context payload prefix.
+
+    Pass url=null or url="" to clear. notify_context is a free-form
+    dict stored as-is and sent alongside every webhook call.
+    """
+    url = (req.url or "").strip() or None
+    if url is not None and not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(
+            status_code=400,
+            detail="notify_url must start with http:// or https://",
+        )
+
+    _update_local_config_field(
+        "notify_url",
+        url,
+        remove_when=lambda v: v is None,
+    )
+    _update_local_config_field(
+        "notify_context",
+        req.context or {},
+        remove_when=lambda v: not v,
+    )
+    new_cfg = _reload_engine_config()
+    return {
+        "status": "updated",
+        "notify_url": new_cfg.notify_url,
+        "notify_context": new_cfg.notify_context,
+    }
 
 
 # ── Agent settings endpoints ──────────────────────────────────────────

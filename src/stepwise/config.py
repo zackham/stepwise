@@ -513,11 +513,31 @@ def load_config_with_sources(project_dir: Path | None = None) -> ConfigWithSourc
                         or user.notify_context),
         agent_containment=(local.agent_containment or project.agent_containment
                            or user.agent_containment),
+        max_concurrent_jobs=next(
+            (l.max_concurrent_jobs for l in (local, project, user)
+             if l.max_concurrent_jobs != 10),
+            10,
+        ),
+        max_concurrent_by_executor={
+            **user.max_concurrent_by_executor,
+            **project.max_concurrent_by_executor,
+            **local.max_concurrent_by_executor,
+        },
         max_concurrent_by_agent={
             **user.max_concurrent_by_agent,
             **project.max_concurrent_by_agent,
             **local.max_concurrent_by_agent,
         },
+        agent_permissions=next(
+            (l.agent_permissions for l in (local, project, user)
+             if l.agent_permissions != "approve_all"),
+            "approve_all",
+        ),
+        agent_process_ttl=next(
+            (l.agent_process_ttl for l in (local, project, user)
+             if l.agent_process_ttl != 0),
+            0,
+        ),
     )
 
     return ConfigWithSources(config=config, label_info=label_info, api_key_source=api_key_source)
