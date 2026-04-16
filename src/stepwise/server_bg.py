@@ -21,7 +21,7 @@ def main() -> int:
     parser.add_argument("--templates-dir", required=True)
     parser.add_argument("--project-dir", required=True)
     parser.add_argument("--dot-dir", required=True)
-    parser.add_argument("--port", type=int, default=8340)
+    parser.add_argument("--port", type=int, default=8341)
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--log-file", required=True)
     parser.add_argument("--web-dir", default=None, help="Path to web UI dist directory")

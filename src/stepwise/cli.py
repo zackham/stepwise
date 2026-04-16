@@ -613,11 +613,11 @@ def _server_start(args: argparse.Namespace) -> int:
             io.log("warn", f"Another server active: {s['url']} ({s['project_path']})")
 
     host = args.host or "0.0.0.0"
-    port = args.port or 8340
+    port = args.port or 8341
 
     if not args.port and not _port_available(host, port):
         port = _find_free_port()
-        io.log("warn", f"Port 8340 in use, using {port}")
+        io.log("warn", f"Port 8341 in use, using {port}")
 
     # Default to detached mode — spawns server in its own session, required
     # for agent sessions when started from Claude Code.
@@ -5288,7 +5288,7 @@ def build_parser() -> argparse.ArgumentParser:
     # server
     p_server = sub.add_parser("server", help="Manage the Stepwise server")
     p_server.add_argument("action", choices=["start", "stop", "restart", "status", "log"])
-    p_server.add_argument("--port", type=int, help="Port (default: 8340)")
+    p_server.add_argument("--port", type=int, help="Port (default: 8341)")
     p_server.add_argument("--host", help="Bind address (default: 0.0.0.0)")
     p_server.add_argument("--detach", "-d", action="store_true", help="Run in background (default)")
     p_server.add_argument("--no-detach", action="store_true", help="Run in foreground")
