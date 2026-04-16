@@ -4,7 +4,6 @@ import { useAgents, useAgentMutations } from "@/hooks/useAgents";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import type { LabelInfo, ModelInfo, AgentInfo, AgentConfigKey, AgentCapabilities } from "@/lib/api";
 import {
-  Tag,
   Key,
   Database,
   Settings2,
@@ -44,8 +43,7 @@ type SectionId =
   | "limits"
   | "containment"
   | "integrations"
-  | "models"
-  | "labels";
+  | "models";
 
 interface NavItem {
   id: SectionId;
@@ -59,8 +57,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: "limits", label: "Limits", icon: Gauge },
   { id: "containment", label: "Containment", icon: Shield },
   { id: "integrations", label: "Integrations", icon: Webhook },
-  { id: "models", label: "Models", icon: Database },
-  { id: "labels", label: "Labels", icon: Tag },
+  { id: "models", label: "Models & Labels", icon: Database },
 ];
 
 // ── Formatting helpers ──────────────────────────────────────────────
@@ -2005,9 +2002,16 @@ function IntegrationsSection({
   );
 }
 
-// ── Models section ──────────────────────────────────────────────────
+// ── Models & Labels section (merged) ─────────────────────────────────
+//
+// Per council review: labels and the model registry are conceptually
+// inseparable (labels are pointers into the registry) and deserve one
+// sidebar slot, not two. Labels anchored at the top since they're the
+// high-frequency touch surface for 80% of users — swapping "fast"
+// targets is a one-second task that shouldn't require scrolling past
+// the full registry.
 
-function ModelsSection({
+function ModelsAndLabelsSection({
   config,
   modelLabelMap,
   existingModelIds,
@@ -2018,111 +2022,112 @@ function ModelsSection({
   existingModelIds: Set<string>;
   mutations: ReturnType<typeof useConfigMutations>;
 }) {
-  return (
-    <div>
-      <SectionHeader
-        title="Models"
-        description="Available models in the registry."
-      />
-
-      <div className="border border-zinc-200 dark:border-zinc-800 rounded-lg overflow-hidden">
-        <div className="space-y-0.5 p-1">
-          {/* Column headers */}
-          {config.model_registry.length > 0 && (
-            <div className="hidden md:flex items-center gap-2 py-1 px-3 text-[10px] font-medium text-zinc-500 dark:text-zinc-600 uppercase tracking-wide">
-              <div className="flex-1">Model</div>
-              <div className="flex items-center gap-3 shrink-0 font-mono">
-                <span className="w-12 text-right">Context</span>
-                <span className="w-12 text-right">Output</span>
-                <span className="w-14 text-right">In/1M</span>
-                <span className="w-14 text-right">Out/1M</span>
-              </div>
-              <div className="w-7" />
-            </div>
-          )}
-          {config.model_registry.map((model) => (
-            <ModelRow
-              key={model.id}
-              model={model}
-              labelRefs={modelLabelMap[model.id] ?? []}
-              onDelete={() => mutations.removeModel.mutate(model.id)}
-            />
-          ))}
-          {config.model_registry.length === 0 && (
-            <div className="px-3 py-2 text-xs text-zinc-500 dark:text-zinc-600">
-              No models in registry. Search OpenRouter to add models.
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="mt-2">
-        <ModelSearch
-          existingIds={existingModelIds}
-          onAdd={(model) => mutations.addModel.mutate(model)}
-        />
-      </div>
-    </div>
-  );
-}
-
-// ── Labels section ──────────────────────────────────────────────────
-
-function LabelsSection({
-  config,
-  mutations,
-}: {
-  config: NonNullable<ReturnType<typeof useConfig>["data"]>;
-  mutations: ReturnType<typeof useConfigMutations>;
-}) {
   const defaultLabels = config.labels.filter((l) => l.is_default);
   const customLabels = config.labels.filter((l) => !l.is_default);
 
   return (
     <div>
       <SectionHeader
-        title="Labels"
-        description="Model label aliases for use in flows."
+        title="Models & Labels"
+        description={
+          "Labels are named pointers into the model registry. Flows reference " +
+          "labels (e.g. 'balanced') so a single registry swap changes every " +
+          "flow at once."
+        }
       />
 
-      <div className="border border-zinc-200 dark:border-zinc-800 rounded-lg overflow-hidden">
-        <div className="space-y-1 p-1">
-          <div className="px-3 py-1 text-[10px] font-medium text-zinc-500 dark:text-zinc-600 uppercase tracking-wide">
-            Default Labels
+      <div className="space-y-6">
+        {/* ── Labels (top — high-frequency edit surface) ──────────────── */}
+        <div>
+          <div className="text-xs font-medium text-zinc-500 dark:text-zinc-600 uppercase tracking-wide mb-2">
+            Labels
           </div>
-          {defaultLabels.map((label) => (
-            <LabelRow
-              key={label.name}
-              label={label}
-              models={config.model_registry}
-              onUpdate={(model) =>
-                mutations.updateLabel.mutate({ name: label.name, model })
-              }
-            />
-          ))}
+          <div className="border border-zinc-200 dark:border-zinc-800 rounded-lg overflow-hidden">
+            <div className="space-y-1 p-1">
+              <div className="px-3 py-1 text-[10px] font-medium text-zinc-500 dark:text-zinc-600 uppercase tracking-wide">
+                Defaults
+              </div>
+              {defaultLabels.map((label) => (
+                <LabelRow
+                  key={label.name}
+                  label={label}
+                  models={config.model_registry}
+                  onUpdate={(model) =>
+                    mutations.updateLabel.mutate({ name: label.name, model })
+                  }
+                />
+              ))}
 
-          <div className="px-3 py-1 mt-3 text-[10px] font-medium text-zinc-500 dark:text-zinc-600 uppercase tracking-wide">
-            Custom Labels
+              <div className="px-3 py-1 mt-3 text-[10px] font-medium text-zinc-500 dark:text-zinc-600 uppercase tracking-wide">
+                Custom
+              </div>
+              {customLabels.length === 0 && (
+                <div className="px-3 py-1 text-xs text-zinc-500 dark:text-zinc-600">
+                  No custom labels
+                </div>
+              )}
+              {customLabels.map((label) => (
+                <LabelRow
+                  key={label.name}
+                  label={label}
+                  models={config.model_registry}
+                  onUpdate={(model) =>
+                    mutations.updateLabel.mutate({ name: label.name, model })
+                  }
+                  onDelete={() => mutations.deleteLabel.mutate(label.name)}
+                />
+              ))}
+
+              <AddLabelForm
+                models={config.model_registry}
+                onAdd={(name, model) => mutations.createLabel.mutate({ name, model })}
+              />
+            </div>
           </div>
-          {customLabels.length === 0 && (
-            <div className="px-3 py-1 text-xs text-zinc-500 dark:text-zinc-600">No custom labels</div>
-          )}
-          {customLabels.map((label) => (
-            <LabelRow
-              key={label.name}
-              label={label}
-              models={config.model_registry}
-              onUpdate={(model) =>
-                mutations.updateLabel.mutate({ name: label.name, model })
-              }
-              onDelete={() => mutations.deleteLabel.mutate(label.name)}
-            />
-          ))}
+        </div>
 
-          <AddLabelForm
-            models={config.model_registry}
-            onAdd={(name, model) => mutations.createLabel.mutate({ name, model })}
-          />
+        {/* ── Model registry (bottom — reference surface) ─────────────── */}
+        <div>
+          <div className="text-xs font-medium text-zinc-500 dark:text-zinc-600 uppercase tracking-wide mb-2">
+            Registry
+          </div>
+          <div className="border border-zinc-200 dark:border-zinc-800 rounded-lg overflow-hidden">
+            <div className="space-y-0.5 p-1">
+              {/* Column headers */}
+              {config.model_registry.length > 0 && (
+                <div className="hidden md:flex items-center gap-2 py-1 px-3 text-[10px] font-medium text-zinc-500 dark:text-zinc-600 uppercase tracking-wide">
+                  <div className="flex-1">Model</div>
+                  <div className="flex items-center gap-3 shrink-0 font-mono">
+                    <span className="w-12 text-right">Context</span>
+                    <span className="w-12 text-right">Output</span>
+                    <span className="w-14 text-right">In/1M</span>
+                    <span className="w-14 text-right">Out/1M</span>
+                  </div>
+                  <div className="w-7" />
+                </div>
+              )}
+              {config.model_registry.map((model) => (
+                <ModelRow
+                  key={model.id}
+                  model={model}
+                  labelRefs={modelLabelMap[model.id] ?? []}
+                  onDelete={() => mutations.removeModel.mutate(model.id)}
+                />
+              ))}
+              {config.model_registry.length === 0 && (
+                <div className="px-3 py-2 text-xs text-zinc-500 dark:text-zinc-600">
+                  No models in registry. Search OpenRouter to add models.
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-2">
+            <ModelSearch
+              existingIds={existingModelIds}
+              onAdd={(model) => mutations.addModel.mutate(model)}
+            />
+          </div>
         </div>
       </div>
     </div>
@@ -2246,15 +2251,13 @@ export function SettingsPage() {
         return <IntegrationsSection config={config} mutations={mutations} />;
       case "models":
         return (
-          <ModelsSection
+          <ModelsAndLabelsSection
             config={config}
             modelLabelMap={modelLabelMap}
             existingModelIds={existingModelIds}
             mutations={mutations}
           />
         );
-      case "labels":
-        return <LabelsSection config={config} mutations={mutations} />;
     }
   };
 
