@@ -1124,12 +1124,48 @@ function AgentCard({
 
 // ── Agents section ──────────────────────────────────────────────────
 
-function AgentsSection() {
+const PERMISSIONS_OPTIONS: Array<{
+  value: string;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "approve_all",
+    label: "Approve all",
+    description:
+      "Every tool call runs without prompting. Recommended for local dev on a trusted project. This is the engine's current behavior today.",
+  },
+  {
+    value: "prompt",
+    label: "Prompt on write",
+    description:
+      "Intended to pause on write/exec tool calls and ask for approval. Defined in config but not yet enforced by the engine — setting this persists the policy so the future enforcer can pick it up.",
+  },
+  {
+    value: "deny",
+    label: "Deny side effects",
+    description:
+      "Intended to reject any tool call with a side effect. Defined in config but not yet enforced by the engine.",
+  },
+];
+
+function AgentsSection({
+  config,
+  mutations,
+}: {
+  config: NonNullable<ReturnType<typeof useConfig>["data"]>;
+  mutations: ReturnType<typeof useConfigMutations>;
+}) {
   const { data: agents, isLoading, isError } = useAgents();
-  const mutations = useAgentMutations();
+  const agentMutations = useAgentMutations();
   const [editAgent, setEditAgent] = useState<AgentInfo | null>(null);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+
+  const currentPerms = config.agent_permissions ?? "approve_all";
+  const currentPermDesc =
+    PERMISSIONS_OPTIONS.find((p) => p.value === currentPerms)?.description ?? "";
+  const permsNotEnforced = currentPerms !== "approve_all";
 
   if (isLoading) {
     return (
@@ -1154,6 +1190,42 @@ function AgentsSection() {
 
   return (
     <div className="space-y-1">
+      {/* ── Approval policy ─────────────────────────────────────────── */}
+      <div className="border border-zinc-200 dark:border-zinc-800 rounded-lg p-3 mb-4">
+        <div className="flex items-start gap-3">
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
+              Approval policy
+            </div>
+            <p className="text-[11px] text-zinc-500 dark:text-zinc-500 mt-0.5">
+              {currentPermDesc}
+            </p>
+            {permsNotEnforced && (
+              <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1.5 flex items-start gap-1">
+                <span className="font-mono">⚠</span>
+                <span>
+                  Not yet enforced by the engine. The policy is persisted to
+                  <code className="text-[10px] bg-zinc-100 dark:bg-zinc-900 px-1 rounded mx-1">.stepwise/config.local.yaml</code>
+                  and will take effect when the approval gate ships.
+                </span>
+              </p>
+            )}
+          </div>
+          <select
+            value={currentPerms}
+            onChange={(e) => mutations.setAgentPermissions.mutate(e.target.value)}
+            disabled={mutations.setAgentPermissions.isPending}
+            className="text-xs bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1.5 text-zinc-700 dark:text-zinc-300 min-w-[10rem] shrink-0"
+          >
+            {PERMISSIONS_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
       {/* Builtin agents */}
       <div className="px-3 py-1 text-[10px] font-medium text-zinc-500 dark:text-zinc-600 uppercase tracking-wide">
         Builtin Agents
@@ -1168,10 +1240,10 @@ function AgentsSection() {
           onEdit={() => setEditAgent(agent)}
           onToggle={() =>
             agent.is_disabled
-              ? mutations.enableAgent.mutate(agent.name)
-              : mutations.disableAgent.mutate(agent.name)
+              ? agentMutations.enableAgent.mutate(agent.name)
+              : agentMutations.disableAgent.mutate(agent.name)
           }
-          onReset={agent.has_overrides ? () => mutations.resetAgent.mutate(agent.name) : undefined}
+          onReset={agent.has_overrides ? () => agentMutations.resetAgent.mutate(agent.name) : undefined}
         />
       ))}
 
@@ -1189,8 +1261,8 @@ function AgentsSection() {
           onEdit={() => setEditAgent(agent)}
           onToggle={() =>
             agent.is_disabled
-              ? mutations.enableAgent.mutate(agent.name)
-              : mutations.disableAgent.mutate(agent.name)
+              ? agentMutations.enableAgent.mutate(agent.name)
+              : agentMutations.disableAgent.mutate(agent.name)
           }
           onDelete={() => setDeleteConfirm(agent.name)}
         />
@@ -1214,12 +1286,12 @@ function AgentsSection() {
           }}
           agent={editAgent}
           onSave={(payload) => {
-            mutations.updateAgent.mutate(
+            agentMutations.updateAgent.mutate(
               { name: editAgent.name, agent: payload },
               { onSuccess: () => setEditAgent(null) }
             );
           }}
-          isPending={mutations.updateAgent.isPending}
+          isPending={agentMutations.updateAgent.isPending}
         />
       )}
 
@@ -1229,11 +1301,11 @@ function AgentsSection() {
         onOpenChange={setShowAddDialog}
         existingNames={existingNames}
         onCreate={(agent) => {
-          mutations.createAgent.mutate(agent, {
+          agentMutations.createAgent.mutate(agent, {
             onSuccess: () => setShowAddDialog(false),
           });
         }}
-        isPending={mutations.createAgent.isPending}
+        isPending={agentMutations.createAgent.isPending}
       />
 
       {/* Delete confirmation */}
@@ -1258,13 +1330,13 @@ function AgentsSection() {
               <Button
                 variant="destructive"
                 onClick={() => {
-                  mutations.deleteAgent.mutate(deleteConfirm, {
+                  agentMutations.deleteAgent.mutate(deleteConfirm, {
                     onSuccess: () => setDeleteConfirm(null),
                   });
                 }}
-                disabled={mutations.deleteAgent.isPending}
+                disabled={agentMutations.deleteAgent.isPending}
               >
-                {mutations.deleteAgent.isPending ? "Deleting..." : "Delete"}
+                {agentMutations.deleteAgent.isPending ? "Deleting..." : "Delete"}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -1996,9 +2068,9 @@ export function SettingsPage() {
           <div>
             <SectionHeader
               title="Agents"
-              description="Agent backends available for use in flows."
+              description="Agent backends available for use in flows, plus the project-wide approval policy."
             />
-            <AgentsSection />
+            <AgentsSection config={config} mutations={mutations} />
           </div>
         );
       case "limits":
