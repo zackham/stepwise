@@ -11,6 +11,17 @@ export function useConfig() {
   });
 }
 
+export function useHealth() {
+  return useQuery({
+    queryKey: ["health"],
+    queryFn: api.fetchHealth,
+    // Settings footer refreshes this — 5s is fine for a read-mostly
+    // status strip. Don't poll more aggressively than needed.
+    refetchInterval: 5000,
+    staleTime: 4000,
+  });
+}
+
 export function useOpenRouterSearch(query: string) {
   const [debouncedQuery, setDebouncedQuery] = useState(query);
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);

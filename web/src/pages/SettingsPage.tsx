@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect } from "react";
-import { useConfig, useConfigMutations, useOpenRouterSearch } from "@/hooks/useConfig";
+import { useQueryClient } from "@tanstack/react-query";
+import { useConfig, useConfigMutations, useHealth, useOpenRouterSearch } from "@/hooks/useConfig";
+import * as api from "@/lib/api";
 import { useAgents, useAgentMutations } from "@/hooks/useAgents";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import type { LabelInfo, ModelInfo, AgentInfo, AgentConfigKey, AgentCapabilities } from "@/lib/api";
@@ -21,6 +23,7 @@ import {
   Shield,
   Gauge,
   Webhook,
+  RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -2136,6 +2139,85 @@ function ModelsAndLabelsSection({
 
 // ── Sidebar navigation ──────────────────────────────────────────────
 
+// ── Sidebar status footer ──────────────────────────────────────────
+//
+// Replaces what would have been a dedicated "System" / "Diagnostics"
+// tab. Per council review: a whole tab was too heavy for mostly
+// read-only info, but losing the info entirely forces users into
+// `stepwise doctor` on the CLI for basic questions ("what version am
+// I on?"). A compact footer hits the sweet spot — zero-cost when
+// you're editing a real setting, glanceable when you're not.
+
+function SidebarStatusFooter() {
+  const { data: health } = useHealth();
+  const queryClient = useQueryClient();
+  const [reloading, setReloading] = useState(false);
+  const [lastReloadedAt, setLastReloadedAt] = useState<number | null>(null);
+
+  const handleReload = async () => {
+    setReloading(true);
+    try {
+      await api.reloadConfig();
+      queryClient.invalidateQueries({ queryKey: ["config"] });
+      queryClient.invalidateQueries({ queryKey: ["health"] });
+      setLastReloadedAt(Date.now());
+    } catch {
+      // Swallow — nothing actionable for the user here, the
+      // mutation failure will surface through the next refetch.
+    } finally {
+      setReloading(false);
+    }
+  };
+
+  const showJustReloaded =
+    lastReloadedAt !== null && Date.now() - lastReloadedAt < 1500;
+
+  const projectPath = health?.project_path ?? null;
+  const projectLabel = projectPath
+    ? projectPath.split("/").pop() || projectPath
+    : null;
+
+  return (
+    <div className="mt-auto pt-3 pb-2 px-2 border-t border-zinc-200 dark:border-zinc-800">
+      <div className="px-2 py-1 text-[10px] text-zinc-500 dark:text-zinc-600 font-mono space-y-0.5">
+        <div className="flex items-center justify-between">
+          <span className="truncate">
+            stepwise{" "}
+            <span className="text-zinc-700 dark:text-zinc-400">
+              {health?.version ?? "…"}
+            </span>
+          </span>
+          <button
+            onClick={handleReload}
+            disabled={reloading}
+            title="Reload config from disk"
+            className="text-zinc-500 dark:text-zinc-600 hover:text-zinc-700 dark:hover:text-zinc-300 disabled:opacity-40 p-0.5 shrink-0"
+          >
+            {reloading ? (
+              <Loader2 className="w-3 h-3 animate-spin" />
+            ) : showJustReloaded ? (
+              <Check className="w-3 h-3 text-green-500" />
+            ) : (
+              <RefreshCw className="w-3 h-3" />
+            )}
+          </button>
+        </div>
+        {projectLabel && (
+          <div
+            className="truncate text-zinc-500 dark:text-zinc-600"
+            title={projectPath ?? undefined}
+          >
+            {projectLabel}
+          </div>
+        )}
+        <div className="text-zinc-500 dark:text-zinc-600">
+          {health?.active_jobs ?? 0} active job{health?.active_jobs === 1 ? "" : "s"}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Sidebar({
   activeSection,
   onSelect,
@@ -2144,7 +2226,7 @@ function Sidebar({
   onSelect: (id: SectionId) => void;
 }) {
   return (
-    <nav className="w-52 shrink-0 py-6 pr-2">
+    <nav className="w-52 shrink-0 py-6 pr-2 flex flex-col h-full">
       <div className="space-y-0.5">
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon;
@@ -2166,6 +2248,7 @@ function Sidebar({
           );
         })}
       </div>
+      <SidebarStatusFooter />
     </nav>
   );
 }

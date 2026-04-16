@@ -705,6 +705,21 @@ export function fetchConfig(): Promise<ConfigResponse> {
   return request<ConfigResponse>("/config");
 }
 
+export interface HealthResponse {
+  status: string;
+  version: string;
+  active_jobs: number;
+  project_path: string | null;
+}
+
+export function fetchHealth(): Promise<HealthResponse> {
+  return request<HealthResponse>("/health");
+}
+
+export function reloadConfig(): Promise<{ status: string; limits: Record<string, number> }> {
+  return request("/config/reload", { method: "POST" });
+}
+
 export function createLabel(name: string, model: string): Promise<{ status: string }> {
   return request("/config/labels", {
     method: "POST",
