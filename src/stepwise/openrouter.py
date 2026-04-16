@@ -15,37 +15,6 @@ logger = logging.getLogger("stepwise.openrouter")
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 
-# Direct provider configs loaded from ~/.config/vita/<provider>.json
-# Each file has {"api_key": "...", "base_url": "..."}
-# Model prefix → config file path + model name remapping
-_DIRECT_PROVIDERS = {
-    "moonshotai/": {
-        "config_file": "~/.config/vita/moonshot.json",
-        "model_remap": {"moonshotai/kimi-k2.5": "kimi-k2.5-0127"},
-    },
-}
-
-
-def _resolve_direct_provider(model: str) -> tuple[str, str, str] | None:
-    """If model matches a direct provider, return (base_url, api_key, remapped_model).
-    Returns None to use OpenRouter as normal."""
-    import os
-    from pathlib import Path
-    for prefix, cfg in _DIRECT_PROVIDERS.items():
-        if model.startswith(prefix):
-            config_path = Path(os.path.expanduser(cfg["config_file"]))
-            if config_path.exists():
-                try:
-                    data = json.loads(config_path.read_text())
-                    api_key = data.get("api_key", "")
-                    base_url = data.get("base_url", "")
-                    if api_key and base_url:
-                        remapped = cfg.get("model_remap", {}).get(model, model)
-                        return (base_url, api_key, remapped)
-                except (json.JSONDecodeError, KeyError):
-                    pass
-    return None
-
 
 class OpenRouterError(Exception):
     """Error from OpenRouter API with response details."""
@@ -60,7 +29,7 @@ class OpenRouterError(Exception):
 
 
 class OpenRouterClient:
-    """Makes chat completion calls via OpenRouter (or a direct provider)
+    """Makes chat completion calls via OpenRouter
     using Server-Sent Events streaming.
 
     All calls stream with `stream: true`. This prevents idle-connection
@@ -95,25 +64,14 @@ class OpenRouterClient:
         if not model:
             raise ValueError("model name is empty — check that $variable references resolved correctly")
 
-        # Check for direct provider routing (bypasses OpenRouter entirely)
-        direct = _resolve_direct_provider(model)
-        if direct:
-            direct_base, direct_key, direct_model = direct
-            logger.info("Direct provider: %s → %s (%s)", model, direct_model, direct_base)
-            api_url = direct_base.rstrip("/") + "/chat/completions"
-            api_key = direct_key
-            effective_model = direct_model
-            is_direct = True
-        else:
-            api_url = f"{self.base_url}/chat/completions"
-            api_key = self.api_key
-            effective_model = model
-            is_direct = False
+        api_url = f"{self.base_url}/chat/completions"
+        api_key = self.api_key
+        effective_model = model
 
         # Support provider routing via suffix: "model-id:provider/tag"
         # e.g. "moonshotai/kimi-k2.5:moonshotai/int4" routes to that specific provider
         provider_order = None
-        if not is_direct and ":" in effective_model:
+        if ":" in effective_model:
             parts = effective_model.split(":", 1)
             if "/" in parts[0]:
                 effective_model, provider_order = parts[0], [parts[1]]
@@ -124,16 +82,9 @@ class OpenRouterClient:
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": True,
-            # OpenAI-spec: include `usage` in the final streaming chunk.
-            # Without this the final chunk has no usage field and we
-            # can't report token counts or cost.
             "stream_options": {"include_usage": True},
+            "usage": {"include": True},
         }
-        if not is_direct:
-            # OpenRouter-specific: include `cost` in the final usage object.
-            # Orthogonal to stream_options — OR uses this to enrich usage
-            # with cost metadata that OpenAI's spec doesn't define.
-            payload["usage"] = {"include": True}
         if provider_order:
             payload["provider"] = {"order": provider_order}
         if tools:
@@ -144,10 +95,9 @@ class OpenRouterClient:
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "Accept": "text/event-stream",
+            "HTTP-Referer": "https://stepwise.local",
+            "X-Title": "Stepwise",
         }
-        if not is_direct:
-            headers["HTTP-Referer"] = "https://stepwise.local"
-            headers["X-Title"] = "Stepwise"
 
         try:
             with httpx.stream(
