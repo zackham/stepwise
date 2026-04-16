@@ -20,6 +20,8 @@ import {
   Power,
   PowerOff,
   Shield,
+  Gauge,
+  Webhook,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -36,7 +38,14 @@ import { Label } from "@/components/ui/label";
 
 // ── Types ──────────────────────────────────────────────────────────
 
-type SectionId = "general" | "agents" | "containment" | "api-keys" | "models" | "labels";
+type SectionId =
+  | "general"
+  | "agents"
+  | "limits"
+  | "containment"
+  | "api-keys"
+  | "models"
+  | "labels";
 
 interface NavItem {
   id: SectionId;
@@ -47,6 +56,7 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { id: "general", label: "General", icon: Settings2 },
   { id: "agents", label: "Agents", icon: Bot },
+  { id: "limits", label: "Limits", icon: Gauge },
   { id: "containment", label: "Containment", icon: Shield },
   { id: "api-keys", label: "API Keys", icon: Key },
   { id: "models", label: "Models", icon: Database },
@@ -1292,8 +1302,9 @@ function ContainmentSection({
         title="Containment"
         description={
           "Hardware-isolated agent execution via Cloud-Hypervisor microVMs. " +
-          "Set a project-wide default below, then override per agent if needed. " +
-          "Override chain at run time: CLI flag > flow YAML > step YAML > agent override > project default."
+          "Set a project-wide default below, then pin specific agents if needed. " +
+          "Override chain at run time: CLI flag > flow YAML > step YAML > agent override > project default. " +
+          "Concurrency caps used to live here — they've moved to the Limits section."
         }
       />
 
@@ -1334,16 +1345,16 @@ function ContainmentSection({
           </div>
         </div>
 
-        {/* ── Per-agent table: containment + concurrency ──────────────── */}
+        {/* ── Per-agent table: containment only ───────────────────────── */}
         <div className="border border-zinc-200 dark:border-zinc-800 rounded-lg overflow-hidden">
           <div className="px-3 py-2 bg-zinc-50 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800">
             <div className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
               Per-agent overrides
             </div>
             <p className="text-[11px] text-zinc-500 dark:text-zinc-500 mt-0.5">
-              <strong>Containment</strong> — pin a specific agent to a mode regardless of the project default.
-              <strong className="ml-2">Concurrency</strong> — cap simultaneous in-flight steps for this agent.
-              Set 0 (empty) to remove. Per-agent caps are AND'd with the executor-type cap in General.
+              Pin a specific agent to a containment mode regardless of the
+              project default. Use <code className="text-[10px] bg-zinc-100 dark:bg-zinc-900 px-1 rounded">(use project default)</code> to
+              clear an override.
             </p>
           </div>
 
@@ -1353,24 +1364,19 @@ function ContainmentSection({
             </div>
           ) : (
             <div>
-              <div className="px-3 py-1.5 border-b border-zinc-200/50 dark:border-zinc-800/50 grid grid-cols-[1fr_auto_auto_auto] items-center gap-3 text-[10px] uppercase tracking-wide font-medium text-zinc-500 dark:text-zinc-600">
+              <div className="px-3 py-1.5 border-b border-zinc-200/50 dark:border-zinc-800/50 grid grid-cols-[1fr_auto_auto] items-center gap-3 text-[10px] uppercase tracking-wide font-medium text-zinc-500 dark:text-zinc-600">
                 <div>Agent</div>
                 <div>Effective</div>
-                <div className="min-w-[10rem] text-left">Containment</div>
-                <div className="w-20 text-left">Concurrency</div>
+                <div className="min-w-[10rem] text-left">Override</div>
               </div>
               <div className="divide-y divide-zinc-200/50 dark:divide-zinc-800/50">
                 {agents.map((agent) => {
                   const effective = effectiveFor(agent);
                   const overrideValue = agent.containment ?? "";
-                  const concurrencyLimits = config.agent_concurrency_limits ?? {};
-                  const concurrencyRunning = config.agent_concurrency_running ?? {};
-                  const currentConcurrency = concurrencyLimits[agent.name] ?? 0;
-                  const running = concurrencyRunning[agent.name] ?? 0;
                   return (
                     <div
                       key={agent.name}
-                      className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-3 px-3 py-2"
+                      className="grid grid-cols-[1fr_auto_auto] items-center gap-3 px-3 py-2"
                     >
                       <div className="flex items-center gap-2 min-w-0">
                         <Bot className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-500 shrink-0" />
@@ -1411,35 +1417,233 @@ function ContainmentSection({
                         <option value="">(use project default)</option>
                         <option value="cloud-hypervisor">cloud-hypervisor</option>
                       </select>
-                      <div className="flex items-center gap-1.5 w-20">
-                        <input
-                          type="number"
-                          min={0}
-                          max={999}
-                          value={currentConcurrency || ""}
-                          placeholder="∞"
-                          onChange={(e) => {
-                            const n = parseInt(e.target.value || "0", 10);
-                            if (Number.isNaN(n) || n < 0) return;
-                            mutations.setAgentConcurrencyLimit.mutate({
-                              agent: agent.name,
-                              limit: n,
-                            });
-                          }}
-                          disabled={mutations.setAgentConcurrencyLimit.isPending}
-                          className="text-xs bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded px-1.5 py-1 text-zinc-700 dark:text-zinc-300 w-12 text-center"
-                          title={currentConcurrency > 0 ? `max ${currentConcurrency} in flight` : "no cap"}
-                        />
-                        {currentConcurrency > 0 && (
-                          <span className="text-[9px] text-zinc-500 dark:text-zinc-600 font-mono">
-                            {running}/{currentConcurrency}
-                          </span>
-                        )}
-                      </div>
                     </div>
                   );
                 })}
               </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Limits section ──────────────────────────────────────────────────
+//
+// Concurrency + throttling controls, pulled out of Containment (where
+// they were conceptually mis-grouped) into one "don't melt my laptop"
+// tab. Order of presentation matches the order the engine evaluates:
+//   1. max_concurrent_jobs   — overall job-queue cap
+//   2. per-executor-type     — e.g. "at most 3 agent steps across the whole engine"
+//   3. per-agent-name        — e.g. "at most 2 claude steps"
+//   4. agent_process_ttl     — safety net for zombie subprocesses
+// A step is throttled if ANY applicable cap is at capacity.
+
+const KNOWN_EXECUTOR_TYPES = ["agent", "llm", "script", "external", "poll"];
+
+function NumericLimitRow({
+  label,
+  description,
+  value,
+  placeholder,
+  running,
+  onChange,
+  disabled,
+  min = 0,
+  max = 9999,
+}: {
+  label: React.ReactNode;
+  description?: React.ReactNode;
+  value: number;
+  placeholder?: string;
+  running?: number;
+  onChange: (n: number) => void;
+  disabled?: boolean;
+  min?: number;
+  max?: number;
+}) {
+  const [local, setLocal] = useState(String(value || ""));
+  useEffect(() => {
+    setLocal(String(value || ""));
+  }, [value]);
+
+  return (
+    <div className="flex items-start gap-3 px-3 py-2">
+      <div className="flex-1 min-w-0">
+        <div className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
+          {label}
+        </div>
+        {description && (
+          <p className="text-[11px] text-zinc-500 dark:text-zinc-500 mt-0.5">
+            {description}
+          </p>
+        )}
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        {running !== undefined && value > 0 && (
+          <span className="text-[10px] text-zinc-500 dark:text-zinc-600 font-mono">
+            {running}/{value}
+          </span>
+        )}
+        <input
+          type="number"
+          min={min}
+          max={max}
+          value={local}
+          placeholder={placeholder ?? "∞"}
+          onChange={(e) => setLocal(e.target.value)}
+          onBlur={() => {
+            const n = parseInt(local || "0", 10);
+            if (Number.isNaN(n) || n < 0) {
+              setLocal(String(value || ""));
+              return;
+            }
+            if (n !== value) onChange(n);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          }}
+          disabled={disabled}
+          className="text-xs bg-zinc-50 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-zinc-700 dark:text-zinc-300 w-20 text-right font-mono"
+        />
+      </div>
+    </div>
+  );
+}
+
+function LimitsSection({
+  config,
+  agents,
+  mutations,
+}: {
+  config: NonNullable<ReturnType<typeof useConfig>["data"]>;
+  agents: AgentInfo[] | undefined;
+  mutations: ReturnType<typeof useConfigMutations>;
+}) {
+  const executorLimits = config.concurrency_limits ?? {};
+  const executorRunning = config.concurrency_running ?? {};
+  const agentLimits = config.agent_concurrency_limits ?? {};
+  const agentRunning = config.agent_concurrency_running ?? {};
+
+  return (
+    <div>
+      <SectionHeader
+        title="Limits"
+        description={
+          "Concurrency caps and process safety nets. A step is throttled if " +
+          "any applicable cap is at capacity. Caps compose: the per-agent cap " +
+          "is AND'd with the per-executor-type cap, which is AND'd with the " +
+          "global job cap. Retries and per-step timeouts live in your FLOW.yaml, " +
+          "not here."
+        }
+      />
+
+      <div className="space-y-6">
+        {/* ── Global caps ────────────────────────────────────────────── */}
+        <div className="border border-zinc-200 dark:border-zinc-800 rounded-lg overflow-hidden">
+          <div className="px-3 py-2 bg-zinc-50 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800">
+            <div className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
+              Global
+            </div>
+          </div>
+          <div className="divide-y divide-zinc-200/50 dark:divide-zinc-800/50">
+            <NumericLimitRow
+              label="Max concurrent jobs"
+              description="Jobs that can be RUNNING at once across the whole engine. 0 = default (10)."
+              value={config.max_concurrent_jobs ?? 10}
+              onChange={(n) => mutations.setMaxConcurrentJobs.mutate(n)}
+              disabled={mutations.setMaxConcurrentJobs.isPending}
+              placeholder="10"
+            />
+            <NumericLimitRow
+              label="Agent subprocess TTL (seconds)"
+              description="Zombie-reaper safety net. Agent subprocesses older than this are killed during the reap sweep. 0 = disabled."
+              value={config.agent_process_ttl ?? 0}
+              onChange={(n) => mutations.setAgentProcessTtl.mutate(n)}
+              disabled={mutations.setAgentProcessTtl.isPending}
+              placeholder="off"
+            />
+          </div>
+        </div>
+
+        {/* ── Per-executor-type caps ─────────────────────────────────── */}
+        <div className="border border-zinc-200 dark:border-zinc-800 rounded-lg overflow-hidden">
+          <div className="px-3 py-2 bg-zinc-50 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800">
+            <div className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
+              Per-executor-type
+            </div>
+            <p className="text-[11px] text-zinc-500 dark:text-zinc-500 mt-0.5">
+              Cap simultaneous steps of each executor type across all jobs.
+              Useful for protecting a rate-limited subscription model
+              (<code className="text-[10px] bg-zinc-100 dark:bg-zinc-900 px-1 rounded">agent</code>)
+              or a flaky local process pool. 0 / empty = no cap.
+            </p>
+          </div>
+          <div className="divide-y divide-zinc-200/50 dark:divide-zinc-800/50">
+            {KNOWN_EXECUTOR_TYPES.map((type) => (
+              <NumericLimitRow
+                key={type}
+                label={<span className="font-mono">{type}</span>}
+                value={executorLimits[type] ?? 0}
+                running={executorRunning[type] ?? 0}
+                onChange={(n) =>
+                  mutations.setExecutorConcurrencyLimit.mutate({
+                    executor_type: type,
+                    limit: n,
+                  })
+                }
+                disabled={mutations.setExecutorConcurrencyLimit.isPending}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* ── Per-agent-name caps ────────────────────────────────────── */}
+        <div className="border border-zinc-200 dark:border-zinc-800 rounded-lg overflow-hidden">
+          <div className="px-3 py-2 bg-zinc-50 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800">
+            <div className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
+              Per-agent-name
+            </div>
+            <p className="text-[11px] text-zinc-500 dark:text-zinc-500 mt-0.5">
+              Cap simultaneous steps for a specific agent backend by name.
+              Tighter than the per-executor-type cap — useful for
+              <code className="text-[10px] bg-zinc-100 dark:bg-zinc-900 px-1 mx-1 rounded">max 2 claude</code> alongside
+              <code className="text-[10px] bg-zinc-100 dark:bg-zinc-900 px-1 mx-1 rounded">max 5 codex</code>.
+              0 = no per-agent cap.
+            </p>
+          </div>
+          {!agents || agents.length === 0 ? (
+            <div className="px-3 py-4 text-xs text-zinc-500 dark:text-zinc-600">
+              No agents registered.
+            </div>
+          ) : (
+            <div className="divide-y divide-zinc-200/50 dark:divide-zinc-800/50">
+              {agents.map((agent) => (
+                <NumericLimitRow
+                  key={agent.name}
+                  label={
+                    <span className="flex items-center gap-1.5">
+                      <Bot className="w-3 h-3 text-zinc-500" />
+                      <span className="font-mono">{agent.name}</span>
+                      {agent.is_disabled && (
+                        <span className="text-[10px] px-1 py-0.5 rounded bg-red-100 dark:bg-red-950 text-red-600 dark:text-red-400">
+                          disabled
+                        </span>
+                      )}
+                    </span>
+                  }
+                  value={agentLimits[agent.name] ?? 0}
+                  running={agentRunning[agent.name] ?? 0}
+                  onChange={(n) =>
+                    mutations.setAgentConcurrencyLimit.mutate({
+                      agent: agent.name,
+                      limit: n,
+                    })
+                  }
+                  disabled={mutations.setAgentConcurrencyLimit.isPending}
+                />
+              ))}
             </div>
           )}
         </div>
@@ -1797,6 +2001,8 @@ export function SettingsPage() {
             <AgentsSection />
           </div>
         );
+      case "limits":
+        return <LimitsSection config={config} agents={agents} mutations={mutations} />;
       case "containment":
         return <ContainmentSection config={config} agents={agents} mutations={mutations} />;
       case "api-keys":

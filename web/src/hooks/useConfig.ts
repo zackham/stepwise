@@ -92,6 +92,38 @@ export function useConfigMutations() {
     onSuccess: invalidateConfig,
   });
 
+  const setExecutorConcurrencyLimit = useMutation({
+    mutationFn: ({ executor_type, limit }: { executor_type: string; limit: number }) =>
+      api.setExecutorConcurrencyLimit(executor_type, limit),
+    onSuccess: invalidateConfig,
+  });
+
+  const setMaxConcurrentJobs = useMutation({
+    mutationFn: (limit: number) => api.setMaxConcurrentJobs(limit),
+    onSuccess: invalidateConfig,
+  });
+
+  const setAgentProcessTtl = useMutation({
+    mutationFn: (ttl_seconds: number) => api.setAgentProcessTtl(ttl_seconds),
+    onSuccess: invalidateConfig,
+  });
+
+  const setAgentPermissions = useMutation({
+    mutationFn: (permissions: string) => api.setAgentPermissions(permissions),
+    onSuccess: invalidateConfig,
+  });
+
+  const setNotifyWebhook = useMutation({
+    mutationFn: ({
+      url,
+      context,
+    }: {
+      url: string | null;
+      context: Record<string, unknown> | null;
+    }) => api.setNotifyWebhook(url, context),
+    onSuccess: invalidateConfig,
+  });
+
   return {
     createLabel,
     updateLabel,
@@ -103,5 +135,10 @@ export function useConfigMutations() {
     setDefaultAgent,
     setAgentContainmentDefault,
     setAgentConcurrencyLimit,
+    setExecutorConcurrencyLimit,
+    setMaxConcurrentJobs,
+    setAgentProcessTtl,
+    setAgentPermissions,
+    setNotifyWebhook,
   };
 }

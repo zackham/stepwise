@@ -682,6 +682,18 @@ export interface ConfigResponse {
   // Project-wide default containment for agent steps. null = no
   // default (agent steps run unisolated unless overridden).
   agent_containment?: string | null;
+  // Project-wide agent approval policy. "approve_all" | "prompt" | "deny".
+  // "prompt" and "deny" are defined in StepwiseConfig but not yet
+  // fully enforced in the engine — see docs/executors.md.
+  agent_permissions?: string;
+  // Zombie agent subprocess reap timeout in seconds. 0 = disabled.
+  agent_process_ttl?: number;
+  // Global job-queue cap (how many jobs may be RUNNING across the
+  // whole engine). Default 10.
+  max_concurrent_jobs?: number;
+  // Webhook fields — job lifecycle notifications.
+  notify_url?: string | null;
+  notify_context?: Record<string, unknown>;
   concurrency_limits?: Record<string, number>;
   concurrency_running?: Record<string, number>;
   // Per-agent-NAME concurrency caps. 0 / missing = no per-agent cap.
@@ -778,6 +790,57 @@ export function setAgentConcurrencyLimit(
   return request("/config/agent-concurrency", {
     method: "PUT",
     body: JSON.stringify({ agent, limit }),
+  });
+}
+
+export function setExecutorConcurrencyLimit(
+  executor_type: string,
+  limit: number,
+): Promise<{ status: string; limits: Record<string, number> }> {
+  return request("/config/concurrency", {
+    method: "PUT",
+    body: JSON.stringify({ executor_type, limit }),
+  });
+}
+
+export function setMaxConcurrentJobs(
+  limit: number,
+): Promise<{ status: string; max_concurrent_jobs: number }> {
+  return request("/config/max-concurrent-jobs", {
+    method: "PUT",
+    body: JSON.stringify({ limit }),
+  });
+}
+
+export function setAgentProcessTtl(
+  ttl_seconds: number,
+): Promise<{ status: string; agent_process_ttl: number }> {
+  return request("/config/agent-process-ttl", {
+    method: "PUT",
+    body: JSON.stringify({ ttl_seconds }),
+  });
+}
+
+export function setAgentPermissions(
+  permissions: string,
+): Promise<{ status: string; agent_permissions: string }> {
+  return request("/config/agent-permissions", {
+    method: "PUT",
+    body: JSON.stringify({ permissions }),
+  });
+}
+
+export function setNotifyWebhook(
+  url: string | null,
+  context: Record<string, unknown> | null,
+): Promise<{
+  status: string;
+  notify_url: string | null;
+  notify_context: Record<string, unknown>;
+}> {
+  return request("/config/notify-webhook", {
+    method: "PUT",
+    body: JSON.stringify({ url, context }),
   });
 }
 
