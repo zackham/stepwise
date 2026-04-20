@@ -38,7 +38,7 @@ class JsonRpcTransport:
         self.process = process
         self._next_id = 1
         self._pending: dict[int, Future] = {}
-        self._notification_handlers: dict[str, Callable] = {}
+        self._notification_handlers: dict[str, list[Callable]] = {}
         self._request_handlers: dict[str, Callable] = {}
         self._reader_thread: threading.Thread | None = None
         self._lock = threading.Lock()
@@ -82,8 +82,22 @@ class JsonRpcTransport:
         self._write(msg)
 
     def on_notification(self, method: str, handler: Callable) -> None:
-        """Register a handler for incoming notifications."""
-        self._notification_handlers[method] = handler
+        """Register a handler for incoming notifications.
+
+        Multiple handlers can be registered for the same method.
+        All registered handlers are called for each notification.
+        """
+        if method not in self._notification_handlers:
+            self._notification_handlers[method] = []
+        self._notification_handlers[method].append(handler)
+
+    def off_notification(self, method: str, handler: Callable) -> None:
+        """Unregister a notification handler."""
+        handlers = self._notification_handlers.get(method, [])
+        try:
+            handlers.remove(handler)
+        except ValueError:
+            pass
 
     def on_request(self, method: str, handler: Callable) -> None:
         """Register a handler for incoming requests (server→client).
@@ -184,9 +198,8 @@ class JsonRpcTransport:
                         else:
                             future.set_result(msg.get("result", {}))
                 elif "method" in msg and "id" not in msg:
-                    # Notification
-                    handler = self._notification_handlers.get(msg["method"])
-                    if handler:
+                    # Notification — call all registered handlers
+                    for handler in self._notification_handlers.get(msg["method"], []):
                         try:
                             handler(msg.get("params", {}))
                         except Exception:

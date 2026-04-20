@@ -140,6 +140,92 @@ class TestPrompt:
         assert len(updates) >= 2  # agent_message_chunk + usage_update
 
 
+class TestConcurrentPromptIsolation:
+    """Verify that concurrent prompts on the same ACP process write to
+    separate output files without cross-contamination (P1 bug fix)."""
+
+    def test_concurrent_prompts_write_to_own_files(self, client, tmp_path):
+        """Two prompts on different sessions should only capture their own
+        session's notifications, not each other's."""
+        sid_a = client.new_session("/tmp/work", session_name="job-a")
+        sid_b = client.new_session("/tmp/work", session_name="job-b")
+        output_a = str(tmp_path / "output-a.jsonl")
+        output_b = str(tmp_path / "output-b.jsonl")
+
+        import threading
+
+        results = {}
+        errors = {}
+
+        def run_prompt(name, sid, prompt_text, output_path):
+            try:
+                results[name] = client.prompt(sid, prompt_text, output_path=output_path)
+            except Exception as e:
+                errors[name] = e
+
+        t_a = threading.Thread(target=run_prompt, args=("a", sid_a, "ALPHA", output_a))
+        t_b = threading.Thread(target=run_prompt, args=("b", sid_b, "BRAVO", output_b))
+        t_a.start()
+        t_b.start()
+        t_a.join(timeout=10)
+        t_b.join(timeout=10)
+
+        assert not errors, f"Prompt errors: {errors}"
+
+        # Parse output files
+        def read_ndjson(path):
+            lines = []
+            with open(path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        lines.append(json.loads(line))
+            return lines
+
+        lines_a = read_ndjson(output_a)
+        lines_b = read_ndjson(output_b)
+
+        # Each file should have content (not empty due to overwritten handler)
+        assert len(lines_a) >= 2, f"Output A too short: {lines_a}"
+        assert len(lines_b) >= 2, f"Output B too short: {lines_b}"
+
+        # Extract session IDs from each file's notifications
+        def session_ids_in(lines):
+            ids = set()
+            for line in lines:
+                params = line.get("params", {})
+                sid = params.get("sessionId")
+                if sid:
+                    ids.add(sid)
+            return ids
+
+        sids_a = session_ids_in(lines_a)
+        sids_b = session_ids_in(lines_b)
+
+        # Critical assertion: no cross-contamination
+        assert sid_b not in sids_a, (
+            f"Output A contains session B's data: {sids_a}"
+        )
+        assert sid_a not in sids_b, (
+            f"Output B contains session A's data: {sids_b}"
+        )
+
+    def test_handler_cleanup_after_prompt(self, client):
+        """Handlers should be unregistered after prompt completes to prevent
+        leaked handlers from accumulating on long-running processes."""
+        sid = client.new_session("/tmp/work")
+        handlers_before = len(
+            client.transport._notification_handlers.get("session/update", [])
+        )
+        client.prompt(sid, "test")
+        handlers_after = len(
+            client.transport._notification_handlers.get("session/update", [])
+        )
+        assert handlers_after == handlers_before, (
+            f"Handler leak: {handlers_before} before, {handlers_after} after"
+        )
+
+
 class TestCancel:
     def test_cancel_sends_notification(self, client):
         sid = client.new_session("/tmp/work")

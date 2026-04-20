@@ -107,6 +107,11 @@ class ACPClient:
             output_file = None
 
         def _on_session_update(params: dict) -> None:
+            # Only handle updates for this session — when multiple prompts
+            # share an ACP process, each handler must ignore other sessions'
+            # notifications to prevent cross-job output corruption.
+            if params.get("sessionId") != session_id:
+                return
             if output_file:
                 line = (
                     json.dumps(
@@ -140,6 +145,7 @@ class ACPClient:
 
             return result
         finally:
+            self.transport.off_notification("session/update", _on_session_update)
             if writer_thread:
                 write_queue.put(None)  # Signal writer to exit
                 writer_thread.join(timeout=5)
