@@ -637,7 +637,7 @@ async def _broadcast(message: dict) -> None:
     """Send a message to all connected WebSocket clients."""
     dead: list[WebSocket] = []
     payload = json.dumps(message, default=str)
-    for ws in _ws_clients:
+    for ws in list(_ws_clients):  # snapshot — clients may connect/disconnect during await
         try:
             await ws.send_text(payload)
         except Exception:

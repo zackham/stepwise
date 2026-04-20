@@ -953,11 +953,12 @@ class SQLiteStore:
             if job.runner_pid:
                 try:
                     os.kill(job.runner_pid, 0)
+                    # Process is alive — runner is still working, just not
+                    # heartbeating (or heartbeat hasn't landed yet). Skip it.
+                    continue
                 except ProcessLookupError:
                     pass  # Process dead — definitely stuck
-                result.append(job)
-            else:
-                result.append(job)
+            result.append(job)
         return result
 
     def running_jobs(self, exclude_owner: str | None = None) -> list[Job]:

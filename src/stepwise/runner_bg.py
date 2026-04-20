@@ -37,17 +37,51 @@ async def _run(args) -> int:
     job.runner_pid = os.getpid()
     store.save_job(job)
 
+    async def _heartbeat_loop():
+        """Send periodic heartbeats so the server knows this runner is alive."""
+        while True:
+            try:
+                store.heartbeat(args.job_id)
+            except Exception:
+                pass
+            await asyncio.sleep(10)
+
     engine_task = asyncio.create_task(engine.run())
+    heartbeat_task = asyncio.create_task(_heartbeat_loop())
     try:
         engine.start_job(args.job_id)
-        await engine.wait_for_job(args.job_id)
+
+        # wait_for_job relies on an in-process asyncio.Event.  If another
+        # engine instance mutates the job status directly in SQLite (e.g.
+        # the stuck-step watchdog from a concurrent runner), the event is
+        # never set and this process zombies.  Poll the DB as a fallback.
+        while True:
+            try:
+                await asyncio.wait_for(
+                    engine.wait_for_job(args.job_id), timeout=15.0
+                )
+                break
+            except asyncio.TimeoutError:
+                job = store.load_job(args.job_id)
+                if job.status not in (JobStatus.RUNNING, JobStatus.PENDING):
+                    logging.warning(
+                        "Job %s reached %s via external mutation — exiting",
+                        args.job_id, job.status.value,
+                    )
+                    break
+
         job = engine.store.load_job(args.job_id)
         return 0 if job.status == JobStatus.COMPLETED else 1
     except Exception as e:
         logging.error(f"Background runner error: {e}")
         return 1
     finally:
+        heartbeat_task.cancel()
         engine_task.cancel()
+        try:
+            await heartbeat_task
+        except asyncio.CancelledError:
+            pass
         try:
             await engine_task
         except asyncio.CancelledError:

@@ -4133,8 +4133,19 @@ class AsyncEngine(Engine):
         met and that don't already have a run. Safe to call unconditionally.
         """
         from stepwise.process_lifecycle import _is_pid_alive
+        import os
+
+        my_pid = os.getpid()
 
         for job in self.store.active_jobs():
+            # Skip jobs owned by a different runner process — their engine
+            # manages their task lifecycle. Without this guard, concurrent
+            # runner_bg processes sharing the same SQLite DB would each see
+            # the other's RUNNING steps as "stuck" (not in their _tasks)
+            # and kill them after 60s.
+            if job.runner_pid and job.runner_pid != my_pid:
+                continue
+
             # Detect stuck running steps: run is RUNNING but no task in registry.
             # Only flag if started >60s ago (avoids race with task creation).
             for run in self.store.running_runs(job.id):
