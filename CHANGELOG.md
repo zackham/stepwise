@@ -3,6 +3,31 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.44.0] — 2026-04-20
+
+### Added
+- **Settings page overhaul** — council-reviewed (Opus 4.6, GPT-5.4, Gemini 3.1 Pro, Grok 4.20) redesign of settings IA. 6 sections reorganized, all 16 `StepwiseConfig` fields now have UI or read-only exposure:
+  - **Limits** (new section) — global job cap, per-executor-type concurrency, per-agent-name concurrency, agent subprocess TTL. Reusable `NumericLimitRow` with onBlur-commit
+  - **Agents** — `agent_permissions` approval policy dropdown (approve_all / prompt / deny) with not-yet-enforced warning
+  - **Integrations** (renamed from API Keys) — API keys + webhook editor (`notify_url` + `notify_context` JSON textarea)
+  - **Models & Labels** (merged) — Labels anchored top (high-frequency), registry below. One sidebar item removed
+  - **Containment** (slimmed) — sandbox-only after concurrency moved to Limits
+  - **Sidebar status footer** — version, project basename, active jobs count, reload-config button. New `useHealth()` hook (5s poll)
+- **5 new config API endpoints** — `PUT /api/config/max-concurrent-jobs`, `agent-process-ttl`, `agent-permissions`, `notify-webhook`, `concurrency`. Shared `_update_local_config_field` helper
+- **Prompt rendered inline for completed runs** — ACP NDJSON only carries responses; outgoing `session/prompt` is now injected into the NDJSON output file at send time so `_parse_ndjson_events` emits a `{t:"prompt"}` event. The existing `FadedText` / `PromptSegmentRow` violet panel renders for both live and completed runs across all session views
+- **Runner heartbeat loop** — background runners send 10-second heartbeats so the server can distinguish alive-but-busy runners from dead ones. DB-poll fallback exits cleanly if another engine mutates job status externally
+
+### Fixed
+- **Concurrent prompt isolation** — when two jobs shared an ACP process (identical agent config), the second prompt's `session/update` handler overwrote the first's because `JsonRpcTransport._notification_handlers` was a dict keyed by method name. All streaming chunks routed to the last-registered handler, silently corrupting output files. Transport now supports multiple handlers per method (list). Each handler filters by `sessionId` and unregisters on completion
+- **Multi-runner stuck-step watchdog** — engine stuck-step detector now skips jobs owned by a different runner PID. Previously, concurrent `runner_bg` processes sharing SQLite would each see the other's RUNNING steps as "stuck" (not in their `_tasks` registry) and kill them after 60s
+- **Stuck-job detection skips live PIDs** — `store.stuck_jobs()` was including jobs whose runner PID was still alive; now only returns jobs with dead or missing PIDs
+- **WebSocket broadcast safety** — `_broadcast()` snapshots the `_ws_clients` set before iterating to avoid mutation-during-iteration when clients connect/disconnect during an await
+- **Retry button actually retries** — sidebar and right-click "Retry" were wired to `resume_job` which only flips status to RUNNING; failed step runs stayed FAILED and the job immediately re-settled. New `retry_failed_steps` endpoint creates fresh `StepRun` instances for each failed step and recursively walks delegated runs with broken sub-jobs
+- **Retry idempotency for delegated fan-out** — the retry recursion only fired when the parent's delegated step run was itself FAILED. Once a previous Retry had reset it to DELEGATED, subsequent clicks became no-ops. Now walks sub-jobs regardless of parent run status
+- **Follow-live FAB positioning** — "Follow live" button now actually follows and is correctly centered
+- **DAG pulse animation** — data flow pulse stops on terminal (completed/failed) jobs instead of animating indefinitely
+- **Tick handler efficiency** — patches changed jobs in-place instead of refetching the full list
+
 ## [0.43.5] — 2026-04-15
 
 ### Fixed
