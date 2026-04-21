@@ -1058,6 +1058,20 @@ async def lifespan(app: FastAPI):
     if reattached:
         logger.info("Reattached %d surviving step run(s) from previous server", reattached)
 
+    # SIGTERM any claude-agent-acp processes alive on this host but not
+    # owned by any active job's step_run. Catches the case where a
+    # previous server was SIGKILLed (or upgraded) and its ACP pool
+    # reparented to systemd --user instead of being drained. Runs AFTER
+    # reattach_surviving_runs so executor_state.pgid is populated for
+    # every live-and-wanted run — only truly unowned processes are reaped.
+    from stepwise.process_lifecycle import reap_orphaned_agent_processes as _reap_orphans
+    try:
+        orphaned = _reap_orphans(store)
+        if orphaned:
+            logger.info("Startup sweep: reaped %d orphan agent process(es)", len(orphaned))
+    except Exception:
+        logger.error("Startup orphan sweep failed", exc_info=True)
+
     # Kick PENDING jobs that are ready to start. recover_jobs() already calls
     # _start_queued_jobs(), but by that point reattach_surviving_runs() hasn't
     # registered surviving executor tasks yet. Re-evaluating here ensures PENDING
