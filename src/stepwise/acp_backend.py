@@ -11,6 +11,7 @@ import logging
 import os
 import signal
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -68,6 +69,10 @@ class ACPProcess:
     capabilities: dict = field(default_factory=dict)
     pid_file: Path | None = None
     bridge_client: BridgeClient | None = None
+    # ContainmentConfig used at spawn time (if this process runs inside a
+    # VM). Cached so reuse-path callers can re-register the VM's job_refs
+    # without reconstructing auth_mounts etc. None when running on host.
+    containment_config: Any | None = None
 
 
 class ACPBackend:
@@ -103,6 +108,11 @@ class ACPBackend:
             teardown=self._kill_process,
             is_alive=self._is_alive,
         )
+        # Thread-local job_id passthrough: spawn() sets this for the
+        # duration of the acquire call so that _spawn_process (invoked
+        # as the factory) can pass job_id to containment.get_spawn_context.
+        # Keeps the ResourceLifecycleManager factory signature unchanged.
+        self._tls = threading.local()
 
     def _ensure_containment_backend(self, mode: str) -> Any:
         """Lazily create a containment backend for the requested mode.
@@ -350,6 +360,7 @@ class ACPBackend:
         env.update(config.env_vars)
 
         bridge_client: BridgeClient | None = None
+        containment_config: Any | None = None
 
         # Lazy-init if the step requested containment and we don't yet
         # have a backend. This unblocks flow-YAML-level `containment:`
@@ -435,7 +446,10 @@ class ACPBackend:
             # per-agent-instance state that doesn't belong in the
             # VM-grouping config_key (grouping is on tools/paths).
             containment_config._host_auth_mounts = auth_mounts  # type: ignore[attr-defined]
-            spawn_ctx = self.containment.get_spawn_context(containment_config)
+            job_id = getattr(self._tls, "current_job_id", None)
+            spawn_ctx = self.containment.get_spawn_context(
+                containment_config, job_id=job_id,
+            )
             # Inside the VM, the host workspace lives at /mnt/workspace
             # (virtiofs mount from guest-agent's init.sh). Passing the
             # host path as cwd would make guest-agent os.makedirs a
@@ -517,6 +531,7 @@ class ACPBackend:
             capabilities=caps,
             pid_file=pid_file,
             bridge_client=bridge_client,
+            containment_config=containment_config,
         )
 
     @staticmethod
@@ -570,10 +585,37 @@ class ACPBackend:
         )
         resolved = resolve_config(agent_name, step_overrides, working_dir)
 
-        # Acquire or reuse ACP process
+        # Acquire or reuse ACP process. job_id is threaded via TLS so
+        # _spawn_process (invoked as the factory) can forward it to
+        # containment.get_spawn_context — the VM pool needs to ref-count
+        # the same job the ACP process pool is tracking.
         session_name = config.get("_session_name")
-        managed, was_new = self.lifecycle.acquire(resolved, session_name)
+        job_id = context.job_id
+        self._tls.current_job_id = job_id
+        try:
+            managed, was_new = self.lifecycle.acquire(
+                resolved, session_name, job_id=job_id,
+            )
+        finally:
+            self._tls.current_job_id = None
         acp_proc = managed.resource
+
+        # On the reuse path, _spawn_process was NOT called, so containment
+        # didn't see this job_id. Register it explicitly so the VM's refs
+        # reflect every job that uses it.
+        if (
+            not was_new
+            and job_id
+            and self.containment is not None
+            and resolved.containment
+        ):
+            try:
+                self._register_containment_ref(resolved, job_id)
+            except Exception:
+                logger.debug(
+                    "Failed to register containment ref for job %s",
+                    job_id, exc_info=True,
+                )
 
         # When the adapter is running INSIDE a containment VM, its
         # filesystem only has `/mnt/workspace` (the virtiofs projection
@@ -910,8 +952,57 @@ class ACPBackend:
     def supports_resume(self) -> bool:
         return True
 
-    def cleanup(self) -> None:
-        """Release all managed processes and containment environments (job end)."""
+    def release_for_job(self, job_id: str) -> None:
+        """Drop this job's refs from the ACP pool and containment pool.
+
+        Conforms to the ResourceManager protocol. The engine calls this
+        when a job reaches terminal status. Processes and VMs whose
+        reference sets drain to empty are torn down; resources still
+        referenced by other jobs are left alone.
+        """
+        self.lifecycle.release_for_job(job_id)
+        if self.containment is not None:
+            try:
+                self.containment.release_for_job(job_id)
+            except Exception:
+                logger.debug(
+                    "containment.release_for_job(%s) raised",
+                    job_id, exc_info=True,
+                )
+
+    def release_all(self) -> None:
+        """Release all managed processes and containment environments (server shutdown).
+
+        Conforms to the ResourceManager protocol.
+        """
         self.lifecycle.release_all()
-        if self.containment:
-            self.containment.release_all()
+        if self.containment is not None:
+            try:
+                self.containment.release_all()
+            except Exception:
+                logger.debug(
+                    "containment.release_all() raised", exc_info=True,
+                )
+
+    # Legacy alias — prefer release_all() to match the ResourceManager protocol.
+    cleanup = release_all
+
+    def _register_containment_ref(
+        self, resolved: ResolvedAgentConfig, job_id: str,
+    ) -> None:
+        """Re-register a job_id with the containment pool on ACP-process reuse.
+
+        When lifecycle.acquire returns an existing process, _spawn_process
+        is not called and containment.get_spawn_context never sees this job.
+        Call it now (idempotently) so the VM's job_refs reflect every job
+        actually using it.
+        """
+        # Look up the cached ContainmentConfig the process was booted with,
+        # so the config_key matches on the containment side and we register
+        # against the same VM.
+        found = self.lifecycle.find(resolved)
+        if found is None or found.resource.containment_config is None:
+            return
+        self.containment.get_spawn_context(
+            found.resource.containment_config, job_id=job_id,
+        )
