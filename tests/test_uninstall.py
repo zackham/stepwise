@@ -38,6 +38,17 @@ class TestUninstallRemovesDotDir:
         assert not (tmp_path / DOT_DIR_NAME).exists()
 
     def test_uninstall_no_project_exits_cleanly(self, tmp_path, capsys):
+        # find_project (used internally by cmd_uninstall) walks up from
+        # --project-dir. If an ancestor of tmp_path has a .stepwise/ (e.g.,
+        # stale /tmp/.stepwise/), uninstall discovers it and tries to
+        # confirm deletion on stdin — which pytest's capture blocks,
+        # producing an opaque OSError. Assert the chain is clean so the
+        # failure mode is legible.
+        for ancestor in [tmp_path, *tmp_path.parents]:
+            assert not (ancestor / DOT_DIR_NAME).exists(), (
+                f"Non-hermetic test env: {ancestor / DOT_DIR_NAME} exists. "
+                f"Remove it before rerunning."
+            )
         rc = main(["--project-dir", str(tmp_path), "uninstall"])
         assert rc == EXIT_SUCCESS
         captured = capsys.readouterr()

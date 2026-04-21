@@ -35,6 +35,15 @@ class TestFindProject:
         assert project.root == tmp_path
 
     def test_raises_when_not_found(self, tmp_path):
+        # find_project walks up to /, so any ancestor .stepwise/ (e.g., a
+        # stale /tmp/.stepwise/ left over from running stepwise with cwd
+        # under /tmp) would make this test spuriously succeed as "found."
+        # Assert the chain is clean so the failure mode is legible.
+        for ancestor in [tmp_path, *tmp_path.parents]:
+            assert not (ancestor / DOT_DIR_NAME).exists(), (
+                f"Non-hermetic test env: {ancestor / DOT_DIR_NAME} exists. "
+                f"Remove it before rerunning."
+            )
         with pytest.raises(ProjectNotFoundError):
             find_project(tmp_path)
 
