@@ -2169,11 +2169,23 @@ class Engine:
                 self._emit(job.id, STEP_SKIPPED, {"step": step_name, "reason": "settlement"})
 
     def _cleanup_job_sessions(self, job_id: str, job: Job | None = None) -> None:
-        """Clean up in-memory session registry for a completed/failed job.
+        """Clean up per-job resources for a completed/failed/cancelled job.
 
-        Process cleanup is handled by ACPBackend's lifecycle manager.
+        Drops the in-memory session registry for this job_id and asks every
+        registered ResourceManager (ACP pool + containment pool) to release
+        its references for this job. Resources whose reference sets drain
+        to empty are torn down; resources still referenced by other active
+        jobs are preserved.
         """
         self._session_registries.pop(job_id, None)
+        for manager in self.registry.resource_managers:
+            try:
+                manager.release_for_job(job_id)
+            except Exception:
+                _engine_logger.error(
+                    "Resource manager %s raised during release_for_job(%s)",
+                    type(manager).__name__, job_id, exc_info=True,
+                )
 
     # ── Launching ─────────────────────────────────────────────────────────
 
@@ -4087,7 +4099,7 @@ class AsyncEngine(Engine):
         self._agent_stagger_seconds = 2.0
 
     async def shutdown(self) -> None:
-        """Clean up thread pool and cancel pending tasks."""
+        """Clean up thread pool, cancel pending tasks, drain resource pools."""
         self._executor_pool.shutdown(wait=False)
         for task in self._tasks.values():
             task.cancel()
@@ -4096,6 +4108,17 @@ class AsyncEngine(Engine):
         self._task_exec_types.clear()
         self._task_agent_names.clear()
         self._throttled_jobs.clear()
+        # Drain every registered ResourceManager — ACP processes and VMs.
+        # Without this, agents spawned with start_new_session=True reparent
+        # to systemd --user on server exit and keep running forever.
+        for manager in self.registry.resource_managers:
+            try:
+                manager.release_all()
+            except Exception:
+                _async_logger.error(
+                    "Resource manager %s raised during release_all",
+                    type(manager).__name__, exc_info=True,
+                )
 
     # ── Main loop ────────────────────────────────────────────────────────
 
