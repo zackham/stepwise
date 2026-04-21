@@ -76,6 +76,9 @@ def create_default_registry(config: StepwiseConfig | None = None) -> ExecutorReg
         default_permissions=config.agent_permissions,
         containment=containment_backend,
     )
+    # Register as a resource manager so the engine can drain its pools
+    # (ACP processes + VMs) on job-terminal and server-shutdown.
+    registry.register_resource_manager(acp_backend)
     registry.register("agent", lambda cfg: AgentExecutor(
         backend=acp_backend,
         prompt=cfg.get("prompt", ""),

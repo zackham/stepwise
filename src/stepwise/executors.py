@@ -192,9 +192,28 @@ class Executor(ABC):
 class ExecutorRegistry:
     def __init__(self) -> None:
         self._factories: dict[str, Callable[[dict], Executor]] = {}
+        # Backends that own long-lived resources (ACP processes, VMs, etc.)
+        # and conform to the ResourceManager protocol. The engine calls
+        # release_for_job on each when a job reaches terminal status, and
+        # release_all on server shutdown.
+        self._resource_managers: list[Any] = []
 
     def register(self, type_name: str, factory: Callable[[dict], Executor]) -> None:
         self._factories[type_name] = factory
+
+    def register_resource_manager(self, manager: Any) -> None:
+        """Register a backend that owns per-job resources.
+
+        The manager must implement release_for_job(job_id) and release_all()
+        (the ResourceManager protocol in stepwise.lifecycle).
+        """
+        if manager not in self._resource_managers:
+            self._resource_managers.append(manager)
+
+    @property
+    def resource_managers(self) -> list[Any]:
+        """Registered resource managers (read-only view)."""
+        return list(self._resource_managers)
 
     def create(self, ref: Any) -> Executor:
         """Create an executor from an ExecutorRef, wrapping with decorators."""
