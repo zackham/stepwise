@@ -3,6 +3,11 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.45.1] — 2026-04-21
+
+### Fixed
+- **Startup orphan sweep — closes the upgrade/crash gap** — `0.45.0` prevents new leaks going forward, but offered no way to reap orphans that were already alive when the fix deployed (agents spawned by a pre-0.45.0 server reparent to `systemd --user` when their parent dies and live forever). `server.py` now runs `reap_orphaned_agent_processes(store)` during lifespan startup, after `reattach_surviving_runs` so `executor_state.pgid` is fully populated for every live-and-wanted run. The sweep scans `/proc` for `claude-agent-acp` processes owned by the current uid, subtracts PGIDs claimed by active jobs, and SIGTERMs the rest (SIGKILLs survivors after a 5s grace). Containment (`in_vm`) runs are skipped — their pgid is a guest pid and vmmd owns VM lifecycle. Matching tests in `test_orphan_sweep.py` exercise scan, ownership collection, end-to-end kill-vs-spare, and `/proc` race resilience
+
 ## [0.45.0] — 2026-04-21
 
 ### Fixed

@@ -63,7 +63,7 @@ When H18 lands, its reattach path should call `lifecycle.acquire(config, session
 
 ## Out of scope (follow-ups)
 
-- **Startup orphan sweep.** Scan `/proc` for live `claude-agent-acp` processes, cross-reference with `executor_state.pgid` of active jobs, SIGTERM the rest. Covers the case where a prior stepwise server was SIGKILLed before it could drain. Depends on the H18 PID-verification work.
+- ~~**Startup orphan sweep.**~~ Shipped in 0.45.1. `process_lifecycle.reap_orphaned_agent_processes` scans `/proc` at server startup, intersects with `executor_state.pgid` of active jobs, SIGTERMs the rest. Runs after H18's `reattach_surviving_runs` so owned-set is accurate. Covers the "previous server SIGKILLed / upgraded" class.
 - **`PR_SET_PDEATHSIG`.** Linux kernel primitive that sends SIGTERM to the child when its parent dies. Eliminates the "prior stepwise SIGKILLed → agents reparented to systemd" class. `preexec_fn` at `acp_backend.py:448`.
 - **Idle-TTL reaper for the pool itself.** Generalize `reap_expired_processes` beyond `store.active_jobs()` so regressions in ref-counting are caught before they accumulate.
 - **Observability.** `/api/v1/health` + `stepwise doctor` should surface per-manager pool sizes, oldest age, and orphan counts detected by the startup sweep.
