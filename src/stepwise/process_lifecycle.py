@@ -391,3 +391,157 @@ def run_health_check(
         )
 
     return result
+
+
+# ── Startup orphan sweep ─────────────────────────────────────────────
+
+
+# cmdline marker used to identify ACP agent processes. Matches both the
+# npm exec wrapper and the node invocation (both carry the string in
+# argv), but does NOT match the standalone `claude` CLI (the Claude
+# Code binary used for interactive sessions) — that has a different
+# cmdline entirely.
+_ACP_CMDLINE_MARKER = "claude-agent-acp"
+
+
+def _iter_proc_pids(proc_root: str = "/proc"):
+    """Yield integer pids from /proc. Silently skips non-pid entries."""
+    try:
+        entries = os.listdir(proc_root)
+    except OSError:
+        return
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        yield int(entry)
+
+
+def _read_cmdline(pid: int, proc_root: str = "/proc") -> str | None:
+    """Read /proc/{pid}/cmdline as a space-joined string. None on failure."""
+    try:
+        with open(f"{proc_root}/{pid}/cmdline", "rb") as f:
+            raw = f.read()
+    except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+        return None
+    if not raw:
+        return None
+    return raw.replace(b"\x00", b" ").decode("utf-8", errors="replace")
+
+
+def _proc_uid(pid: int, proc_root: str = "/proc") -> int | None:
+    """Return the effective UID of a pid via /proc stat. None on failure."""
+    try:
+        st = os.stat(f"{proc_root}/{pid}")
+    except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+        return None
+    return st.st_uid
+
+
+def _scan_acp_processes(
+    proc_root: str = "/proc",
+    uid: int | None = None,
+    marker: str = _ACP_CMDLINE_MARKER,
+) -> list[tuple[int, int]]:
+    """Return (pid, pgid) tuples for live claude-agent-acp processes owned by `uid`.
+
+    `uid` defaults to the current process's uid. Pids whose /proc entry
+    disappears mid-scan are silently skipped.
+    """
+    if uid is None:
+        uid = os.getuid()
+
+    found: list[tuple[int, int]] = []
+    for pid in _iter_proc_pids(proc_root):
+        if _proc_uid(pid, proc_root) != uid:
+            continue
+        cmdline = _read_cmdline(pid, proc_root)
+        if cmdline is None or marker not in cmdline:
+            continue
+        try:
+            pgid = os.getpgid(pid)
+        except (ProcessLookupError, PermissionError):
+            continue
+        found.append((pid, pgid))
+    return found
+
+
+def _collect_active_pgids(store) -> set[int]:
+    """Gather PGIDs owned by non-terminal jobs' running step_runs.
+
+    Walks store.active_jobs() and reads executor_state.pgid off each
+    running run. Containment (in_vm) runs are skipped — their pgid is a
+    guest pid that can't be compared to host /proc entries, and VMs are
+    reaped by vmmd rather than by this sweep.
+    """
+    owned: set[int] = set()
+    for job in store.active_jobs():
+        for run in store.running_runs(job.id):
+            state = run.executor_state or {}
+            if state.get("in_vm"):
+                continue
+            pgid = state.get("pgid")
+            if pgid:
+                try:
+                    owned.add(int(pgid))
+                except (TypeError, ValueError):
+                    continue
+    return owned
+
+
+def reap_orphaned_agent_processes(
+    store,
+    grace_seconds: float = 5.0,
+    proc_root: str = "/proc",
+) -> list[int]:
+    """Startup sweep: SIGTERM claude-agent-acp processes not owned by any active job.
+
+    Closes the gap where agents spawned by a previous server incarnation
+    survive into a new one (server SIGKILL, upgrade, crash) and reparent
+    to systemd --user. Scans /proc for live ACP processes owned by the
+    current uid, intersects with executor_state.pgid of active jobs, and
+    SIGTERMs the rest.
+
+    SIGTERMs by PGID so the whole npm-exec/node-adapter tree goes down
+    together. Duplicate PGIDs are deduped (one SIGTERM per group). After
+    the grace period, PGIDs still alive are SIGKILLed.
+
+    Returns the list of PIDs observed as orphans (for logging). Safe to
+    run at any time, but intended for server startup — during normal
+    operation, release_for_job handles cleanup on job-terminal.
+    """
+    active = _collect_active_pgids(store)
+    live = _scan_acp_processes(proc_root=proc_root)
+
+    # Group by pgid — one SIGTERM per group is enough.
+    orphan_pgids: set[int] = set()
+    orphan_pids: list[int] = []
+    for pid, pgid in live:
+        if pgid in active:
+            continue
+        orphan_pgids.add(pgid)
+        orphan_pids.append(pid)
+
+    if not orphan_pgids:
+        return []
+
+    logger.warning(
+        "Startup sweep: found %d orphan claude-agent-acp process(es) across "
+        "%d process group(s) — SIGTERM",
+        len(orphan_pids), len(orphan_pgids),
+    )
+
+    for pgid in orphan_pgids:
+        _kill_process_group(pgid, signal.SIGTERM)
+
+    if grace_seconds > 0:
+        time.sleep(grace_seconds)
+
+    # Anything still alive → SIGKILL
+    still_alive = [p for p in orphan_pgids if _is_pid_alive(p)]
+    for pgid in still_alive:
+        logger.warning(
+            "Startup sweep: pgid %d survived SIGTERM, sending SIGKILL", pgid,
+        )
+        _kill_process_group(pgid, signal.SIGKILL)
+
+    return orphan_pids
