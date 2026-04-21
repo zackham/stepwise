@@ -2,7 +2,11 @@
 
 import pytest
 
-from stepwise.lifecycle import ManagedResource, ResourceLifecycleManager
+from stepwise.lifecycle import (
+    ManagedResource,
+    ResourceLifecycleManager,
+    ResourceManager,
+)
 
 
 # ── Test helpers ──────────────────────────────────────────────────────
@@ -202,6 +206,106 @@ class TestDiscard:
         m, _ = manager.acquire({"group": "alpha"})
         manager.discard(m)
         manager.discard(m)  # should not raise
+
+
+# ── release_for_job() — reference-counted teardown ───────────────────
+
+
+class TestReleaseForJob:
+    def test_single_job_drains_resource(self, manager):
+        """Resource acquired for one job is torn down when that job releases."""
+        m, _ = manager.acquire({"group": "alpha"}, job_id="job-A")
+        resource = m.resource
+        assert m.job_refs == {"job-A"}
+        assert m.job_scoped is True
+
+        manager.release_for_job("job-A")
+
+        assert not resource.alive
+        assert len(manager.active) == 0
+
+    def test_shared_across_jobs_survives_first_release(self, manager):
+        """Two jobs sharing a resource; first release leaves it alive."""
+        m1, _ = manager.acquire({"group": "alpha"}, job_id="job-A")
+        m2, _ = manager.acquire({"group": "alpha"}, job_id="job-B")
+        assert m1 is m2
+        assert m1.job_refs == {"job-A", "job-B"}
+
+        manager.release_for_job("job-A")
+
+        assert m1.resource.alive
+        assert m1.job_refs == {"job-B"}
+        assert len(manager.active) == 1
+
+        manager.release_for_job("job-B")
+
+        assert not m1.resource.alive
+        assert len(manager.active) == 0
+
+    def test_unscoped_resource_not_torn_down(self, manager):
+        """Resource acquired without job_id is not affected by release_for_job."""
+        m, _ = manager.acquire({"group": "alpha"})  # no job_id
+        assert m.job_scoped is False
+
+        manager.release_for_job("job-A")
+
+        assert m.resource.alive
+        assert len(manager.active) == 1
+
+    def test_release_for_unknown_job_is_noop(self, manager):
+        """Releasing a job_id that doesn't reference anything is safe."""
+        m, _ = manager.acquire({"group": "alpha"}, job_id="job-A")
+
+        manager.release_for_job("job-X")  # never acquired
+
+        assert m.resource.alive
+        assert m.job_refs == {"job-A"}
+
+    def test_mixed_scoped_and_unscoped(self, manager):
+        """Scoped and unscoped resources in same pool — only scoped gets cleaned."""
+        scoped, _ = manager.acquire({"group": "alpha"}, job_id="job-A")
+        unscoped, _ = manager.acquire({"group": "beta"})  # no job_id
+
+        manager.release_for_job("job-A")
+
+        assert not scoped.resource.alive
+        assert unscoped.resource.alive
+        assert len(manager.active) == 1
+        assert manager.active[0] is unscoped
+
+    def test_teardown_error_does_not_break_cleanup(self):
+        """Teardown errors during release_for_job don't corrupt active list."""
+        def _bad_teardown(r: FakeResource) -> None:
+            raise RuntimeError("boom")
+
+        mgr = ResourceLifecycleManager(
+            is_eq=_is_eq,
+            factory=_factory,
+            teardown=_bad_teardown,
+        )
+        mgr.acquire({"group": "alpha"}, job_id="job-A")
+
+        mgr.release_for_job("job-A")  # should not raise
+
+        assert len(mgr.active) == 0
+
+    def test_acquire_then_add_job_ref(self, manager):
+        """Subsequent acquire adds job_id to existing resource's refs."""
+        m, _ = manager.acquire({"group": "alpha"}, job_id="job-A")
+        m2, was_new = manager.acquire({"group": "alpha"}, job_id="job-B")
+
+        assert m is m2
+        assert was_new is False
+        assert m.job_refs == {"job-A", "job-B"}
+
+
+# ── ResourceManager protocol conformance ─────────────────────────────
+
+
+class TestProtocolConformance:
+    def test_lifecycle_manager_is_resource_manager(self, manager):
+        """ResourceLifecycleManager satisfies the ResourceManager protocol."""
+        assert isinstance(manager, ResourceManager)
 
 
 # ── Thread safety — race-free acquire ─────────────────────────────────

@@ -10,20 +10,48 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Callable, Generic, TypeVar
+from typing import Any, Callable, Generic, Protocol, TypeVar, runtime_checkable
 
 logger = logging.getLogger("stepwise.lifecycle")
 
 R = TypeVar("R")
 
 
+@runtime_checkable
+class ResourceManager(Protocol):
+    """Minimum contract for a scope-aware resource manager.
+
+    Both ResourceLifecycleManager (ACP processes) and
+    ContainmentBackend (microVMs) conform. The engine drives
+    cleanup through this protocol so the same caller covers both
+    domains.
+    """
+
+    def release_for_job(self, job_id: str) -> None:
+        """Drop this job's reference; tear down resources with no refs left."""
+        ...
+
+    def release_all(self) -> None:
+        """Tear down every managed resource (server shutdown)."""
+        ...
+
+
 @dataclass
 class ManagedResource(Generic[R]):
-    """A resource managed by the lifecycle manager."""
+    """A resource managed by the lifecycle manager.
+
+    `job_refs` is the set of jobs that currently reference this resource.
+    `job_scoped` records whether any job ever acquired this resource —
+    once True, the resource is torn down when refs drain to empty. A
+    resource acquired without a job_id stays unscoped and is only
+    cleaned up via release_all().
+    """
 
     config: Any
     resource: R
     session_names: set[str] = field(default_factory=set)
+    job_refs: set[str] = field(default_factory=set)
+    job_scoped: bool = False
 
 
 class ResourceLifecycleManager(Generic[R]):
@@ -56,7 +84,10 @@ class ResourceLifecycleManager(Generic[R]):
         self._lock = threading.RLock()
 
     def acquire(
-        self, config: Any, session_name: str | None = None,
+        self,
+        config: Any,
+        session_name: str | None = None,
+        job_id: str | None = None,
     ) -> tuple[ManagedResource[R], bool]:
         """Get or create a resource for this config.
 
@@ -67,6 +98,10 @@ class ResourceLifecycleManager(Generic[R]):
         The `was_newly_created` flag lets callers clean up the resource if
         their post-acquire setup (e.g. ACP session/new) fails — without it
         we'd orphan the just-spawned subprocess.
+
+        When `job_id` is supplied, it's added to the resource's job_refs
+        set. `release_for_job` uses those refs to tear down resources only
+        when every referencing job has reached a terminal state.
         """
         with self._lock:
             for managed in self.active:
@@ -84,6 +119,9 @@ class ResourceLifecycleManager(Generic[R]):
                         break  # Fall through to factory()
                     if session_name:
                         managed.session_names.add(session_name)
+                    if job_id:
+                        managed.job_refs.add(job_id)
+                        managed.job_scoped = True
                     return managed, False
 
             resource = self.factory(config)
@@ -91,6 +129,8 @@ class ResourceLifecycleManager(Generic[R]):
                 config=config,
                 resource=resource,
                 session_names={session_name} if session_name else set(),
+                job_refs={job_id} if job_id else set(),
+                job_scoped=bool(job_id),
             )
             self.active.append(managed)
             return managed, True
@@ -136,7 +176,7 @@ class ResourceLifecycleManager(Generic[R]):
             self.active = still_active
 
     def release_all(self) -> None:
-        """Release all resources (job completion or cleanup)."""
+        """Release all resources (server shutdown)."""
         with self._lock:
             for managed in self.active:
                 try:
@@ -146,6 +186,29 @@ class ResourceLifecycleManager(Generic[R]):
                         "Teardown error during release_all", exc_info=True,
                     )
             self.active.clear()
+
+    def release_for_job(self, job_id: str) -> None:
+        """Drop job_id from every resource's refs; tear down any with no refs left.
+
+        A resource acquired by multiple jobs survives until every referencing
+        job has called release_for_job. Resources acquired without a job_id
+        (job_scoped=False) are left alone — release_all owns those.
+        """
+        with self._lock:
+            still_active = []
+            for managed in self.active:
+                managed.job_refs.discard(job_id)
+                if managed.job_scoped and not managed.job_refs:
+                    try:
+                        self.teardown(managed.resource)
+                    except Exception:
+                        logger.debug(
+                            "Teardown error during release_for_job",
+                            exc_info=True,
+                        )
+                else:
+                    still_active.append(managed)
+            self.active = still_active
 
     def find(self, config: Any) -> ManagedResource[R] | None:
         """Find existing resource matching config, without creating."""
