@@ -4238,6 +4238,16 @@ class AsyncEngine(Engine):
                 "Watchdog _recover_orphaned_for_each_sub_jobs raised", exc_info=True,
             )
 
+        # Reconcile ghost entries in _task_exec_types: run_ids tracked for
+        # capacity accounting whose runs are no longer RUNNING (e.g. cancelled
+        # job where the untrack raced with a concurrent _track_task).
+        if self._task_exec_types:
+            removed = self._reconcile_tracked_runs()
+            if removed:
+                # Ghosts were occupying slots — re-evaluate throttled jobs
+                for jid in list(self._throttled_jobs):
+                    self._dispatch_ready(jid)
+
     # ── Job lifecycle overrides ──────────────────────────────────────────
 
     def start_job(self, job_id: str) -> None:
@@ -4683,6 +4693,11 @@ class AsyncEngine(Engine):
             )
 
         super().cancel_job(job_id)
+        # Belt-and-suspenders: untrack any runs that were tracked by a
+        # concurrent _launch between the initial snapshot and super().cancel_job().
+        # This closes the race where _track_task is called AFTER our initial
+        # _untrack_task pass but BEFORE super() sets the run to CANCELLED.
+        self._reconcile_tracked_runs(job_id)
         self._signal_job_done(job_id)
         # Recursive cascade: cancel all STAGED/PENDING transitive dependents
         visited: set[str] = set()
@@ -4735,6 +4750,8 @@ class AsyncEngine(Engine):
             )
 
         super().pause_job(job_id)
+        # Belt-and-suspenders: remove any ghost entries for this job
+        self._reconcile_tracked_runs(job_id)
         # A slot opened — start queued jobs
         self._start_queued_jobs()
 
@@ -5158,6 +5175,34 @@ class AsyncEngine(Engine):
         """Drop a run from capacity accounting (on terminal or crash)."""
         self._task_exec_types.pop(run_id, None)
         self._task_agent_names.pop(run_id, None)
+
+    def _reconcile_tracked_runs(self, job_id: str | None = None) -> int:
+        """Remove ghost entries from _task_exec_types for runs no longer RUNNING.
+
+        When job_id is given, only checks runs belonging to that job.
+        When job_id is None, checks ALL tracked run_ids (full reconciliation).
+
+        Returns the number of ghost entries removed.
+        """
+        ghosts: list[str] = []
+        for run_id in list(self._task_exec_types):
+            try:
+                run = self.store.load_run(run_id)
+            except KeyError:
+                # Run was deleted from the store entirely — definitely a ghost
+                ghosts.append(run_id)
+                continue
+            if job_id is not None and run.job_id != job_id:
+                continue
+            if run.status != StepRunStatus.RUNNING:
+                ghosts.append(run_id)
+        for run_id in ghosts:
+            _async_logger.info(
+                "Reconciliation: removing ghost entry for run %s from executor capacity tracking",
+                run_id,
+            )
+            self._untrack_task(run_id)
+        return len(ghosts)
 
     @staticmethod
     def _step_agent_name(step_def) -> str | None:
