@@ -3,6 +3,19 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.45.0] — 2026-04-21
+
+### Fixed
+- **Per-job ResourceManager lifecycle — ACP + VM pool leaks closed** — `ACPBackend.cleanup()` and `CloudHypervisorBackend.release_all()` existed and did the right thing, but **nothing in the engine ever called them**. Every agent spawned for every job stayed alive until the stepwise server died, and then agents spawned with `start_new_session=True` reparented to `systemd --user` and kept running indefinitely. Diagnosed on a single workstation: **112 `claude-agent-acp` processes at 29.8 GB RSS, 30 ACP sessions of which 28 belonged to terminal-state jobs** (26 completed, 2 failed). The fix is one unified protocol + two hook points:
+  - New `ResourceManager` protocol in `stepwise.lifecycle` (`release_for_job(job_id)`, `release_all()`). `ResourceLifecycleManager` and `ContainmentBackend` both conform. `ACPBackend` fronts both pools as one manager
+  - `ResourceLifecycleManager`: reference-counted sharing. `ManagedResource` gains `job_refs` and `job_scoped`. `acquire(…, job_id=…)` tracks refs; `release_for_job` tears down resources whose refs drain empty. Resources acquired without a job_id stay unscoped — only `release_all()` cleans those up (tests, library use)
+  - `CloudHypervisorBackend`: parallel `{config_key: set[job_id]}` ref-counting. VMs booted without a job_id are left for `release_all`
+  - `ACPBackend.spawn()` threads `context.job_id` into both pools. ACP pool gets it directly; containment pool gets it via thread-local in the factory path, plus an explicit `_register_containment_ref` on the reuse path so the VM's ref set reflects every job actually using it
+  - `ExecutorRegistry.register_resource_manager(mgr)` + `.resource_managers` view. `registry_factory` registers the `ACPBackend`
+  - Engine wires the single caller site: `_cleanup_job_sessions(job_id)` calls `release_for_job(job_id)` on every registered manager. `AsyncEngine.shutdown()` calls `release_all()`. Per-manager exceptions are logged and swallowed so one bad backend can't block the rest
+  - Design doc in `reports/plan-stepwise-per-job-resource-manager-lifecycle.md`. Orthogonal to H18 (reattach of live-and-wanted orphans); H18 + this fix together cover every quadrant of `{job active/terminal} × {agent alive/dead}`. Follow-ups deliberately left open: startup orphan sweep, `PR_SET_PDEATHSIG`, idle-TTL reaper, observability, optional acpx-daemon
+- **Ghost run_ids in executor capacity tracking** — when a job with a running agent step was cancelled and the agent process had no pid/pgid in `executor_state` (e.g. died before being tracked), the run_id could remain in `_task_exec_types` permanently. A ghost entry counted against `max_concurrent_agents` and throttled every subsequent agent step — across all jobs — until the server restarted. `AsyncEngine._reconcile_tracked_runs(job_id=None)` walks the tracking table and drops entries whose runs are no longer RUNNING. Called from `cancel_job`, `pause_job` (belt-and-suspenders for the `_track_task` race), and the watchdog loop (periodic full-table sweep — if slots freed, re-evaluate throttled jobs)
+
 ## [0.44.0] — 2026-04-20
 
 ### Added
