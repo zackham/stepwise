@@ -282,14 +282,24 @@ class CloudHypervisorBackend:
             auto_start=True,
         )
         self._active_vms: dict[str, VMInfo] = {}
+        # Per-config reference counts by job_id. A VM is destroyed when
+        # every referencing job has called release_for_job.
+        self._job_refs: dict[str, set[str]] = {}
 
     def get_spawn_context(
-        self, config: ContainmentConfig,
+        self,
+        config: ContainmentConfig,
+        job_id: str | None = None,
     ) -> SpawnContext:
-        """Get or create a VM for this config, return a SpawnContext."""
-        # Check for reusable VM in our local cache
+        """Get or create a VM for this config, return a SpawnContext.
+
+        When `job_id` is supplied, the VM is ref-counted against that job.
+        `release_for_job(job_id)` destroys VMs whose ref set drains to empty.
+        """
         config_key = self._config_key(config)
         if config_key in self._active_vms:
+            if job_id:
+                self._job_refs.setdefault(config_key, set()).add(job_id)
             return VMSpawnContext(self._active_vms[config_key])
 
         # Request VM from vmmd (may reuse server-side)
@@ -301,6 +311,8 @@ class CloudHypervisorBackend:
             cid=result["cid"],
         )
         self._active_vms[config_key] = vm
+        if job_id:
+            self._job_refs[config_key] = {job_id}
 
         return VMSpawnContext(vm)
 
@@ -339,6 +351,30 @@ class CloudHypervisorBackend:
         for key in to_remove:
             del self._active_vms[key]
 
+    def release_for_job(self, job_id: str) -> None:
+        """Drop job_id from every VM's refs; destroy any VM with no refs left.
+
+        VMs that were booted without a job_id (no entry in `_job_refs`) are
+        left alone — `release_all` handles those on server shutdown.
+        """
+        to_remove: list[str] = []
+        for key, refs in self._job_refs.items():
+            refs.discard(job_id)
+            if not refs:
+                vm = self._active_vms.get(key)
+                if vm is not None:
+                    try:
+                        self._client.destroy(vm.vm_id)
+                    except Exception:
+                        logger.debug(
+                            "Error destroying VM %s", vm.vm_id, exc_info=True,
+                        )
+                to_remove.append(key)
+
+        for key in to_remove:
+            self._active_vms.pop(key, None)
+            self._job_refs.pop(key, None)
+
     def release_all(self) -> None:
         """Release all VMs."""
         try:
@@ -346,4 +382,5 @@ class CloudHypervisorBackend:
         except Exception:
             logger.debug("Error destroying all VMs", exc_info=True)
         self._active_vms.clear()
+        self._job_refs.clear()
         self._client.close()

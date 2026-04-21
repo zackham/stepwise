@@ -115,11 +115,16 @@ class ContainmentBackend(Protocol):
     """
 
     def get_spawn_context(
-        self, config: ContainmentConfig,
+        self,
+        config: ContainmentConfig,
+        job_id: str | None = None,
     ) -> SpawnContext:
         """Return a SpawnContext for this config.
 
         May boot a new VM or reuse an existing one based on config equality.
+        When `job_id` is supplied, the environment is ref-counted against
+        that job so `release_for_job` can tear it down once no referencing
+        jobs remain.
         """
         ...
 
@@ -129,8 +134,12 @@ class ContainmentBackend(Protocol):
         """Release environments no longer needed."""
         ...
 
+    def release_for_job(self, job_id: str) -> None:
+        """Drop this job's ref; tear down environments with no refs left."""
+        ...
+
     def release_all(self) -> None:
-        """Release all environments (job completion)."""
+        """Release all environments (server shutdown)."""
         ...
 
 
@@ -140,11 +149,16 @@ class NoContainmentBackend:
     _local_context = LocalSpawnContext()
 
     def get_spawn_context(
-        self, config: ContainmentConfig,
+        self,
+        config: ContainmentConfig,
+        job_id: str | None = None,
     ) -> SpawnContext:
         return self._local_context
 
     def release_if_unused(self, remaining_steps_checker: Any) -> None:
+        pass  # nothing to release
+
+    def release_for_job(self, job_id: str) -> None:
         pass  # nothing to release
 
     def release_all(self) -> None:
