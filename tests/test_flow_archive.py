@@ -4,10 +4,31 @@ from pathlib import Path
 
 import pytest
 
+from stepwise.cli import main, EXIT_SUCCESS, EXIT_JOB_FAILED
 from stepwise.flow_resolution import is_archived, set_flow_archived
 
 
 MINIMAL_FLOW = "name: test-flow\nsteps:\n  s:\n    run: echo '{}'\n    outputs: [result]\n"
+
+
+def _make_project(tmp_path: Path) -> Path:
+    dot_dir = tmp_path / ".stepwise"
+    dot_dir.mkdir()
+    (dot_dir / "db.sqlite").touch()
+    return tmp_path
+
+
+def _make_flow_dir(project: Path, name: str, yaml_content: str) -> Path:
+    flow_dir = project / "flows" / name
+    flow_dir.mkdir(parents=True, exist_ok=True)
+    (flow_dir / "FLOW.yaml").write_text(yaml_content)
+    return flow_dir
+
+
+def _make_root_flow(project: Path, filename: str, yaml_content: str) -> Path:
+    path = project / filename
+    path.write_text(yaml_content)
+    return path
 
 
 class TestHelpers:
@@ -73,3 +94,83 @@ class TestHelpers:
         set_flow_archived(p, False)
         restored = p.read_text()
         assert restored == original
+
+
+class TestCLI:
+    """Tests for stepwise flow archive/unarchive/delete commands."""
+
+    def test_cli_archive_sets_flag(self, tmp_path, monkeypatch, capsys):
+        project = _make_project(tmp_path)
+        _make_flow_dir(project, "my-flow", MINIMAL_FLOW.replace("test-flow", "my-flow"))
+        monkeypatch.chdir(project)
+        rc = main(["flow", "archive", "my-flow"])
+        assert rc == EXIT_SUCCESS
+        yaml_path = project / "flows" / "my-flow" / "FLOW.yaml"
+        assert "archived: true" in yaml_path.read_text()
+
+    def test_cli_unarchive_removes_flag(self, tmp_path, monkeypatch, capsys):
+        project = _make_project(tmp_path)
+        _make_flow_dir(project, "my-flow",
+                       "name: my-flow\narchived: true\nsteps:\n  s:\n    run: echo '{}'\n    outputs: [result]\n")
+        monkeypatch.chdir(project)
+        rc = main(["flow", "unarchive", "my-flow"])
+        assert rc == EXIT_SUCCESS
+        content = (project / "flows" / "my-flow" / "FLOW.yaml").read_text()
+        assert "archived" not in content
+
+    def test_cli_archive_idempotent(self, tmp_path, monkeypatch, capsys):
+        project = _make_project(tmp_path)
+        _make_flow_dir(project, "my-flow",
+                       "name: my-flow\narchived: true\nsteps:\n  s:\n    run: echo '{}'\n    outputs: [result]\n")
+        monkeypatch.chdir(project)
+        rc = main(["flow", "archive", "my-flow"])
+        assert rc == EXIT_SUCCESS
+        out = capsys.readouterr().out + capsys.readouterr().err
+        # Should indicate already archived (via info log)
+
+    def test_cli_unarchive_idempotent(self, tmp_path, monkeypatch, capsys):
+        project = _make_project(tmp_path)
+        _make_flow_dir(project, "my-flow", MINIMAL_FLOW.replace("test-flow", "my-flow"))
+        monkeypatch.chdir(project)
+        rc = main(["flow", "unarchive", "my-flow"])
+        assert rc == EXIT_SUCCESS
+
+    def test_cli_delete_single_file_with_yes(self, tmp_path, monkeypatch, capsys):
+        project = _make_project(tmp_path)
+        _make_root_flow(project, "foo.flow.yaml", MINIMAL_FLOW.replace("test-flow", "foo"))
+        monkeypatch.chdir(project)
+        rc = main(["flow", "delete", "foo", "--yes"])
+        assert rc == EXIT_SUCCESS
+        assert not (project / "foo.flow.yaml").exists()
+
+    def test_cli_delete_directory_with_yes(self, tmp_path, monkeypatch, capsys):
+        project = _make_project(tmp_path)
+        _make_flow_dir(project, "bar", MINIMAL_FLOW.replace("test-flow", "bar"))
+        monkeypatch.chdir(project)
+        rc = main(["flow", "delete", "bar", "--yes"])
+        assert rc == EXIT_SUCCESS
+        assert not (project / "flows" / "bar").exists()
+
+    def test_cli_delete_confirmation_match(self, tmp_path, monkeypatch, capsys):
+        project = _make_project(tmp_path)
+        _make_flow_dir(project, "my-flow", MINIMAL_FLOW.replace("test-flow", "my-flow"))
+        monkeypatch.chdir(project)
+        monkeypatch.setattr("builtins.input", lambda _: "my-flow")
+        rc = main(["flow", "delete", "my-flow"])
+        assert rc == EXIT_SUCCESS
+        assert not (project / "flows" / "my-flow").exists()
+
+    def test_cli_delete_confirmation_mismatch(self, tmp_path, monkeypatch, capsys):
+        project = _make_project(tmp_path)
+        _make_flow_dir(project, "my-flow", MINIMAL_FLOW.replace("test-flow", "my-flow"))
+        monkeypatch.chdir(project)
+        monkeypatch.setattr("builtins.input", lambda _: "wrong")
+        rc = main(["flow", "delete", "my-flow"])
+        assert rc == EXIT_JOB_FAILED
+        assert (project / "flows" / "my-flow" / "FLOW.yaml").exists()
+
+    def test_cli_delete_nonexistent(self, tmp_path, monkeypatch, capsys):
+        project = _make_project(tmp_path)
+        monkeypatch.chdir(project)
+        rc = main(["flow", "delete", "no-such-flow", "--yes"])
+        assert rc != EXIT_SUCCESS

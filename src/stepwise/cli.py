@@ -5676,6 +5676,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_job_rm.add_argument("job_id", help="Job ID")
     p_job_rm.add_argument("--output", choices=["table", "json"], default="table")
 
+    # flow lifecycle (archive, unarchive, delete)
+    p_flow_cmd = sub.add_parser("flow", help="Archive, unarchive, or delete flows")
+    flow_sub = p_flow_cmd.add_subparsers(dest="flow_command")
+    p_flow_archive = flow_sub.add_parser("archive", help="Hide a flow from listings")
+    p_flow_archive.add_argument("flow", help="Flow name or path")
+    p_flow_unarchive = flow_sub.add_parser("unarchive", help="Restore a flow to listings")
+    p_flow_unarchive.add_argument("flow", help="Flow name or path")
+    p_flow_delete = flow_sub.add_parser("delete", help="Permanently delete a flow")
+    p_flow_delete.add_argument("flow", help="Flow name or path")
+    p_flow_delete.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
+
     # schedule
     p_sched = sub.add_parser("schedule", help="Manage scheduled flow execution")
     sched_sub = p_sched.add_subparsers(dest="schedule_command")
@@ -6560,6 +6571,108 @@ def cmd_job(args: argparse.Namespace) -> int:
     return EXIT_USAGE_ERROR
 
 
+# ── flow lifecycle ──────────────────────────────────────────────────────
+
+def _cmd_flow_archive(args: argparse.Namespace) -> int:
+    io = _io(args)
+    from stepwise.flow_resolution import FlowResolutionError, resolve_flow, set_flow_archived
+    try:
+        flow_path = resolve_flow(args.flow, _project_dir(args))
+    except FlowResolutionError as e:
+        io.log("error", str(e))
+        return EXIT_USAGE_ERROR
+
+    changed = set_flow_archived(flow_path, True)
+    if not changed:
+        io.log("info", f"'{args.flow}' is already archived")
+    else:
+        io.log("success", f"Archived flow '{args.flow}'")
+    return EXIT_SUCCESS
+
+
+def _cmd_flow_unarchive(args: argparse.Namespace) -> int:
+    io = _io(args)
+    from stepwise.flow_resolution import FlowResolutionError, resolve_flow, set_flow_archived
+    try:
+        flow_path = resolve_flow(args.flow, _project_dir(args))
+    except FlowResolutionError as e:
+        io.log("error", str(e))
+        return EXIT_USAGE_ERROR
+
+    changed = set_flow_archived(flow_path, False)
+    if not changed:
+        io.log("info", f"'{args.flow}' is not archived")
+    else:
+        io.log("success", f"Unarchived flow '{args.flow}'")
+    return EXIT_SUCCESS
+
+
+def _cmd_flow_delete(args: argparse.Namespace) -> int:
+    import shutil
+    import yaml
+
+    io = _io(args)
+    from stepwise.flow_resolution import FlowResolutionError, resolve_flow
+    try:
+        flow_path = resolve_flow(args.flow, _project_dir(args))
+    except FlowResolutionError as e:
+        io.log("error", str(e))
+        return EXIT_USAGE_ERROR
+
+    # Determine delete target: directory for dir flows, file for single-file
+    if flow_path.name == "FLOW.yaml":
+        target = flow_path.parent
+    else:
+        target = flow_path
+
+    # Derive the flow name for confirmation
+    try:
+        raw = yaml.safe_load(flow_path.read_text()) or {}
+        name = raw.get("name", "")
+    except Exception:
+        name = ""
+    if not name:
+        name = target.stem if target.is_file() else target.name
+    # Strip .flow suffix for single-file flows
+    if name.endswith(".flow"):
+        name = name[:-5]
+
+    io.log("info", f"Will delete: {target}")
+
+    if not getattr(args, "yes", False):
+        try:
+            response = input(f"Type '{name}' to confirm: ")
+        except (EOFError, KeyboardInterrupt):
+            io.log("error", "Aborted")
+            return EXIT_JOB_FAILED
+        if response.strip() != name:
+            io.log("error", "Confirmation mismatch — delete aborted")
+            return EXIT_JOB_FAILED
+
+    if target.is_dir():
+        shutil.rmtree(target)
+    else:
+        target.unlink()
+
+    io.log("success", f"Deleted '{name}'")
+    return EXIT_SUCCESS
+
+
+def cmd_flow(args: argparse.Namespace) -> int:
+    """Flow lifecycle commands (archive, unarchive, delete)."""
+    action = getattr(args, "flow_command", None)
+    handlers = {
+        "archive": _cmd_flow_archive,
+        "unarchive": _cmd_flow_unarchive,
+        "delete": _cmd_flow_delete,
+    }
+    handler = handlers.get(action)
+    if handler:
+        return handler(args)
+    _io(args).log("error", "Usage: stepwise flow {archive|unarchive|delete}")
+    return EXIT_USAGE_ERROR
+
+
 def _schedule_relative_time(dt_str: str | None) -> str:
     """Format an ISO datetime string as a relative time string."""
     if not dt_str:
@@ -7384,6 +7497,7 @@ def main(argv: list[str] | None = None) -> int:
         "docs": cmd_docs,
         "cache": cmd_cache,
         "job": cmd_job,
+        "flow": cmd_flow,
         "schedule": cmd_schedule,
         "update": cmd_self_update,
         "version": lambda args: (print(f"stepwise {_get_version()}"), EXIT_SUCCESS)[1],
