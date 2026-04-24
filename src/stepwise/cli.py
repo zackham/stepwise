@@ -1544,7 +1544,7 @@ def cmd_flows(args: argparse.Namespace) -> int:
     flows = discover_flows(project_dir)
     kits = discover_kits(project_dir)
 
-    # Build per-flow metadata (description, step count, visibility)
+    # Build per-flow metadata (description, step count, visibility, archived)
     def _flow_row(flow_info):
         try:
             raw = _yaml.safe_load(flow_info.path.read_text()) or {}
@@ -1554,7 +1554,9 @@ def cmd_flows(args: argparse.Namespace) -> int:
         desc = (raw.get("description", "") or "")[:50]
         visibility = raw.get("visibility", "interactive")
         steps = len(raw.get("steps") or {})
-        return {"name": name, "description": desc, "steps": steps, "visibility": visibility}
+        archived = bool(raw.get("archived", False))
+        return {"name": name, "description": desc, "steps": steps,
+                "visibility": visibility, "archived": archived}
 
     # Apply visibility filter
     vis_filter = getattr(args, "visibility", None)
@@ -1565,6 +1567,9 @@ def cmd_flows(args: argparse.Namespace) -> int:
             return vis != "internal"
         return True
 
+    include_archived = getattr(args, "include_archived", False)
+    archived_only = getattr(args, "archived_only", False)
+
     # Group flows by kit
     kit_flows: dict[str, list] = {}
     standalone: list = []
@@ -1572,6 +1577,13 @@ def cmd_flows(args: argparse.Namespace) -> int:
         row = _flow_row(f)
         if not _vis_ok(row["visibility"]):
             continue
+        # Archive filtering
+        if archived_only and not row["archived"]:
+            continue
+        if not include_archived and not archived_only and row["archived"]:
+            continue
+        if row["archived"]:
+            row["name"] = row["name"] + " [archived]"
         if f.kit_name:
             kit_flows.setdefault(f.kit_name, []).append(row)
         else:
@@ -5410,6 +5422,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_flows = sub.add_parser("flows", help="List flows in this project")
     p_flows.add_argument("--visibility", choices=["interactive", "background", "internal", "all"],
                          help="Filter by visibility category (default: hide internal)")
+    _flows_archive_group = p_flows.add_mutually_exclusive_group()
+    _flows_archive_group.add_argument("--include-archived", "-a", action="store_true",
+                                      help="Include archived flows in output")
+    _flows_archive_group.add_argument("--archived-only", action="store_true",
+                                      help="Show only archived flows")
 
     # config
     p_config = sub.add_parser("config", help="Get/set configuration values",

@@ -174,3 +174,52 @@ class TestCLI:
         monkeypatch.chdir(project)
         rc = main(["flow", "delete", "no-such-flow", "--yes"])
         assert rc != EXIT_SUCCESS
+
+
+ARCHIVED_FLOW = "name: hidden\narchived: true\nsteps:\n  s:\n    run: echo '{}'\n    outputs: [result]\n"
+ACTIVE_FLOW = "name: active\nsteps:\n  s:\n    run: echo '{}'\n    outputs: [result]\n"
+
+
+class TestFlowsListing:
+    """Tests for archive filtering in stepwise flows."""
+
+    def _setup_flows(self, tmp_path, monkeypatch):
+        project = _make_project(tmp_path)
+        _make_flow_dir(project, "active", ACTIVE_FLOW)
+        _make_flow_dir(project, "hidden", ARCHIVED_FLOW)
+        monkeypatch.chdir(project)
+        return project
+
+    def test_hides_archived_by_default(self, tmp_path, monkeypatch, capsys):
+        self._setup_flows(tmp_path, monkeypatch)
+        rc = main(["flows"])
+        assert rc == EXIT_SUCCESS
+        captured = capsys.readouterr()
+        out = captured.out + captured.err
+        assert "active" in out
+        assert "hidden" not in out
+
+    def test_include_archived(self, tmp_path, monkeypatch, capsys):
+        self._setup_flows(tmp_path, monkeypatch)
+        rc = main(["flows", "--include-archived"])
+        assert rc == EXIT_SUCCESS
+        captured = capsys.readouterr()
+        out = captured.out + captured.err
+        assert "active" in out
+        assert "hidden" in out
+        assert "[archived]" in out
+
+    def test_archived_only(self, tmp_path, monkeypatch, capsys):
+        self._setup_flows(tmp_path, monkeypatch)
+        rc = main(["flows", "--archived-only"])
+        assert rc == EXIT_SUCCESS
+        captured = capsys.readouterr()
+        out = captured.out + captured.err
+        assert "hidden" in out
+        assert "[archived]" in out
+
+    def test_flags_mutually_exclusive(self, tmp_path, monkeypatch, capsys):
+        self._setup_flows(tmp_path, monkeypatch)
+        with pytest.raises(SystemExit) as exc_info:
+            main(["flows", "--include-archived", "--archived-only"])
+        assert exc_info.value.code == 2
