@@ -11,6 +11,7 @@ import { WorkspaceView } from "@/components/jobs/WorkspaceView";
 import { RunView } from "@/components/jobs/RunView";
 import { StepDefinitionPanel } from "@/components/editor/StepDefinitionPanel";
 import { JobOverview } from "@/components/jobs/JobOverview";
+import { PausedJobBanner } from "@/components/jobs/PausedJobBanner";
 import type { DagSelection } from "@/lib/dag-layout";
 import { useAutoSelectSuspended } from "@/hooks/useAutoSelectSuspended";
 import { useAutoExpand } from "@/hooks/useAutoExpand";
@@ -493,6 +494,14 @@ export function JobDetailPage() {
                   View Details
                 </button>
               </div>
+            )}
+
+            {job.status === "paused" && job.pause_cause && (
+              <PausedJobBanner
+                cause={job.pause_cause}
+                strandedCount={runs.filter((r) => r.is_stranded).length}
+                onViewStep={(s) => handleSelectStep(s)}
+              />
             )}
 
             <TabsContent value="dag" className={cn("flex-1 min-h-0", viewMode !== "dag" && "hidden")}>

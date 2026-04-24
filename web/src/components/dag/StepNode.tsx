@@ -17,10 +17,19 @@ import {
 import { ContentModal } from "@/components/ui/content-modal";
 import { copyToClipboard } from "@/hooks/useCopyFeedback";
 import { StepStatusBadge } from "@/components/StatusBadge";
-import { STEP_STATUS_COLORS, STEP_PENDING_COLORS } from "@/lib/status-colors";
+import {
+  STEP_STATUS_COLORS,
+  STEP_PENDING_COLORS,
+  STEP_DISPLAY_COLORS,
+} from "@/lib/status-colors";
 import { EntityContextMenu } from "@/components/menus/EntityContextMenu";
 import type { StepEntity } from "@/lib/actions/step-actions";
-import type { ExitRule, StepDefinition, StepRun, StepRunStatus } from "@/lib/types";
+import type {
+  ExitRule,
+  StepDefinition,
+  StepDisplayStatus,
+  StepRun,
+} from "@/lib/types";
 import { cn, safeRenderValue } from "@/lib/utils";
 import { LiveDuration } from "@/components/LiveDuration";
 import { executorIcon, executorLabel } from "@/lib/executor-utils";
@@ -615,15 +624,51 @@ export function StepNode({
   const isWaitingReset =
     latestRun?.status === "running" &&
     !!(latestRun?.executor_state as Record<string, unknown> | undefined)?.usage_limit_waiting;
-  const status: StepRunStatus | "pending" =
-    isWaitingReset
-      ? "waiting_reset"
-      : latestRun?.status ?? (flowStatus === "throttled" ? "throttled" : "pending");
+
+  // Derive the badge's display status — escalate + strand are decorations
+  // on top of the engine's raw StepRunStatus. We check them in priority
+  // order: STRANDED wins over ESCALATED (if somehow both held, the
+  // stranded process is the more urgent hazard); ESCALATED wins over the
+  // underlying completed status because the step's outcome caused the
+  // job to pause and that matters more than "it finished."
+  const rawStatus = latestRun?.status;
+  const isStranded = latestRun?.is_stranded === true;
+  const isEscalated = latestRun?.exit_rule?.action === "escalate";
+  const status: StepDisplayStatus = isStranded
+    ? "stranded"
+    : isEscalated
+      ? "escalated"
+      : isWaitingReset
+        ? "waiting_reset"
+        : rawStatus ?? (flowStatus === "throttled" ? "throttled" : "pending");
   const subJobId = latestRun?.sub_job_id ?? null;
   const colors =
     status === "pending"
       ? STEP_PENDING_COLORS
-      : STEP_STATUS_COLORS[status];
+      : status === "escalated" || status === "stranded"
+        ? STEP_DISPLAY_COLORS[status]
+        : STEP_STATUS_COLORS[status];
+
+  // Temporal-ordering annotation: did this run start within 250ms of a
+  // sibling run? Exposes parallel starts that the static DAG hides —
+  // see the gumball text-quality-check race (issue surfaced in cycle 91
+  // stepwise review). We keep the threshold small so only genuine
+  // scheduler-level ties are flagged, not user-triggered concurrency.
+  const PARALLEL_WINDOW_MS = 250;
+  const startedAt = latestRun?.started_at
+    ? new Date(latestRun.started_at).getTime()
+    : null;
+  const parallelSiblings: string[] = [];
+  if (startedAt != null && latestRuns) {
+    for (const [otherName, otherRun] of Object.entries(latestRuns)) {
+      if (otherName === stepDef.name) continue;
+      if (!otherRun?.started_at) continue;
+      const otherStarted = new Date(otherRun.started_at).getTime();
+      if (Math.abs(otherStarted - startedAt) <= PARALLEL_WINDOW_MS) {
+        parallelSiblings.push(otherName);
+      }
+    }
+  }
 
   const canRerun =
     !latestRun ||
@@ -662,6 +707,8 @@ export function StepNode({
     status === "suspended" ? "bg-amber-500/60 border-amber-400/60" :
     status === "waiting_reset" ? "bg-amber-600/60 border-amber-500/60" :
     status === "throttled" ? "bg-orange-500/60 border-orange-400/60" :
+    status === "escalated" ? "bg-red-500/60 border-red-400/60" :
+    status === "stranded" ? "bg-amber-500/60 border-amber-400/60" :
     "bg-zinc-300 border-zinc-400 dark:bg-zinc-700 dark:border-zinc-600";
 
   // Port hover/click content
@@ -745,10 +792,43 @@ export function StepNode({
       </div>
 
       {/* Duration */}
-      {latestRun && (status === "completed" || status === "failed" || status === "running") && (
+      {latestRun && (status === "completed" || status === "failed" || status === "running" || status === "escalated" || status === "stranded") && (
         <div className="flex items-center gap-0.5 text-[9px] text-zinc-500 mt-0.5">
           <Clock className="w-2.5 h-2.5" />
           <LiveDuration startTime={latestRun.started_at} endTime={latestRun.completed_at} />
+        </div>
+      )}
+
+      {/* ESCALATED annotation: the step caused the job to pause. */}
+      {status === "escalated" && latestRun?.exit_rule && (
+        <div
+          className="mt-0.5 text-[9px] text-red-700 dark:text-red-300 font-mono truncate"
+          title={`Exit rule '${latestRun.exit_rule.rule}' resolved with action=escalate — this paused the job.`}
+        >
+          ↑ escalated via rule: {latestRun.exit_rule.rule ?? "—"}
+        </div>
+      )}
+
+      {/* STRANDED annotation: the job is paused but the run is still live. */}
+      {status === "stranded" && (
+        <div
+          className="mt-0.5 text-[9px] text-amber-700 dark:text-amber-300 font-mono truncate"
+          title="Job is paused; this run's completion won't be processed until the job is resumed. Any live executor process is idle."
+        >
+          ⚠ stranded — job paused, run orphaned
+        </div>
+      )}
+
+      {/* TEMPORAL ORDER annotation: sibling started within ~250ms of this
+          step. Exposes races that the static DAG topology otherwise
+          hides (e.g. the gumball text-quality-check / initial-check
+          race that caused the original escalate-mid-repair bug). */}
+      {parallelSiblings.length > 0 && (
+        <div
+          className="mt-0.5 text-[9px] text-amber-600 dark:text-amber-400 font-mono truncate"
+          title={`Started in parallel with: ${parallelSiblings.join(", ")}. If any of these is a dependency or prerequisite, the flow likely has a missing ordering constraint (after / after_resolved).`}
+        >
+          ⇉ parallel with {parallelSiblings.length === 1 ? parallelSiblings[0] : `${parallelSiblings.length} siblings`}
         </div>
       )}
 

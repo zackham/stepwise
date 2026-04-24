@@ -1,6 +1,11 @@
 import { Badge } from "@/components/ui/badge";
-import { JOB_STATUS_COLORS, STEP_STATUS_COLORS, STEP_PENDING_COLORS } from "@/lib/status-colors";
-import type { JobStatus, StepRunStatus } from "@/lib/types";
+import {
+  JOB_STATUS_COLORS,
+  STEP_STATUS_COLORS,
+  STEP_PENDING_COLORS,
+  STEP_DISPLAY_COLORS,
+} from "@/lib/status-colors";
+import type { JobStatus, StepDisplayStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export function JobStatusBadge({ status }: { status: JobStatus }) {
@@ -22,15 +27,20 @@ export function JobStatusBadge({ status }: { status: JobStatus }) {
   );
 }
 
+function pickStepColors(status: StepDisplayStatus) {
+  if (status === "pending") return STEP_PENDING_COLORS;
+  if (status === "escalated" || status === "stranded") {
+    return STEP_DISPLAY_COLORS[status];
+  }
+  return STEP_STATUS_COLORS[status];
+}
+
 export function StepStatusBadge({
   status,
 }: {
-  status: StepRunStatus | "pending";
+  status: StepDisplayStatus;
 }) {
-  const colors =
-    status === "pending"
-      ? STEP_PENDING_COLORS
-      : STEP_STATUS_COLORS[status];
+  const colors = pickStepColors(status);
   return (
     <Badge
       variant="outline"
@@ -40,7 +50,10 @@ export function StepStatusBadge({
         colors.text,
         "ring-1 border-transparent",
         colors.ring,
-        status === "running" && "animate-pulse"
+        // Pulse while actively running OR stranded (the running process
+        // is still alive but idle — signals the "live but going nowhere"
+        // state visually).
+        (status === "running" || status === "stranded") && "animate-pulse"
       )}
     >
       {status}

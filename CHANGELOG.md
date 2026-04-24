@@ -3,6 +3,24 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.45.3] — 2026-04-24
+
+### Fixed
+- **`stream_result` returned empty when model emitted only `agent_thought_chunk` events** — observed in the wild with Claude Opus on a transcript-writing agent step: the model produced 8000+ chars of prose but routed all of it into the extended-thinking stream and never emitted an `agent_message_chunk`. `extract_final_text` only watched the message stream → returned `""` → downstream pipeline operated on nothing → 105-word "no draft transcript was provided" cascade through 8 more steps. Two-layer fix: (1) `extract_final_text` now falls back to concatenated `agent_thought_chunk` text when no `agent_message_chunk` events were captured (message wins when both exist; pure-thinking runs are no longer silently dropped). (2) Defense in depth: when `output_mode: stream_result` extracts a still-empty result (no message and no thoughts), the agent run is now marked failed with `error_category: empty_stream_result` so `max_retries` and exit-rule logic can fire instead of propagating an empty artifact downstream.
+- Tests: 3 new in `test_acp_ndjson.py::TestExtractFinalText` covering thought-chunk fallback, message-wins-when-both-present, and truly-empty preserves empty.
+
+## [0.45.2] — 2026-04-23
+
+### Added
+- **UI + API surface for escalate / pause / stranded states** — closes the "it looks done but the job is frozen" failure mode surfaced by a gumball main-trail race (text-quality-check escalated mid-repair-transcript, sub-job paused, agent process stranded, UI kept pulsing RUNNING with no indication of cause).
+  - `GET /api/jobs/{id}` now decorates the response with `pause_cause` when `status == "paused"` — replays the latest `job.paused` event payload (reason, step, rule, target, timestamp). Lets the UI name WHY the job is paused without scanning events.
+  - `GET /api/jobs/{id}/runs` and `GET /api/jobs/{id}/tree` now decorate each run with `exit_rule` (latest `exit.resolved` payload for that step) and `is_stranded` (bool — true when `job.status == paused` AND `run.status == running`, signaling the runner won't process the run's eventual completion until resume).
+  - New UI badge states: **ESCALATED** (red) on runs whose exit rule fired with action=escalate; **STRANDED** (amber, pulsing) on RUNNING runs inside a paused job. Override the underlying step-run status badge so users don't misread a completed-then-escalated step as "just completed."
+  - New **PausedJobBanner** in the job detail header — names the escalating step (clickable → jumps to that tile) and the rule, shows pause timestamp, and counts stranded runs.
+  - StepNode tiles gain a **parallel-start annotation** — when a run started within 250ms of a sibling run, the tile shows `⇉ parallel with <sibling>`. Exposes scheduler-level races that the static DAG topology hides (the class of bug that caused the main-trail escalation).
+  - Zero DB migrations — all decorations derive from the existing event stream in the API serializer.
+  - Coverage: new `tests/test_pause_cause_and_stranded.py` (11 tests) for the backend helpers + `/api/jobs/{id}`, `/runs`, `/tree` endpoints; new `web/src/components/jobs/PausedJobBanner.test.tsx` (9 tests); extended `StatusBadge.test.tsx` (+5) and `StepNode.test.tsx` (+6) for the new display states.
+
 ## [0.45.1] — 2026-04-21
 
 ### Fixed

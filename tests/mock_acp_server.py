@@ -49,6 +49,10 @@ class MockAcpServer:
     })
     response_script: list[list[dict]] | None = None
     fail_session_load: bool = False
+    # When True, session/prompt streams partial output (one message chunk
+    # + one usage_update) and then never returns the final result — used
+    # to exercise the client's idle-stream watchdog.
+    stall_after_partial: bool = False
 
     sessions: dict[str, Session] = field(default_factory=dict)
     _input: TextIO = field(default_factory=lambda: sys.stdin)
@@ -142,6 +146,24 @@ class MockAcpServer:
         session = self.sessions[session_id]
         session.cancelled = False
         session.prompt_count += 1
+
+        if self.stall_after_partial:
+            # Stream one partial update then go silent. Mirrors the
+            # real-world failure mode where the upstream API stream dies
+            # mid-turn without emitting message_stop.
+            self._send_session_update(session_id, {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "partial..."},
+            })
+            self._send_session_update(session_id, {
+                "sessionUpdate": "usage_update",
+                "used": 10,
+                "size": 200000,
+                "cost": {"amount": 0.0001, "currency": "USD"},
+            })
+            # Intentionally do NOT send the session/prompt result —
+            # forces the client to time out on stream idleness.
+            return
 
         # Emit scripted notifications or default behavior
         if self.response_script and self._script_index < len(self.response_script):
@@ -251,6 +273,11 @@ def main() -> None:
         action="store_true",
         help="Make session/load always return an error",
     )
+    parser.add_argument(
+        "--stall-after-partial",
+        action="store_true",
+        help="On session/prompt, stream partial output then never reply",
+    )
     args = parser.parse_args()
 
     capabilities = json.loads(args.capabilities)
@@ -263,6 +290,7 @@ def main() -> None:
         capabilities=capabilities,
         response_script=response_script,
         fail_session_load=args.fail_session_load,
+        stall_after_partial=args.stall_after_partial,
     )
     server.run()
 

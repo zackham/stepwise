@@ -220,6 +220,41 @@ class TestExtractFinalText:
         path = _write_ndjson([non_text, TEXT_CHUNK_1], str(tmp_path / "out.jsonl"))
         assert extract_final_text(path) == "Hello "
 
+    # ── thought-chunk fallback ─────────────────────────────────────────
+    # When Claude (Opus, observed in the wild) routes its full prose
+    # response into the extended-thinking stream and never emits an
+    # `agent_message_chunk`, the surfaced result was previously "" — the
+    # downstream pipeline then operated on nothing. Fallback rule:
+    # message_chunks win; thought_chunks are used only when message
+    # chunks are completely absent.
+
+    def test_falls_back_to_thought_chunks_when_no_message_chunks(self, tmp_path):
+        thought1 = _session_update("s", {
+            "sessionUpdate": "agent_thought_chunk",
+            "content": {"type": "text", "text": "The water cycle starts "},
+        })
+        thought2 = _session_update("s", {
+            "sessionUpdate": "agent_thought_chunk",
+            "content": {"type": "text", "text": "with evaporation."},
+        })
+        path = _write_ndjson([thought1, thought2], str(tmp_path / "out.jsonl"))
+        assert extract_final_text(path) == "The water cycle starts with evaporation."
+
+    def test_message_chunks_win_when_both_present(self, tmp_path):
+        """Real message + brief thinking → only message is returned."""
+        thought = _session_update("s", {
+            "sessionUpdate": "agent_thought_chunk",
+            "content": {"type": "text", "text": "Let me think... "},
+        })
+        path = _write_ndjson([thought, TEXT_CHUNK_1, TEXT_CHUNK_2], str(tmp_path / "out.jsonl"))
+        # "Let me think..." stays in thoughts; we get the message
+        assert extract_final_text(path) == "Hello world!"
+
+    def test_truly_empty_returns_empty(self, tmp_path):
+        """No message + no thought = empty (preserves error-signal semantics)."""
+        path = _write_ndjson([TOOL_CALL, USAGE_UPDATE], str(tmp_path / "out.jsonl"))
+        assert extract_final_text(path) == ""
+
 
 # ── read_last_error ───────────────────────────────────────────────────
 

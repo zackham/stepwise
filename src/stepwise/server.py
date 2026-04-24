@@ -44,7 +44,7 @@ from stepwise.models import (
     RecoveryPolicy,
 )
 from stepwise.store import SQLiteStore
-from stepwise.events import JOB_AWAITING_APPROVAL
+from stepwise.events import JOB_AWAITING_APPROVAL, JOB_PAUSED, EXIT_RESOLVED
 from stepwise.hooks import build_event_envelope
 
 logger = logging.getLogger("stepwise.server")
@@ -527,6 +527,66 @@ def _get_engine() -> AsyncEngine:
     return _engine
 
 
+def _latest_pause_cause(engine, job_id: str) -> dict | None:
+    """Return the payload of the most recent `job.paused` event, or None.
+
+    Surfaces WHY a job is paused (which step, which exit rule, reason)
+    without forcing callers to scan the event stream themselves. The
+    engine already emits rich payloads for the escalate / loop-max /
+    suspend-escalate paths — we just replay the latest one.
+    """
+    events = engine.get_events(job_id)
+    for event in reversed(events):
+        if event.type == JOB_PAUSED:
+            data = dict(event.data or {})
+            data["at"] = event.timestamp.isoformat() if event.timestamp else None
+            return data
+    return None
+
+
+def _exit_rules_by_step(engine, job_id: str) -> dict[str, dict]:
+    """Return the latest `exit.resolved` payload per step name.
+
+    The engine emits exactly one exit.resolved event per exit-rule
+    evaluation (engine.py `_process_completion`), so the chronologically
+    latest event for a given step corresponds to that step's most recent
+    rule resolution. The returned dict is suitable for per-run
+    decoration at the API layer.
+    """
+    events = engine.get_events(job_id)
+    out: dict[str, dict] = {}
+    for event in events:
+        if event.type == EXIT_RESOLVED:
+            step = (event.data or {}).get("step")
+            if step:
+                out[step] = {
+                    "rule": (event.data or {}).get("rule"),
+                    "action": (event.data or {}).get("action"),
+                    "at": event.timestamp.isoformat() if event.timestamp else None,
+                }
+    return out
+
+
+def _enrich_run_dict(run_dict: dict, *, job_paused: bool,
+                     exit_rules: dict[str, dict]) -> dict:
+    """Add UI-facing derived fields to a StepRun dict.
+
+    Fields added:
+      - `exit_rule`: {rule, action, at} | None — most recent exit rule
+        that fired for this step (None if no rule matched / no completion
+        recorded yet).
+      - `is_stranded`: bool — True when the owning job is PAUSED and
+        this run is still RUNNING. Signals that the runner can't
+        process the run's eventual completion until the job is resumed.
+    """
+    step = run_dict.get("step_name")
+    run_dict["exit_rule"] = exit_rules.get(step) if step else None
+    run_dict["is_stranded"] = bool(
+        job_paused and run_dict.get("status") == StepRunStatus.RUNNING.value
+    )
+    return run_dict
+
+
 def _serialize_job(
     job: Job,
     summary: bool = False,
@@ -608,8 +668,13 @@ def _serialize_job(
         }
         if cost_usd is not None:
             result["cost_usd"] = round(cost_usd, 4)
+        if job.status == JobStatus.PAUSED:
+            result["pause_cause"] = _latest_pause_cause(_get_engine(), job.id)
         return result
-    return job.to_dict()
+    result = job.to_dict()
+    if job.status == JobStatus.PAUSED:
+        result["pause_cause"] = _latest_pause_cause(_get_engine(), job.id)
+    return result
 
 
 def _build_summary_lookups(store, jobs: list[Job]) -> dict:
@@ -1970,9 +2035,15 @@ def get_job_tree(job_id: str):
         tree = engine.get_job_tree(job_id)
 
         def serialize_tree(node: dict) -> dict:
+            node_job = node["job"]
+            job_paused = node_job.status == JobStatus.PAUSED
+            exit_rules = _exit_rules_by_step(engine, node_job.id)
             return {
-                "job": _serialize_job(node["job"]),
-                "runs": [r.to_dict() for r in node["runs"]],
+                "job": _serialize_job(node_job),
+                "runs": [
+                    _enrich_run_dict(r.to_dict(), job_paused=job_paused, exit_rules=exit_rules)
+                    for r in node["runs"]
+                ],
                 "sub_jobs": [serialize_tree(s) for s in node["sub_jobs"]],
             }
 
@@ -1986,9 +2057,15 @@ def get_runs(job_id: str, step_name: str | None = None):
     engine = _get_engine()
     try:
         runs = engine.get_runs(job_id, step_name)
-        return [r.to_dict() for r in runs]
+        job = engine.get_job(job_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    job_paused = job.status == JobStatus.PAUSED
+    exit_rules = _exit_rules_by_step(engine, job_id)
+    return [
+        _enrich_run_dict(r.to_dict(), job_paused=job_paused, exit_rules=exit_rules)
+        for r in runs
+    ]
 
 
 @app.get("/api/jobs/{job_id}/children")

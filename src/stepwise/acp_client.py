@@ -9,13 +9,25 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import queue
 import threading
+import time
 from typing import Any, Callable
 
-from stepwise.acp_transport import JsonRpcTransport
+from stepwise.acp_transport import AcpError, JsonRpcTransport
 
 logger = logging.getLogger("stepwise.acp_client")
+
+# Default idle-stream timeout: if no session/update notification arrives for
+# this many seconds while a prompt is pending, the watchdog cancels the
+# prompt and fails with AcpError. Guards against silent upstream API stalls
+# where the agent subprocess streams partial output and then goes quiet
+# without emitting the final session/prompt response (observed: Anthropic
+# stream dying mid-turn with no message_stop; claude-agent-acp's own stream
+# idle detector does not always catch it). Override via
+# STEPWISE_ACP_IDLE_TIMEOUT env var or per-call argument.
+DEFAULT_IDLE_TIMEOUT_SECONDS = 900.0
 
 
 class ACPClient:
@@ -70,6 +82,7 @@ class ACPClient:
         text: str,
         on_update: Callable[[dict], None] | None = None,
         output_path: str | None = None,
+        idle_timeout_seconds: float | None = None,
     ) -> dict:
         """Send prompt, stream updates, return PromptResponse.
 
@@ -78,7 +91,21 @@ class ACPClient:
             text: The prompt text.
             on_update: Called for each session/update notification.
             output_path: If set, write all ACP messages to this NDJSON file.
+            idle_timeout_seconds: Cancel the prompt if no session/update
+                notification arrives for this many seconds. Defaults to
+                STEPWISE_ACP_IDLE_TIMEOUT env var or
+                DEFAULT_IDLE_TIMEOUT_SECONDS. Set to 0 or negative to disable.
         """
+        if idle_timeout_seconds is None:
+            env_val = os.environ.get("STEPWISE_ACP_IDLE_TIMEOUT")
+            if env_val:
+                try:
+                    idle_timeout_seconds = float(env_val)
+                except ValueError:
+                    idle_timeout_seconds = DEFAULT_IDLE_TIMEOUT_SECONDS
+            else:
+                idle_timeout_seconds = DEFAULT_IDLE_TIMEOUT_SECONDS
+
         # Use a write queue to decouple pipe reading from file I/O.
         # The reader thread must drain the pipe as fast as possible to prevent
         # backpressure stalls. File writes happen in a dedicated writer thread.
@@ -106,12 +133,16 @@ class ACPClient:
         else:
             output_file = None
 
+        last_update_monotonic = time.monotonic()
+
         def _on_session_update(params: dict) -> None:
             # Only handle updates for this session — when multiple prompts
             # share an ACP process, each handler must ignore other sessions'
             # notifications to prevent cross-job output corruption.
             if params.get("sessionId") != session_id:
                 return
+            nonlocal last_update_monotonic
+            last_update_monotonic = time.monotonic()
             if output_file:
                 line = (
                     json.dumps(
@@ -126,11 +157,65 @@ class ACPClient:
 
         self.transport.on_notification("session/update", _on_session_update)
 
+        future = self.transport.send_request("session/prompt", {
+            "sessionId": session_id,
+            "prompt": [{"type": "text", "text": text}],
+        })
+
+        watchdog_stop = threading.Event()
+        watchdog_thread: threading.Thread | None = None
+
+        if idle_timeout_seconds and idle_timeout_seconds > 0:
+            def _idle_watchdog():
+                # Poll at idle/4 up to 30s — frequent enough to detect
+                # breach promptly, infrequent enough to avoid overhead.
+                poll_interval = max(5.0, min(30.0, idle_timeout_seconds / 4))
+                while not watchdog_stop.wait(timeout=poll_interval):
+                    if future.done():
+                        return
+                    idle = time.monotonic() - last_update_monotonic
+                    if idle < idle_timeout_seconds:
+                        continue
+                    logger.warning(
+                        "ACP session %s idle for %.0fs (limit %.0fs) — "
+                        "cancelling prompt",
+                        session_id, idle, idle_timeout_seconds,
+                    )
+                    try:
+                        self.cancel(session_id)
+                    except Exception:
+                        logger.debug(
+                            "session/cancel failed during idle watchdog",
+                            exc_info=True,
+                        )
+                    # Give the agent up to 5s to honor the cancel
+                    # (returns a session/prompt result with stopReason
+                    # "cancelled"). If it doesn't, force-fail the future
+                    # so the caller stops waiting.
+                    for _ in range(10):
+                        if future.done() or watchdog_stop.is_set():
+                            return
+                        time.sleep(0.5)
+                    if not future.done():
+                        self.transport.fail_pending(
+                            future,
+                            AcpError(
+                                f"Stream idle timeout: no session/update for "
+                                f"{idle:.0f}s (limit {idle_timeout_seconds:.0f}s); "
+                                f"session {session_id} did not respond to cancel",
+                                code=-32001,
+                            ),
+                        )
+                    return
+
+            watchdog_thread = threading.Thread(
+                target=_idle_watchdog,
+                daemon=True,
+                name=f"acp-idle-{session_id[:8]}",
+            )
+            watchdog_thread.start()
+
         try:
-            future = self.transport.send_request("session/prompt", {
-                "sessionId": session_id,
-                "prompt": [{"type": "text", "text": text}],
-            })
             result = future.result(timeout=14400)  # 4 hour timeout
 
             # Write the final response to NDJSON
@@ -145,6 +230,9 @@ class ACPClient:
 
             return result
         finally:
+            watchdog_stop.set()
+            if watchdog_thread:
+                watchdog_thread.join(timeout=2)
             self.transport.off_notification("session/update", _on_session_update)
             if writer_thread:
                 write_queue.put(None)  # Signal writer to exit

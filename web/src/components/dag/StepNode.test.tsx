@@ -287,4 +287,137 @@ describe("StepNode", () => {
     );
     expect(unknownContainer.firstChild).toBeTruthy();
   });
+
+  // ── Escalation / Stranded / Parallel-start annotations ────────────
+
+  it("shows ESCALATED badge when latest exit rule action is escalate", () => {
+    render(
+      <StepNode
+        stepDef={makeStepDef()}
+        latestRun={makeRun({
+          status: "completed",
+          exit_rule: { rule: "still_broken", action: "escalate", at: null },
+        })}
+        {...defaultProps}
+      />
+    );
+    expect(screen.getByText("escalated")).toBeInTheDocument();
+    // Must NOT also render the underlying "completed" badge — the
+    // escalated state replaces it so users don't misread a completed
+    // badge as "fine, advancing."
+    expect(screen.queryByText("completed")).toBeNull();
+  });
+
+  it("includes the escalating rule name in the tile body", () => {
+    render(
+      <StepNode
+        stepDef={makeStepDef()}
+        latestRun={makeRun({
+          status: "completed",
+          exit_rule: { rule: "still_broken", action: "escalate", at: null },
+        })}
+        {...defaultProps}
+      />
+    );
+    expect(screen.getByText(/escalated via rule:/i)).toBeInTheDocument();
+    expect(screen.getByText(/still_broken/)).toBeInTheDocument();
+  });
+
+  it("shows STRANDED badge + annotation when is_stranded is true", () => {
+    render(
+      <StepNode
+        stepDef={makeStepDef()}
+        latestRun={makeRun({ status: "running", is_stranded: true })}
+        {...defaultProps}
+      />
+    );
+    expect(screen.getByText("stranded")).toBeInTheDocument();
+    expect(screen.getByText(/stranded — job paused/i)).toBeInTheDocument();
+  });
+
+  it("STRANDED wins over ESCALATED when both conditions somehow coincide", () => {
+    render(
+      <StepNode
+        stepDef={makeStepDef()}
+        latestRun={makeRun({
+          status: "running",
+          is_stranded: true,
+          exit_rule: { rule: "whatever", action: "escalate", at: null },
+        })}
+        {...defaultProps}
+      />
+    );
+    expect(screen.getByText("stranded")).toBeInTheDocument();
+    expect(screen.queryByText("escalated")).toBeNull();
+  });
+
+  it("does NOT show escalated badge for advance/loop actions", () => {
+    render(
+      <StepNode
+        stepDef={makeStepDef()}
+        latestRun={makeRun({
+          status: "completed",
+          exit_rule: { rule: "all_clear", action: "advance", at: null },
+        })}
+        {...defaultProps}
+      />
+    );
+    expect(screen.queryByText("escalated")).toBeNull();
+    expect(screen.getByText("completed")).toBeInTheDocument();
+  });
+
+  it("shows parallel-with annotation when a sibling started within the window", () => {
+    const ts = "2026-04-23T19:35:03.790Z";
+    const sibTs = "2026-04-23T19:35:03.795Z"; // 5ms later — well under 250ms
+    render(
+      <StepNode
+        stepDef={makeStepDef({ name: "text-quality-check" })}
+        latestRun={makeRun({
+          step_name: "text-quality-check",
+          status: "completed",
+          started_at: ts,
+        })}
+        latestRuns={{
+          "text-quality-check": makeRun({
+            step_name: "text-quality-check",
+            status: "completed",
+            started_at: ts,
+          }),
+          "initial-check": makeRun({
+            id: "run-sibling",
+            step_name: "initial-check",
+            status: "completed",
+            started_at: sibTs,
+          }),
+        }}
+        {...defaultProps}
+      />
+    );
+    expect(screen.getByText(/parallel with/i)).toBeInTheDocument();
+    expect(screen.getByText(/initial-check/)).toBeInTheDocument();
+  });
+
+  it("does NOT show parallel annotation when siblings started far apart", () => {
+    render(
+      <StepNode
+        stepDef={makeStepDef({ name: "a" })}
+        latestRun={makeRun({
+          step_name: "a",
+          status: "completed",
+          started_at: "2026-04-23T19:30:00.000Z",
+        })}
+        latestRuns={{
+          a: makeRun({ step_name: "a", status: "completed", started_at: "2026-04-23T19:30:00.000Z" }),
+          b: makeRun({
+            id: "run-b",
+            step_name: "b",
+            status: "completed",
+            started_at: "2026-04-23T19:40:00.000Z", // 10 min later
+          }),
+        }}
+        {...defaultProps}
+      />
+    );
+    expect(screen.queryByText(/parallel with/i)).toBeNull();
+  });
 });

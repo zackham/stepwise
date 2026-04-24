@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { JobStatusBadge, StepStatusBadge } from "./StatusBadge";
-import type { JobStatus, StepRunStatus } from "@/lib/types";
+import type { JobStatus, StepDisplayStatus } from "@/lib/types";
 
 describe("JobStatusBadge", () => {
   const allStatuses: JobStatus[] = [
@@ -32,13 +32,15 @@ describe("JobStatusBadge", () => {
 });
 
 describe("StepStatusBadge", () => {
-  const allStatuses: Array<StepRunStatus | "pending"> = [
+  const allStatuses: StepDisplayStatus[] = [
     "running",
     "suspended",
     "delegated",
     "completed",
     "failed",
     "pending",
+    "escalated",
+    "stranded",
   ];
 
   it.each(allStatuses)("renders '%s' status text", (status) => {
@@ -46,15 +48,36 @@ describe("StepStatusBadge", () => {
     expect(screen.getByText(status)).toBeInTheDocument();
   });
 
-  it("applies animate-pulse only for running status", () => {
-    const { container: running } = render(
-      <StepStatusBadge status="running" />
-    );
-    expect(running.querySelector("[class*='animate-pulse']")).not.toBeNull();
+  it("applies animate-pulse for running status", () => {
+    const { container } = render(<StepStatusBadge status="running" />);
+    expect(container.querySelector("[class*='animate-pulse']")).not.toBeNull();
+  });
 
-    const { container: pending } = render(
-      <StepStatusBadge status="pending" />
-    );
-    expect(pending.querySelector("[class*='animate-pulse']")).toBeNull();
+  it("applies animate-pulse for stranded (process is idle but alive)", () => {
+    const { container } = render(<StepStatusBadge status="stranded" />);
+    expect(container.querySelector("[class*='animate-pulse']")).not.toBeNull();
+  });
+
+  it("does NOT pulse for escalated (run itself is terminal)", () => {
+    const { container } = render(<StepStatusBadge status="escalated" />);
+    expect(container.querySelector("[class*='animate-pulse']")).toBeNull();
+  });
+
+  it("does not apply animate-pulse for pending", () => {
+    const { container } = render(<StepStatusBadge status="pending" />);
+    expect(container.querySelector("[class*='animate-pulse']")).toBeNull();
+  });
+
+  it("uses red theme for escalated", () => {
+    const { container } = render(<StepStatusBadge status="escalated" />);
+    const html = container.innerHTML;
+    // red-700 for light-mode text; verifies we picked the escalated palette
+    expect(html).toContain("text-red-700");
+  });
+
+  it("uses amber theme for stranded", () => {
+    const { container } = render(<StepStatusBadge status="stranded" />);
+    const html = container.innerHTML;
+    expect(html).toContain("text-amber-700");
   });
 });

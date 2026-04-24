@@ -563,6 +563,42 @@ class AgentExecutor(Executor):
             logger.error(f"[{step_id}] _extract_output CRASHED: {type(e).__name__}: {e}", exc_info=True)
             raise
 
+        # stream_result with no captured text — even after the
+        # agent_thought_chunk fallback in extract_final_text — means the
+        # model produced nothing usable. Mark the run failed so retry /
+        # exit-rule logic can fire instead of silently propagating an
+        # empty string downstream (where it cascades into bogus
+        # artifacts and 105-word "no draft transcript" output).
+        if (
+            self.output_mode == "stream_result"
+            and not agent_status.result
+            and isinstance(envelope.artifact, dict)
+            and envelope.artifact.get("result", "") == ""
+        ):
+            logger.warning(
+                f"[{step_id}] stream_result extracted empty text — "
+                f"treating as failure to enable retry"
+            )
+            return ExecutorResult(
+                type="data",
+                envelope=HandoffEnvelope(
+                    artifact={},
+                    sidecar=Sidecar(),
+                    workspace=process.working_dir,
+                    timestamp=_now(),
+                    executor_meta={"failed": True},
+                ),
+                executor_state={
+                    **state,
+                    "failed": True,
+                    "error": (
+                        "Agent completed but produced no message_chunks "
+                        "or thought_chunks (stream_result mode)"
+                    ),
+                    "error_category": "empty_stream_result",
+                },
+            )
+
         # Auto-inject _session_id into artifact for cross-step session sharing
         # Only for legacy continue_session — named sessions don't need this.
         if not self._session_name:

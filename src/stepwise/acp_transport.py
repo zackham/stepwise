@@ -116,6 +116,29 @@ class JsonRpcTransport:
                     future.cancel()
             self._pending.clear()
 
+    def fail_pending(self, future: Future, exc: BaseException) -> None:
+        """Remove `future` from the pending registry and set its exception.
+
+        Used by watchdogs that decide a request is hung (e.g. idle-stream
+        timeout). Dropping the registry entry prevents the reader thread
+        from later trying to resolve a future that has already been failed
+        and avoids leaking pending entries for requests the agent will
+        never respond to.
+        """
+        with self._lock:
+            to_remove = None
+            for req_id, pending in self._pending.items():
+                if pending is future:
+                    to_remove = req_id
+                    break
+            if to_remove is not None:
+                self._pending.pop(to_remove, None)
+        if not future.done():
+            try:
+                future.set_exception(exc)
+            except Exception:
+                pass
+
     def _write(self, msg: dict) -> None:
         """Write a JSON-RPC message to subprocess stdin."""
         try:

@@ -22,6 +22,43 @@ export type StepRunStatus =
   | "throttled"
   | "waiting_reset";
 
+/**
+ * UI-only badge states derived at the API layer or in the UI from underlying
+ * run + job state. These are NOT persisted by the engine — they decorate
+ * existing runs when specific conditions hold:
+ *   - `escalated`: the run's latest exit rule fired with action=escalate
+ *   - `stranded`: the run is RUNNING inside a PAUSED job, so its eventual
+ *     completion won't be processed until the job resumes
+ */
+export type StepDisplayStatus =
+  | StepRunStatus
+  | "pending"
+  | "escalated"
+  | "stranded";
+
+/**
+ * Decoration payload the server attaches to each run in
+ * /api/jobs/{id}/runs. Derived from the event stream; see
+ * server._exit_rules_by_step and server._enrich_run_dict.
+ */
+export interface ExitRuleResolution {
+  rule: string | null;
+  action: string | null;
+  at: string | null;
+}
+
+/**
+ * Decoration payload the server attaches to the job object when
+ * status === "paused". Sourced from the latest `job.paused` event.
+ */
+export interface PauseCause {
+  reason: string;     // "escalated" | "max_iterations_reached" | ...
+  step?: string;
+  rule?: string;
+  target?: string;
+  at?: string | null;
+}
+
 export interface ThrottleInfo {
   executor_type: string;
   running: number;
@@ -200,6 +237,9 @@ export interface StepRun {
   sub_job_id: string | null;
   started_at: string | null;
   completed_at: string | null;
+  // API-layer decorations (added by server._enrich_run_dict)
+  exit_rule?: ExitRuleResolution | null;
+  is_stranded?: boolean;
 }
 
 // ── Step Event ────────────────────────────────────────────────────────
@@ -253,6 +293,8 @@ export interface Job {
   cost_usd?: number | null;
   step_count?: number;
   completed_steps?: number;
+  // Server decoration — populated when status === "paused"
+  pause_cause?: PauseCause | null;
 }
 
 // ── Event ──────────────────────────────────────────────────────────────

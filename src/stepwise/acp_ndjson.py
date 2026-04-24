@@ -74,10 +74,20 @@ def extract_cost(output_path: str) -> float | None:
 def extract_final_text(output_path: str) -> str:
     """Extract the final assistant text from ACP NDJSON output.
 
-    Concatenates all agent_message_chunk text content.
-    Returns empty string if no chunks found.
+    Prefers `agent_message_chunk` (the model's surfaced response). If those
+    are empty but the run produced substantial `agent_thought_chunk` content
+    (extended-thinking events), falls back to those — observed in the wild
+    when Claude Opus routes its full prose response into the thinking
+    stream and never emits a message. The thinking stream is the real
+    output in that case; without this fallback, stream_result returns "".
+
+    Both streams are concatenated in document order within their bucket;
+    we return whichever bucket has content, message_chunks winning ties.
+
+    Returns empty string only when neither stream produced content.
     """
-    chunks: list[str] = []
+    message_chunks: list[str] = []
+    thought_chunks: list[str] = []
     try:
         with open(output_path) as f:
             for line in f:
@@ -88,17 +98,28 @@ def extract_final_text(output_path: str) -> str:
                     data = json.loads(line)
                     params = data.get("params", {})
                     update = params.get("update", {})
-                    if update.get("sessionUpdate") == "agent_message_chunk":
-                        content = update.get("content", {})
-                        if content.get("type") == "text":
-                            text = content.get("text", "")
-                            if text:
-                                chunks.append(text)
+                    upd_type = update.get("sessionUpdate")
+                    if upd_type not in ("agent_message_chunk", "agent_thought_chunk"):
+                        continue
+                    content = update.get("content", {})
+                    if content.get("type") != "text":
+                        continue
+                    text = content.get("text", "")
+                    if not text:
+                        continue
+                    if upd_type == "agent_message_chunk":
+                        message_chunks.append(text)
+                    else:
+                        thought_chunks.append(text)
                 except json.JSONDecodeError:
                     continue
     except FileNotFoundError:
         pass
-    return "".join(chunks)
+    if message_chunks:
+        return "".join(message_chunks)
+    # Fallback: model emitted everything as extended-thinking with no
+    # message. Use the thought stream as the result.
+    return "".join(thought_chunks)
 
 
 def read_last_error(output_path: str) -> str | None:

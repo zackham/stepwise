@@ -1,4 +1,4 @@
-import type { JobStatus, StepRunStatus } from "./types";
+import type { JobStatus, StepDisplayStatus, StepRunStatus } from "./types";
 
 export const JOB_STATUS_COLORS: Record<
   JobStatus,
@@ -57,6 +57,31 @@ export const JOB_STATUS_COLORS: Record<
     text: "text-zinc-600",
     ring: "ring-zinc-500/20",
     dot: "bg-zinc-600",
+  },
+};
+
+export const STEP_DISPLAY_COLORS: Record<
+  Exclude<StepDisplayStatus, StepRunStatus | "pending">,
+  { bg: string; text: string; border: string; ring: string }
+> = {
+  // A run whose latest exit rule fired with action=escalate. Engine-level
+  // status is typically COMPLETED (the step itself finished) but the
+  // outcome pushed the job into PAUSED — users need to see that the job
+  // stopped because of this step, not think it "just completed."
+  escalated: {
+    bg: "bg-red-100 dark:bg-red-500/15",
+    text: "text-red-700 dark:text-red-300",
+    border: "border-red-500/50",
+    ring: "ring-red-500/60",
+  },
+  // A run that is still RUNNING inside a PAUSED job — no forward progress
+  // possible, but the underlying executor may still be alive (e.g. an
+  // agent process idle after streaming its result).
+  stranded: {
+    bg: "bg-amber-100 dark:bg-amber-600/20",
+    text: "text-amber-700 dark:text-amber-300",
+    border: "border-amber-500/50",
+    ring: "ring-amber-500/60",
   },
 };
 

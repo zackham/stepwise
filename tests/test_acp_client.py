@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 
 import pytest
 
@@ -20,6 +21,8 @@ def _spawn_mock(**kwargs) -> subprocess.Popen:
         cmd.extend(["--capabilities", json.dumps(caps)])
     if kwargs.get("fail_session_load"):
         cmd.append("--fail-session-load")
+    if kwargs.get("stall_after_partial"):
+        cmd.append("--stall-after-partial")
     script = kwargs.get("response_script")
     if script:
         cmd.extend(["--response-script", script])
@@ -257,6 +260,58 @@ class TestSetSessionMode:
             transport.close()
             proc.terminate()
             proc.wait(timeout=5)
+
+
+class TestIdleStreamWatchdog:
+    """The prompt() watchdog cancels and fails the future when the agent
+    streams partial output then goes silent without sending the final
+    session/prompt response (real-world failure: upstream API stream dies
+    mid-turn with no message_stop, leaving the agent subprocess parked
+    on epoll_wait indefinitely)."""
+
+    def test_idle_timeout_triggers_cancel_and_raises(self, tmp_path):
+        proc = _spawn_mock(
+            capabilities={"fork": False, "sessions": True, "multi_session": True},
+            stall_after_partial=True,
+        )
+        transport = JsonRpcTransport(proc)
+        transport.start()
+        c = ACPClient(transport)
+        c.initialize()
+        output_path = str(tmp_path / "out.jsonl")
+        try:
+            sid = c.new_session("/tmp/work")
+            start = time.monotonic()
+            with pytest.raises(AcpError, match="Stream idle timeout"):
+                # Short idle timeout so the test completes quickly.
+                c.prompt(
+                    sid, "hello",
+                    output_path=output_path,
+                    idle_timeout_seconds=2.0,
+                )
+            elapsed = time.monotonic() - start
+            # Watchdog polls at idle/4, then waits up to 5s for cancel to
+            # land. Budget: idle(2) + poll(0.5) + cancel-wait(5) + slop.
+            assert elapsed < 15.0, f"watchdog too slow: {elapsed:.1f}s"
+
+            # Partial stream was still captured on disk.
+            with open(output_path) as f:
+                lines = [json.loads(line) for line in f if line.strip()]
+            assert any(
+                line.get("method") == "session/update"
+                for line in lines
+            ), "partial stream should have been written"
+        finally:
+            transport.close()
+            proc.terminate()
+            proc.wait(timeout=5)
+
+    def test_idle_timeout_disabled_when_zero(self, client):
+        """idle_timeout_seconds=0 disables the watchdog (caller opts out)."""
+        sid = client.new_session("/tmp/work")
+        # Mock responds normally, so this should succeed regardless.
+        result = client.prompt(sid, "hello", idle_timeout_seconds=0)
+        assert result["stopReason"] == "end_turn"
 
 
 class TestTimeout:
