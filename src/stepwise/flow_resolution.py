@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
+from io import StringIO
 from pathlib import Path
+
+import yaml
+
+log = logging.getLogger(__name__)
 
 FLOW_DIR_MARKER = "FLOW.yaml"
 FLOW_FILE_SUFFIX = ".flow.yaml"
@@ -52,6 +58,44 @@ class KitInfo:
 
 class FlowResolutionError(Exception):
     """Could not resolve a flow name to a file."""
+
+
+def is_archived(flow_path: Path) -> bool:
+    """Check whether a flow YAML has ``archived: true`` at the top level."""
+    try:
+        raw = yaml.safe_load(flow_path.read_text()) or {}
+        return bool(raw.get("archived", False))
+    except Exception:
+        return False
+
+
+def set_flow_archived(flow_path: Path, archived: bool) -> bool:
+    """Set or remove the ``archived`` flag in a flow YAML (round-trip safe).
+
+    Returns True if the file was modified, False if already in desired state.
+    """
+    from ruamel.yaml import YAML
+
+    ryaml = YAML()
+    ryaml.preserve_quotes = True
+    data = ryaml.load(flow_path.read_text())
+
+    if archived:
+        if data.get("archived"):
+            return False
+        # Insert after 'name' if present, otherwise at position 1
+        data["archived"] = True
+    else:
+        if "archived" not in data:
+            return False
+        del data["archived"]
+
+    buf = StringIO()
+    ryaml.dump(data, buf)
+    tmp = flow_path.with_suffix(flow_path.suffix + ".tmp")
+    tmp.write_text(buf.getvalue())
+    tmp.rename(flow_path)
+    return True
 
 
 def resolve_flow(name_or_path: str, project_dir: Path | None = None) -> Path:
