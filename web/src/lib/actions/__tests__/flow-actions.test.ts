@@ -13,6 +13,7 @@ function makeFlow(overrides: Partial<LocalFlow> = {}): LocalFlow {
     is_directory: true,
     executor_types: ["script", "llm"],
     visibility: "interactive",
+    archived: false,
     ...overrides,
   };
 }
@@ -28,8 +29,23 @@ describe("flow actions", () => {
       "flow.copy",
       "flow.duplicate",
       "flow.export-yaml",
+      "flow.archive",
       "flow.delete",
     ]);
+  });
+
+  it("unarchive replaces archive when flow is archived", () => {
+    const actions = getActionsForEntity("flow", makeFlow({ archived: true }));
+    const ids = actions.map((a) => a.id);
+    expect(ids).toContain("flow.unarchive");
+    expect(ids).not.toContain("flow.archive");
+  });
+
+  it("archive is available for non-archived flow", () => {
+    const actions = getActionsForEntity("flow", makeFlow());
+    const ids = actions.map((a) => a.id);
+    expect(ids).toContain("flow.archive");
+    expect(ids).not.toContain("flow.unarchive");
   });
 
   it("copy sub-menu has path and name children", () => {

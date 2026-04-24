@@ -3,7 +3,11 @@ import { useCallback, useMemo } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { useStepwiseMutations } from "@/hooks/useStepwise";
-import type { useDeleteFlow } from "@/hooks/useEditor";
+import type {
+  useDeleteFlow,
+  useArchiveFlow,
+  useUnarchiveFlow,
+} from "@/hooks/useEditor";
 import type { ActionContext, SideEffects } from "@/lib/actions/types";
 import { copyToClipboard } from "@/hooks/useCopyFeedback";
 
@@ -11,7 +15,11 @@ const ActionCtx = React.createContext<ActionContext | null>(null);
 
 interface ActionContextProviderProps {
   sideEffects?: Partial<SideEffects>;
-  extraMutations?: { deleteFlow?: ReturnType<typeof useDeleteFlow> };
+  extraMutations?: {
+    deleteFlow?: ReturnType<typeof useDeleteFlow>;
+    archiveFlow?: ReturnType<typeof useArchiveFlow>;
+    unarchiveFlow?: ReturnType<typeof useUnarchiveFlow>;
+  };
   children: React.ReactNode;
 }
 

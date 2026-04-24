@@ -412,8 +412,11 @@ export function fetchFlowJobs(flowDir: string, limit: number = 10): Promise<Flow
 
 // ── Editor / Local Flows ─────────────────────────────────────────────
 
-export function fetchLocalFlows(): Promise<LocalFlow[]> {
-  return request<LocalFlow[]>("/local-flows");
+export function fetchLocalFlows(opts?: {
+  includeArchived?: boolean;
+}): Promise<LocalFlow[]> {
+  const qs = opts?.includeArchived ? "?include_archived=true" : "";
+  return request<LocalFlow[]>(`/local-flows${qs}`);
 }
 
 export function fetchKits(): Promise<Kit[]> {
@@ -461,6 +464,14 @@ export function deleteFlow(
   return request(`/flows/local/${path}`, {
     method: "DELETE",
   });
+}
+
+export function archiveFlow(path: string): Promise<{ status: string }> {
+  return request(`/flows/local/${path}/archive`, { method: "POST" });
+}
+
+export function unarchiveFlow(path: string): Promise<{ status: string }> {
+  return request(`/flows/local/${path}/unarchive`, { method: "POST" });
 }
 
 export function saveFlow(

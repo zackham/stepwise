@@ -3857,9 +3857,12 @@ def get_flow_jobs(flow_dir: str = Query(...), limit: int = Query(10, ge=1, le=50
 
 
 @app.get("/api/local-flows")
-def list_local_flows():
+def list_local_flows(
+    include_archived: bool = Query(False),
+    archived_only: bool = Query(False),
+):
     """List all flows discoverable in the project directory (local + registry)."""
-    from stepwise.flow_resolution import discover_flows, discover_registry_flows
+    from stepwise.flow_resolution import discover_flows, discover_registry_flows, is_archived
     from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
 
     flows = discover_flows(_project_dir)
@@ -3913,6 +3916,7 @@ def list_local_flows():
             "source": "local",
             "graph": graph,
             "kit_name": flow_info.kit_name,
+            "archived": is_archived(flow_info.path),
         })
 
     # Also include cached registry flows
@@ -3964,7 +3968,14 @@ def list_local_flows():
             "source": "registry",
             "registry_ref": reg_flow.ref,
             "graph": graph_reg,
+            "archived": False,
         })
+
+    # Apply archive filtering
+    if archived_only:
+        result = [r for r in result if r.get("archived")]
+    elif not include_archived:
+        result = [r for r in result if not r.get("archived")]
 
     return result
 
@@ -4482,6 +4493,47 @@ async def delete_local_flow(path: str):
         raise HTTPException(status_code=404, detail=f"Flow not found: {path}")
 
     return {"status": "deleted", "path": path}
+
+
+@app.post("/api/flows/local/{path:path}/archive")
+async def archive_local_flow(path: str):
+    """Set archived: true on a local flow."""
+    from stepwise.flow_resolution import set_flow_archived
+
+    abs_path = (_project_dir / path).resolve()
+    try:
+        abs_path.relative_to(_project_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path escapes project directory")
+
+    # Resolve to FLOW.yaml for directory flows
+    if abs_path.is_dir():
+        abs_path = abs_path / "FLOW.yaml"
+    if not abs_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Flow not found: {path}")
+
+    changed = set_flow_archived(abs_path, True)
+    return {"status": "archived" if changed else "already_archived"}
+
+
+@app.post("/api/flows/local/{path:path}/unarchive")
+async def unarchive_local_flow(path: str):
+    """Remove the archived flag from a local flow."""
+    from stepwise.flow_resolution import set_flow_archived
+
+    abs_path = (_project_dir / path).resolve()
+    try:
+        abs_path.relative_to(_project_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path escapes project directory")
+
+    if abs_path.is_dir():
+        abs_path = abs_path / "FLOW.yaml"
+    if not abs_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Flow not found: {path}")
+
+    changed = set_flow_archived(abs_path, False)
+    return {"status": "unarchived" if changed else "not_archived"}
 
 
 # ── Flow Config (must be BEFORE the catch-all GET route) ─────────────

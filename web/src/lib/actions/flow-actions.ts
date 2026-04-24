@@ -6,6 +6,8 @@ import {
   CopyPlus,
   Download,
   Trash2,
+  Archive,
+  ArchiveRestore,
 } from "lucide-react";
 import type { LocalFlow } from "@/lib/types";
 import type { ActionDefinition } from "./types";
@@ -100,6 +102,28 @@ export const FLOW_ACTIONS: ActionDefinition<LocalFlow>[] = [
       a.href = `/api/flows/local/${encodeURIComponent(flow.path)}/raw`;
       a.download = `${flow.name}.flow.yaml`;
       a.click();
+    },
+  },
+  {
+    id: "flow.archive",
+    label: "Archive Flow",
+    icon: Archive,
+    group: "organize",
+    groupOrder: 30,
+    isAvailable: (flow) => !flow.archived,
+    execute: (flow, ctx) => {
+      ctx.extraMutations?.archiveFlow?.mutate(flow.path);
+    },
+  },
+  {
+    id: "flow.unarchive",
+    label: "Unarchive Flow",
+    icon: ArchiveRestore,
+    group: "organize",
+    groupOrder: 30,
+    isAvailable: (flow) => !!flow.archived,
+    execute: (flow, ctx) => {
+      ctx.extraMutations?.unarchiveFlow?.mutate(flow.path);
     },
   },
 

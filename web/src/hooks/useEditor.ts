@@ -2,10 +2,11 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import * as api from "@/lib/api";
 
-export function useLocalFlows() {
+export function useLocalFlows(opts?: { includeArchived?: boolean }) {
+  const includeArchived = opts?.includeArchived ?? false;
   return useQuery({
-    queryKey: ["localFlows"],
-    queryFn: api.fetchLocalFlows,
+    queryKey: ["localFlows", { includeArchived }],
+    queryFn: () => api.fetchLocalFlows({ includeArchived }),
     staleTime: 10000,
   });
 }
@@ -59,6 +60,26 @@ export function useDeleteFlow() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (path: string) => api.deleteFlow(path),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["localFlows"] });
+    },
+  });
+}
+
+export function useArchiveFlow() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (path: string) => api.archiveFlow(path),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["localFlows"] });
+    },
+  });
+}
+
+export function useUnarchiveFlow() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (path: string) => api.unarchiveFlow(path),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["localFlows"] });
     },

@@ -3,6 +3,20 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.46.0] — 2026-04-24
+
+### Added
+- **Archive & delete flows — first-class flow lifecycle** — closes the "flows accumulate and clutter listings forever" gap. Archive is a cheap visibility toggle: the flow stays on disk and remains fully runnable (`stepwise run <archived-flow>` works unchanged), but disappears from every default listing surface so agents, the CLI, and the web UI stop seeing it. Delete is an actual hard remove of the flow file or directory.
+  - Three new CLI verbs under the `stepwise flow` namespace (singular, mirroring the existing `stepwise job <verb>` pattern): `stepwise flow archive <flow>`, `stepwise flow unarchive <flow>`, `stepwise flow delete <flow> [--yes]`. Archive/unarchive are idempotent — archiving an already-archived flow prints a notice and exits 0. Delete prompts for typed confirmation (user must type the exact flow name); mismatch aborts with exit 1 and no changes. `--yes`/`-y` bypasses the prompt for scripting. Running jobs are never affected by archive or delete — the flow file vanishing doesn't cancel in-flight work.
+  - Archive state is a single `archived: true` key at the top level of the flow YAML. Absence of the key = not archived. Edits use `ruamel.yaml` round-trip so comments, ordering, and formatting in the rest of the file are preserved byte-for-byte. All consumers go through one shared `is_archived(flow_path)` helper in `flow_resolution.py` — no scattered `yaml.safe_load(...).get("archived")` across surfaces.
+  - Listing surfaces hide archived flows by default and expose consistent flags across CLI + API:
+    - `stepwise flows` gains `--include-archived`/`-a` (include with `[archived]` tag) and `--archived-only` (mutually exclusive — argparse enforces it).
+    - `stepwise agent-help` and `stepwise catalog` drop archived flows from agent-facing discovery. `resolve_flow()` still resolves archived flows by name so `stepwise run` is unaffected.
+    - `GET /api/local-flows` adds `include_archived` and `archived_only` query params and stamps each flow with an `archived: bool` field.
+  - New API endpoints `POST /api/flows/local/{path}/archive` and `POST /api/flows/local/{path}/unarchive` (path-traversal guarded like the existing `patch_flow_metadata`), returning `{"status": "archived"|"already_archived"|"unarchived"|"not_archived"}`.
+  - Web Flows page gains an **Archived** toggle in the toolbar (hidden by default). Archived flows render with an `[archived]` tag and `opacity-60`. Two new right-click actions — **Archive Flow** and **Unarchive Flow** — appear in the "organize" group, swapping based on the flow's current state.
+  - Coverage: `tests/test_flow_archive.py` (26 tests) covers helpers (round-trip byte-identity), all three CLI commands (archive, unarchive, delete with directory/file/confirmation/mismatch/--yes paths), listing filter flags, and agent-help/catalog exclusion. `tests/test_editor_api.py::TestFlowArchiveAPI` (6 tests) covers the server API filter + archive/unarchive endpoints. `web/src/lib/actions/__tests__/flow-actions.test.ts` gains archive/unarchive availability tests. All 32 new Python tests + 5 web tests pass.
+
 ## [0.45.3] — 2026-04-24
 
 ### Fixed

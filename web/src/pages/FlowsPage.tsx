@@ -8,6 +8,8 @@ import {
   useLocalFlow,
   useKits,
   useDeleteFlow,
+  useArchiveFlow,
+  useUnarchiveFlow,
   useForkFlow,
   useRegistrySearch,
   useInstallFlow,
@@ -379,6 +381,7 @@ const FlowListRow = memo(function FlowListRow({ flow, statsMap, selected, active
           "w-full text-left px-4 sm:px-6 py-3 flex items-center gap-3 transition-none hover:bg-zinc-50/80 dark:hover:bg-zinc-800/40 group cursor-pointer",
           selected && "bg-blue-50/50 dark:bg-blue-950/20",
           active && !selected && "bg-blue-950/30 border-l-2 border-l-blue-500",
+          flow.archived && !selected && "opacity-60",
         )}
       >
         <button
@@ -416,6 +419,11 @@ const FlowListRow = memo(function FlowListRow({ flow, statsMap, selected, active
             {flow.visibility && flow.visibility !== "interactive" && (
               <span className="text-[9px] px-1 py-0.5 rounded bg-zinc-200 dark:bg-zinc-700 text-zinc-500 dark:text-zinc-400 uppercase tracking-wider shrink-0">
                 {flow.visibility}
+              </span>
+            )}
+            {flow.archived && (
+              <span className="text-[9px] px-1 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 uppercase tracking-wider shrink-0">
+                archived
               </span>
             )}
           </div>
@@ -470,6 +478,7 @@ export function FlowsPage() {
   const [filter, setFilter] = useState("");
   const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>("all");
   const [timeRange, setTimeRange] = useState<TimeRange>(undefined);
+  const [showArchived, setShowArchived] = useState(false);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [viewMode, setViewMode] = useState<"grid" | "list">("list");
 
@@ -497,10 +506,12 @@ export function FlowsPage() {
   }, []);
 
   // Data
-  const { data: flows = [] } = useLocalFlows();
+  const { data: flows = [] } = useLocalFlows({ includeArchived: showArchived });
   const { data: kits = [] } = useKits();
   const { data: flowStats = [] } = useFlowStats();
   const deleteFlowMutation = useDeleteFlow();
+  const archiveFlowMutation = useArchiveFlow();
+  const unarchiveFlowMutation = useUnarchiveFlow();
   const forkFlowMutation = useForkFlow();
   const mutations = useStepwiseMutations();
 
@@ -616,6 +627,10 @@ export function FlowsPage() {
       result = result.filter((f) => (f.visibility ?? "interactive") === visibilityFilter);
     }
 
+    if (!showArchived) {
+      result = result.filter((f) => !f.archived);
+    }
+
     result = filterByTimeRange(result, timeRange);
 
     // Sort by header column
@@ -654,7 +669,7 @@ export function FlowsPage() {
     });
 
     return result;
-  }, [flows, filter, sortCol, sortAsc, visibilityFilter, timeRange, statsMap, activeKit]);
+  }, [flows, filter, sortCol, sortAsc, visibilityFilter, timeRange, statsMap, activeKit, showArchived]);
 
   // Kits visible at top level (filtered by search)
   const visibleKits = useMemo(() => {
@@ -941,6 +956,18 @@ export function FlowsPage() {
                   placeholder="All time"
                   searchPlaceholder="Time range..."
                 />
+                <button
+                  onClick={() => setShowArchived((v) => !v)}
+                  title={showArchived ? "Hide archived flows" : "Show archived flows"}
+                  className={cn(
+                    "px-2.5 py-1 text-xs rounded-md border border-border transition-colors whitespace-nowrap",
+                    showArchived
+                      ? "bg-white dark:bg-zinc-800 text-foreground shadow-sm"
+                      : "text-zinc-500 hover:text-foreground"
+                  )}
+                >
+                  Archived
+                </button>
                 <span className="text-xs text-zinc-500 whitespace-nowrap">{filtered.length}{activeKit ? "" : ` + ${visibleKits.length} kit${visibleKits.length !== 1 ? "s" : ""}`}</span>
               </>
             ) : (
@@ -1007,7 +1034,11 @@ export function FlowsPage() {
                   }
                 },
               }}
-              extraMutations={{ deleteFlow: deleteFlowMutation }}
+              extraMutations={{
+                deleteFlow: deleteFlowMutation,
+                archiveFlow: archiveFlowMutation,
+                unarchiveFlow: unarchiveFlowMutation,
+              }}
             >
               <div className="flex-1 flex flex-col overflow-hidden">
                 <div className="flex-1 overflow-y-auto">

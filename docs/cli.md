@@ -12,6 +12,7 @@ See [Quickstart](quickstart.md) for installation and first-run instructions. See
 | [Jobs](#job-commands) | `jobs`, `status`, `output`, `tail`, `logs`, `wait`, `cancel`, `fulfill`, `list` |
 | [Job Lifecycle](#job-lifecycle-commands) | `archive`, `unarchive`, `rm` |
 | [Job Staging](#job-staging-commands) | `job create`, `job show`, `job run`, `job dep`, `job approve`, `job cancel`, `job rm` |
+| [Flow Lifecycle](#flow-lifecycle-commands) | `flow archive`, `flow unarchive`, `flow delete` |
 | [Scheduling](#scheduling-commands) | `schedule create`, `schedule list`, `schedule describe`, `schedule pause`, `schedule resume`, `schedule delete`, `schedule update`, `schedule trigger`, `schedule history` |
 | [Server](#server-commands) | `server start`, `server stop`, `server restart`, `server status` |
 | [Registry](#registry-commands) | `share`, `get`, `search`, `info`, `login`, `logout` |
@@ -542,6 +543,60 @@ stepwise rm --archived --force                     # skip confirmation
 | `--archived` | Delete all archived jobs |
 | `--force, -f` | Skip confirmation for bulk deletes |
 | `--output {table,json}` | Output format (default: table) |
+
+---
+
+## Flow Lifecycle Commands
+
+Archive, unarchive, and delete flow definitions on disk. Archiving is a visibility-only operation: the flow stays on disk and remains fully runnable (`stepwise run <archived-flow>` works unchanged), but the flow is hidden from default listings (`stepwise flows`, `stepwise agent-help`, `stepwise catalog`, and the web Flows page). Deleting removes the flow file or directory from disk; it does not touch the job database, so historical job records referring to the flow name are preserved.
+
+### `stepwise flow archive`
+
+Set `archived: true` at the top level of a flow's YAML. Idempotent — archiving an already-archived flow exits 0 with a "already archived" notice.
+
+**Usage:**
+```bash
+stepwise flow archive <flow-name-or-path>
+```
+
+**Examples:**
+```bash
+stepwise flow archive my-flow               # archive by name
+stepwise flow archive flows/my-flow         # archive by path
+stepwise flows                              # archived flow no longer listed
+stepwise flows --include-archived           # shows it, tagged [archived]
+stepwise flows --archived-only              # only archived flows
+stepwise run my-flow                        # still works — archive is visibility only
+```
+
+### `stepwise flow unarchive`
+
+Remove the `archived` key from a flow's YAML. Idempotent on non-archived flows.
+
+**Usage:**
+```bash
+stepwise flow unarchive <flow-name-or-path>
+```
+
+### `stepwise flow delete`
+
+Permanently remove a flow file (single-file flow) or flow directory (directory flow) from disk. Prompts for confirmation by requiring the user to type the exact flow name. Mismatch aborts with exit 1 and no changes. Running jobs are unaffected.
+
+**Usage:**
+```bash
+stepwise flow delete <flow-name-or-path> [--yes]
+```
+
+**Flags:**
+| Flag | Description |
+|------|-------------|
+| `--yes, -y` | Skip typed-confirmation prompt (for scripting) |
+
+**Examples:**
+```bash
+stepwise flow delete experiment             # prompts: "Type 'experiment' to confirm"
+stepwise flow delete experiment --yes       # no prompt, delete immediately
+```
 
 ---
 
@@ -1157,11 +1212,20 @@ stepwise catalog -o SKILL.md                 # write to file
 
 ### `stepwise flows`
 
-List all flows discovered in the current project. Scans the project root, `flows/`, and `.stepwise/flows/` for `.flow.yaml` files.
+List all flows discovered in the current project. Scans the project root, `flows/`, and `.stepwise/flows/` for `.flow.yaml` files. Archived flows are hidden by default — see [Flow Lifecycle Commands](#flow-lifecycle-commands) for `stepwise flow archive/unarchive/delete`.
 
 ```bash
 stepwise flows
+stepwise flows --include-archived      # include archived flows, tagged [archived]
+stepwise flows --archived-only         # only archived flows
+stepwise flows -a                      # short form of --include-archived
 ```
+
+| Flag | Description |
+|------|-------------|
+| `--visibility {interactive,background,internal,all}` | Filter by visibility category (default: hide internal) |
+| `--include-archived, -a` | Include archived flows in output |
+| `--archived-only` | Show only archived flows (mutually exclusive with `--include-archived`) |
 
 ---
 

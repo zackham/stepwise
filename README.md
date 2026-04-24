@@ -144,6 +144,7 @@ stepwise schedule list                         Show all schedules
 stepwise jobs                                  List all jobs
 stepwise status <job-id>                       Step-by-step detail
 stepwise fulfill <run-id> '{...}'              Fulfill a suspended external step
+stepwise flow archive|unarchive|delete <flow>  Flow lifecycle (hide or remove)
 stepwise agent-help                            Generate agent tool docs
 stepwise search <query>                        Find flows in the registry
 stepwise update                                Upgrade to latest

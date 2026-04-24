@@ -510,3 +510,74 @@ class TestKitEndpoints:
         solo_flows = [f for f in flows if f["name"] == "solo"]
         assert len(solo_flows) == 1
         assert solo_flows[0].get("kit_name") is None
+
+
+# ── Flow Archive API ────────────────────────────────────────────────────
+
+
+class TestFlowArchiveAPI:
+
+    @pytest.fixture
+    def archive_project(self, tmp_path):
+        """Project with an active and an archived flow."""
+        (tmp_path / "active.flow.yaml").write_text(SIMPLE_FLOW)
+        (tmp_path / "old.flow.yaml").write_text(
+            "name: old\nauthor: test\narchived: true\nsteps:\n  s:\n    run: echo '{}'\n    outputs: [result]\n"
+        )
+        return tmp_path
+
+    @pytest.fixture
+    def archive_client(self, archive_project):
+        old_env = os.environ.copy()
+        os.environ["STEPWISE_PROJECT_DIR"] = str(archive_project)
+        os.environ["STEPWISE_DB"] = ":memory:"
+        os.environ["STEPWISE_TEMPLATES"] = str(archive_project / "_t")
+        os.environ["STEPWISE_JOBS_DIR"] = str(archive_project / "_j")
+        with TestClient(app, raise_server_exceptions=False) as c:
+            yield c
+        os.environ.clear()
+        os.environ.update(old_env)
+
+    def test_list_excludes_archived_by_default(self, archive_client):
+        resp = archive_client.get("/api/local-flows")
+        assert resp.status_code == 200
+        names = {f["name"] for f in resp.json()}
+        assert "old" not in names
+
+    def test_list_includes_archived_with_param(self, archive_client):
+        resp = archive_client.get("/api/local-flows?include_archived=true")
+        assert resp.status_code == 200
+        data = resp.json()
+        names = {f["name"] for f in data}
+        assert "old" in names
+        old = [f for f in data if f["name"] == "old"][0]
+        assert old["archived"] is True
+
+    def test_list_archived_only(self, archive_client):
+        resp = archive_client.get("/api/local-flows?archived_only=true")
+        assert resp.status_code == 200
+        data = resp.json()
+        names = {f["name"] for f in data}
+        assert "old" in names
+        assert "active" not in names
+        # Also check for 'simple' — all non-archived should be excluded
+        for f in data:
+            assert f["archived"] is True
+
+    def test_archive_endpoint(self, archive_client, archive_project):
+        resp = archive_client.post("/api/flows/local/active.flow.yaml/archive")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "archived"
+        content = (archive_project / "active.flow.yaml").read_text()
+        assert "archived: true" in content
+
+    def test_unarchive_endpoint(self, archive_client, archive_project):
+        resp = archive_client.post("/api/flows/local/old.flow.yaml/unarchive")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "unarchived"
+        content = (archive_project / "old.flow.yaml").read_text()
+        assert "archived" not in content
+
+    def test_archive_nonexistent(self, archive_client):
+        resp = archive_client.post("/api/flows/local/nope.flow.yaml/archive")
+        assert resp.status_code == 404

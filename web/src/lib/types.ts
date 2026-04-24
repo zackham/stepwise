@@ -416,6 +416,7 @@ export interface LocalFlow {
   registry_ref?: string;
   graph?: FlowGraph | null;
   kit_name?: string | null;
+  archived?: boolean;
 }
 
 export interface FlowGraphNode {

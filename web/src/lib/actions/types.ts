@@ -1,6 +1,10 @@
 import type { LucideIcon } from "lucide-react";
 import type { useStepwiseMutations } from "@/hooks/useStepwise";
-import type { useDeleteFlow } from "@/hooks/useEditor";
+import type {
+  useDeleteFlow,
+  useArchiveFlow,
+  useUnarchiveFlow,
+} from "@/hooks/useEditor";
 import type { Job, LocalFlow } from "@/lib/types";
 
 export type EntityType = "job" | "step" | "flow" | "canvas";
@@ -30,7 +34,11 @@ export interface ActionContext {
   navigate: (opts: { to: string; search?: Record<string, unknown>; replace?: boolean }) => void;
   clipboard: (text: string, label?: string) => void;
   sideEffects: SideEffects;
-  extraMutations?: { deleteFlow?: ReturnType<typeof useDeleteFlow> };
+  extraMutations?: {
+    deleteFlow?: ReturnType<typeof useDeleteFlow>;
+    archiveFlow?: ReturnType<typeof useArchiveFlow>;
+    unarchiveFlow?: ReturnType<typeof useUnarchiveFlow>;
+  };
 }
 
 export interface SideEffects {

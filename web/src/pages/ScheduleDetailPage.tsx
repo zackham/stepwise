@@ -457,7 +457,7 @@ function EditScheduleDialog({
 
   const { data: flows = [] } = useQuery({
     queryKey: ["localFlows"],
-    queryFn: fetchLocalFlows,
+    queryFn: () => fetchLocalFlows(),
   });
 
   useEffect(() => {
