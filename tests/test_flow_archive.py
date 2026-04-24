@@ -223,3 +223,38 @@ class TestFlowsListing:
         with pytest.raises(SystemExit) as exc_info:
             main(["flows", "--include-archived", "--archived-only"])
         assert exc_info.value.code == 2
+
+
+class TestAgentHelp:
+    """Tests for agent help and resolve_flow with archived flows."""
+
+    def test_agent_help_excludes_archived(self, tmp_path):
+        from stepwise.agent_help import generate_agent_help
+
+        full_flow = "name: active-flow\nauthor: test\nsteps:\n  s:\n    run: echo '{}'\n    outputs: [result]\n"
+        archived_full = "name: archived-flow\nauthor: test\narchived: true\nsteps:\n  s:\n    run: echo '{}'\n    outputs: [result]\n"
+        project = _make_project(tmp_path)
+        _make_flow_dir(project, "active-flow", full_flow)
+        _make_flow_dir(project, "archived-flow", archived_full)
+        output = generate_agent_help(project)
+        assert "active-flow" in output
+        assert "archived-flow" not in output
+
+    def test_agent_help_includes_non_archived(self, tmp_path):
+        from stepwise.agent_help import generate_agent_help
+
+        full_flow = "name: my-flow\nauthor: test\nsteps:\n  s:\n    run: echo '{}'\n    outputs: [result]\n"
+        project = _make_project(tmp_path)
+        _make_flow_dir(project, "my-flow", full_flow)
+        output = generate_agent_help(project)
+        assert "my-flow" in output
+
+    def test_resolve_flow_finds_archived(self, tmp_path, monkeypatch):
+        from stepwise.flow_resolution import resolve_flow
+
+        project = _make_project(tmp_path)
+        _make_flow_dir(project, "old-flow", ARCHIVED_FLOW.replace("hidden", "old-flow"))
+        monkeypatch.chdir(project)
+        result = resolve_flow("old-flow", project)
+        assert result.exists()
+        assert "FLOW.yaml" in str(result)

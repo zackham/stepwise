@@ -10,7 +10,7 @@ import json
 import re
 from pathlib import Path
 
-from stepwise.flow_resolution import FlowInfo, KitInfo, RegistryFlowInfo
+from stepwise.flow_resolution import FlowInfo, KitInfo, RegistryFlowInfo, is_archived
 from stepwise.flow_resolution import discover_flows as _discover_flows
 from stepwise.flow_resolution import discover_kits as _discover_kits
 from stepwise.flow_resolution import discover_registry_flows as _discover_registry_flows
@@ -36,6 +36,9 @@ def _build_flow_entries(
         else:
             flow_path = item
             flow_name = None
+
+        if is_archived(flow_path):
+            continue
 
         try:
             wf = load_workflow_yaml(str(flow_path))

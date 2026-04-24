@@ -1421,7 +1421,7 @@ def cmd_new(args: argparse.Namespace) -> int:
 
 def cmd_catalog(args: argparse.Namespace) -> int:
     """Generate a kit/flow catalog section for SKILL.md."""
-    from stepwise.flow_resolution import discover_flows, discover_kits
+    from stepwise.flow_resolution import discover_flows, discover_kits, is_archived
     from stepwise.yaml_loader import load_kit_yaml, KitLoadError
 
     project_dir = Path(args.project_dir).resolve() if args.project_dir else Path.cwd().resolve()
@@ -1443,9 +1443,11 @@ def cmd_catalog(args: argparse.Namespace) -> int:
         kit_flow_set.update(names)
     standalone = [f for f in flows if f.name not in kit_flow_set and not f.kit_name]
 
-    # Filter to interactive visibility
+    # Filter to interactive visibility, excluding archived
     standalone_interactive = []
     for f in standalone:
+        if is_archived(f.path):
+            continue
         try:
             from stepwise.yaml_loader import load_workflow_yaml
             wf = load_workflow_yaml(str(f.path))
