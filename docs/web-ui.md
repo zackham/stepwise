@@ -172,6 +172,8 @@ The flows page (`/flows`) lists all flow files discovered in your project — bo
 
 Click a flow to see its structure, or open it in the editor for modification.
 
+**Archived flows** are hidden by default. Click the `Archived` toggle in the toolbar to reveal them — they render dimmed with an `[archived]` tag. Right-click a flow for `Archive Flow` / `Unarchive Flow` actions; archived flows remain runnable from the CLI (`stepwise run`) and via this page. See [Flow Lifecycle Commands](cli.md#flow-lifecycle-commands) for the equivalent CLI verbs.
+
 ## Settings
 
 The settings page (`/settings`) manages runtime configuration:

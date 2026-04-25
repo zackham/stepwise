@@ -41,6 +41,8 @@ stepwise validate my-flow.flow.yaml
 
 This catches structural errors, missing references, unbounded loops, and more — without executing anything.
 
+**Archiving:** Set `archived: true` as a top-level key to hide a flow from default listings (`stepwise flows`, `stepwise agent-help`, the web Flows page) without removing it. Archived flows remain runnable — `stepwise run <archived-flow>` works unchanged. Toggle via `stepwise flow archive` / `stepwise flow unarchive`, or hard-remove with `stepwise flow delete`. See [Flow Lifecycle Commands](cli.md#flow-lifecycle-commands).
+
 ## Script steps
 
 The simplest step type. Runs a shell command and parses JSON from stdout.
