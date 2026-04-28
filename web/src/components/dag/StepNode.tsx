@@ -649,22 +649,42 @@ export function StepNode({
         ? STEP_DISPLAY_COLORS[status]
         : STEP_STATUS_COLORS[status];
 
-  // Temporal-ordering annotation: did this run start within 250ms of a
-  // sibling run? Exposes parallel starts that the static DAG hides —
-  // see the gumball text-quality-check race (issue surfaced in cycle 91
-  // stepwise review). We keep the threshold small so only genuine
-  // scheduler-level ties are flagged, not user-triggered concurrency.
-  const PARALLEL_WINDOW_MS = 250;
-  const startedAt = latestRun?.started_at
-    ? new Date(latestRun.started_at).getTime()
-    : null;
+  // Temporal-ordering annotation: did this run's execution interval
+  // actually overlap with a sibling's? Exposes scheduler-level races
+  // that the static DAG hides — see the gumball text-quality-check
+  // race (issue surfaced in cycle 91 stepwise review). We require
+  // genuine interval overlap (not just close start times) so a fast
+  // sequential chain — e.g. A finishes in 70ms and B starts
+  // immediately — is correctly NOT flagged as parallel.
+  const PARALLEL_MIN_OVERLAP_MS = 100;
+  const runInterval = (run: StepRun | null | undefined): [number, number] | null => {
+    if (!run?.started_at) return null;
+    const start = new Date(run.started_at).getTime();
+    let end: number;
+    if (run.completed_at) {
+      end = new Date(run.completed_at).getTime();
+    } else if (
+      run.status === "running" ||
+      run.status === "suspended" ||
+      run.status === "delegated"
+    ) {
+      end = Date.now();
+    } else {
+      end = start;
+    }
+    return [start, end];
+  };
+  const selfInterval = runInterval(latestRun);
   const parallelSiblings: string[] = [];
-  if (startedAt != null && latestRuns) {
+  if (selfInterval && latestRuns) {
+    const [selfStart, selfEnd] = selfInterval;
     for (const [otherName, otherRun] of Object.entries(latestRuns)) {
       if (otherName === stepDef.name) continue;
-      if (!otherRun?.started_at) continue;
-      const otherStarted = new Date(otherRun.started_at).getTime();
-      if (Math.abs(otherStarted - startedAt) <= PARALLEL_WINDOW_MS) {
+      const otherInterval = runInterval(otherRun);
+      if (!otherInterval) continue;
+      const [oStart, oEnd] = otherInterval;
+      const overlap = Math.min(selfEnd, oEnd) - Math.max(selfStart, oStart);
+      if (overlap >= PARALLEL_MIN_OVERLAP_MS) {
         parallelSiblings.push(otherName);
       }
     }

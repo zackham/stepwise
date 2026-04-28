@@ -366,28 +366,34 @@ describe("StepNode", () => {
     expect(screen.getByText("completed")).toBeInTheDocument();
   });
 
-  it("shows parallel-with annotation when a sibling started within the window", () => {
-    const ts = "2026-04-23T19:35:03.790Z";
-    const sibTs = "2026-04-23T19:35:03.795Z"; // 5ms later — well under 250ms
+  it("shows parallel-with annotation when sibling intervals genuinely overlap", () => {
+    // Both steps ran from ~T to ~T+5s — full interval overlap.
+    const startA = "2026-04-23T19:35:03.790Z";
+    const endA = "2026-04-23T19:35:08.790Z";
+    const startB = "2026-04-23T19:35:03.795Z"; // 5ms after A
+    const endB = "2026-04-23T19:35:08.500Z";
     render(
       <StepNode
         stepDef={makeStepDef({ name: "text-quality-check" })}
         latestRun={makeRun({
           step_name: "text-quality-check",
           status: "completed",
-          started_at: ts,
+          started_at: startA,
+          completed_at: endA,
         })}
         latestRuns={{
           "text-quality-check": makeRun({
             step_name: "text-quality-check",
             status: "completed",
-            started_at: ts,
+            started_at: startA,
+            completed_at: endA,
           }),
           "initial-check": makeRun({
             id: "run-sibling",
             step_name: "initial-check",
             status: "completed",
-            started_at: sibTs,
+            started_at: startB,
+            completed_at: endB,
           }),
         }}
         {...defaultProps}
@@ -397,7 +403,45 @@ describe("StepNode", () => {
     expect(screen.getByText(/initial-check/)).toBeInTheDocument();
   });
 
-  it("does NOT show parallel annotation when siblings started far apart", () => {
+  it("does NOT show parallel annotation when siblings ran sequentially", () => {
+    // Linear chain: A finishes in 70ms, B starts immediately and runs
+    // for 18s. Their start timestamps are within 250ms but their
+    // execution intervals do not overlap — must NOT be flagged.
+    const startA = "2026-04-23T19:30:00.000Z";
+    const endA = "2026-04-23T19:30:00.070Z";
+    const startB = "2026-04-23T19:30:00.075Z"; // 5ms after A finished
+    const endB = "2026-04-23T19:30:18.275Z";
+    render(
+      <StepNode
+        stepDef={makeStepDef({ name: "load-prompt" })}
+        latestRun={makeRun({
+          step_name: "load-prompt",
+          status: "completed",
+          started_at: startA,
+          completed_at: endA,
+        })}
+        latestRuns={{
+          "load-prompt": makeRun({
+            step_name: "load-prompt",
+            status: "completed",
+            started_at: startA,
+            completed_at: endA,
+          }),
+          generate: makeRun({
+            id: "run-gen",
+            step_name: "generate",
+            status: "completed",
+            started_at: startB,
+            completed_at: endB,
+          }),
+        }}
+        {...defaultProps}
+      />
+    );
+    expect(screen.queryByText(/parallel with/i)).toBeNull();
+  });
+
+  it("does NOT show parallel annotation when siblings ran far apart", () => {
     render(
       <StepNode
         stepDef={makeStepDef({ name: "a" })}
@@ -405,14 +449,21 @@ describe("StepNode", () => {
           step_name: "a",
           status: "completed",
           started_at: "2026-04-23T19:30:00.000Z",
+          completed_at: "2026-04-23T19:30:01.000Z",
         })}
         latestRuns={{
-          a: makeRun({ step_name: "a", status: "completed", started_at: "2026-04-23T19:30:00.000Z" }),
+          a: makeRun({
+            step_name: "a",
+            status: "completed",
+            started_at: "2026-04-23T19:30:00.000Z",
+            completed_at: "2026-04-23T19:30:01.000Z",
+          }),
           b: makeRun({
             id: "run-b",
             step_name: "b",
             status: "completed",
             started_at: "2026-04-23T19:40:00.000Z", // 10 min later
+            completed_at: "2026-04-23T19:40:01.000Z",
           }),
         }}
         {...defaultProps}
