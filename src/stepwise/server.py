@@ -43,7 +43,7 @@ from stepwise.models import (
     OverlapPolicy,
     RecoveryPolicy,
 )
-from stepwise.store import SQLiteStore
+from stepwise.store import SQLiteStore, apply_pragmas
 from stepwise.events import JOB_AWAITING_APPROVAL, JOB_PAUSED, EXIT_RESOLVED
 from stepwise.hooks import build_event_envelope
 
@@ -113,13 +113,7 @@ class _ThreadLocalConnProxy:
         else:
             conn = sqlite3.connect(self._connect_uri, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        # WAL isn't meaningful for shared-cache memory DBs — skip it
-        # there to avoid the "cannot change into wal mode from within
-        # a transaction" gotcha on in-memory stores.
-        if not self._use_uri:
-            conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA busy_timeout=5000")
+        apply_pragmas(conn, skip_wal=self._use_uri)
         with self._registry_lock:
             self._all_conns.append(conn)
         return conn

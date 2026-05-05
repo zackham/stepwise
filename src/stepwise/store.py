@@ -54,6 +54,61 @@ def _safe_job_status(raw: str | None) -> JobStatus:
         return JobStatus.FAILED
 
 
+def apply_pragmas(conn: sqlite3.Connection, *, skip_wal: bool = False) -> None:
+    """Apply Stepwise's standard SQLite PRAGMAs to ``conn``.
+
+    Centralizes pragma setup so the bare :class:`SQLiteStore` (used by
+    tests and short-lived CLI commands) and the per-thread proxy
+    connections in :class:`stepwise.server._ThreadLocalConnProxy` (used
+    by the long-running daemon) cannot drift apart.
+
+    Parameters
+    ----------
+    conn:
+        A freshly opened :class:`sqlite3.Connection`.
+    skip_wal:
+        Skip ``journal_mode=WAL``. Set this for shared-cache in-memory
+        databases — switching one of those into WAL raises
+        "cannot change into wal mode from within a transaction" because
+        the implicit auto-transaction is already open.
+
+    Pragma rationale
+    ----------------
+    * ``journal_mode=WAL`` — readers don't block writers; the per-thread
+      proxy gets cheap MVCC snapshots.
+    * ``foreign_keys=ON`` — enforce FK constraints (off by default in
+      sqlite3 for historical reasons).
+    * ``busy_timeout=5000`` — let writers wait up to 5 s for the lock
+      before raising ``database is locked``.
+    * ``synchronous=NORMAL`` — the default under WAL, but stated
+      explicitly so future restructuring doesn't accidentally drop us
+      to OFF (data loss on crash) or hike to FULL (heavy fsync cost
+      with no durability gain under WAL).
+    * ``wal_autocheckpoint=200`` — checkpoint roughly every ~800 KB
+      of WAL (page size 4 KB × 200). The SQLite default of 1000 pages
+      lets the WAL grow to ~4 MB before checkpointing, which on btrfs
+      with CoW + hourly snapshots fragments the database file
+      aggressively. Tighter checkpoints keep the WAL small at the cost
+      of slightly more frequent (but very fast) checkpoint operations.
+      Diagnosed in the May 2026 corruption recovery (CHANGELOG 0.46.1).
+    * ``journal_size_limit=16777216`` — hard cap WAL file at 16 MB.
+      Without this, a large transaction or stalled checkpointer can
+      leave a multi-hundred-MB WAL behind that subsequent reads must
+      walk on every open.
+    * ``temp_store=MEMORY`` — keep temporary tables, indexes, and sort
+      scratch space in RAM. Avoids spilling temp files into the project
+      directory under load.
+    """
+    if not skip_wal:
+        conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA wal_autocheckpoint=200")
+    conn.execute("PRAGMA journal_size_limit=16777216")
+    conn.execute("PRAGMA temp_store=MEMORY")
+
+
 class SQLiteStore:
     """SQLite-backed persistence for Stepwise."""
 
@@ -61,9 +116,7 @@ class SQLiteStore:
         self._db_path = db_path
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA foreign_keys=ON")
-        self._conn.execute("PRAGMA busy_timeout=5000")
+        apply_pragmas(self._conn)
         self._create_tables()
 
     def _create_tables(self) -> None:

@@ -3,6 +3,14 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.46.1] — 2026-05-05
+
+### Fixed
+- **SQLite corruption hardening — `database disk image is malformed` recovery loop on btrfs** — diagnosed after three corruption incidents in ten days against a stepwise.db hosted on a btrfs subvolume with copy-on-write enabled and hourly `snapper-timeline` snapshots. Each incident followed the same pattern: heavy continuous writes → growing WAL (observed at 4.1 MB before recovery) → transient kernel `disk I/O error` → `database disk image is malformed` on the next read → server lifespan startup crashes in `_cleanup_zombie_jobs` and the daemon can't boot. Fix is application-side hardening to keep the WAL small and the file footprint stable; the deployment-side fix is `chattr +C` on the parent directory and excluding the data directory from snapshots.
+  - New `stepwise.store.apply_pragmas(conn, *, skip_wal=False)` helper centralizes pragma setup so the bare `SQLiteStore` (CLI/tests) and the per-thread proxy connections in `server._ThreadLocalConnProxy` (long-running daemon) cannot drift apart. Both code paths now go through the same helper.
+  - Adds four pragmas alongside the existing `journal_mode=WAL` / `foreign_keys=ON` / `busy_timeout=5000`: `synchronous=NORMAL` (explicit — was implicit under WAL, now documented to prevent future regression to FULL or OFF), `wal_autocheckpoint=200` (~800 KB checkpoint cadence vs. the 4 MB SQLite default — keeps the WAL small under sustained write load), `journal_size_limit=16777216` (hard cap WAL at 16 MB — prevents multi-hundred-MB WAL files after a stalled checkpointer), and `temp_store=MEMORY` (keeps temp tables/sort scratch in RAM, avoids spillover writes to the project directory).
+  - Pragma rationale lives in the helper docstring so the values can be revisited as deployment shapes change. No schema or API change; existing databases inherit the new pragmas on next connection.
+
 ## [0.46.0] — 2026-04-24
 
 ### Added
