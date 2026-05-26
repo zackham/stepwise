@@ -15,12 +15,16 @@ from stepwise.config import load_config
 from stepwise.engine import AsyncEngine
 from stepwise.models import JobStatus
 from stepwise.registry_factory import create_default_registry
-from stepwise.store import SQLiteStore
+from stepwise.store import DatabaseIntegrityError, SQLiteStore
 
 
 async def _run(args) -> int:
     config = load_config()
-    store = SQLiteStore(args.db)
+    try:
+        store = SQLiteStore(args.db)
+    except DatabaseIntegrityError as exc:
+        logging.error("%s", exc)
+        return 1
     registry = create_default_registry(config)
     from pathlib import Path
     project_dir = Path(args.project_dir) if args.project_dir else None

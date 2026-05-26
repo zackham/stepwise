@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import signal
+import sqlite3
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone as _tz
 from logging.handlers import RotatingFileHandler
@@ -43,7 +44,12 @@ from stepwise.models import (
     OverlapPolicy,
     RecoveryPolicy,
 )
-from stepwise.store import SQLiteStore, apply_pragmas
+from stepwise.store import (
+    DatabaseIntegrityError,
+    SQLiteStore,
+    apply_pragmas,
+    check_database_integrity,
+)
 from stepwise.events import JOB_AWAITING_APPROVAL, JOB_PAUSED, EXIT_RESOLVED
 from stepwise.hooks import build_event_envelope
 
@@ -176,6 +182,7 @@ class ThreadSafeStore(SQLiteStore):
 
     def __init__(self, db_path: str = ":memory:") -> None:
         self._db_path = db_path
+        check_database_integrity(db_path)
         self._conn = _ThreadLocalConnProxy(db_path)
         self._create_tables()
 
@@ -1070,7 +1077,14 @@ async def lifespan(app: FastAPI):
         logger.error("Cannot start: %s", e)
         raise SystemExit(1) from e
 
-    store = ThreadSafeStore(db_path)
+    try:
+        store = ThreadSafeStore(db_path)
+    except DatabaseIntegrityError:
+        logger.critical("Cannot start Stepwise: database integrity check failed", exc_info=True)
+        from stepwise.server_detect import remove_pidfile
+
+        remove_pidfile(dot_dir)
+        raise
 
     from stepwise.registry_factory import create_default_registry
     config = load_config(_project_dir)
@@ -2676,10 +2690,23 @@ def health_check():
         ver = version("stepwise-run")
     except Exception:
         ver = "unknown"
+    try:
+        active_jobs = len(engine.store.active_jobs())
+    except (DatabaseIntegrityError, sqlite3.DatabaseError) as exc:
+        logger.error("Health check failed: database error", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "error",
+                "database": "unhealthy",
+                "error": str(exc),
+                "project_path": str(_project_dir) if _project_dir else None,
+            },
+        ) from exc
     return {
         "status": "ok",
         "version": ver,
-        "active_jobs": len(engine.store.active_jobs()),
+        "active_jobs": active_jobs,
         "project_path": str(_project_dir) if _project_dir else None,
     }
 

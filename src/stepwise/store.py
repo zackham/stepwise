@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import os
 import json
 import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import logging
@@ -30,6 +32,94 @@ from stepwise.models import (
 )
 
 logger = logging.getLogger("stepwise.store")
+
+
+class DatabaseIntegrityError(RuntimeError):
+    """Raised when a Stepwise SQLite database fails an integrity check."""
+
+    def __init__(self, db_path: str | os.PathLike[str], detail: str, *, check: str) -> None:
+        self.db_path = os.fspath(db_path)
+        self.detail = detail
+        self.check = check
+        super().__init__(
+            f"Stepwise database integrity check failed for {self.db_path} "
+            f"({check}): {detail}. Refusing to open the store."
+        )
+
+
+def _is_memory_db(db_path: str) -> bool:
+    return db_path == ":memory:" or (
+        db_path.startswith("file:") and "mode=memory" in db_path
+    )
+
+
+def _integrity_checks_disabled() -> bool:
+    raw = os.environ.get("STEPWISE_SKIP_DB_INTEGRITY_CHECK", "")
+    return raw.lower() in {"1", "true", "yes", "on"}
+
+
+def _summarize_integrity_findings(rows: list[str], *, limit: int = 20) -> str:
+    findings = [
+        line
+        for row in rows
+        for line in str(row).splitlines()
+        if line.strip()
+    ]
+    if not findings:
+        return "unknown integrity failure"
+    preview = "\n".join(findings[:limit])
+    if len(findings) > limit:
+        preview += f"\n... ({len(findings)} total findings)"
+    return preview
+
+
+def check_database_integrity(
+    db_path: str | os.PathLike[str],
+    *,
+    check: str = "quick_check",
+) -> list[str]:
+    """Run a read-only SQLite integrity check before opening a project DB.
+
+    Existing corrupt databases can still be opened by ``sqlite3.connect()``
+    long enough to create or mutate WAL state. Stepwise refuses the store before
+    applying write-capable pragmas so stale local runners do not keep touching a
+    known-bad database after the server has fallen over.
+    """
+    if check not in {"quick_check", "integrity_check"}:
+        raise ValueError(f"unsupported SQLite integrity check: {check}")
+
+    path_str = os.fspath(db_path)
+    if _integrity_checks_disabled() or _is_memory_db(path_str):
+        return ["ok"]
+
+    path = Path(path_str)
+    try:
+        if not path.exists() or path.stat().st_size == 0:
+            return ["ok"]
+    except OSError as exc:
+        raise DatabaseIntegrityError(path_str, f"{type(exc).__name__}: {exc}", check=check) from exc
+
+    conn: sqlite3.Connection | None = None
+    try:
+        uri = path.resolve().as_uri() + "?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
+        conn.execute("PRAGMA query_only=ON")
+        conn.execute("PRAGMA busy_timeout=5000")
+        rows = [str(row[0]) for row in conn.execute(f"PRAGMA {check}")]
+    except sqlite3.Error as exc:
+        raise DatabaseIntegrityError(path_str, f"{type(exc).__name__}: {exc}", check=check) from exc
+    finally:
+        if conn is not None:
+            conn.close()
+
+    if rows != ["ok"]:
+        raise DatabaseIntegrityError(
+            path_str,
+            _summarize_integrity_findings(rows),
+            check=check,
+        )
+
+    return rows
 
 
 def _dumps(obj: Any) -> str:
@@ -114,6 +204,7 @@ class SQLiteStore:
 
     def __init__(self, db_path: str = ":memory:") -> None:
         self._db_path = db_path
+        check_database_integrity(db_path)
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         apply_pragmas(self._conn)

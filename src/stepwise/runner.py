@@ -30,7 +30,7 @@ from stepwise.models import (
     WorkflowDefinition,
 )
 from stepwise.project import StepwiseProject
-from stepwise.store import SQLiteStore
+from stepwise.store import DatabaseIntegrityError, SQLiteStore
 from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
 
 
@@ -649,7 +649,18 @@ def run_flow(
 
     from stepwise.registry_factory import create_default_registry
 
-    store = SQLiteStore(str(project.db_path))
+    try:
+        store = SQLiteStore(str(project.db_path))
+    except DatabaseIntegrityError as exc:
+        if output_json:
+            _json_stdout({
+                "status": "error",
+                "exit_code": EXIT_JOB_FAILED,
+                "error": str(exc),
+            })
+        else:
+            _err(str(exc), output_stream)
+        return EXIT_JOB_FAILED
     registry = create_default_registry(config)
 
     # Create cache if any step has cache enabled
@@ -1089,7 +1100,11 @@ def run_wait(
 
     from stepwise.registry_factory import create_default_registry
 
-    store = SQLiteStore(str(project.db_path))
+    try:
+        store = SQLiteStore(str(project.db_path))
+    except DatabaseIntegrityError as exc:
+        _json_error(EXIT_JOB_FAILED, str(exc))
+        return EXIT_JOB_FAILED
     registry = create_default_registry(config)
     engine = AsyncEngine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir, billing_mode=config.billing, config=config)
 
@@ -1963,7 +1978,11 @@ def run_async(
 
     from stepwise.registry_factory import create_default_registry
 
-    store = SQLiteStore(str(project.db_path))
+    try:
+        store = SQLiteStore(str(project.db_path))
+    except DatabaseIntegrityError as exc:
+        _json_error(EXIT_JOB_FAILED, str(exc))
+        return EXIT_JOB_FAILED
     try:
         registry = create_default_registry(config)
         engine = AsyncEngine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir, billing_mode=config.billing, config=config)

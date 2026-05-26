@@ -54,6 +54,7 @@ from stepwise.project import (
     get_bundled_templates_dir,
     init_project,
 )
+from stepwise.store import DatabaseIntegrityError
 
 
 # Exit codes
@@ -1840,6 +1841,24 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     io = _io(args)
     all_ok = True
+    project = None
+
+    try:
+        project = _find_project_or_exit(args)
+    except SystemExit:
+        io.log("warn", "No Stepwise project found; skipping database check.")
+        all_ok = False
+
+    if project is not None:
+        from stepwise.store import DatabaseIntegrityError, check_database_integrity
+
+        try:
+            check_database_integrity(project.db_path, check="integrity_check")
+            io.log("info", f"  ✓ Database integrity ({project.db_path})")
+        except DatabaseIntegrityError as exc:
+            io.log("error", f"  ✗ Database integrity ({project.db_path})")
+            io.log("error", f"    {exc.detail}")
+            all_ok = False
 
     if getattr(args, "containment", False):
         io.log("info", "Containment prerequisites:")
@@ -5358,7 +5377,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_open.add_argument("--url", action="store_true", help="Print URL instead of opening browser")
 
     # doctor
-    p_doctor = sub.add_parser("doctor", help="Check system prerequisites (containment, agents, config)")
+    p_doctor = sub.add_parser("doctor", help="Check project database and system prerequisites")
     p_doctor.add_argument("--containment", action="store_true",
                           help="Check containment prerequisites (KVM, cloud-hypervisor, virtiofsd, rootfs)")
 
@@ -7527,7 +7546,15 @@ def main(argv: list[str] | None = None) -> int:
 
     handler = handlers.get(args.command)
     if handler:
-        return handler(args)
+        try:
+            return handler(args)
+        except DatabaseIntegrityError as exc:
+            print(str(exc), file=sys.stderr)
+            print(
+                "Move the corrupt database aside or restore it before running jobs.",
+                file=sys.stderr,
+            )
+            return EXIT_JOB_FAILED
 
     parser.print_help()
     return EXIT_USAGE_ERROR
@@ -7539,6 +7566,13 @@ def cli_main() -> None:
         sys.exit(main())
     except KeyboardInterrupt:
         sys.exit(130)
+    except DatabaseIntegrityError as exc:
+        print(str(exc), file=sys.stderr)
+        print(
+            "Move the corrupt database aside or restore it before running jobs.",
+            file=sys.stderr,
+        )
+        sys.exit(EXIT_JOB_FAILED)
     except Exception as exc:
         # Catch unexpected errors and show a clean message instead of traceback
         if "--verbose" in sys.argv or "-v" in sys.argv:

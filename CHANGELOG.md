@@ -3,6 +3,15 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.46.2] — 2026-05-26
+
+### Fixed
+- **SQLite corruption guardrail — fail closed before local runners touch a malformed job DB** — Stepwise now runs a read-only `PRAGMA quick_check` before opening an existing project database in `SQLiteStore` or server `ThreadSafeStore`. If SQLite reports corruption, the store raises `DatabaseIntegrityError` before applying WAL/write pragmas, so `stepwise run --wait` cannot silently fall back to local SQLite mode and keep a corrupt `.stepwise/stepwise.db`/WAL pair open after the daemon has failed.
+  - Server startup logs a fatal integrity error and removes the pidfile instead of crashing later in lifespan cleanup. `/api/health` returns `503` with structured database-unhealthy detail if runtime reads start failing.
+  - CLI direct-SQLite commands report a clean remediation message rather than a Python traceback. JSON runner modes (`--wait`, `--async`, `--output json`) return structured `{"status":"error","exit_code":1,...}` payloads.
+  - `stepwise doctor` now checks the project database with full `PRAGMA integrity_check` and reports corruption explicitly.
+  - Coverage: `tests/test_db_integrity.py` exercises corrupt DB refusal, no WAL creation on refused open, server-store startup refusal, CLI clean errors, JSON runner errors, and doctor pass/fail behavior.
+
 ## [0.46.1] — 2026-05-05
 
 ### Fixed
