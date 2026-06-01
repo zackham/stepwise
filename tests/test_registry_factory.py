@@ -32,6 +32,16 @@ class TestCreateDefaultRegistry:
             registry = create_default_registry(config)
         assert "llm" in registry._factories
 
+    def test_registers_llm_with_env_api_key(self, tmp_path, monkeypatch):
+        """OPENROUTER_API_KEY is enough for the default registry to expose llm."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-env-key")
+        with patch("stepwise.config.CONFIG_FILE_YAML", tmp_path / "config.yaml"), \
+             patch("stepwise.config.CONFIG_FILE", tmp_path / "config.json"), \
+             patch("stepwise.openrouter.OpenRouterClient") as client:
+            registry = create_default_registry(None)
+        assert "llm" in registry._factories
+        client.assert_called_once_with(api_key="sk-env-key")
+
     def test_output_matches_server_types(self):
         """Registry has same executor types as server.py registration."""
         # The expected types that server.py registers (without API key or CLI)

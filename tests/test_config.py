@@ -259,6 +259,26 @@ class TestConfigHierarchy:
             cfg = load_config(project_dir)
         assert cfg.openrouter_api_key == "local-key"
 
+    def test_env_api_key_fallback(self, tmp_path, monkeypatch):
+        """OPENROUTER_API_KEY/ANTHROPIC_API_KEY enable LLM use without config files."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", " env-openrouter-key ")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "env-anthropic-key")
+        with patch("stepwise.config.CONFIG_FILE_YAML", tmp_path / "config.yaml"), \
+             patch("stepwise.config.CONFIG_FILE", tmp_path / "config.json"):
+            cfg = load_config()
+        assert cfg.openrouter_api_key == "env-openrouter-key"
+        assert cfg.anthropic_api_key == "env-anthropic-key"
+
+    def test_config_api_key_beats_env_fallback(self, tmp_path, monkeypatch):
+        """Stored config remains the explicit source when env keys are also present."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "env-key")
+        user_yaml = tmp_path / "config.yaml"
+        user_yaml.write_text(yaml.dump({"openrouter_api_key": "user-key"}))
+        with patch("stepwise.config.CONFIG_FILE_YAML", user_yaml), \
+             patch("stepwise.config.CONFIG_FILE", tmp_path / "config.json"):
+            cfg = load_config()
+        assert cfg.openrouter_api_key == "user-key"
+
 
 # ── Config with sources ──────────────────────────────────────────────
 
@@ -289,6 +309,14 @@ class TestConfigWithSources:
         assert by_name["code"].source == "project"
         assert by_name["code"].is_default is False
         assert by_name["fast"].is_default is True
+
+    def test_env_api_key_source(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OPENROUTER_API_KEY", "env-key")
+        with patch("stepwise.config.CONFIG_FILE_YAML", tmp_path / "config.yaml"), \
+             patch("stepwise.config.CONFIG_FILE", tmp_path / "config.json"):
+            cs = load_config_with_sources()
+        assert cs.config.openrouter_api_key == "env-key"
+        assert cs.api_key_source == "env"
 
     def test_api_key_source(self, tmp_path):
         user_yaml = tmp_path / "config.yaml"
@@ -331,7 +359,9 @@ class TestConfigPersistence:
         assert loaded.resolve_model("fast") == "google/gemini-3.1-flash-lite-preview"
         assert loaded.resolve_model("custom") == "test/model"
 
-    def test_load_missing_file(self, tmp_path):
+    def test_load_missing_file(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         with patch("stepwise.config.CONFIG_FILE_YAML", tmp_path / "nonexistent.yaml"), \
              patch("stepwise.config.CONFIG_FILE", tmp_path / "nonexistent.json"):
             cfg = load_config()

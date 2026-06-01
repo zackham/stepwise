@@ -3,6 +3,11 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.46.3] — 2026-05-31
+
+### Fixed
+- **LLM executor registration with environment-provided OpenRouter keys** — `load_config()` now treats `OPENROUTER_API_KEY` and `ANTHROPIC_API_KEY` as fallback credential sources when no user, project, or project-local key is configured. This matches the documented runtime contract and prevents flows with `executor: llm` from failing at dispatch with `Unknown executor type: 'llm'` when the server process has an OpenRouter key in its environment but no persisted Stepwise config key.
+
 ## [0.46.2] — 2026-05-26
 
 ### Fixed

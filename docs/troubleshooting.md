@@ -153,7 +153,7 @@ Errors that occur during job execution.
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| `LLM API error: <detail>` | OpenRouter API call failed | Check your API key: `stepwise config get openrouter_api_key`. Verify the model exists. |
+| `LLM API error: <detail>` | OpenRouter API call failed | Check your API key: `stepwise config get openrouter_api_key`, or verify `OPENROUTER_API_KEY` is set for the Stepwise process. Verify the model exists. |
 | `Could not parse LLM output into declared output fields` | LLM response didn't contain the expected JSON structure | Simplify outputs, improve the prompt, or try a different model. |
 | `Missing output fields: <fields>` | LLM response is missing some declared output fields | Ensure your prompt instructs the model to produce all declared outputs. |
 

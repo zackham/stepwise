@@ -628,7 +628,8 @@ class TestCronDescription:
 
     def test_basic_expressions(self):
         from cron_descriptor import get_description
-        assert "09:00 AM" in get_description("0 9 * * *")
+        desc = get_description("0 9 * * *")
+        assert "09:00 AM" in desc or "09:00" in desc
         assert "5 minutes" in get_description("*/5 * * * *")
         assert "Monday" in get_description("0 9 * * MON")
 

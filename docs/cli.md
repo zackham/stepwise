@@ -939,7 +939,7 @@ stepwise logout
 
 ### `stepwise config`
 
-Manage configuration. Config is stored in `~/.config/stepwise/config.json`.
+Manage configuration. Config is stored in `~/.config/stepwise/config.yaml` or the legacy `~/.config/stepwise/config.json`. `OPENROUTER_API_KEY` and `ANTHROPIC_API_KEY` are also accepted as fallback sources when no key is set in config.
 
 #### Set a value
 

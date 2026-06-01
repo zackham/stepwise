@@ -10,6 +10,7 @@ Config hierarchy (each level overrides the previous):
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -339,6 +340,15 @@ def _ensure_defaults_in_registry(registry: list[ModelEntry]) -> list[ModelEntry]
     return registry
 
 
+def _env_or_none(name: str) -> str | None:
+    """Return a non-empty environment value, stripped of incidental whitespace."""
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
+
+
 def _load_user_agents(project_dir: Path | None = None) -> None:
     """Load user-defined agents from all config levels and register them."""
     from stepwise.agent_registry import load_user_agents_from_config, set_user_agents
@@ -406,9 +416,11 @@ def load_config(project_dir: Path | None = None) -> StepwiseConfig:
 
     return StepwiseConfig(
         openrouter_api_key=(local.openrouter_api_key or project.openrouter_api_key
-                            or user.openrouter_api_key),
+                            or user.openrouter_api_key
+                            or _env_or_none("OPENROUTER_API_KEY")),
         anthropic_api_key=(local.anthropic_api_key or project.anthropic_api_key
-                           or user.anthropic_api_key),
+                           or user.anthropic_api_key
+                           or _env_or_none("ANTHROPIC_API_KEY")),
         model_registry=registry,
         default_model=(local.default_model or project.default_model
                        or user.default_model or "balanced"),
@@ -486,6 +498,8 @@ def load_config_with_sources(project_dir: Path | None = None) -> ConfigWithSourc
         api_key_source = "project"
     elif user.openrouter_api_key:
         api_key_source = "user"
+    elif _env_or_none("OPENROUTER_API_KEY"):
+        api_key_source = "env"
 
     registry = list(user.model_registry)
     registry = _ensure_label_models_in_registry(registry, merged_labels)
@@ -498,9 +512,11 @@ def load_config_with_sources(project_dir: Path | None = None) -> ConfigWithSourc
 
     config = StepwiseConfig(
         openrouter_api_key=(local.openrouter_api_key or project.openrouter_api_key
-                            or user.openrouter_api_key),
+                            or user.openrouter_api_key
+                            or _env_or_none("OPENROUTER_API_KEY")),
         anthropic_api_key=(local.anthropic_api_key or project.anthropic_api_key
-                           or user.anthropic_api_key),
+                           or user.anthropic_api_key
+                           or _env_or_none("ANTHROPIC_API_KEY")),
         model_registry=registry,
         default_model=(local.default_model or project.default_model
                        or user.default_model or "balanced"),

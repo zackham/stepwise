@@ -76,6 +76,7 @@ score_content:
 - The response is parsed as JSON to extract declared output fields
 - Uses structured output tooling (tool_use) when output fields are declared
 - Cost and token usage are tracked per step
+- Uses `OPENROUTER_API_KEY` from the process environment when no key is set in Stepwise config
 
 **Configuration fields** (set at step level, not nested):
 
@@ -87,7 +88,7 @@ score_content:
 | `temperature` | No | Sampling temperature (default: 0.0) |
 | `max_tokens` | No | Maximum output tokens (default: 4096) |
 
-**Model registry** is configured in `~/.config/stepwise/config.json`. Models are referenced by full ID or by tier alias:
+**Model registry** is configured in `~/.config/stepwise/config.yaml` or `~/.config/stepwise/config.json`. Models are referenced by full ID or by tier alias:
 
 ```json
 {
