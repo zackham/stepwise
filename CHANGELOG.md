@@ -3,6 +3,12 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.46.4] — 2026-06-01
+
+### Fixed
+- **Server SQLite fd leak under threaded API/executor load** — `ThreadSafeStore` keeps one SQLite connection per worker thread, but the daemon held strong references to every connection ever opened. Transient ASGI/threadpool workers left their DB and WAL file descriptors open after the owning thread exited; in production this pinned the server at the default 1024 fd limit with hundreds of duplicate `.stepwise/stepwise.db` and `.stepwise/stepwise.db-wal` handles, causing executor crashes, missing step outputs, and failed webhooks. `_ThreadLocalConnProxy` now tracks owner threads with weak references and prunes/closes dead-thread connections before registering a new connection.
+- **Detached server fd headroom** — `stepwise server start --detach` now raises the soft `RLIMIT_NOFILE` to 65536 when permitted by the host hard limit. This is defense in depth; the leak fix is what keeps fd usage bounded. Coverage: `tests/test_server_fd_cleanup.py`.
+
 ## [0.46.3] — 2026-05-31
 
 ### Fixed

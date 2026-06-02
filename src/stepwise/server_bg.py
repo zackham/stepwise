@@ -9,9 +9,22 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import resource
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+
+def _raise_nofile_limit(target: int = 65536) -> None:
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        desired = min(target, hard)
+        if soft < desired:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (desired, hard))
+    except Exception:
+        logging.getLogger("stepwise").warning(
+            "Could not raise RLIMIT_NOFILE", exc_info=True
+        )
 
 
 def main() -> int:
@@ -38,6 +51,7 @@ def main() -> int:
         "%(asctime)s %(name)s %(levelname)s: %(message)s"
     ))
     logging.basicConfig(level=logging.WARNING, handlers=[handler], force=True)
+    _raise_nofile_limit()
 
     # Redirect stdout/stderr to log file (catches stray prints from libraries)
     log_fd = open(log_path, "a")

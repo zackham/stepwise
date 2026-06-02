@@ -8,6 +8,8 @@ import logging
 import os
 import signal
 import sqlite3
+import threading
+import weakref
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone as _tz
 from logging.handlers import RotatingFileHandler
@@ -81,8 +83,6 @@ class _ThreadLocalConnProxy:
     """
 
     def __init__(self, db_path: str) -> None:
-        import sqlite3
-        import threading
         # Rewrite :memory: to a shared-cache URI unique per proxy so
         # test stores don't collide and each test gets its own fresh
         # in-memory database shared across its threads. File-backed
@@ -103,15 +103,17 @@ class _ThreadLocalConnProxy:
             self._keepalive = None
         self._db_path = db_path
         self._tls = threading.local()
-        # Track every live connection so the owning store can close
-        # them on shutdown. Access to the registry is serialized by
-        # the registry_lock; individual connections are never shared
-        # across threads.
-        self._all_conns: list[sqlite3.Connection] = []
+        # Track live thread-owned connections so the owning store can
+        # close them on shutdown. Threads used by ASGI/threadpool work
+        # can be transient; keeping strong references to every
+        # connection ever opened leaks SQLite file descriptors long
+        # after the owning thread exits. Store a weak reference to the
+        # thread and prune dead owners whenever a new thread opens a
+        # connection.
+        self._all_conns: list[tuple[weakref.ReferenceType[threading.Thread], sqlite3.Connection]] = []
         self._registry_lock = threading.Lock()
 
     def _make_conn(self):
-        import sqlite3
         if self._use_uri:
             conn = sqlite3.connect(
                 self._connect_uri, uri=True, check_same_thread=False,
@@ -121,8 +123,22 @@ class _ThreadLocalConnProxy:
         conn.row_factory = sqlite3.Row
         apply_pragmas(conn, skip_wal=self._use_uri)
         with self._registry_lock:
-            self._all_conns.append(conn)
+            self._prune_dead_connections_locked()
+            self._all_conns.append((weakref.ref(threading.current_thread()), conn))
         return conn
+
+    def _prune_dead_connections_locked(self) -> None:
+        live: list[tuple[weakref.ReferenceType[threading.Thread], sqlite3.Connection]] = []
+        for thread_ref, conn in self._all_conns:
+            thread = thread_ref()
+            if thread is not None and thread.is_alive():
+                live.append((thread_ref, conn))
+                continue
+            try:
+                conn.close()
+            except Exception:
+                pass
+        self._all_conns = live
 
     def _current(self):
         conn = getattr(self._tls, "conn", None)
@@ -134,7 +150,7 @@ class _ThreadLocalConnProxy:
     def close_all(self) -> None:
         """Close every thread's connection. Called at server shutdown."""
         with self._registry_lock:
-            for conn in self._all_conns:
+            for _thread_ref, conn in self._all_conns:
                 try:
                     conn.close()
                 except Exception:
