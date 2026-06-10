@@ -363,3 +363,190 @@ class TestResolveAloopOpenrouterKey:
         env: dict[str, str] = {}
         _resolve_aloop_openrouter_key(env)
         assert "OPENROUTER_API_KEY" not in env
+
+
+# ── stopReason value handling (F44) ───────────────────────────────────
+
+
+class TestStopReasonFailure:
+    """An idle-timeout-cancelled (or refused) prompt must not be recorded
+    as a successful completion: stopReason='cancelled'/'refusal' = failed."""
+
+    def _write_result(self, tmp_path, stop_reason: str) -> AgentProcess:
+        output = tmp_path / "out.jsonl"
+        output.write_text(
+            json.dumps({
+                "jsonrpc": "2.0", "id": 0,
+                "result": {"sessionId": "sess-1", "stopReason": stop_reason},
+            }) + "\n"
+        )
+        return AgentProcess(
+            pid=1, pgid=1,
+            output_path=str(output),
+            working_dir=str(tmp_path),
+            session_id="sess-1",
+        )
+
+    def test_wait_fails_on_cancelled(self, tmp_path):
+        b = ACPBackend()
+        process = self._write_result(tmp_path, "cancelled")
+        status = b.wait(process)
+        assert status.state == "failed"
+        assert "cancelled" in (status.error or "")
+
+    def test_wait_fails_on_refusal(self, tmp_path):
+        b = ACPBackend()
+        process = self._write_result(tmp_path, "refusal")
+        status = b.wait(process)
+        assert status.state == "failed"
+        assert "refusal" in (status.error or "")
+
+    def test_wait_completes_on_end_turn(self, tmp_path):
+        b = ACPBackend()
+        process = self._write_result(tmp_path, "end_turn")
+        status = b.wait(process)
+        assert status.state == "completed"
+
+    def test_check_fails_on_cancelled(self, tmp_path):
+        b = ACPBackend()
+        process = self._write_result(tmp_path, "cancelled")
+        status = b.check(process)
+        assert status.state == "failed"
+        assert "cancelled" in (status.error or "")
+
+    def test_check_completes_on_end_turn(self, tmp_path):
+        b = ACPBackend()
+        process = self._write_result(tmp_path, "end_turn")
+        status = b.check(process)
+        assert status.state == "completed"
+
+
+# ── Session resume by name (F45) ──────────────────────────────────────
+
+
+class TestSessionResumeByName:
+    """continue_session/_session_id sharing must actually resume the same
+    ACP session when the process is reused — previously a brand-new
+    session was created on every spawn."""
+
+    def test_same_session_name_resumes_same_session(self, backend, context):
+        r1 = backend.spawn("First", _make_config(_session_name="conv-1"), context)
+
+        context2 = ExecutionContext(
+            job_id="job-test-123",
+            step_name="test-step",
+            attempt=2,
+            workspace_path=context.workspace_path,
+            idempotency="test-idemp-2",
+        )
+        r2 = backend.spawn(
+            "Second",
+            _make_config(_session_name="conv-1", continue_session=True),
+            context2,
+        )
+
+        assert r1.pid == r2.pid  # process reused
+        assert r1.session_id == r2.session_id  # SAME conversation resumed
+
+    def test_different_session_names_get_distinct_sessions(self, backend, context):
+        r1 = backend.spawn("First", _make_config(_session_name="conv-a"), context)
+        context2 = ExecutionContext(
+            job_id="job-test-123",
+            step_name="step-b",
+            attempt=1,
+            workspace_path=context.workspace_path,
+            idempotency="test-idemp-2",
+        )
+        r2 = backend.spawn("Second", _make_config(_session_name="conv-b"), context2)
+        assert r1.session_id != r2.session_id
+
+    def test_unnamed_spawns_get_fresh_sessions(self, backend, context):
+        r1 = backend.spawn("First", _make_config(), context)
+        context2 = ExecutionContext(
+            job_id="job-test-123",
+            step_name="step-b",
+            attempt=1,
+            workspace_path=context.workspace_path,
+            idempotency="test-idemp-2",
+        )
+        r2 = backend.spawn("Second", _make_config(), context2)
+        assert r1.session_id != r2.session_id
+
+    def test_cross_step_session_sharing_via_name(self, backend, context):
+        """Downstream step receiving _session_id (a session name) resumes
+        the upstream step's conversation."""
+        r1 = backend.spawn(
+            "Plan something", _make_config(_session_name="step-j1-plan"), context,
+        )
+        downstream_ctx = ExecutionContext(
+            job_id="job-test-123",
+            step_name="implement",
+            attempt=1,
+            workspace_path=context.workspace_path,
+            idempotency="impl-1",
+        )
+        r2 = backend.spawn(
+            "Implement the plan",
+            _make_config(_session_name="step-j1-plan"),
+            downstream_ctx,
+        )
+        assert r2.session_id == r1.session_id
+
+
+# ── Cancel routing (F46) ──────────────────────────────────────────────
+
+
+class TestCancelRouting:
+    """cancel() must send session/cancel to the process that hosts the
+    session — not blindly to the first active process."""
+
+    def test_cancel_targets_owning_process(self, backend, context):
+        set_user_agents({
+            "mock": AgentConfig(name="mock", command=MOCK_SERVER, config={}),
+            "mock2": AgentConfig(name="mock2", command=MOCK_SERVER, config={}),
+        })
+        r1 = backend.spawn("First", _make_config("mock"), context)
+        context2 = ExecutionContext(
+            job_id="job-test-456",
+            step_name="step-b",
+            attempt=1,
+            workspace_path=context.workspace_path,
+            idempotency="test-idemp-2",
+        )
+        r2 = backend.spawn("Second", _make_config("mock2"), context2)
+        assert r1.pid != r2.pid
+        assert len(backend.lifecycle.active) == 2
+
+        # Record which process's client receives the cancel
+        recorded: dict[int, list[str]] = {}
+        for managed in backend.lifecycle.active:
+            pid = managed.resource.process.pid
+
+            def _make_recorder(p):
+                def _rec(session_id):
+                    recorded.setdefault(p, []).append(session_id)
+                return _rec
+
+            managed.resource.client.cancel = _make_recorder(pid)
+
+        # Cancel the SECOND process's session (lifecycle.active[0] is the
+        # first process — the old code always targeted it).
+        backend.cancel(r2)
+
+        assert recorded == {r2.pid: [r2.session_id]}
+
+    def test_cancel_unknown_session_does_not_spray_processes(self, backend, context):
+        backend.spawn("First", _make_config("mock"), context)
+
+        recorded: list[str] = []
+        for managed in backend.lifecycle.active:
+            managed.resource.client.cancel = lambda sid: recorded.append(sid)
+
+        ghost = AgentProcess(
+            pid=0, pgid=0,
+            output_path="/tmp/ghost.jsonl",
+            working_dir="/tmp",
+            session_id="not-a-real-session",
+        )
+        backend.cancel(ghost)  # should not raise
+        assert recorded == []  # no random process received the cancel

@@ -164,6 +164,11 @@ class ACPClient:
 
         watchdog_stop = threading.Event()
         watchdog_thread: threading.Thread | None = None
+        # Set by the watchdog when it sends session/cancel due to idle
+        # timeout. If the agent honors the cancel, the prompt resolves
+        # "normally" with stopReason="cancelled" — that must still be
+        # reported as a failure to the caller, not a successful completion.
+        idle_cancel_sent = threading.Event()
 
         if idle_timeout_seconds and idle_timeout_seconds > 0:
             def _idle_watchdog():
@@ -181,6 +186,7 @@ class ACPClient:
                         "cancelling prompt",
                         session_id, idle, idle_timeout_seconds,
                     )
+                    idle_cancel_sent.set()
                     try:
                         self.cancel(session_id)
                     except Exception:
@@ -226,6 +232,22 @@ class ACPClient:
                         separators=(",", ":"),
                     )
                     + "\n"
+                )
+
+            # Idle watchdog cancelled this prompt and the agent honored the
+            # cancel (returned stopReason="cancelled"). The run hung — fail
+            # it instead of returning the truncated result as a success.
+            if (
+                idle_cancel_sent.is_set()
+                and isinstance(result, dict)
+                and result.get("stopReason") == "cancelled"
+            ):
+                raise AcpError(
+                    f"Stream idle timeout: no session/update for "
+                    f"{idle_timeout_seconds:.0f}s; prompt for session "
+                    f"{session_id} was cancelled (agent honored cancel, "
+                    f"output is truncated)",
+                    code=-32001,
                 )
 
             return result

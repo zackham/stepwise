@@ -42,6 +42,13 @@ class JsonRpcTransport:
         self._request_handlers: dict[str, Callable] = {}
         self._reader_thread: threading.Thread | None = None
         self._lock = threading.Lock()
+        # Separate lock for stdin writes. process.stdin is a TextIOWrapper
+        # (Popen text=True), which is NOT thread-safe — concurrent writers
+        # (executor threads, the reader thread answering server→client
+        # requests, idle-watchdog cancels) could interleave and corrupt the
+        # JSON-RPC frame stream. Kept separate from self._lock so a blocking
+        # pipe write never stalls request-ID allocation or response dispatch.
+        self._write_lock = threading.Lock()
         self._closed = False
         # Increase pipe buffer to reduce backpressure stalls
         try:
@@ -144,8 +151,9 @@ class JsonRpcTransport:
         try:
             line = json.dumps(msg, separators=(",", ":")) + "\n"
             logger.info("[acp tx] %s", line.strip()[:500])
-            self.process.stdin.write(line)
-            self.process.stdin.flush()
+            with self._write_lock:
+                self.process.stdin.write(line)
+                self.process.stdin.flush()
         except (BrokenPipeError, OSError) as exc:
             logger.debug("Write failed (process likely exited): %s", exc)
 

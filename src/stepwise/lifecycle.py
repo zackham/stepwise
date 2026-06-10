@@ -37,6 +37,21 @@ class ResourceManager(Protocol):
 
 
 @dataclass
+class _PendingCreation:
+    """Placeholder for a resource whose factory() is in flight.
+
+    Lets acquire() release the global lock while the (potentially very
+    slow — subprocess spawn, ACP handshake, microVM boot) factory runs,
+    while still guaranteeing that two threads asking for the same config
+    don't both spawn. Threads that find a pending entry for their config
+    wait on `done` and then re-scan.
+    """
+
+    config: Any
+    done: threading.Event = field(default_factory=threading.Event)
+
+
+@dataclass
 class ManagedResource(Generic[R]):
     """A resource managed by the lifecycle manager.
 
@@ -82,6 +97,12 @@ class ResourceLifecycleManager(Generic[R]):
         # Without this, two threads could each see an empty `active` list,
         # both call factory(), and orphan one of the resources.
         self._lock = threading.RLock()
+        # Creations in flight: factory() runs OUTSIDE self._lock (it can
+        # take 30s+ — ACP handshake — or minutes — VM boot), so unrelated
+        # configs spawn concurrently and release paths aren't blocked
+        # behind a slow spawn. Entries here prevent duplicate spawns for
+        # the same config while the lock is released.
+        self._creating: list[_PendingCreation] = []
 
     def acquire(
         self,
@@ -103,36 +124,79 @@ class ResourceLifecycleManager(Generic[R]):
         set. `release_for_job` uses those refs to tear down resources only
         when every referencing job has reached a terminal state.
         """
-        with self._lock:
-            for managed in self.active:
-                if self.is_eq(managed.config, config):
-                    # Verify the resource is still alive before reusing
-                    if self.is_alive and not self.is_alive(managed.resource):
-                        logger.warning(
-                            "Resource is dead, removing and creating new one",
-                        )
-                        try:
-                            self.teardown(managed.resource)
-                        except Exception:
-                            pass
-                        self.active.remove(managed)
-                        break  # Fall through to factory()
-                    if session_name:
-                        managed.session_names.add(session_name)
-                    if job_id:
-                        managed.job_refs.add(job_id)
-                        managed.job_scoped = True
-                    return managed, False
+        while True:
+            dead: ManagedResource[R] | None = None
+            pending: _PendingCreation | None = None
+            is_creator = False
+            with self._lock:
+                for managed in self.active:
+                    if self.is_eq(managed.config, config):
+                        # Verify the resource is still alive before reusing
+                        if self.is_alive and not self.is_alive(managed.resource):
+                            logger.warning(
+                                "Resource is dead, removing and creating new one",
+                            )
+                            self.active.remove(managed)
+                            dead = managed
+                            break  # Fall through to factory()
+                        if session_name:
+                            managed.session_names.add(session_name)
+                        if job_id:
+                            managed.job_refs.add(job_id)
+                            managed.job_scoped = True
+                        return managed, False
 
-            resource = self.factory(config)
-            managed = ManagedResource(
-                config=config,
-                resource=resource,
-                session_names={session_name} if session_name else set(),
-                job_refs={job_id} if job_id else set(),
-                job_scoped=bool(job_id),
-            )
-            self.active.append(managed)
+                for p in self._creating:
+                    if self.is_eq(p.config, config):
+                        pending = p
+                        break
+                if pending is None:
+                    pending = _PendingCreation(config=config)
+                    self._creating.append(pending)
+                    is_creator = True
+
+            # Tear down the dead resource outside the lock (teardown can
+            # block several seconds on SIGTERM wait).
+            if dead is not None:
+                try:
+                    self.teardown(dead.resource)
+                except Exception:
+                    pass
+
+            if not is_creator:
+                # Another thread is creating a resource for this config —
+                # wait for it, then re-scan (either the resource is now in
+                # `active`, or creation failed and we become the creator).
+                pending.done.wait()
+                continue
+
+            # We own the creation. Run the (slow) factory WITHOUT holding
+            # the global lock so unrelated configs spawn concurrently.
+            try:
+                resource = self.factory(config)
+            except BaseException:
+                with self._lock:
+                    try:
+                        self._creating.remove(pending)
+                    except ValueError:
+                        pass
+                pending.done.set()
+                raise
+
+            with self._lock:
+                try:
+                    self._creating.remove(pending)
+                except ValueError:
+                    pass
+                managed = ManagedResource(
+                    config=config,
+                    resource=resource,
+                    session_names={session_name} if session_name else set(),
+                    job_refs={job_id} if job_id else set(),
+                    job_scoped=bool(job_id),
+                )
+                self.active.append(managed)
+            pending.done.set()
             return managed, True
 
     def discard(self, managed: ManagedResource[R]) -> None:

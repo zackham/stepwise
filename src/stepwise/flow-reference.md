@@ -272,9 +272,7 @@ When an agent step declares `outputs: [field_a, field_b, ...]`, stepwise hands t
 
 1. **Auto-promotes `output_mode`.** If `outputs:` is declared and the user didn't explicitly set `output_mode`, the mode is lifted from the default `"effect"` to `"file"`. Agent steps with declared outputs almost always want the file path — this saves a line of boilerplate. Explicit `output_mode: <value>` always wins. (`agent.py:_auto_promoted`)
 
-2. **Sets `STEPWISE_OUTPUT_FILE` in the agent's env.** An absolute file path, resolved against the step workspace. The agent can `echo "..." > "$STEPWISE_OUTPUT_FILE"` directly without parsing instructions. (`agent.py:_build_agent_env`)
-
-3. **Appends a `<stepwise-output>` block to the prompt.** Only when `output_mode == "file"` AND `outputs:` is non-empty. The block contains the target file path, the list of required JSON keys, a shaped example, and a reminder that the path is available as `$STEPWISE_OUTPUT_FILE`. (`agent.py:_append_output_instructions`)
+2. **Appends a `<stepwise-output>` block to the prompt.** Only when `output_mode == "file"` AND `outputs:` is non-empty. The block contains the literal target file path (resolved against the step workspace), the list of required JSON keys, and a shaped example. ACP agent processes are pooled with a fixed environment, so the path is delivered via the prompt — not an env var. (`agent.py:_append_output_instructions`)
 
 **What the agent literally sees** (appended to your prompt when `outputs: [score, summary]` is declared):
 

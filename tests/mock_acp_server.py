@@ -53,8 +53,14 @@ class MockAcpServer:
     # + one usage_update) and then never returns the final result — used
     # to exercise the client's idle-stream watchdog.
     stall_after_partial: bool = False
+    # When True (with stall_after_partial), a session/cancel for a stalled
+    # prompt is HONORED: the server replies to the pending session/prompt
+    # request with stopReason "cancelled" — the normal real-agent behavior
+    # the idle watchdog comment describes.
+    honor_cancel: bool = False
 
     sessions: dict[str, Session] = field(default_factory=dict)
+    _stalled_prompts: dict[str, Any] = field(default_factory=dict)  # session_id -> msg_id
     _input: TextIO = field(default_factory=lambda: sys.stdin)
     _output: TextIO = field(default_factory=lambda: sys.stdout)
     _next_id: int = 0
@@ -162,7 +168,10 @@ class MockAcpServer:
                 "cost": {"amount": 0.0001, "currency": "USD"},
             })
             # Intentionally do NOT send the session/prompt result —
-            # forces the client to time out on stream idleness.
+            # forces the client to time out on stream idleness. If
+            # honor_cancel is set, a later session/cancel resolves it
+            # with stopReason "cancelled".
+            self._stalled_prompts[session_id] = msg_id
             return
 
         # Emit scripted notifications or default behavior
@@ -197,8 +206,17 @@ class MockAcpServer:
         session_id = params.get("sessionId", "")
         if session_id in self.sessions:
             self.sessions[session_id].cancelled = True
-            self._send_result(msg_id, {"sessionId": session_id, "cancelled": True})
-        else:
+            # Honor the cancel: resolve the stalled session/prompt request
+            # with stopReason "cancelled" (real-agent behavior).
+            if self.honor_cancel and session_id in self._stalled_prompts:
+                prompt_msg_id = self._stalled_prompts.pop(session_id)
+                self._send_result(prompt_msg_id, {
+                    "sessionId": session_id,
+                    "stopReason": "cancelled",
+                })
+            if msg_id is not None:
+                self._send_result(msg_id, {"sessionId": session_id, "cancelled": True})
+        elif msg_id is not None:
             self._send_error(msg_id, -32000, f"Session not found: {session_id}")
 
     def _handle_session_close(self, msg_id: Any, params: dict) -> None:
@@ -278,6 +296,11 @@ def main() -> None:
         action="store_true",
         help="On session/prompt, stream partial output then never reply",
     )
+    parser.add_argument(
+        "--honor-cancel",
+        action="store_true",
+        help="Resolve a stalled prompt with stopReason=cancelled on session/cancel",
+    )
     args = parser.parse_args()
 
     capabilities = json.loads(args.capabilities)
@@ -291,6 +314,7 @@ def main() -> None:
         response_script=response_script,
         fail_session_load=args.fail_session_load,
         stall_after_partial=args.stall_after_partial,
+        honor_cancel=args.honor_cancel,
     )
     server.run()
 

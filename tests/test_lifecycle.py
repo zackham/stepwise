@@ -355,3 +355,132 @@ class TestThreadSafety:
         assert len({id(m) for m, _ in results}) == 1
         assert sum(1 for _, was_new in results if was_new) == 1
         assert len(mgr.active) == 1
+
+    def test_factory_runs_outside_global_lock(self):
+        """A slow factory for one config must not serialize acquires of
+        unrelated configs (F50): previously every agent spawn queued
+        behind a single 30s+ ACP handshake or VM boot."""
+        import threading
+        import time as _t
+
+        gate = threading.Event()
+        slow_started = threading.Event()
+
+        def _slow_factory(config: dict) -> FakeResource:
+            if config.get("group") == "slow":
+                slow_started.set()
+                assert gate.wait(timeout=5), "test gate never released"
+            return FakeResource(config.get("group", "default"))
+
+        mgr = ResourceLifecycleManager(
+            is_eq=_is_eq,
+            factory=_slow_factory,
+            teardown=_teardown,
+        )
+
+        slow_thread = threading.Thread(
+            target=lambda: mgr.acquire({"group": "slow"})
+        )
+        slow_thread.start()
+        assert slow_started.wait(timeout=5)
+
+        # While the slow spawn is in flight, an unrelated config must
+        # acquire promptly instead of blocking on the manager lock.
+        t0 = _t.monotonic()
+        m, was_new = mgr.acquire({"group": "fast"})
+        elapsed = _t.monotonic() - t0
+        assert was_new is True
+        assert m.resource.config_id == "fast"
+        assert elapsed < 1.0, f"unrelated acquire blocked {elapsed:.2f}s behind slow factory"
+
+        gate.set()
+        slow_thread.join(timeout=5)
+        assert not slow_thread.is_alive()
+        assert len(mgr.active) == 2
+
+    def test_release_not_blocked_by_inflight_spawn(self):
+        """release_for_job must not block behind an in-flight factory."""
+        import threading
+        import time as _t
+
+        gate = threading.Event()
+        slow_started = threading.Event()
+
+        def _slow_factory(config: dict) -> FakeResource:
+            if config.get("group") == "slow":
+                slow_started.set()
+                assert gate.wait(timeout=5)
+            return FakeResource(config.get("group", "default"))
+
+        mgr = ResourceLifecycleManager(
+            is_eq=_is_eq,
+            factory=_slow_factory,
+            teardown=_teardown,
+        )
+        existing, _ = mgr.acquire({"group": "fast"}, job_id="job-A")
+
+        slow_thread = threading.Thread(
+            target=lambda: mgr.acquire({"group": "slow"}, job_id="job-B")
+        )
+        slow_thread.start()
+        assert slow_started.wait(timeout=5)
+
+        t0 = _t.monotonic()
+        mgr.release_for_job("job-A")
+        elapsed = _t.monotonic() - t0
+        assert elapsed < 1.0
+        assert not existing.resource.alive
+
+        gate.set()
+        slow_thread.join(timeout=5)
+        assert len(mgr.active) == 1  # only the slow resource remains
+
+    def test_factory_failure_wakes_waiters_who_then_retry(self):
+        """If the creating thread's factory raises, a waiter must not hang —
+        it retries and spawns its own resource."""
+        import threading
+        import time as _t
+
+        calls = [0]
+        calls_lock = threading.Lock()
+
+        def _flaky_factory(config: dict) -> FakeResource:
+            with calls_lock:
+                calls[0] += 1
+                n = calls[0]
+            if n == 1:
+                _t.sleep(0.05)  # widen the window so the second thread waits
+                raise RuntimeError("spawn failed")
+            return FakeResource(config.get("group", "default"))
+
+        mgr = ResourceLifecycleManager(
+            is_eq=_is_eq,
+            factory=_flaky_factory,
+            teardown=_teardown,
+        )
+
+        results: list = []
+        errors: list = []
+        barrier = threading.Barrier(2)
+
+        def _worker():
+            barrier.wait()
+            try:
+                results.append(mgr.acquire({"group": "alpha"}))
+            except RuntimeError as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=_worker) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        assert all(not t.is_alive() for t in threads), "acquire() hung"
+
+        # Exactly one thread saw the failure; the other got a resource.
+        assert len(errors) == 1
+        assert len(results) == 1
+        assert calls[0] == 2
+        assert len(mgr.active) == 1
+        # No pending-creation entries leaked.
+        assert mgr._creating == []

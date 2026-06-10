@@ -163,6 +163,67 @@ class TestProcessExit:
         t.close()
 
 
+class TestConcurrentWrites:
+    def test_concurrent_writers_do_not_interleave_frames(self):
+        """_write must be atomic per JSON-RPC line (F47 regression).
+
+        process.stdin is a TextIOWrapper (not thread-safe); without the
+        write lock, concurrent writers (executor threads, the reader
+        thread answering server→client requests, idle watchdogs) can
+        interleave partial lines and corrupt the agent's stdin stream.
+        Uses a slow char-by-char writer to make interleaving virtually
+        certain if writes are unlocked.
+        """
+        import threading
+        import types
+
+        class SlowWriter:
+            """Writes one character at a time with a tiny yield."""
+
+            def __init__(self):
+                self.chunks: list[str] = []
+
+            def write(self, s: str) -> None:
+                for ch in s:
+                    self.chunks.append(ch)
+                    time.sleep(0.00005)
+
+            def flush(self) -> None:
+                pass
+
+        writer = SlowWriter()
+        fake_proc = types.SimpleNamespace(stdin=writer, stdout=None, pid=0)
+        t = JsonRpcTransport(fake_proc)  # no start(): write path only
+
+        n_threads, n_msgs = 8, 25
+
+        def _spam(tid: int) -> None:
+            for i in range(n_msgs):
+                t.send_notification(
+                    "session/update",
+                    {"thread": tid, "seq": i, "pad": "x" * 50},
+                )
+
+        threads = [
+            threading.Thread(target=_spam, args=(tid,))
+            for tid in range(n_threads)
+        ]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+
+        raw = "".join(writer.chunks)
+        lines = [line for line in raw.split("\n") if line]
+        assert len(lines) == n_threads * n_msgs
+        seen = set()
+        for line in lines:
+            msg = json.loads(line)  # raises if frames interleaved
+            params = msg["params"]
+            seen.add((params["thread"], params["seq"]))
+        assert len(seen) == n_threads * n_msgs
+
+
 class TestClose:
     def test_close_cancels_pending(self, transport):
         """Close cancels pending futures."""

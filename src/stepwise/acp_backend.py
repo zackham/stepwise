@@ -36,6 +36,35 @@ from stepwise.lifecycle import ResourceLifecycleManager
 
 logger = logging.getLogger("stepwise.acp_backend")
 
+# stopReason values that mean the agent's turn did NOT complete its work.
+# "cancelled": idle-timeout watchdog or user-initiated session/cancel —
+# output is truncated. "refusal": the model declined the task.
+_FAILURE_STOP_REASONS = frozenset({"cancelled", "canceled", "refusal"})
+
+
+def _read_stop_reason(output_path: str) -> str | None:
+    """Return the stopReason from the first result line in an NDJSON file.
+
+    Returns None when no result line with a stopReason exists (agent was
+    killed / never completed the prompt).
+    """
+    try:
+        with open(output_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                result = data.get("result", {})
+                if isinstance(result, dict) and "stopReason" in result:
+                    return result["stopReason"]
+    except FileNotFoundError:
+        pass
+    return None
+
 
 def _resolve_aloop_openrouter_key(env: dict[str, str]) -> None:
     """If OPENROUTER_API_KEY is unset, read host ~/.aloop/credentials.json.
@@ -113,6 +142,12 @@ class ACPBackend:
         # as the factory) can pass job_id to containment.get_spawn_context.
         # Keeps the ResourceLifecycleManager factory signature unchanged.
         self._tls = threading.local()
+        # session_id -> ManagedResource hosting that session. cancel() uses
+        # this to send session/cancel to the RIGHT process — client.cancel
+        # is a notification (cannot fail for a live process), so probing
+        # every active process would always "succeed" on the first one.
+        self._session_hosts: dict[str, Any] = {}
+        self._session_hosts_lock = threading.Lock()
 
     def _ensure_containment_backend(self, mode: str) -> Any:
         """Lazily create a containment backend for the requested mode.
@@ -671,7 +706,42 @@ class ACPBackend:
                     )
                     session_id = acp_proc.client.new_session(adapter_cwd, session_name)
             else:
-                session_id = acp_proc.client.new_session(adapter_cwd, session_name)
+                # Named-session continuity without an explicit UUID
+                # (legacy continue_session / _session_id sharing): if this
+                # ACP process already hosts a session under that name,
+                # resume it by prompting the same sessionId — the session
+                # is live in the adapter, no session/load round-trip needed.
+                # Previously this always called session/new, so every loop
+                # iteration silently started a fresh conversation.
+                known_id = (
+                    acp_proc.client.sessions.get(session_name)
+                    if session_name
+                    else None
+                )
+                if known_id:
+                    logger.info(
+                        "[%s] resuming live session %s (name=%s)",
+                        step_id, known_id[:8], session_name,
+                    )
+                    session_id = known_id
+                else:
+                    if (
+                        session_name
+                        and config.get("continue_session")
+                        and context.attempt > 1
+                    ):
+                        # Resume was expected but the session is unknown to
+                        # this process (process restarted/recycled, or the
+                        # name was created on a different process). Be
+                        # honest: conversation context is NOT carried over.
+                        logger.warning(
+                            "[%s] continue_session: no live session named "
+                            "%r on this ACP process — starting a fresh "
+                            "conversation (context from previous attempts "
+                            "is lost)",
+                            step_id, session_name,
+                        )
+                    session_id = acp_proc.client.new_session(adapter_cwd, session_name)
         except AcpError as exc:
             if was_new:
                 logger.warning(
@@ -687,6 +757,18 @@ class ACPBackend:
                     step_id, exc,
                 )
             raise
+
+        # Record which process hosts this session so cancel() can route
+        # session/cancel to the right process. Prune entries whose host
+        # is no longer in the pool to keep the map bounded.
+        with self._session_hosts_lock:
+            live_ids = {id(m) for m in self.lifecycle.active}
+            self._session_hosts = {
+                sid: m
+                for sid, m in self._session_hosts.items()
+                if id(m) in live_ids
+            }
+            self._session_hosts[session_id] = managed
 
         # Execute ACP method calls (mode, model overrides)
         for method_name, value in resolved.acp_calls:
@@ -712,19 +794,13 @@ class ACPBackend:
         prompt_file = step_io / f"{context.step_name}{session_suffix}-{context.attempt}.prompt.md"
         prompt_file.write_text(prompt)
 
-        # Build env vars for the step (STEPWISE_* vars)
-        proc_env = acp_proc.process.environ if hasattr(acp_proc.process, "environ") else {}
-        env_updates = {
-            "STEPWISE_STEP_NAME": context.step_name,
-            "STEPWISE_ATTEMPT": str(context.attempt),
-            "STEPWISE_STEP_IO": str(step_io),
-        }
-        output_fields = config.get("output_fields")
-        if output_fields:
-            output_filename = config.get("output_path") or f"{context.step_name}-output.json"
-            env_updates["STEPWISE_OUTPUT_FILE"] = str(
-                (Path(working_dir) / output_filename).resolve()
-            )
+        # NOTE: per-step STEPWISE_* env vars are intentionally NOT set here.
+        # ACP processes are pooled and reused across steps, so their
+        # environment is fixed at _spawn_process time — there is no seam to
+        # deliver per-step env to an already-running adapter. Structured
+        # output bridging for ACP agents works exclusively through the
+        # prompt instructions (the literal output file path is embedded in
+        # the prompt by AgentExecutor._render_prompt).
 
         # Publish output_path to DB BEFORE blocking so the stream monitor can
         # start tailing while the agent is still running. When the adapter
@@ -843,30 +919,27 @@ class ACPBackend:
 
         # Verify the output has a completed result (stopReason).
         # Without this, a killed agent would be falsely marked completed.
-        has_stop_reason = False
-        try:
-            with open(process.output_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        data = json.loads(line)
-                        result = data.get("result", {})
-                        if isinstance(result, dict) and "stopReason" in result:
-                            has_stop_reason = True
-                            break
-                    except json.JSONDecodeError:
-                        continue
-        except FileNotFoundError:
-            pass
+        stop_reason = _read_stop_reason(process.output_path)
 
-        if not has_stop_reason:
+        if stop_reason is None:
             return AgentStatus(
                 state="failed",
                 exit_code=-1,
                 session_id=session_id or process.session_id,
                 error="Agent terminated without completing (no stopReason in output)",
+                cost_usd=cost,
+            )
+
+        # A stopReason is only success if the agent actually finished its
+        # turn. "cancelled" (idle-timeout watchdog or user cancel) and
+        # "refusal" mean the work did NOT complete — the output is
+        # truncated and must not propagate downstream as an artifact.
+        if stop_reason in _FAILURE_STOP_REASONS:
+            return AgentStatus(
+                state="failed",
+                exit_code=-1,
+                session_id=session_id or process.session_id,
+                error=f"Agent did not complete: stopReason={stop_reason!r}",
                 cost_usd=cost,
             )
 
@@ -892,35 +965,31 @@ class ACPBackend:
         cost = extract_cost(process.output_path)
 
         # Check if we have a completed result (stopReason in output)
-        try:
-            with open(process.output_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        data = json.loads(line)
-                        result = data.get("result", {})
-                        if isinstance(result, dict) and "stopReason" in result:
-                            error = read_last_error(process.output_path)
-                            if error:
-                                return AgentStatus(
-                                    state="failed",
-                                    exit_code=-1,
-                                    session_id=session_id or process.session_id,
-                                    error=error,
-                                    cost_usd=cost,
-                                )
-                            return AgentStatus(
-                                state="completed",
-                                exit_code=0,
-                                session_id=session_id or process.session_id,
-                                cost_usd=cost,
-                            )
-                    except json.JSONDecodeError:
-                        continue
-        except FileNotFoundError:
-            pass
+        stop_reason = _read_stop_reason(process.output_path)
+        if stop_reason is not None:
+            error = read_last_error(process.output_path)
+            if error:
+                return AgentStatus(
+                    state="failed",
+                    exit_code=-1,
+                    session_id=session_id or process.session_id,
+                    error=error,
+                    cost_usd=cost,
+                )
+            if stop_reason in _FAILURE_STOP_REASONS:
+                return AgentStatus(
+                    state="failed",
+                    exit_code=-1,
+                    session_id=session_id or process.session_id,
+                    error=f"Agent did not complete: stopReason={stop_reason!r}",
+                    cost_usd=cost,
+                )
+            return AgentStatus(
+                state="completed",
+                exit_code=0,
+                session_id=session_id or process.session_id,
+                cost_usd=cost,
+            )
 
         return AgentStatus(
             state="running",
@@ -929,16 +998,35 @@ class ACPBackend:
         )
 
     def cancel(self, process: AgentProcess) -> None:
-        """Cancel in-flight prompt."""
-        # Find the ACP process hosting this session
+        """Cancel in-flight prompt.
+
+        Routes session/cancel to the ACP process that actually hosts the
+        session. client.cancel is a JSON-RPC notification — it cannot fail
+        for a live process — so blindly probing lifecycle.active would
+        always send the cancel to the first process and silently no-op
+        whenever more than one ACP process is active.
+        """
         if process.session_id:
-            for managed in self.lifecycle.active:
-                acp_proc = managed.resource
+            with self._session_hosts_lock:
+                host = self._session_hosts.get(process.session_id)
+            host_is_pooled = host is not None and any(
+                m is host for m in self.lifecycle.active
+            )
+            if host_is_pooled and self._is_alive(host.resource):
                 try:
-                    acp_proc.client.cancel(process.session_id)
+                    host.resource.client.cancel(process.session_id)
                     return
                 except Exception:
-                    pass
+                    logger.debug(
+                        "session/cancel failed for session %s",
+                        process.session_id, exc_info=True,
+                    )
+            else:
+                logger.warning(
+                    "cancel: no live ACP process hosts session %s — "
+                    "falling back to SIGTERM",
+                    process.session_id,
+                )
 
         # Fallback: SIGTERM on process group
         pgid = process.pgid or process.pid

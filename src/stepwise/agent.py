@@ -34,6 +34,19 @@ EMIT_FLOW_FILENAME = "emit.flow.yaml"
 EMIT_FLOW_DIR = ".stepwise"
 
 
+def emit_flow_filename(step_name: str, attempt: int) -> str:
+    """Per-step/attempt emit-flow filename.
+
+    The emit file used to be a single shared path per working_dir
+    (.stepwise/emit.flow.yaml), which let stale emissions from failed runs —
+    or concurrent emissions from parallel steps — get picked up by the wrong
+    step. Namespacing by step name + attempt makes each run's emission
+    unambiguous. The legacy filename is still read as a fallback for agents
+    that ignore the per-step instruction.
+    """
+    return f"emit-{step_name}-{attempt}.flow.yaml"
+
+
 def _detect_usage_limit_in_line(line: str, parse_json: bool) -> str | None:
     """Check a single line for usage limit patterns.
 
@@ -164,6 +177,12 @@ def _build_agent_env(
     the stepwise server's own venv / node_modules / conda environment via
     tool commands. Mirrors ScriptExecutor's STEPWISE_* env vars and adds
     STEPWISE_OUTPUT_FILE when the step declares outputs.
+
+    NOTE: the production ACP backend does NOT use this — ACP processes are
+    pooled and reused across steps, so per-step env delivery is structurally
+    impossible there. Output-file bridging for ACP agents happens via prompt
+    instructions (the literal path is embedded by _render_prompt). This
+    builder is for backends that spawn one subprocess per step.
 
     The step config may set `inherit_host_toolchain: true` to opt out of
     filtering — useful for agents that legitimately need the same toolchain
@@ -406,6 +425,30 @@ class AgentExecutor(Executor):
 
         prompt = self._render_prompt(inputs, context)
 
+        # Remove stale emit files BEFORE the agent runs: a previous failed
+        # attempt returns from the failure branch without consuming its
+        # emission, and the legacy shared filename can carry leftovers from
+        # other steps in the same working_dir. Anything found after the run
+        # must have been written during this run.
+        if self.config.get("emit_flow"):
+            emit_dir = os.path.join(
+                str(self.config.get("working_dir") or context.workspace_path),
+                EMIT_FLOW_DIR,
+            )
+            for stale_name in (
+                emit_flow_filename(context.step_name, context.attempt),
+                EMIT_FLOW_FILENAME,
+            ):
+                stale_path = os.path.join(emit_dir, stale_name)
+                if os.path.exists(stale_path):
+                    logger.warning(
+                        f"[{step_id}] removing stale emit file before run: {stale_path}"
+                    )
+                    try:
+                        os.remove(stale_path)
+                    except OSError:
+                        pass
+
         # Session naming strategy
         spawn_config = dict(self.config)
 
@@ -426,8 +469,13 @@ class AgentExecutor(Executor):
             if use_existing and prev_session:
                 # Continue existing session — use stable name (no attempt suffix)
                 spawn_config["_session_name"] = prev_session
-            elif use_existing and context.attempt > 1:
-                # Previous session should exist but config missing — use stable name
+            elif use_existing:
+                # Use the stable name from attempt 1 onward. The first
+                # attempt must register the name with the backend so later
+                # attempts (and downstream steps via the auto-emitted
+                # _session_id) can actually resume the same conversation —
+                # without this the ACP backend created a fresh session
+                # every iteration and continue_session was a silent no-op.
                 job_prefix = context.job_id.replace("job-", "") if context.job_id else "local"
                 spawn_config["_session_name"] = f"step-{job_prefix}-{context.step_name}"
 
@@ -542,19 +590,31 @@ class AgentExecutor(Executor):
                 },
             )
 
-        # Check for emitted flow (only if emit_flow enabled in config)
+        # Check for emitted flow (only if emit_flow enabled in config).
+        # Prefer the per-step/attempt filename the agent was instructed to
+        # use; fall back to the legacy shared filename for agents that
+        # ignore the instruction.
         if self.config.get("emit_flow"):
             working_dir = state.get("working_dir", workspace_path)
-            emit_path = os.path.join(working_dir, EMIT_FLOW_DIR, EMIT_FLOW_FILENAME)
-            if os.path.exists(emit_path):
-                step_outputs = self.config.get("output_fields", [])
-                result = self._build_delegate_result(emit_path, state, context, step_outputs)
-                # Consume the emit file so it doesn't persist across loop iterations
-                try:
-                    os.remove(emit_path)
-                except OSError:
-                    pass
-                return result
+            candidates = []
+            if context is not None:
+                candidates.append(os.path.join(
+                    working_dir, EMIT_FLOW_DIR,
+                    emit_flow_filename(context.step_name, context.attempt),
+                ))
+            candidates.append(
+                os.path.join(working_dir, EMIT_FLOW_DIR, EMIT_FLOW_FILENAME)
+            )
+            for emit_path in candidates:
+                if os.path.exists(emit_path):
+                    step_outputs = self.config.get("output_fields", [])
+                    result = self._build_delegate_result(emit_path, state, context, step_outputs)
+                    # Consume the emit file so it doesn't persist across loop iterations
+                    try:
+                        os.remove(emit_path)
+                    except OSError:
+                        pass
+                    return result
 
         # Completed — extract outputs based on mode
         try:
@@ -772,10 +832,24 @@ class AgentExecutor(Executor):
         template = self.prompt_template
         if context.attempt > 1 and self.loop_prompt:
             template = self.loop_prompt
+        # {{var}} (Jinja/Mustache-style) support: rewrite placeholders on the
+        # TEMPLATE to $-style, then run a single safe_substitute pass.
+        # Substituted VALUES must never be re-scanned for placeholders —
+        # otherwise untrusted input data containing '{{other_input}}' would
+        # splice a sibling input (e.g. a secret) into the agent prompt.
+        for k in str_inputs:
+            template = template.replace("{{" + k + "}}", "${" + k + "}")
+        # For file output mode, replace generic "output.json" references in
+        # the template with the step-specific filename to prevent collisions
+        # in a shared workspace. Applied pre-substitution so input data that
+        # merely mentions "output.json" is never mutated.
+        if self.output_mode == "file":
+            step_output_file = self.output_path or f"{context.step_name}-output.json"
+            import re
+            # Only replace standalone "output.json", not when part of a longer filename
+            # like "explore-output.json". Match when preceded by whitespace, backtick, or quote.
+            template = re.sub(r'(?<=[\s`"\'])output\.json(?=[\s`"\',)])', step_output_file, template)
         prompt = Template(template).safe_substitute(str_inputs)
-        # Also support {{var}} (Jinja/Mustache-style) templates
-        for k, v in str_inputs.items():
-            prompt = prompt.replace("{{" + k + "}}", v)
 
         if context.injected_context:
             prompt += "\n\nAdditional context:\n" + "\n".join(context.injected_context)
@@ -788,15 +862,15 @@ class AgentExecutor(Executor):
                 depth_remaining=self.config.get("_depth_remaining"),
                 project_dir=self.config.get("_project_dir"),
             )
-
-        # For file output mode, replace generic "output.json" references with
-        # the step-specific filename to prevent collisions in shared workspace.
-        if self.output_mode == "file":
-            step_output_file = self.output_path or f"{context.step_name}-output.json"
-            import re
-            # Only replace standalone "output.json", not when part of a longer filename
-            # like "explore-output.json". Match when preceded by whitespace, backtick, or quote.
-            prompt = re.sub(r'(?<=[\s`"\'])output\.json(?=[\s`"\',)])', step_output_file, prompt)
+            # Override the generic emit path with a per-step/attempt
+            # filename so concurrent or stale emissions in a shared
+            # working_dir can never be attributed to the wrong step.
+            step_emit_name = emit_flow_filename(context.step_name, context.attempt)
+            prompt += (
+                f"\n\nIMPORTANT: for THIS step, write the emitted flow to "
+                f"`{EMIT_FLOW_DIR}/{step_emit_name}` "
+                f"(use this exact filename instead of `{EMIT_FLOW_DIR}/{EMIT_FLOW_FILENAME}`).\n"
+            )
 
         # Append structured output instructions when step declares outputs and
         # mode is "file" (whether explicit or auto-promoted).
@@ -812,8 +886,7 @@ class AgentExecutor(Executor):
                 f"Required JSON keys: {field_list}\n"
                 f"Example:\n```json\n"
                 f"{json.dumps(example, indent=2)}\n```\n"
-                f"\nThe file path is also available as $STEPWISE_OUTPUT_FILE.\n"
-                f"Write this file as one of your final actions.\n"
+                f"\nWrite this file as one of your final actions.\n"
                 f"</stepwise-output>"
             )
 

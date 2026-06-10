@@ -589,3 +589,121 @@ def test_iterative_delegation_max_iterations(async_engine):
     result = run_job_sync(async_engine, job.id, timeout=15)
     # Should be PAUSED because max_iterations was exceeded
     assert result.status == JobStatus.PAUSED
+
+
+# ── Per-step emit file namespacing (F49) ─────────────────────────────
+
+
+ALT_EMIT_FLOW = """\
+name: namespaced-flow
+author: test
+steps:
+  do-work:
+    run: |
+      echo '{"result": "namespaced"}'
+    outputs: [result]
+"""
+
+
+def _direct_executor(backend, **cfg):
+    from stepwise.agent import AgentExecutor
+    return AgentExecutor(backend=backend, prompt="Do work", emit_flow=True, **cfg)
+
+
+def _direct_ctx(workspace, step="s1", attempt=1):
+    return ExecutionContext(
+        job_id="j1", step_name=step, attempt=attempt,
+        workspace_path=str(workspace), idempotency=f"{step}-{attempt}",
+    )
+
+
+def test_namespaced_emit_file_is_picked_up(tmp_path):
+    """Agent writing the per-step/attempt filename gets a delegate result."""
+    from stepwise.agent import emit_flow_filename
+
+    backend = FileWritingMockBackend()
+    backend.set_auto_complete(result={})
+    backend._files_to_write[
+        os.path.join(EMIT_FLOW_DIR, emit_flow_filename("s1", 1))
+    ] = SIMPLE_EMIT_FLOW
+
+    executor = _direct_executor(backend)
+    result = executor.start({}, _direct_ctx(tmp_path))
+
+    assert result.type == "delegate"
+    assert result.sub_job_def.workflow.metadata.name == "emitted-flow"
+    # Consumed after pickup
+    assert not (tmp_path / EMIT_FLOW_DIR / emit_flow_filename("s1", 1)).exists()
+
+
+def test_namespaced_emit_preferred_over_legacy(tmp_path):
+    """When both files exist, the step's own namespaced emission wins —
+    a concurrent/stale legacy emission can't be attributed to this step."""
+    from stepwise.agent import emit_flow_filename
+
+    backend = FileWritingMockBackend()
+    backend.set_auto_complete(result={})
+    backend._files_to_write[
+        os.path.join(EMIT_FLOW_DIR, EMIT_FLOW_FILENAME)
+    ] = SIMPLE_EMIT_FLOW  # name: emitted-flow
+    backend._files_to_write[
+        os.path.join(EMIT_FLOW_DIR, emit_flow_filename("s1", 1))
+    ] = ALT_EMIT_FLOW  # name: namespaced-flow
+
+    executor = _direct_executor(backend)
+    result = executor.start({}, _direct_ctx(tmp_path))
+
+    assert result.type == "delegate"
+    assert result.sub_job_def.workflow.metadata.name == "namespaced-flow"
+
+
+def test_stale_legacy_emit_file_cleared_before_run(tmp_path):
+    """A leftover emit.flow.yaml from a previous failed run must NOT be
+    delegated by a later step that never emitted anything."""
+    stale_dir = tmp_path / EMIT_FLOW_DIR
+    stale_dir.mkdir(parents=True)
+    (stale_dir / EMIT_FLOW_FILENAME).write_text(SIMPLE_EMIT_FLOW)
+
+    backend = MockAgentBackend()
+    backend.set_auto_complete(result={})  # agent emits nothing
+
+    executor = _direct_executor(backend)
+    result = executor.start({}, _direct_ctx(tmp_path))
+
+    # No delegation from the stale file; it was removed pre-run.
+    assert result.type == "data"
+    assert not (stale_dir / EMIT_FLOW_FILENAME).exists()
+
+
+def test_stale_namespaced_emit_file_cleared_before_run(tmp_path):
+    """Same-step retry: a namespaced emit file left by a failed attempt
+    with the same attempt number is cleared before the agent runs."""
+    from stepwise.agent import emit_flow_filename
+
+    stale_dir = tmp_path / EMIT_FLOW_DIR
+    stale_dir.mkdir(parents=True)
+    (stale_dir / emit_flow_filename("s1", 1)).write_text(SIMPLE_EMIT_FLOW)
+
+    backend = MockAgentBackend()
+    backend.set_auto_complete(result={})
+
+    executor = _direct_executor(backend)
+    result = executor.start({}, _direct_ctx(tmp_path))
+
+    assert result.type == "data"
+    assert not (stale_dir / emit_flow_filename("s1", 1)).exists()
+
+
+def test_prompt_instructs_namespaced_emit_filename():
+    """The agent is told the exact per-step/attempt filename to write."""
+    from stepwise.agent import AgentExecutor, emit_flow_filename
+
+    backend = MockAgentBackend()
+    executor = AgentExecutor(backend=backend, prompt="Do work", emit_flow=True)
+    context = ExecutionContext(
+        job_id="j1", step_name="my-step", attempt=3,
+        workspace_path="/tmp/test", idempotency="t",
+    )
+    prompt = executor._render_prompt({}, context)
+    assert emit_flow_filename("my-step", 3) in prompt
+    assert "emit-my-step-3.flow.yaml" in prompt

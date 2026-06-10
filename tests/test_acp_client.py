@@ -23,6 +23,8 @@ def _spawn_mock(**kwargs) -> subprocess.Popen:
         cmd.append("--fail-session-load")
     if kwargs.get("stall_after_partial"):
         cmd.append("--stall-after-partial")
+    if kwargs.get("honor_cancel"):
+        cmd.append("--honor-cancel")
     script = kwargs.get("response_script")
     if script:
         cmd.extend(["--response-script", script])
@@ -301,6 +303,34 @@ class TestIdleStreamWatchdog:
                 line.get("method") == "session/update"
                 for line in lines
             ), "partial stream should have been written"
+        finally:
+            transport.close()
+            proc.terminate()
+            proc.wait(timeout=5)
+
+    def test_idle_timeout_raises_when_agent_honors_cancel(self, tmp_path):
+        """F44 regression: when the agent HONORS the watchdog's
+        session/cancel (the normal case — the prompt resolves with
+        stopReason='cancelled'), prompt() must still raise instead of
+        returning the truncated result as a success."""
+        proc = _spawn_mock(
+            capabilities={"fork": False, "sessions": True, "multi_session": True},
+            stall_after_partial=True,
+            honor_cancel=True,
+        )
+        transport = JsonRpcTransport(proc)
+        transport.start()
+        c = ACPClient(transport)
+        c.initialize()
+        output_path = str(tmp_path / "out.jsonl")
+        try:
+            sid = c.new_session("/tmp/work")
+            with pytest.raises(AcpError, match="Stream idle timeout"):
+                c.prompt(
+                    sid, "hello",
+                    output_path=output_path,
+                    idle_timeout_seconds=2.0,
+                )
         finally:
             transport.close()
             proc.terminate()

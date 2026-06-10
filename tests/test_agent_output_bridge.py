@@ -205,7 +205,9 @@ class TestPromptInstructions:
         assert "</stepwise-output>" in prompt
         assert '"summary"' in prompt
         assert '"score"' in prompt
-        assert "STEPWISE_OUTPUT_FILE" in prompt
+        # The env var is never delivered to ACP agents (pooled processes
+        # have a fixed env) — the prompt must not promise it (F48).
+        assert "STEPWISE_OUTPUT_FILE" not in prompt
         assert "analyze-output.json" in prompt
         # JSON example block
         assert '"summary": "<summary value>"' in prompt
