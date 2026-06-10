@@ -276,7 +276,12 @@ def _delegated_create_and_start(
         resp = httpx.post(f"{base}/api/jobs/{job_id}/start", timeout=10)
         resp.raise_for_status()
     except Exception as e:
-        return None, f"Failed to start job on server: {e}"
+        # The job exists on the server but never started — tell the user
+        # its id so it isn't silently orphaned in the job list.
+        return None, (
+            f"Job {job_id} was created on the server but failed to start: {e}. "
+            f"It remains on the server — start or delete it from the web UI."
+        )
 
     return job_id, None
 
@@ -337,6 +342,7 @@ async def _delegated_ws_loop(
         shutdown_requested = True
 
     start_time = time.time()
+    last_fetch = 0.0  # always fetch on the first iteration
     seen_completed: set[str] = set()  # external steps already prompted
     base_url = server_url.rstrip("/")
 
@@ -373,7 +379,11 @@ async def _delegated_ws_loop(
                             # Only fetch if this tick is for our job
                             changed = data.get("changed_jobs", [])
                             if data.get("type") != "tick" or (changed and job_id not in changed):
-                                continue
+                                # On a busy server, ticks for other jobs can
+                                # arrive faster than the 2s recv timeout —
+                                # don't let them starve our periodic fetch.
+                                if time.time() - last_fetch < 2.0:
+                                    continue
                         except asyncio.TimeoutError:
                             # No message in 2s, do a fetch anyway to stay current
                             pass
@@ -388,6 +398,7 @@ async def _delegated_ws_loop(
                         await asyncio.sleep(2.0)
 
                     # Fetch state and report
+                    last_fetch = time.time()
                     try:
                         job_data, runs = await _fetch_job_state(client, job_id)
                     except Exception as e:
@@ -413,13 +424,18 @@ async def _delegated_ws_loop(
                                 )
                                 handle.resume_after_input()
                                 try:
-                                    await client.post(
+                                    resp = await client.post(
                                         f"/api/runs/{run_id}/fulfill",
                                         json={"payload": payload},
                                     )
+                                    resp.raise_for_status()
                                 except Exception as e:
-                                    _err(f"Failed to fulfill step: {e}", output_stream)
-                                seen_completed.add(run_id)
+                                    # Don't mark handled: the input was not
+                                    # delivered, so re-prompt on the next tick
+                                    # instead of silently discarding it.
+                                    _err(f"Failed to fulfill step (will retry): {e}", output_stream)
+                                else:
+                                    seen_completed.add(run_id)
 
                     # Check terminal state
                     job_status = job_data["status"]
@@ -463,6 +479,20 @@ async def _delegated_ws_loop(
                                 flow_path, report_output, output_stream,
                             )
                         return EXIT_JOB_FAILED
+                    elif job_status == "paused":
+                        handle.flush_all()
+                        _err(
+                            f"Job escalated — paused for human review. "
+                            f"Inspect and resume it in the web UI (job {job_id}).",
+                            output_stream,
+                        )
+                        if output_json:
+                            _json_stdout({
+                                "status": "paused",
+                                "job_id": job_id,
+                                "duration_seconds": round(time.time() - start_time, 1),
+                            })
+                        return EXIT_SUSPENDED
         finally:
             if ws_conn:
                 await ws_conn.close()
@@ -959,6 +989,21 @@ async def _async_run_flow(
                     if report:
                         _generate_report(job, store, flow_path, report_output, output_stream)
                     return EXIT_JOB_FAILED
+                elif job.status == JobStatus.PAUSED:
+                    handle.flush_all()
+                    _err(
+                        f"Job escalated — paused for human review. "
+                        f"Inspect and resume it in the web UI (job {job.id}).",
+                        output_stream,
+                    )
+                    if output_json:
+                        _json_stdout({
+                            "status": "paused",
+                            "job_id": job.id,
+                            "completed_outputs": engine.completed_outputs(job.id),
+                            "duration_seconds": round(time.time() - start_time, 1),
+                        })
+                    return EXIT_SUSPENDED
 
                 await asyncio.sleep(0.1)
 
@@ -1212,6 +1257,7 @@ async def _delegated_wait_ws_loop(
         pass  # SIGTSTP not available on all platforms
 
     start_time = time.time()
+    last_fetch = 0.0  # always fetch on the first iteration
     base_url = server_url.rstrip("/")
 
     async with httpx.AsyncClient(base_url=base_url, timeout=10) as client:
@@ -1257,7 +1303,12 @@ async def _delegated_wait_ws_loop(
                         data = json_mod.loads(msg)
                         changed = data.get("changed_jobs", [])
                         if data.get("type") != "tick" or (changed and job_id not in changed):
-                            continue
+                            # On a busy server, ticks for other jobs can arrive
+                            # faster than the 2s recv timeout — don't let them
+                            # starve our own periodic fetch (a missed tick for
+                            # this job would otherwise hang us forever).
+                            if time.time() - last_fetch < 2.0:
+                                continue
                     except asyncio.TimeoutError:
                         pass
                     except Exception:
@@ -1267,6 +1318,7 @@ async def _delegated_wait_ws_loop(
                     await asyncio.sleep(2.0)
 
                 # Fetch state
+                last_fetch = time.time()
                 try:
                     job_data, runs = await _fetch_job_state(client, job_id)
                 except JobNotFoundError as e:
@@ -1334,6 +1386,19 @@ async def _delegated_wait_ws_loop(
                         "duration_seconds": duration,
                     })
                     return EXIT_JOB_FAILED
+
+                elif job_status == "paused":
+                    completed_steps = [
+                        r["step_name"] for r in runs if r["status"] == "completed"
+                    ]
+                    _write_sentinel(project_dir, job_id, "paused")
+                    _json_stdout({
+                        "status": "paused",
+                        "job_id": job_id,
+                        "completed_steps": completed_steps,
+                        "duration_seconds": duration,
+                    })
+                    return EXIT_SUSPENDED
 
                 # Check for suspension
                 elif _is_blocked_by_suspension_from_runs(runs):
@@ -1504,6 +1569,13 @@ async def _delegated_wait_multi_ws_loop(
                                         "cost_usd": cost_usd, "duration_seconds": duration}
                         _write_sentinel(project_dir, jid, job_status)
 
+                    elif job_status == "paused":
+                        completed_steps = [r["step_name"] for r in runs if r["status"] == "completed"]
+                        pending[jid] = {"job_id": jid, "status": "paused",
+                                        "completed_steps": completed_steps,
+                                        "duration_seconds": duration}
+                        _write_sentinel(project_dir, jid, "paused")
+
                     elif _is_blocked_by_suspension_from_runs(runs):
                         try:
                             cost_resp = await client.get(f"/api/jobs/{jid}/cost")
@@ -1521,7 +1593,8 @@ async def _delegated_wait_multi_ws_loop(
                         result = _build_multi_result(mode, [pending[jid]], time.time() - start_time)
                         _json_stdout(result)
                         exit_map = {"completed": EXIT_SUCCESS, "failed": EXIT_JOB_FAILED,
-                                    "cancelled": EXIT_CANCELLED, "suspended": EXIT_SUSPENDED}
+                                    "cancelled": EXIT_CANCELLED, "suspended": EXIT_SUSPENDED,
+                                    "paused": EXIT_SUSPENDED}
                         return exit_map.get(pending[jid]["status"], EXIT_JOB_FAILED)
 
                 # --all: check if all resolved
@@ -1626,6 +1699,22 @@ async def _async_wait_for_job(
                 }
                 _json_stdout(result)
                 return EXIT_JOB_FAILED
+
+            elif job.status == JobStatus.PAUSED:
+                duration = round(time.time() - start_time, 1)
+                completed_steps = [
+                    r.step_name for r in engine.get_runs(job_id)
+                    if r.status == StepRunStatus.COMPLETED
+                ]
+                result = {
+                    "status": "paused",
+                    "job_id": job_id,
+                    "completed_steps": completed_steps,
+                    "completed_outputs": engine.completed_outputs(job_id),
+                    "duration_seconds": duration,
+                }
+                _json_stdout(result)
+                return EXIT_SUSPENDED
 
             # Check for suspension: all progress blocked by suspended steps
             if _is_blocked_by_suspension(engine, job_id):
@@ -1740,6 +1829,23 @@ def wait_for_job(
                 _write_sentinel(project_dir, job_id, job.status.value)
                 _json_stdout(result)
                 return EXIT_JOB_FAILED
+
+            elif job.status == JobStatus.PAUSED:
+                duration = round(time.time() - start_time, 1)
+                completed_steps = [
+                    r.step_name for r in engine.get_runs(job_id)
+                    if r.status == StepRunStatus.COMPLETED
+                ]
+                result = {
+                    "status": "paused",
+                    "job_id": job_id,
+                    "completed_steps": completed_steps,
+                    "completed_outputs": engine.completed_outputs(job_id),
+                    "duration_seconds": duration,
+                }
+                _write_sentinel(project_dir, job_id, "paused")
+                _json_stdout(result)
+                return EXIT_SUSPENDED
 
             # Check for suspension: all progress blocked by suspended steps
             if _is_blocked_by_suspension(engine, job_id):
@@ -1857,6 +1963,14 @@ def wait_for_jobs(
                                     "duration_seconds": duration}
                     _write_sentinel(project_dir, jid, job.status.value)
 
+                elif job.status == JobStatus.PAUSED:
+                    completed_steps = [r.step_name for r in engine.get_runs(jid)
+                                       if r.status == StepRunStatus.COMPLETED]
+                    pending[jid] = {"job_id": jid, "status": "paused",
+                                    "completed_steps": completed_steps,
+                                    "duration_seconds": duration}
+                    _write_sentinel(project_dir, jid, "paused")
+
                 elif _is_blocked_by_suspension(engine, jid):
                     cost = engine.job_cost(jid)
                     completed_steps = [r.step_name for r in engine.get_runs(jid)
@@ -1872,7 +1986,8 @@ def wait_for_jobs(
                     result = _build_multi_result(mode, [pending[jid]], time.time() - start_time)
                     _json_stdout(result)
                     exit_map = {"completed": EXIT_SUCCESS, "failed": EXIT_JOB_FAILED,
-                                "cancelled": EXIT_CANCELLED, "suspended": EXIT_SUSPENDED}
+                                "cancelled": EXIT_CANCELLED, "suspended": EXIT_SUSPENDED,
+                                "paused": EXIT_SUSPENDED}
                     return exit_map.get(pending[jid]["status"], EXIT_JOB_FAILED)
 
             # --all: check if all resolved
@@ -2052,16 +2167,30 @@ def run_async(
         "--project-dir", str(project.dot_dir),
     ]
 
-    # Detach: new session, no stdin/stdout/stderr inheritance
+    # Detach: new session, no stdin/stdout inheritance. Stderr/stdout go to
+    # a per-job log so background-runner crashes leave diagnostics instead
+    # of a silently stranded PENDING job.
+    log_path = project.logs_dir / f"runner-{job_id}.log"
+    try:
+        project.logs_dir.mkdir(parents=True, exist_ok=True)
+        log_fd = open(log_path, "a")
+    except OSError:
+        log_fd = sp.DEVNULL
+        log_path = None
     sp.Popen(
         cmd,
         stdin=sp.DEVNULL,
-        stdout=sp.DEVNULL,
-        stderr=sp.DEVNULL,
+        stdout=log_fd,
+        stderr=log_fd,
         start_new_session=True,
     )
+    if log_fd is not sp.DEVNULL:
+        log_fd.close()  # child holds its own copy of the fd
 
-    _json_stdout({"job_id": job_id, "status": "running"})
+    out = {"job_id": job_id, "status": "running"}
+    if log_path is not None:
+        out["log_file"] = str(log_path)
+    _json_stdout(out)
     return EXIT_SUCCESS
 
 
@@ -2132,14 +2261,14 @@ def _write_sentinel(project_dir: Path | None, job_id: str, status: str, extra: d
 def _aggregate_exit_code(job_results: list[dict]) -> int:
     """Determine exit code from multiple job results. Worst status wins.
 
-    Priority: failed (1) > cancelled (4) > suspended (5) > completed (0).
+    Priority: failed (1) > cancelled (4) > suspended/paused (5) > completed (0).
     """
     statuses = {r["status"] for r in job_results}
     if "failed" in statuses or "error" in statuses:
         return EXIT_JOB_FAILED
     if "cancelled" in statuses:
         return EXIT_CANCELLED
-    if "suspended" in statuses:
+    if "suspended" in statuses or "paused" in statuses:
         return EXIT_SUSPENDED
     return EXIT_SUCCESS
 
