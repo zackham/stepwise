@@ -468,17 +468,30 @@ def _parse_ndjson_events(raw: str) -> list[dict]:
 
 
 async def _tail_agent_output(run_id: str, output_path: str) -> None:
-    """Async task that tails an NDJSON file and broadcasts events via WebSocket."""
+    """Async task that tails an NDJSON file and broadcasts events via WebSocket.
+
+    Reads in binary mode and only consumes newline-terminated lines: a
+    read that lands mid-write of an NDJSON record keeps the partial tail
+    unconsumed (offset doesn't advance past it) so the event is parsed
+    intact on a later poll instead of being silently dropped.
+    """
     offset = 0
     try:
         while True:
             try:
-                with open(output_path) as f:
+                with open(output_path, "rb") as f:
                     f.seek(offset)
                     new_data = f.read()
-                    if new_data:
-                        offset = f.tell()
-                        events = _parse_ndjson_events(new_data)
+                if new_data:
+                    # Only consume up to the last complete line; leave any
+                    # partial trailing line for the next read.
+                    nl = new_data.rfind(b"\n")
+                    if nl >= 0:
+                        complete = new_data[: nl + 1]
+                        offset += len(complete)
+                        events = _parse_ndjson_events(
+                            complete.decode("utf-8", errors="replace")
+                        )
                         if events:
                             await _broadcast({
                                 "type": "agent_output",
@@ -551,14 +564,22 @@ def _latest_pause_cause(engine, job_id: str) -> dict | None:
     without forcing callers to scan the event stream themselves. The
     engine already emits rich payloads for the escalate / loop-max /
     suspend-escalate paths — we just replay the latest one.
+
+    Uses a targeted LIMIT 1 query (covered by idx_events_job) instead of
+    loading + deserializing the job's entire event log — this runs for
+    every PAUSED job on every /api/jobs poll.
     """
-    events = engine.get_events(job_id)
-    for event in reversed(events):
-        if event.type == JOB_PAUSED:
-            data = dict(event.data or {})
-            data["at"] = event.timestamp.isoformat() if event.timestamp else None
-            return data
-    return None
+    row = engine.store._conn.execute(
+        """SELECT data, timestamp FROM events
+           WHERE job_id = ? AND type = ?
+           ORDER BY timestamp DESC, rowid DESC LIMIT 1""",
+        (job_id, JOB_PAUSED),
+    ).fetchone()
+    if row is None:
+        return None
+    data = dict(json.loads(row["data"]) if row["data"] else {})
+    data["at"] = row["timestamp"] or None  # stored as isoformat text
+    return data
 
 
 def _exit_rules_by_step(engine, job_id: str) -> dict[str, dict]:
@@ -715,17 +736,44 @@ def _build_summary_lookups(store, jobs: list[Job]) -> dict:
     }
 
 
+# Upper bound for a single WebSocket send during a broadcast. A client
+# that stops reading (laptop sleep, half-open TCP) fills its socket
+# buffer and would otherwise block ALL broadcasts to everyone behind it.
+_BROADCAST_SEND_TIMEOUT_SECONDS = 5.0
+
+
 async def _broadcast(message: dict) -> None:
-    """Send a message to all connected WebSocket clients."""
+    """Send a message to all connected WebSocket clients.
+
+    Each send is bounded by a per-client timeout; a stalled client is
+    treated as dead and dropped so it cannot block broadcasts to the
+    remaining clients.
+    """
     dead: list[WebSocket] = []
     payload = json.dumps(message, default=str)
     for ws in list(_ws_clients):  # snapshot — clients may connect/disconnect during await
         try:
-            await ws.send_text(payload)
+            await asyncio.wait_for(
+                ws.send_text(payload), timeout=_BROADCAST_SEND_TIMEOUT_SECONDS
+            )
         except Exception:
             dead.append(ws)
     for ws in dead:
         _ws_clients.discard(ws)
+
+
+def _jobs_with_streamable_runs(engine) -> list[Job]:
+    """Jobs whose RUNNING step runs should have live output tailers.
+
+    Includes PAUSED jobs in addition to RUNNING ones: pausing a job does
+    not stop an in-flight agent/script executor (the run is "stranded"
+    but still producing output), so its tailer must survive the pause —
+    otherwise resume restarts the tail at offset 0 and re-broadcasts the
+    entire transcript to live viewers.
+    """
+    jobs = list(engine.store.active_jobs())
+    jobs.extend(engine.store.all_jobs(status=JobStatus.PAUSED))
+    return jobs
 
 
 async def _agent_stream_monitor() -> None:
@@ -734,7 +782,7 @@ async def _agent_stream_monitor() -> None:
     while True:
         try:
             # Start tailers for new running agent steps
-            for job in engine.store.active_jobs():
+            for job in _jobs_with_streamable_runs(engine):
                 for run in engine.store.running_runs(job.id):
                     output_path = (run.executor_state or {}).get("output_path")
                     if output_path and run.id not in _stream_tasks:
@@ -745,7 +793,7 @@ async def _agent_stream_monitor() -> None:
 
             # Cancel tailers for completed/failed runs
             active_run_ids = set()
-            for job in engine.store.active_jobs():
+            for job in _jobs_with_streamable_runs(engine):
                 for run in engine.store.running_runs(job.id):
                     active_run_ids.add(run.id)
             stale = [rid for rid in _stream_tasks if rid not in active_run_ids]
@@ -765,7 +813,7 @@ async def _script_stream_monitor() -> None:
     engine = _get_engine()
     while True:
         try:
-            for job in engine.store.active_jobs():
+            for job in _jobs_with_streamable_runs(engine):
                 for run in engine.store.running_runs(job.id):
                     state = run.executor_state or {}
                     stdout_path = state.get("stdout_path")
@@ -780,7 +828,7 @@ async def _script_stream_monitor() -> None:
                         _script_stream_tasks[run.id] = task
 
             active_run_ids = set()
-            for job in engine.store.active_jobs():
+            for job in _jobs_with_streamable_runs(engine):
                 for run in engine.store.running_runs(job.id):
                     active_run_ids.add(run.id)
             stale = [rid for rid in _script_stream_tasks if rid not in active_run_ids]
@@ -819,7 +867,7 @@ async def _process_health_check() -> None:
     while True:
         try:
             await asyncio.sleep(interval)
-            result = run_health_check(engine.store, ttl_seconds=ttl)
+            result = run_health_check(engine.store, ttl_seconds=ttl, engine=engine)
 
             # Re-evaluate affected jobs so exit rules / settlement can proceed
             affected_job_ids: set[str] = set()
@@ -1501,6 +1549,17 @@ def list_suspended_jobs_route(
     return list_suspended_jobs(since=since, flow=flow)
 
 
+# NOTE: must be registered BEFORE /api/jobs/{job_id} — routes match in
+# registration order, so a later literal route would be shadowed by the
+# parameterized one (job_id="stale" → 404).
+@app.get("/api/jobs/stale")
+def get_stale_jobs():
+    """Return jobs whose CLI owner hasn't heartbeated recently."""
+    engine = _get_engine()
+    stale = engine.store.stale_jobs(max_age_seconds=60)
+    return [j.to_dict() for j in stale]
+
+
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str, summary: bool = False):
     """Return a single job. With `?summary=true` the response shape
@@ -1635,21 +1694,29 @@ def adopt_job(job_id: str):
     return {"status": "adopted", "job_id": job_id}
 
 
-@app.get("/api/jobs/stale")
-def get_stale_jobs():
-    """Return jobs whose CLI owner hasn't heartbeated recently."""
-    engine = _get_engine()
-    stale = engine.store.stale_jobs(max_age_seconds=60)
-    return [j.to_dict() for j in stale]
+def _cancel_if_active(engine, job: Job) -> None:
+    """Cancel a RUNNING/PENDING job before deletion so agent/script
+    processes are killed and engine task tracking is cleaned up —
+    deleting the rows alone would orphan the live processes.
+    """
+    if job.status in (JobStatus.RUNNING, JobStatus.PENDING):
+        try:
+            engine.cancel_job(job.id)
+        except (KeyError, ValueError):
+            logger.warning(
+                "Failed to cancel active job %s before delete", job.id,
+                exc_info=True,
+            )
 
 
 @app.delete("/api/jobs/{job_id}")
 def delete_job(job_id: str):
     engine = _get_engine()
     try:
-        engine.store.load_job(job_id)  # verify it exists
+        job = engine.store.load_job(job_id)  # verify it exists
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    _cancel_if_active(engine, job)
     engine.store.delete_job(job_id)
     _notify_change(job_id)
     return {"status": "deleted"}
@@ -1660,6 +1727,7 @@ def delete_all_jobs():
     engine = _get_engine()
     jobs = engine.store.all_jobs(include_archived=True)
     for job in jobs:
+        _cancel_if_active(engine, job)
         engine.store.delete_job(job.id)
     if _event_loop is not None:
         _event_loop.call_soon_threadsafe(
@@ -2241,7 +2309,10 @@ def trigger_poll_now(run_id: str):
     """Reset next_check_at so the engine's next poll cycle picks up this step immediately."""
     from datetime import timezone
     engine = _get_engine()
-    run = engine.store.load_run(run_id)
+    try:
+        run = engine.store.load_run(run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
     if run.status != StepRunStatus.SUSPENDED:
         raise HTTPException(status_code=400, detail="Run is not suspended")
     if not run.watch or run.watch.mode != "poll":
@@ -2424,7 +2495,13 @@ def inject_context(job_id: str, req: InjectContextRequest):
 @app.get("/api/jobs/{job_id}/events")
 def get_events(job_id: str, since: str | None = None):
     engine = _get_engine()
-    since_dt = datetime.fromisoformat(since) if since else None
+    try:
+        since_dt = datetime.fromisoformat(since) if since else None
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid 'since' timestamp (expected ISO 8601): {since}",
+        )
     try:
         events = engine.get_events(job_id, since_dt)
         return [e.to_dict() for e in events]
@@ -3085,7 +3162,13 @@ def get_models():
 def update_models(req: UpdateModelsRequest):
     cfg = load_config()  # user-level only for registry
     cfg.model_registry = [
-        ModelEntry(id=m.id, name=m.name, provider=m.provider)
+        ModelEntry(
+            id=m.id, name=m.name, provider=m.provider,
+            context_length=m.context_length,
+            max_output_tokens=m.max_output_tokens,
+            prompt_cost=m.prompt_cost,
+            completion_cost=m.completion_cost,
+        )
         for m in req.models
     ]
     if req.default_model is not None:
@@ -4408,7 +4491,7 @@ def _resolve_file_in_flow(flow_dir: Path, file_path: str) -> Path:
 
 
 @app.get("/api/flows/local/{flow_path:path}/files")
-async def list_flow_files(flow_path: str):
+def list_flow_files(flow_path: str):
     """List all files in a flow directory (recursive tree)."""
     flow_dir = _resolve_flow_dir(flow_path)
     skip = {".git", "__pycache__", ".venv", "node_modules", ".stepwise"}
@@ -4432,7 +4515,7 @@ async def list_flow_files(flow_path: str):
 
 
 @app.get("/api/flows/local/{flow_path:path}/files/{file_path:path}")
-async def read_flow_file(flow_path: str, file_path: str):
+def read_flow_file(flow_path: str, file_path: str):
     """Read a file from within a flow directory."""
     flow_dir = _resolve_flow_dir(flow_path)
     full = _resolve_file_in_flow(flow_dir, file_path)
@@ -4456,7 +4539,7 @@ class FlowFileWriteRequest(BaseModel):
 
 
 @app.post("/api/flows/local/{flow_path:path}/files/{file_path:path}")
-async def write_flow_file(flow_path: str, file_path: str, req: FlowFileWriteRequest):
+def write_flow_file(flow_path: str, file_path: str, req: FlowFileWriteRequest):
     """Create or update a file within a flow directory."""
     flow_dir = _resolve_flow_dir(flow_path)
     full = _resolve_file_in_flow(flow_dir, file_path)
@@ -4487,7 +4570,7 @@ async def write_flow_file(flow_path: str, file_path: str, req: FlowFileWriteRequ
 
 
 @app.delete("/api/flows/local/{flow_path:path}/files/{file_path:path}")
-async def delete_flow_file(flow_path: str, file_path: str):
+def delete_flow_file(flow_path: str, file_path: str):
     """Delete a file from a flow directory."""
     flow_dir = _resolve_flow_dir(flow_path)
     full = _resolve_file_in_flow(flow_dir, file_path)
@@ -4504,7 +4587,7 @@ async def delete_flow_file(flow_path: str, file_path: str):
 
 
 @app.delete("/api/flows/local/{path:path}")
-async def delete_local_flow(path: str):
+def delete_local_flow(path: str):
     """Delete an entire flow (file or directory)."""
     import shutil
 
@@ -5371,6 +5454,8 @@ async def event_stream(ws: WebSocket):
     )
     _event_stream_clients.append(client)
 
+    recv_task: asyncio.Task | None = None
+    queue_task: asyncio.Task | None = None
     try:
         # Catch-up: query events between replay and registration to close the gap
         if since_rowid >= 0:
@@ -5385,13 +5470,35 @@ async def event_stream(ws: WebSocket):
                 )
                 await ws.send_json(envelope)
 
-        # Live send loop
+        # Live send loop. Race the outbox queue against ws.receive() —
+        # Starlette only surfaces client disconnects via the receive
+        # channel, so a loop that never reads the socket would stay
+        # parked in queue.get() forever after the consumer goes away
+        # (no event matching its filter ever arrives for finished jobs).
+        recv_task = asyncio.create_task(ws.receive())
         while True:
-            envelope = await client.queue.get()
-            await ws.send_json(envelope)
+            if queue_task is None:
+                queue_task = asyncio.create_task(client.queue.get())
+            done, _ = await asyncio.wait(
+                {recv_task, queue_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if queue_task in done:
+                envelope = queue_task.result()
+                queue_task = None
+                await ws.send_json(envelope)
+            if recv_task in done:
+                msg = recv_task.result()
+                if msg.get("type") == "websocket.disconnect":
+                    break
+                # Ignore client-sent frames; keep watching for disconnect
+                recv_task = asyncio.create_task(ws.receive())
     except (WebSocketDisconnect, Exception):
         pass
     finally:
+        for task in (recv_task, queue_task):
+            if task is not None:
+                task.cancel()
         try:
             _event_stream_clients.remove(client)
         except ValueError:
@@ -5714,8 +5821,14 @@ def resume_schedule(schedule_id: str):
 
 
 @app.post("/api/schedules/{schedule_id}/trigger")
-async def trigger_schedule(schedule_id: str):
-    """Manually fire a schedule now, bypassing cron timing."""
+def trigger_schedule(schedule_id: str):
+    """Manually fire a schedule now, bypassing cron timing.
+
+    Plain `def` (not async) so FastAPI runs it in the threadpool — it
+    does blocking sqlite queries, filesystem reads, job creation, and
+    potentially a slow poll command, none of which belong on the event
+    loop.
+    """
     from stepwise.yaml_loader import load_workflow_yaml, YAMLLoadError
     from stepwise.models import OverlapPolicy
 
@@ -5742,8 +5855,8 @@ async def trigger_schedule(schedule_id: str):
 
     if sched.type == ScheduleType.POLL and sched.poll_command:
         # For poll type, run the poll command first
-        from stepwise.poll_eval import evaluate_poll_command
-        result = await evaluate_poll_command(
+        from stepwise.poll_eval import evaluate_poll_command_sync
+        result = evaluate_poll_command_sync(
             command=sched.poll_command,
             cwd=str(_project_dir),
             timeout_seconds=sched.poll_timeout_seconds,
@@ -6264,15 +6377,25 @@ if _web_dist.exists():
     # Serve static assets directly
     app.mount("/assets", StaticFiles(directory=str(_web_dist / "assets")), name="assets")
 
+    _web_dist_root = _web_dist.resolve()
+
     # SPA fallback: any non-API route serves index.html
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
         if full_path.startswith("api/"):
             return JSONResponse({"detail": "Not Found"}, status_code=404)
-        # Try serving a static file first
-        file_path = _web_dist / full_path
-        if full_path and file_path.is_file():
-            return FileResponse(file_path)
+        # Try serving a static file first. Resolve and containment-check
+        # so `..` segments (Starlette's {path:path} does not collapse
+        # them) cannot escape the web dist — otherwise this is an
+        # arbitrary file read.
+        if full_path:
+            try:
+                candidate = (_web_dist / full_path).resolve()
+                candidate.relative_to(_web_dist_root)
+            except (ValueError, OSError):
+                candidate = None
+            if candidate is not None and candidate.is_file():
+                return FileResponse(candidate)
         # Fallback to index.html for client-side routing
         return FileResponse(_web_dist / "index.html")
 

@@ -169,6 +169,10 @@ export function computeDagLayout(workflow: FlowDefinition): DagLayout {
           edgeLabels[key].push(src.field);
         }
       } else if (binding.source_step && binding.source_step !== "$job") {
+        // Back-edge bindings close a loop (the producer is downstream);
+        // the visual loop is drawn from the exit rule, so feeding them to
+        // dagre would create cycles/self-edges in the layout graph.
+        if (binding.is_back_edge || binding.source_step === name) continue;
         const key = `${binding.source_step}->${name}`;
         if (!edgeSet.has(key)) {
           g.setEdge(binding.source_step, name);

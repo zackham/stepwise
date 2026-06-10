@@ -92,6 +92,8 @@ export interface InputBinding {
   source_step: string; // "$job" or step name; empty string for any_of
   source_field: string; // empty string for any_of
   any_of_sources?: { step: string; field: string }[];
+  optional?: boolean; // weak reference — resolves to null when unavailable
+  is_back_edge?: boolean; // producer is closed by a loop exit rule
 }
 
 // ── Step Limits ────────────────────────────────────────────────────────
