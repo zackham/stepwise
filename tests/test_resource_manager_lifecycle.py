@@ -15,6 +15,7 @@ from stepwise.engine import AsyncEngine
 from stepwise.executors import ExecutorRegistry
 from stepwise.models import (
     ExecutorRef,
+    ExitRule,
     JobStatus,
     StepDefinition,
     WorkflowDefinition,
@@ -107,6 +108,34 @@ class TestJobTerminalRelease:
         result = await run_job(engine, job.id)
 
         assert result.status == JobStatus.COMPLETED
+        assert mgr.released_jobs == [job.id]
+
+    @pytest.mark.asyncio
+    async def test_abandoned_job_triggers_release(self):
+        """A job abandoned via exit rule on a completed step releases resources.
+
+        Regression test: the abandon arm of exit-rule resolution in
+        _process_completion marked the job FAILED without draining
+        resource managers, leaking the job's ACP agent processes for
+        the life of the server.
+        """
+        register_step_fn("noop", lambda inputs: {})
+        mgr = FakeResourceManager()
+        engine = _make_engine_with_manager(mgr)
+        wf = WorkflowDefinition(steps={
+            "s1": StepDefinition(
+                name="s1", outputs=[],
+                executor=ExecutorRef("callable", {"fn_name": "noop"}),
+                exit_rules=[
+                    ExitRule("cancel", "always", {"action": "abandon"}, priority=10),
+                ],
+            ),
+        })
+        job = engine.create_job("t-abandon", wf)
+
+        result = await run_job(engine, job.id)
+
+        assert result.status == JobStatus.FAILED
         assert mgr.released_jobs == [job.id]
 
     @pytest.mark.asyncio
