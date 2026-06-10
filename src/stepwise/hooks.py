@@ -17,8 +17,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import subprocess
 import tempfile
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -50,6 +53,61 @@ def build_event_envelope(
     if "step" in event_data:
         envelope["step"] = event_data["step"]
     return envelope
+
+# ── Hook dispatch thread ──────────────────────────────────────────────
+#
+# fire_hook blocks for up to 30s (proc.communicate timeout). Engine._emit
+# runs on the server's asyncio event loop, so hooks must never execute
+# inline there — a single slow hook would freeze queue processing, poll
+# watches, and WebSocket broadcasts for its full duration. Hooks are
+# instead executed on one dedicated daemon worker thread; a single thread
+# (not a pool) preserves event ordering: hooks fire in the order their
+# events were emitted.
+
+_hook_queue: queue.Queue = queue.Queue()
+_hook_thread: threading.Thread | None = None
+_hook_thread_lock = threading.Lock()
+
+
+def _hook_worker() -> None:
+    while True:
+        event_name, payload, project_dir, envelope = _hook_queue.get()
+        try:
+            fire_hook(event_name, payload, project_dir, envelope=envelope)
+        except Exception:
+            logger.warning(
+                "Hook dispatch failed for on-%s", event_name, exc_info=True,
+            )
+        finally:
+            _hook_queue.task_done()
+
+
+def _ensure_hook_thread() -> None:
+    global _hook_thread
+    with _hook_thread_lock:
+        if _hook_thread is None or not _hook_thread.is_alive():
+            _hook_thread = threading.Thread(
+                target=_hook_worker,
+                name="stepwise-hook-dispatch",
+                daemon=True,
+            )
+            _hook_thread.start()
+
+
+def flush_hooks(timeout: float = 30.0) -> bool:
+    """Block until all queued hooks have finished executing.
+
+    Returns True if the queue drained within the timeout. Intended for
+    tests and shutdown paths; normal operation never needs to wait.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with _hook_queue.all_tasks_done:
+            if _hook_queue.unfinished_tasks == 0:
+                return True
+        time.sleep(0.01)
+    return False
+
 
 # Map engine event types to hook event names
 EVENT_MAP = {
@@ -155,7 +213,12 @@ def fire_hook_for_event(
     project_dir: Path | None,
     envelope: dict | None = None,
 ) -> bool:
-    """Map an engine event type to a hook and fire it.
+    """Map an engine event type to a hook and dispatch it asynchronously.
+
+    The hook executes on the dedicated hook-dispatch thread (see
+    _hook_worker) so callers on the asyncio event loop are never blocked
+    by a slow hook script. Hooks fire in event-emission order. Use
+    flush_hooks() to wait for completion (tests/shutdown).
 
     Args:
         event_type: Engine event constant (e.g. "step.suspended").
@@ -165,13 +228,19 @@ def fire_hook_for_event(
         envelope: Optional standardized event envelope for temp file dispatch.
 
     Returns:
-        True if a hook was fired.
+        True if a matching hook script exists and was queued for execution.
     """
     if project_dir is None:
         return False
 
     hook_name = EVENT_MAP.get(event_type)
     if hook_name is None:
+        return False
+
+    # Cheap existence check up front so non-hooked events stay zero-cost
+    # and the return value still reflects "a hook will fire".
+    script = project_dir / HOOKS_DIR_NAME / f"on-{hook_name}"
+    if not script.is_file():
         return False
 
     payload = {
@@ -192,7 +261,9 @@ def fire_hook_for_event(
     if hook_name == "approval-needed":
         payload["approve_command"] = f"stepwise job approve {job_id}"
 
-    return fire_hook(hook_name, payload, project_dir, envelope=envelope)
+    _ensure_hook_thread()
+    _hook_queue.put((hook_name, payload, project_dir, envelope))
+    return True
 
 
 def fire_notify_webhook(

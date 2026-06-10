@@ -64,6 +64,17 @@ def _make_simple_workflow():
     })
 
 
+def _make_agent_workflow():
+    """Workflow whose step-a is an agent executor (TTL reaping is agent-only)."""
+    return WorkflowDefinition(steps={
+        "step-a": StepDefinition(
+            name="step-a",
+            executor=ExecutorRef(type="agent", config={}),
+            outputs=["result"],
+        ),
+    })
+
+
 def _make_run(
     job_id: str,
     step_name: str = "step-a",
@@ -328,7 +339,7 @@ class TestReapExpiredProcesses:
         job = Job(
             id=_gen_id("job"),
             objective="test",
-            workflow=_make_simple_workflow(),
+            workflow=_make_agent_workflow(),
             status=JobStatus.RUNNING,
             inputs={},
         )
@@ -352,7 +363,7 @@ class TestReapExpiredProcesses:
         job = Job(
             id=_gen_id("job"),
             objective="test",
-            workflow=_make_simple_workflow(),
+            workflow=_make_agent_workflow(),
             status=JobStatus.RUNNING,
             inputs={},
         )
@@ -375,7 +386,7 @@ class TestReapExpiredProcesses:
         job = Job(
             id=_gen_id("job"),
             objective="test",
-            workflow=_make_simple_workflow(),
+            workflow=_make_agent_workflow(),
             status=JobStatus.RUNNING,
             inputs={},
         )
@@ -395,7 +406,7 @@ class TestReapExpiredProcesses:
         job = Job(
             id=_gen_id("job"),
             objective="test",
-            workflow=_make_simple_workflow(),
+            workflow=_make_agent_workflow(),
             status=JobStatus.RUNNING,
             inputs={},
         )
@@ -419,7 +430,7 @@ class TestReapExpiredProcesses:
             job = Job(
                 id=_gen_id("job"),
                 objective="test",
-                workflow=_make_simple_workflow(),
+                workflow=_make_agent_workflow(),
                 status=JobStatus.RUNNING,
                 inputs={},
             )
@@ -575,3 +586,146 @@ class TestPauseJobKillsProcesses:
                 proc.wait()
             except ProcessLookupError:
                 pass
+
+
+# ── Regression tests: RC hardening (F40, F41, F42) ───────────────────
+
+
+class TestPidAliveDoesNotReap:
+    """F40: _is_pid_alive must not reap children via os.waitpid — that
+    races Popen.wait() and corrupts exit codes."""
+
+    def test_does_not_steal_exit_status_of_zombie_child(self):
+        proc = subprocess.Popen(["sh", "-c", "exit 7"])
+        try:
+            # Wait for the child to exit and become a zombie (unreaped)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                try:
+                    with open(f"/proc/{proc.pid}/status") as f:
+                        state_line = next(
+                            (l for l in f if l.startswith("State:")), ""
+                        )
+                    if "Z" in state_line:
+                        break
+                except FileNotFoundError:
+                    break
+                time.sleep(0.01)
+
+            # Liveness check reports the zombie as dead WITHOUT reaping it
+            assert _is_pid_alive(proc.pid) is False
+
+            # The owning Popen still observes the real exit code (the old
+            # waitpid-based check stole the status and wait() returned 0)
+            assert proc.wait(timeout=2) == 7
+        finally:
+            try:
+                proc.kill()
+                proc.wait()
+            except (ProcessLookupError, ChildProcessError):
+                pass
+
+
+class TestReapDeadFailureRouting:
+    """F41: reap_dead_processes must surface failures via events, and
+    route through the engine's failure path when an engine is given."""
+
+    def _job_with_dead_run(self):
+        store = _make_store()
+        job = Job(
+            id=_gen_id("job"),
+            objective="test",
+            workflow=_make_simple_workflow(),
+            status=JobStatus.RUNNING,
+            inputs={},
+        )
+        store.save_job(job)
+        run = _make_run(job.id, pid=99999999)
+        store.save_run(run)
+        return store, job, run
+
+    def test_emits_step_failed_event_without_engine(self):
+        store, job, run = self._job_with_dead_run()
+
+        cleaned = reap_dead_processes(store, engine=None)
+        assert run.id in cleaned
+
+        updated = store.load_run(run.id)
+        assert updated.status == StepRunStatus.FAILED
+        assert updated.error_category == "infra_failure"
+
+        events = store.load_events(job.id)
+        failed = [e for e in events if e.type == "step.failed"]
+        assert len(failed) == 1
+        assert failed[0].data["step"] == "step-a"
+        assert "no longer alive" in failed[0].data["error"]
+
+    def test_routes_through_engine_fail_run_when_provided(self):
+        store, job, run = self._job_with_dead_run()
+        calls = []
+
+        class FakeEngine:
+            def _fail_run(self, job, run, step_def, error,
+                          error_category=None, traceback_str=None):
+                calls.append((job.id, run.id, step_def.name, error, error_category))
+
+        cleaned = reap_dead_processes(store, engine=FakeEngine())
+        assert run.id in cleaned
+        assert len(calls) == 1
+        assert calls[0][0] == job.id
+        assert calls[0][2] == "step-a"
+        assert calls[0][4] == "infra_failure"
+
+        # No duplicate store-direct event when the engine handled it
+        events = store.load_events(job.id)
+        assert [e for e in events if e.type == "step.failed"] == []
+
+
+class TestReapExpiredAgentScope:
+    """F42: TTL reaping only targets agent-type steps, per docs."""
+
+    def _job_with_expired_run(self, workflow, step_name="step-a"):
+        store = _make_store()
+        job = Job(
+            id=_gen_id("job"),
+            objective="test",
+            workflow=workflow,
+            status=JobStatus.RUNNING,
+            inputs={},
+        )
+        store.save_job(job)
+        old_start = datetime.now(timezone.utc) - timedelta(hours=3)
+        run = _make_run(job.id, step_name=step_name, pid=99999999, started_at=old_start)
+        store.save_run(run)
+        return store, job, run
+
+    def test_script_steps_exempt_from_ttl(self):
+        """Non-agent (callable/script) steps are never TTL-killed."""
+        store, job, run = self._job_with_expired_run(_make_simple_workflow())
+
+        killed = reap_expired_processes(store, ttl_seconds=7200)
+        assert killed == []
+        assert store.load_run(run.id).status == StepRunStatus.RUNNING
+
+    def test_unknown_step_exempt_from_ttl(self):
+        """Steps that can't be resolved in the workflow are left alone."""
+        store, job, run = self._job_with_expired_run(
+            _make_agent_workflow(), step_name="ghost-step",
+        )
+
+        killed = reap_expired_processes(store, ttl_seconds=7200)
+        assert killed == []
+        assert store.load_run(run.id).status == StepRunStatus.RUNNING
+
+    def test_expired_agent_emits_step_failed_event(self):
+        """TTL-killed agent runs record a STEP_FAILED event."""
+        store, job, run = self._job_with_expired_run(_make_agent_workflow())
+
+        killed = reap_expired_processes(store, ttl_seconds=7200)
+        assert run.id in killed
+        assert store.load_run(run.id).status == StepRunStatus.FAILED
+
+        events = store.load_events(job.id)
+        failed = [e for e in events if e.type == "step.failed"]
+        assert len(failed) == 1
+        assert "expired" in failed[0].data["error"]

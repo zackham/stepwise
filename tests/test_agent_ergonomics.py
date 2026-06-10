@@ -708,7 +708,7 @@ class TestHooks:
         hook.write_text(f"#!/bin/sh\ncat > {output_file}\n")
         hook.chmod(0o755)
 
-        from stepwise.hooks import fire_hook_for_event
+        from stepwise.hooks import fire_hook_for_event, flush_hooks
         result = fire_hook_for_event(
             "step.suspended",
             {"step": "approve", "run_id": "run-abc", "watch_mode": "external"},
@@ -716,6 +716,8 @@ class TestHooks:
             dot_dir,
         )
         assert result is True
+        # Hooks execute asynchronously on the dispatch thread — drain it
+        assert flush_hooks(timeout=10) is True
         written = json.loads(output_file.read_text())
         assert written["event"] == "step.suspended"
         assert written["hook"] == "suspend"
@@ -769,6 +771,69 @@ class TestHooks:
             result = fire_hook("complete", {"job_id": "j1"}, dot_dir)
             assert result is True
             mock_proc.kill.assert_called_once()
+
+    def test_fire_hook_for_event_does_not_block_caller(self, tmp_path):
+        """F59: fire_hook_for_event must return immediately — hooks run
+        on the dispatch thread, never inline on the (event loop) caller."""
+        import time as _time
+
+        dot_dir = tmp_path / ".stepwise"
+        dot_dir.mkdir()
+        hooks_dir = dot_dir / "hooks"
+        hooks_dir.mkdir()
+
+        marker = tmp_path / "done.txt"
+        hook = hooks_dir / "on-complete"
+        hook.write_text(f"#!/bin/sh\nsleep 1\ntouch {marker}\n")
+        hook.chmod(0o755)
+
+        from stepwise.hooks import fire_hook_for_event, flush_hooks
+
+        start = _time.monotonic()
+        result = fire_hook_for_event("job.completed", {}, "job-1", dot_dir)
+        elapsed = _time.monotonic() - start
+
+        assert result is True
+        assert elapsed < 0.5, f"fire_hook_for_event blocked for {elapsed:.2f}s"
+        assert not marker.exists()  # hook still running on dispatch thread
+
+        assert flush_hooks(timeout=10) is True
+        assert marker.exists()
+
+    def test_hooks_execute_in_emission_order(self, tmp_path):
+        """The single dispatch thread preserves event ordering."""
+        dot_dir = tmp_path / ".stepwise"
+        dot_dir.mkdir()
+        hooks_dir = dot_dir / "hooks"
+        hooks_dir.mkdir()
+
+        log = tmp_path / "order.log"
+        hook = hooks_dir / "on-step-complete"
+        hook.write_text(
+            f"#!/bin/sh\npayload=$(cat)\n"
+            f"echo \"$payload\" | grep -o 'step-[0-9][0-9]*' | head -1 >> {log}\n"
+        )
+        hook.chmod(0o755)
+
+        from stepwise.hooks import fire_hook_for_event, flush_hooks
+
+        for i in range(5):
+            assert fire_hook_for_event(
+                "step.completed", {"step": f"step-{i}"}, "job-1", dot_dir,
+            ) is True
+
+        assert flush_hooks(timeout=10) is True
+        lines = log.read_text().strip().splitlines()
+        assert lines == [f"step-{i}" for i in range(5)]
+
+    def test_fire_hook_for_event_no_script_returns_false(self, tmp_path):
+        """Existence is checked synchronously: no script → False, nothing queued."""
+        dot_dir = tmp_path / ".stepwise"
+        dot_dir.mkdir()
+        (dot_dir / "hooks").mkdir()
+
+        from stepwise.hooks import fire_hook_for_event
+        assert fire_hook_for_event("job.completed", {}, "job-1", dot_dir) is False
 
 
 class TestHookScaffolding:
@@ -863,6 +928,10 @@ class TestHookEngineIntegration:
         engine.start_job(job.id)
         _run_to_suspension(engine, job.id)
 
+        # Hooks execute asynchronously on the dispatch thread
+        from stepwise.hooks import flush_hooks
+        assert flush_hooks(timeout=10) is True
+
         assert output_file.exists()
         payload = json.loads(output_file.read_text())
         assert payload["event"] == "step.suspended"
@@ -896,6 +965,10 @@ class TestHookEngineIntegration:
         job = engine.create_job(objective="simple", workflow=wf)
         engine.start_job(job.id)
         _run_to_completion(engine, job.id)
+
+        # Hooks execute asynchronously on the dispatch thread
+        from stepwise.hooks import flush_hooks
+        assert flush_hooks(timeout=10) is True
 
         assert output_file.exists()
         payload = json.loads(output_file.read_text())

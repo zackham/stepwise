@@ -28,17 +28,15 @@ HEALTH_CHECK_INTERVAL_SECONDS = 15
 def _is_pid_alive(pid: int) -> bool:
     """Check if a process is alive (not zombie, not dead).
 
-    Tries os.waitpid() first to reap zombies if we're the parent,
-    then falls back to os.kill(pid, 0).
+    Uses os.kill(pid, 0) plus a /proc zombie check. Deliberately does
+    NOT call os.waitpid(): this function is invoked concurrently against
+    PIDs owned by live Popen objects (engine poll loop, server health
+    check), and a WNOHANG waitpid here would race Popen.wait() and steal
+    the child's exit status — CPython's Popen._try_wait then records
+    returncode 0, silently corrupting exit codes. Zombie children of this
+    process read as "State: Z" in /proc and are reported dead without
+    being reaped; the owning Popen reaps them.
     """
-    # Try to reap zombie if we're the parent
-    try:
-        wpid, _ = os.waitpid(pid, os.WNOHANG)
-        if wpid != 0:
-            return False  # reaped zombie — process is dead
-    except ChildProcessError:
-        pass  # not our child — use kill(0)
-
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -213,12 +211,73 @@ class ReapResult:
     errors: list[str] = field(default_factory=list)          # error messages
 
 
+def _fail_run_record(store, engine, job, run, error: str) -> None:
+    """Fail a RUNNING step run, preferring the engine's failure path.
+
+    When an engine is provided, routes through engine._fail_run so exit
+    rules (loop/escalate/abandon) are evaluated and STEP_FAILED is
+    emitted exactly like any other step failure.
+
+    Without an engine (e.g. the server health check, which only has the
+    store), falls back to a direct store update but still records a
+    STEP_FAILED event so the event log and UI learn about the failure.
+    Limitation of the fallback: exit rules are NOT evaluated on this
+    path — the run is hard-failed.
+    """
+    from stepwise.events import STEP_FAILED
+    from stepwise.models import Event, StepRunStatus, _gen_id, _now
+
+    if engine is not None:
+        step_def = (getattr(job.workflow, "steps", None) or {}).get(run.step_name)
+        if step_def is not None:
+            try:
+                engine._fail_run(
+                    job, run, step_def,
+                    error=error,
+                    error_category="infra_failure",
+                )
+                return
+            except Exception:
+                logger.error(
+                    "Engine failure routing failed for run %s — "
+                    "falling back to direct store update",
+                    run.id, exc_info=True,
+                )
+
+    run.status = StepRunStatus.FAILED
+    run.error = error
+    run.error_category = "infra_failure"
+    run.pid = None
+    run.completed_at = _now()
+    store.save_run(run)
+    try:
+        store.save_event(Event(
+            id=_gen_id("evt"),
+            job_id=run.job_id,
+            timestamp=_now(),
+            type=STEP_FAILED,
+            data={
+                "step": run.step_name,
+                "attempt": run.attempt,
+                "error": error,
+                "error_category": "infra_failure",
+            },
+        ))
+    except Exception:
+        logger.warning(
+            "Could not record STEP_FAILED event for run %s", run.id, exc_info=True,
+        )
+
+
 def reap_dead_processes(store, engine) -> list[str]:
     """Detect RUNNING step runs whose process is dead and fail them.
 
     Args:
         store: SQLiteStore with running runs.
-        engine: Engine instance for _fail_run / emit.
+        engine: Optional Engine instance. When provided, failures route
+            through engine._fail_run (exit rules + events). When None,
+            runs are failed directly in the store with a STEP_FAILED
+            event recorded (no exit-rule evaluation).
 
     Returns:
         List of run IDs that were cleaned up.
@@ -251,12 +310,10 @@ def reap_dead_processes(store, engine) -> list[str]:
                 "Dead process detected: run=%s step=%s job=%s pid=%d — failing run",
                 run.id, run.step_name, job.id, pid,
             )
-            from stepwise.models import StepRunStatus, _now
-            run.status = StepRunStatus.FAILED
-            run.error = f"Runner process died (PID {pid} no longer alive)"
-            run.pid = None
-            run.completed_at = _now()
-            store.save_run(run)
+            _fail_run_record(
+                store, engine, job, run,
+                error=f"Runner process died (PID {pid} no longer alive)",
+            )
             cleaned.append(run.id)
 
     return cleaned
@@ -265,20 +322,23 @@ def reap_dead_processes(store, engine) -> list[str]:
 def reap_expired_processes(
     store,
     ttl_seconds: int = DEFAULT_AGENT_TTL_SECONDS,
+    engine=None,
 ) -> list[str]:
     """Detect and kill RUNNING step runs that have exceeded TTL.
 
-    Only targets agent-type executors (which are long-running subprocesses).
+    Only targets agent-type executors (which are long-running
+    subprocesses). Script/llm/poll/etc. steps are exempt — legitimate
+    long-running scripts (builds, migrations) must not be killed by the
+    agent TTL knob. Use per-step `limits` in FLOW.yaml for those.
 
     Args:
         store: SQLiteStore with running runs.
         ttl_seconds: Maximum allowed runtime in seconds (default 2h).
+        engine: Optional Engine instance — see reap_dead_processes.
 
     Returns:
         List of run IDs that were killed.
     """
-    from stepwise.models import StepRunStatus, _now
-
     if ttl_seconds <= 0:
         return []  # TTL disabled — agent steps run without time limit
 
@@ -286,8 +346,17 @@ def reap_expired_processes(
     killed = []
 
     for job in store.active_jobs():
+        steps = getattr(job.workflow, "steps", None) or {}
         for run in store.running_runs(job.id):
             if not run.started_at:
+                continue
+
+            # Agent-only contract: skip runs whose step is not an agent
+            # executor (or whose step can't be resolved — be conservative
+            # and don't kill what we can't classify).
+            step_def = steps.get(run.step_name)
+            executor_type = getattr(getattr(step_def, "executor", None), "type", None)
+            if executor_type != "agent":
                 continue
 
             age_seconds = (now - run.started_at).total_seconds()
@@ -313,6 +382,10 @@ def reap_expired_processes(
             if not pid and not pgid:
                 continue
 
+            expired_error = (
+                f"Runner process expired (TTL {ttl_seconds}s, ran for {age_seconds:.0f}s)"
+            )
+
             check_pid = pid or pgid
             if not _is_pid_alive(check_pid):
                 # Already dead — just clean up the run
@@ -320,11 +393,7 @@ def reap_expired_processes(
                     "Expired run %s (step=%s, age=%.0fs) — process already dead, cleaning up",
                     run.id, run.step_name, age_seconds,
                 )
-                run.status = StepRunStatus.FAILED
-                run.error = f"Runner process expired (TTL {ttl_seconds}s, ran for {age_seconds:.0f}s)"
-                run.pid = None
-                run.completed_at = _now()
-                store.save_run(run)
+                _fail_run_record(store, engine, job, run, error=expired_error)
                 killed.append(run.id)
                 continue
 
@@ -341,11 +410,7 @@ def reap_expired_processes(
                 step_name=run.step_name,
             )
 
-            run.status = StepRunStatus.FAILED
-            run.error = f"Runner process expired (TTL {ttl_seconds}s, ran for {age_seconds:.0f}s)"
-            run.pid = None
-            run.completed_at = _now()
-            store.save_run(run)
+            _fail_run_record(store, engine, job, run, error=expired_error)
             killed.append(run.id)
 
             if not dead:
@@ -359,12 +424,17 @@ def reap_expired_processes(
 def run_health_check(
     store,
     ttl_seconds: int = DEFAULT_AGENT_TTL_SECONDS,
+    engine=None,
 ) -> ReapResult:
     """Combined health check: reap dead processes + kill expired ones.
 
     Args:
         store: SQLiteStore.
         ttl_seconds: Maximum allowed runtime for agent processes.
+        engine: Optional Engine instance. When provided, run failures are
+            routed through the engine (exit rules + event emission);
+            otherwise they are recorded directly in the store with a
+            STEP_FAILED event.
 
     Returns:
         ReapResult with lists of cleaned/killed run IDs.
@@ -372,13 +442,15 @@ def run_health_check(
     result = ReapResult()
 
     try:
-        result.dead_cleaned = reap_dead_processes(store, engine=None)
+        result.dead_cleaned = reap_dead_processes(store, engine=engine)
     except Exception as e:
         logger.error("Error in reap_dead_processes: %s", e, exc_info=True)
         result.errors.append(f"reap_dead: {e}")
 
     try:
-        result.expired_killed = reap_expired_processes(store, ttl_seconds=ttl_seconds)
+        result.expired_killed = reap_expired_processes(
+            store, ttl_seconds=ttl_seconds, engine=engine,
+        )
     except Exception as e:
         logger.error("Error in reap_expired_processes: %s", e, exc_info=True)
         result.errors.append(f"reap_expired: {e}")

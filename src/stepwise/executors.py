@@ -461,6 +461,32 @@ class ScriptExecutor(Executor):
         shell_mode = "shell" if use_shell else "direct"
         run_arg: str | list[str] = command if use_shell else shlex.split(command)
 
+        def _launch_failure(e: Exception) -> ExecutorResult:
+            # Subprocess never launched (bad working_dir, permissions, …).
+            # Must follow the failure contract so the engine routes the
+            # run through _fail_run / exit rules instead of recording a
+            # silent success.
+            error = f"Failed to launch script: {e}"
+            return ExecutorResult(
+                type="data",
+                envelope=HandoffEnvelope(
+                    artifact={"stdout": ""},
+                    sidecar=Sidecar(),
+                    workspace=workspace,
+                    timestamp=_now(),
+                    executor_meta={
+                        "failed": True,
+                        "error": str(e),
+                        "shell_mode": shell_mode,
+                    },
+                ),
+                executor_state={
+                    "failed": True,
+                    "error": error,
+                    "error_category": "infra_failure",
+                },
+            )
+
         try:
             stdout_fh = open(stdout_path, "w")
             stderr_fh = open(stderr_path, "w")
@@ -473,6 +499,10 @@ class ScriptExecutor(Executor):
                     text=True,
                     env=env,
                     cwd=cwd,
+                    # New session = new process group, so cancel/pause can
+                    # kill the whole script tree (not just the shell) via
+                    # os.killpg without touching the server's own group.
+                    start_new_session=True,
                 )
             except FileNotFoundError:
                 stdout_fh.close()
@@ -491,36 +521,22 @@ class ScriptExecutor(Executor):
                         text=True,
                         env=env,
                         cwd=cwd,
+                        start_new_session=True,
                     )
                 except Exception as e:
                     stdout_fh.close()
                     stderr_fh.close()
-                    return ExecutorResult(
-                        type="data",
-                        envelope=HandoffEnvelope(
-                            artifact={"stdout": ""},
-                            sidecar=Sidecar(),
-                            workspace=workspace,
-                            timestamp=_now(),
-                            executor_meta={"error": str(e), "shell_mode": shell_mode},
-                        ),
-                    )
+                    return _launch_failure(e)
         except Exception as e:
-            return ExecutorResult(
-                type="data",
-                envelope=HandoffEnvelope(
-                    artifact={"stdout": ""},
-                    sidecar=Sidecar(),
-                    workspace=workspace,
-                    timestamp=_now(),
-                    executor_meta={"error": str(e), "shell_mode": shell_mode},
-                ),
-            )
+            return _launch_failure(e)
 
-        # Store PID and output paths in DB for crash recovery (issue #4)
+        # Store PID and output paths in DB for crash recovery (issue #4).
+        # pgid == pid because of start_new_session=True; recording it lets
+        # kill_run_process kill the entire script process tree.
         if context.state_update_fn:
             context.state_update_fn({
                 "pid": proc.pid,
+                "pgid": proc.pid,
                 "stdout_path": str(stdout_path),
                 "stderr_path": str(stderr_path),
             })

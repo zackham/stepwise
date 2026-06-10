@@ -511,3 +511,196 @@ class TestDecoratorComposition:
 
         assert result.envelope.artifact["result"] == "from_fallback"
         assert result.envelope.executor_meta["fallback"]["primary_failed"] is True
+
+
+# ── Regression tests: RC hardening (F36, F37, F39) ───────────────────
+
+
+class TestScriptLaunchFailure:
+    """F37: subprocess launch failures must follow the failure contract,
+    not be recorded as successful completions."""
+
+    def test_bad_working_dir_is_failure(self):
+        ex = ScriptExecutor(command="echo hi", working_dir="/nonexistent/dir/xyz")
+        result = ex.start({}, _ctx())
+
+        assert result.type == "data"
+        assert result.executor_state is not None
+        assert result.executor_state["failed"] is True
+        assert result.executor_state["error_category"] == "infra_failure"
+        assert "No such file or directory" in result.executor_state["error"]
+        assert result.envelope.executor_meta["failed"] is True
+        assert "No such file or directory" in result.envelope.executor_meta["error"]
+
+    def test_bad_working_dir_shell_mode_is_failure(self):
+        # Shell metacharacters force shell mode — same contract applies
+        ex = ScriptExecutor(command="echo hi | cat", working_dir="/nonexistent/dir/xyz")
+        result = ex.start({}, _ctx())
+
+        assert result.executor_state["failed"] is True
+        assert result.envelope.executor_meta["failed"] is True
+
+
+class TestScriptProcessGroup:
+    """F39: scripts run in their own session/process group and record
+    pgid so cancel/pause can kill the entire process tree."""
+
+    def test_records_pgid_in_own_group(self):
+        states = []
+        ctx = _ctx()
+        ctx.state_update_fn = states.append
+
+        ex = ScriptExecutor(command='echo \'{"ok": true}\'')
+        result = ex.start({}, ctx)
+        assert result.envelope.artifact["ok"] is True
+
+        assert len(states) == 1
+        state = states[0]
+        assert state["pgid"] == state["pid"]
+        # Must NOT share the test runner's (server's) process group —
+        # otherwise a group kill would kill the server itself.
+        assert state["pgid"] != os.getpgrp()
+
+    def test_group_kill_terminates_script_tree(self):
+        """Killing the recorded pgid takes down shell + children."""
+        import signal as _signal
+        import threading
+        import time as _time
+
+        states = []
+        state_ready = threading.Event()
+
+        def _capture(state):
+            states.append(state)
+            state_ready.set()
+
+        ctx = _ctx()
+        ctx.state_update_fn = _capture
+
+        # Pipeline forces shell mode: /bin/sh with sleep children
+        ex = ScriptExecutor(command="sleep 30 | sleep 30")
+        result_box = []
+        t = threading.Thread(target=lambda: result_box.append(ex.start({}, ctx)))
+        t.start()
+        try:
+            assert state_ready.wait(timeout=5)
+            pgid = states[0]["pgid"]
+            os.killpg(pgid, _signal.SIGKILL)
+            t.join(timeout=5)
+            assert not t.is_alive(), "script tree survived group kill"
+            # The killed script surfaces as a failed run
+            assert result_box[0].executor_state["failed"] is True
+        finally:
+            if t.is_alive():
+                try:
+                    os.killpg(states[0]["pgid"], _signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                t.join(timeout=5)
+
+
+class TestTimeoutEnforcement:
+    """F36: TimeoutDecorator must actually enforce the limit — hung
+    steps fail with error_category='timeout' instead of running forever."""
+
+    def test_hung_script_times_out_and_fails(self):
+        import time as _time
+
+        # ~0.6s limit against a 30s sleep
+        timed = TimeoutDecorator(ScriptExecutor(command="sleep 30"), {"minutes": 0.01})
+        ctx = _ctx()
+
+        start = _time.monotonic()
+        result = timed.start({}, ctx)
+        elapsed = _time.monotonic() - start
+
+        assert elapsed < 15, f"timeout not enforced (took {elapsed:.1f}s)"
+        assert result.type == "data"
+        assert result.executor_state["failed"] is True
+        assert result.executor_state["error_category"] == "timeout"
+        assert "timed out" in result.executor_state["error"]
+        assert result.envelope.executor_meta["failed"] is True
+        assert result.envelope.executor_meta["timeout"]["triggered"] is True
+
+    def test_hung_script_process_is_killed(self):
+        import time as _time
+
+        states = []
+        ctx = _ctx()
+        ctx.state_update_fn = states.append
+
+        timed = TimeoutDecorator(ScriptExecutor(command="sleep 30"), {"minutes": 0.01})
+        result = timed.start({}, ctx)
+        assert result.executor_state["failed"] is True
+
+        # The recorded process must be dead shortly after the timeout
+        assert len(states) == 1
+        pid = states[0]["pid"]
+        deadline = _time.monotonic() + 5
+        while _time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            _time.sleep(0.05)
+        else:
+            pytest.fail(f"timed-out script pid {pid} still alive")
+
+    def test_fast_inner_passes_through(self):
+        timed = TimeoutDecorator(
+            ScriptExecutor(command='echo \'{"result": "ok"}\''), {"minutes": 5},
+        )
+        result = timed.start({}, _ctx())
+
+        assert result.envelope.artifact["result"] == "ok"
+        assert result.envelope.executor_meta["timeout"]["triggered"] is False
+        assert not (result.executor_state or {}).get("failed")
+
+    def test_zero_limit_disables_enforcement(self):
+        """minutes=0 means no enforcement — inner runs inline."""
+        timed = TimeoutDecorator(
+            ScriptExecutor(command='echo \'{"result": "ok"}\''), {"minutes": 0},
+        )
+        result = timed.start({}, _ctx())
+        assert result.envelope.artifact["result"] == "ok"
+        # Legacy annotation: elapsed >= 0 → triggered True for limit 0
+        assert "timeout" in result.envelope.executor_meta
+
+    def test_inner_exception_propagates(self):
+        class BoomExecutor(Executor):
+            def start(self, inputs, context):
+                raise RuntimeError("boom")
+
+            def check_status(self, state):
+                return ExecutorStatus(state="failed")
+
+            def cancel(self, state):
+                pass
+
+        timed = TimeoutDecorator(BoomExecutor(), {"minutes": 5})
+        with pytest.raises(RuntimeError, match="boom"):
+            timed.start({}, _ctx())
+
+    def test_timeout_calls_inner_cancel_with_captured_state(self):
+        import time as _time
+
+        cancel_calls = []
+
+        class HangingExecutor(Executor):
+            def start(self, inputs, context):
+                if context.state_update_fn:
+                    context.state_update_fn({"session": "abc"})
+                _time.sleep(30)
+                return ExecutorResult(type="data")
+
+            def check_status(self, state):
+                return ExecutorStatus(state="running")
+
+            def cancel(self, state):
+                cancel_calls.append(dict(state or {}))
+
+        timed = TimeoutDecorator(HangingExecutor(), {"minutes": 0.005})
+        result = timed.start({}, _ctx())
+
+        assert result.executor_state["failed"] is True
+        assert cancel_calls == [{"session": "abc"}]
