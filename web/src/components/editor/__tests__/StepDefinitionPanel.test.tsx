@@ -19,6 +19,18 @@ function renderWithQuery(ui: React.ReactElement) {
   return render(ui, { wrapper: createWrapper() });
 }
 
+// Source references render as split nodes (`<span>step</span>.field`) so the
+// step name can be a clickable cross-navigation link. Match on the innermost
+// element whose combined text equals the full reference.
+function getByTextContent(text: string) {
+  return screen.getByText((_, element) => {
+    if (element?.textContent !== text) return false;
+    return Array.from(element.children).every(
+      (child) => child.textContent !== text
+    );
+  });
+}
+
 function makeStepDef(overrides: Partial<StepDefinition> = {}): StepDefinition {
   return {
     name: "analyze",
@@ -114,7 +126,7 @@ describe("StepDefinitionPanel", () => {
       />
     );
     expect(screen.getByText("raw")).toBeInTheDocument();
-    expect(screen.getByText("fetch.data")).toBeInTheDocument();
+    expect(getByTextContent("fetch.data")).toBeInTheDocument();
   });
 
   it("calls onClose when close button clicked", () => {
@@ -248,7 +260,7 @@ describe("StepDefinitionPanel", () => {
       />
     );
     expect(screen.getByText("for_each")).toBeInTheDocument();
-    expect(screen.getByText("fetch.items")).toBeInTheDocument();
+    expect(getByTextContent("fetch.items")).toBeInTheDocument();
     expect(screen.getByText("item")).toBeInTheDocument();
     expect(screen.getByText("fail_fast")).toBeInTheDocument();
   });

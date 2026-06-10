@@ -91,25 +91,35 @@ describe("AgentStreamView", () => {
     ];
     render(<AgentStreamView runId="r1" isLive={true} />);
 
-    expect(screen.getByText("Read config.ts")).toBeInTheDocument();
-    expect(screen.getByText("Search codebase")).toBeInTheDocument();
+    // Tool cards render kind + title in separate spans; the button's
+    // accessible name joins them.
+    expect(
+      screen.getByRole("button", { name: "Read config.ts" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Grep Search codebase" })
+    ).toBeInTheDocument();
   });
 
-  it("shows usage bar when usage data is present", () => {
+  it("reports usage to parent via onUsage when usage data is present", () => {
     mockStreamState.segments = [textSeg("output")];
     mockStreamState.usage = { used: 5000, size: 200000 };
-    render(<AgentStreamView runId="r1" isLive={true} />);
+    const onUsage = vi.fn();
+    render(<AgentStreamView runId="r1" isLive={true} onUsage={onUsage} />);
 
-    expect(screen.getByText(/5,000/)).toBeInTheDocument();
-    expect(screen.getByText(/200,000/)).toBeInTheDocument();
-    expect(screen.getByText(/tokens/)).toBeInTheDocument();
+    // The usage bar moved to the parent (RunView) — the stream view
+    // reports usage upward instead of rendering tokens inline.
+    expect(onUsage).toHaveBeenCalledWith({ used: 5000, size: 200000 });
+    expect(screen.queryByText(/tokens/)).toBeNull();
   });
 
-  it("does not show usage bar when usage is null", () => {
+  it("reports null usage via onUsage when usage is null", () => {
     mockStreamState.segments = [textSeg("output")];
     mockStreamState.usage = null;
-    render(<AgentStreamView runId="r1" isLive={true} />);
+    const onUsage = vi.fn();
+    render(<AgentStreamView runId="r1" isLive={true} onUsage={onUsage} />);
 
+    expect(onUsage).toHaveBeenCalledWith(null);
     expect(screen.queryByText(/tokens/)).toBeNull();
   });
 
@@ -129,7 +139,9 @@ describe("AgentStreamView", () => {
     render(<AgentStreamView runId="r1" isLive={true} />);
 
     expect(screen.getByText("Analyzing...")).toBeInTheDocument();
-    expect(screen.getByText("Read main.py")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Read main.py" })
+    ).toBeInTheDocument();
     expect(screen.getByText("Found the issue.")).toBeInTheDocument();
   });
 
@@ -159,17 +171,18 @@ describe("AgentStreamView", () => {
     ];
     render(<AgentStreamView runId="r1" isLive={true} />);
 
-    // Tool title visible
-    expect(screen.getByText("Read config.ts")).toBeInTheDocument();
+    // Tool title visible (kind + path joined in the button's accessible name)
+    const toolButton = screen.getByRole("button", { name: "Read config.ts" });
+    expect(toolButton).toBeInTheDocument();
     // Output hidden by default
     expect(screen.queryByText("file contents here")).toBeNull();
 
     // Click to expand
-    await user.click(screen.getByText("Read config.ts"));
+    await user.click(toolButton);
     expect(screen.getByText("file contents here")).toBeInTheDocument();
 
     // Click again to collapse
-    await user.click(screen.getByText("Read config.ts"));
+    await user.click(toolButton);
     expect(screen.queryByText("file contents here")).toBeNull();
   });
 

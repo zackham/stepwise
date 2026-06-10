@@ -21,6 +21,7 @@ vi.mock("@/hooks/useStepwise", () => ({
   useGroups: () => ({ data: mockGroups }),
   useStepwiseMutations: () => ({
     updateGroupLimit: { mutate: vi.fn() },
+    archiveJobs: { mutate: vi.fn() },
   }),
 }));
 
@@ -28,24 +29,14 @@ vi.mock("@/lib/api", () => ({
   fetchRuns: () => Promise.resolve([]),
 }));
 
-// Mock canvas components to avoid dagre/svg complexity in jsdom
-vi.mock("@/components/canvas/DependencyArrows", () => ({
-  DependencyArrows: () => <div data-testid="dependency-arrows" />,
-}));
-
-vi.mock("@/components/canvas/CanvasLayout", () => ({
-  computeCanvasLayout: (jobs: Job[]) => ({
-    cards: jobs.map((j, i) => ({ jobId: j.id, x: i * 300, y: 0, width: 280, height: 180 })),
-    edges: [],
-    groups: [],
-    width: jobs.length * 300,
-    height: 200,
-  }),
-}));
-
+// Mock JobCard to expose the props CanvasPage computes (status, dependency names)
 vi.mock("@/components/canvas/JobCard", () => ({
-  JobCard: ({ job }: { job: Job }) => (
-    <div data-testid={`job-card-${job.id}`} data-status={job.status}>
+  JobCard: ({ job, dependencyNames }: { job: Job; dependencyNames?: string[] }) => (
+    <div
+      data-testid={`job-card-${job.id}`}
+      data-status={job.status}
+      data-deps={dependencyNames && dependencyNames.length > 0 ? dependencyNames.join(",") : undefined}
+    >
       {job.name || job.objective}
     </div>
   ),
@@ -99,11 +90,12 @@ describe("CanvasPage partition logic", () => {
 
     expect(screen.getByTestId(`job-card-${j1.id}`)).toBeInTheDocument();
     expect(screen.getByTestId(`job-card-${j2.id}`)).toBeInTheDocument();
-    // No dependency arrows when all jobs are independent
-    expect(screen.queryByTestId("dependency-arrows")).not.toBeInTheDocument();
+    // No dependency badges when all jobs are independent
+    expect(screen.getByTestId(`job-card-${j1.id}`)).not.toHaveAttribute("data-deps");
+    expect(screen.getByTestId(`job-card-${j2.id}`)).not.toHaveAttribute("data-deps");
   });
 
-  it("places both ends of a depends_on edge in the DAG zone", () => {
+  it("surfaces depends_on edges as dependency badges on the dependent card", () => {
     const parent = makeJob({ name: "Parent" });
     const child = makeJob({ name: "Child", depends_on: [parent.id] });
     const independent = makeJob({ name: "Independent" });
@@ -115,11 +107,13 @@ describe("CanvasPage partition logic", () => {
     expect(screen.getByTestId(`job-card-${parent.id}`)).toBeInTheDocument();
     expect(screen.getByTestId(`job-card-${child.id}`)).toBeInTheDocument();
     expect(screen.getByTestId(`job-card-${independent.id}`)).toBeInTheDocument();
-    // DAG zone present (dependency arrows rendered for dependent jobs)
-    expect(screen.getByTestId("dependency-arrows")).toBeInTheDocument();
+    // The dependent card carries its dependency's name; the others carry none
+    expect(screen.getByTestId(`job-card-${child.id}`)).toHaveAttribute("data-deps", "Parent");
+    expect(screen.getByTestId(`job-card-${parent.id}`)).not.toHaveAttribute("data-deps");
+    expect(screen.getByTestId(`job-card-${independent.id}`)).not.toHaveAttribute("data-deps");
   });
 
-  it("places parent_job_id relationships in the DAG zone", () => {
+  it("renders parent/sub jobs as plain cards (parent_job_id is not a canvas dependency)", () => {
     const parent = makeJob({ name: "Parent Job" });
     const sub = makeJob({ name: "Sub Job", parent_job_id: parent.id });
     const solo = makeJob({ name: "Solo" });
@@ -130,21 +124,23 @@ describe("CanvasPage partition logic", () => {
     expect(screen.getByTestId(`job-card-${parent.id}`)).toBeInTheDocument();
     expect(screen.getByTestId(`job-card-${sub.id}`)).toBeInTheDocument();
     expect(screen.getByTestId(`job-card-${solo.id}`)).toBeInTheDocument();
-    expect(screen.getByTestId("dependency-arrows")).toBeInTheDocument();
+    // parent_job_id no longer creates a dependency edge on the canvas
+    expect(screen.getByTestId(`job-card-${sub.id}`)).not.toHaveAttribute("data-deps");
   });
 
-  it("sorts independent jobs by status priority: running > pending > completed", () => {
-    const completed = makeJob({ name: "Done", status: "completed", updated_at: "2026-01-01T00:00:00Z" });
+  it("sorts ungrouped jobs by recency regardless of status", () => {
+    const completed = makeJob({ name: "Done", status: "completed", updated_at: "2026-01-03T00:00:00Z" });
     const running = makeJob({ name: "Active", status: "running", updated_at: "2026-01-01T00:00:00Z" });
-    const pending = makeJob({ name: "Waiting", status: "pending", updated_at: "2026-01-01T00:00:00Z" });
-    mockJobs = [completed, running, pending];
+    const pending = makeJob({ name: "Waiting", status: "pending", updated_at: "2026-01-02T00:00:00Z" });
+    mockJobs = [running, completed, pending];
 
     render(<CanvasPage jobs={mockJobs} />, { wrapper: createWrapper() });
 
+    // Interleaved sort is recency-first: most recently updated job leads even if terminal
     const cards = screen.getAllByTestId(/^job-card-/);
-    expect(cards[0]).toHaveAttribute("data-status", "running");
+    expect(cards[0]).toHaveAttribute("data-status", "completed");
     expect(cards[1]).toHaveAttribute("data-status", "pending");
-    expect(cards[2]).toHaveAttribute("data-status", "completed");
+    expect(cards[2]).toHaveAttribute("data-status", "running");
   });
 
   it("breaks status ties by recency (newer first)", () => {
@@ -172,20 +168,25 @@ describe("CanvasPage partition logic", () => {
 
     render(<CanvasPage jobs={mockJobs} />, { wrapper: createWrapper() });
 
-    // Both should be in grid (no valid edge = both independent)
-    expect(screen.queryByTestId("dependency-arrows")).not.toBeInTheDocument();
+    // Both should be in grid; the dangling reference produces no dependency badge
     expect(screen.getByTestId(`job-card-${child.id}`)).toBeInTheDocument();
     expect(screen.getByTestId(`job-card-${solo.id}`)).toBeInTheDocument();
+    expect(screen.getByTestId(`job-card-${child.id}`)).not.toHaveAttribute("data-deps");
   });
 
-  it("labels the independent section when DAG zone is present", () => {
-    const parent = makeJob({ name: "Parent" });
-    const child = makeJob({ name: "Child", depends_on: [parent.id] });
+  it("renders a labeled section with completion summary for grouped jobs", () => {
+    const grouped1 = makeJob({ name: "Batch One", job_group: "batch-a", status: "completed" });
+    const grouped2 = makeJob({ name: "Batch Two", job_group: "batch-a", status: "running" });
     const solo = makeJob({ name: "Solo" });
-    mockJobs = [parent, child, solo];
+    mockJobs = [grouped1, grouped2, solo];
 
     render(<CanvasPage jobs={mockJobs} />, { wrapper: createWrapper() });
 
-    expect(screen.getByText("Independent jobs")).toBeInTheDocument();
+    // Group section header with name and rollup; active group is expanded by default
+    expect(screen.getByText("batch-a")).toBeInTheDocument();
+    expect(screen.getByText("1/2 done")).toBeInTheDocument();
+    expect(screen.getByTestId(`job-card-${grouped1.id}`)).toBeInTheDocument();
+    expect(screen.getByTestId(`job-card-${grouped2.id}`)).toBeInTheDocument();
+    expect(screen.getByTestId(`job-card-${solo.id}`)).toBeInTheDocument();
   });
 });

@@ -44,25 +44,39 @@ function errorResponse(status: number, detail: string) {
 
 describe("API client", () => {
   describe("fetchJobs", () => {
-    it("fetches all jobs without filter", async () => {
-      const jobs = [{ id: "j1", objective: "test" }];
-      mockFetch.mockReturnValueOnce(jsonResponse(jobs));
+    it("fetches all jobs with pagination params", async () => {
+      const response = { jobs: [{ id: "j1", objective: "test" }], total: 1 };
+      mockFetch.mockReturnValueOnce(jsonResponse(response));
 
       const result = await fetchJobs();
 
-      expect(mockFetch).toHaveBeenCalledWith("/api/jobs", expect.objectContaining({
-        headers: expect.objectContaining({ "Content-Type": "application/json" }),
-      }));
-      expect(result).toEqual(jobs);
+      expect(mockFetch).toHaveBeenCalledWith(
+        "/api/jobs?limit=500&include_total=true",
+        expect.objectContaining({
+          headers: expect.objectContaining({ "Content-Type": "application/json" }),
+        })
+      );
+      expect(result).toEqual(response);
     });
 
     it("appends status filter as query param", async () => {
-      mockFetch.mockReturnValueOnce(jsonResponse([]));
+      mockFetch.mockReturnValueOnce(jsonResponse({ jobs: [], total: 0 }));
 
       await fetchJobs("running");
 
       expect(mockFetch).toHaveBeenCalledWith(
-        "/api/jobs?status=running",
+        "/api/jobs?status=running&limit=500&include_total=true",
+        expect.any(Object)
+      );
+    });
+
+    it("appends top_level and include_archived flags", async () => {
+      mockFetch.mockReturnValueOnce(jsonResponse({ jobs: [], total: 0 }));
+
+      await fetchJobs(undefined, true, true);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        "/api/jobs?top_level=true&include_archived=true&limit=500&include_total=true",
         expect.any(Object)
       );
     });

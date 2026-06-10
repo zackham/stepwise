@@ -49,12 +49,20 @@ vi.mock("@tanstack/react-router", async () => {
 // Mock hooks
 const mockJobs: Job[] = [];
 vi.mock("@/hooks/useStepwise", () => ({
-  useJobs: () => ({ data: mockJobs, isLoading: false }),
+  // useJobs returns a JobsResponse wrapper ({ jobs, total }), not a raw array
+  useJobs: () => ({
+    data: { jobs: mockJobs, total: mockJobs.length },
+    isLoading: false,
+    isFetching: false,
+    dataUpdatedAt: 0,
+  }),
   useStepwiseMutations: () => ({
     cancelJob: { mutate: vi.fn() },
     deleteJob: { mutate: vi.fn() },
     deleteAllJobs: { mutate: vi.fn(), isPending: false },
     resumeJob: { mutate: vi.fn() },
+    archiveJobs: { mutate: vi.fn() },
+    bulkDeleteJobs: { mutate: vi.fn() },
   }),
 }));
 

@@ -88,10 +88,18 @@ const mockMutations = {
   deleteJob: { mutate: vi.fn() },
   deleteAllJobs: { mutate: vi.fn(), isPending: false },
   fulfillWatch: { mutate: vi.fn() },
+  archiveJobs: { mutate: vi.fn() },
+  bulkDeleteJobs: { mutate: vi.fn() },
 };
 
 vi.mock("@/hooks/useStepwise", () => ({
-  useJobs: () => ({ data: mockJobs, isLoading: false }),
+  // useJobs returns a JobsResponse wrapper ({ jobs, total }), not a raw array
+  useJobs: () => ({
+    data: { jobs: mockJobs, total: mockJobs.length },
+    isLoading: false,
+    isFetching: false,
+    dataUpdatedAt: 0,
+  }),
   useStepwiseMutations: () => mockMutations,
 }));
 
