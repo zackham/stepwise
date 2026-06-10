@@ -3,6 +3,51 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.99.0] — 2026-06-10
+
+**1.0 Release Candidate.** No new features — a full-codebase hardening pass ahead of 1.0. A twelve-dimension audit (engine, server, store, CLI, runner, executors, agent/ACP, YAML/models, performance, web) surfaced 71 adversarially-verified defects; all are fixed here, each with regression coverage. Suite: 3309 Python + 464 web tests green, eslint clean. (The version is 0.99.0 rather than a `1.0.0rc` string so the upgrade checker — which compares plain `X.Y.Z` tuples — keeps working for existing installs; 1.0.0 follows once this RC soaks.)
+
+### Fixed — stranded jobs & hangs
+- **Escalated jobs hung the CLI forever** — `action: escalate` pauses a job, but no runner wait loop ever recognized PAUSED. All seven wait loops (interactive, `--wait`, multi-job, local and delegated) now exit code 5 with a clear hand-off message. The documented ESCALATE pattern finally works headless.
+- **Delegated sub-jobs deadlocked at the concurrency cap** — `sub_flow`/`emit_flow` sub-jobs created while `max_concurrent_jobs` was saturated queued forever behind their own parent (which holds a slot in DELEGATED state). Sub-jobs of waiting parents now bypass the cap.
+- **Engine event loop death** — one exception from `_poll_external_changes()` permanently killed the AsyncEngine's sole queue consumer while the server kept serving HTTP; every job stranded. The loop now logs and survives.
+- **Sibling results discarded on pause/fail** — a step completing while its job was being escalated/abandoned by a sibling had its envelope silently dropped (rerun from scratch after resume). Results are now persisted with exit-rule processing deferred to resume.
+- **Poll watches froze the whole server** — `check_command` ran synchronously on the event loop (up to 300 s). Checks now run in the executor thread pool.
+- **`stepwise cancel --run` stranded jobs in RUNNING**; it now refuses when a live engine owns the run and settles the job properly for orphaned runs.
+- **for_each fan-outs**: `fail_fast` left capacity-queued PENDING sub-jobs that auto-started (and billed) after the parent failed; escalated sub-jobs were recorded as permanent item errors instead of awaiting human resolution. Both fixed.
+
+### Fixed — honest failure reporting
+- **TimeoutDecorator enforced nothing** — a configured timeout only annotated metadata; hung steps ran forever. It now bounds execution, kills the process group, and fails the run.
+- **Hung agents recorded as successes** — idle-timeout-cancelled ACP prompts returned truncated output as a completed run. They now fail with a clear error (cancelled/refusal stop-reasons fail too).
+- **Script launch failures recorded as successes** — bad `working_dir` or missing binary completed the step with empty output. Now routed through the failure contract.
+- **Fulfill failures silently discarded human input** — a failed fulfill POST marked the step handled and looped forever; it now re-prompts. `--async --local` runner crashes (previously DEVNULL'd) now log to `.stepwise/logs/runner-<job>.log`; failed delegated starts name the orphaned server job id.
+- Poll checks emitting non-JSON stdout surfaced as watch errors instead of silent "not ready" forever; dead-process reaps route through exit rules and emit events.
+
+### Fixed — correctness & data integrity
+- **`continue_session` never actually resumed sessions** on the production ACP backend — every "continued" step got a fresh session and `_session_id` sharing was dead. Real resume implemented (session registered on attempt 1, prompted by id on the hosting process; honest logged fallback if the process was recycled).
+- **Cache cross-contamination** — the cache key ignored `working_dir`/`flow_dir` and flow/step identity, so identical `run:` text in different flows shared entries. Key scheme bumped to v2 (existing cache entries recompute once); corrupt cache DBs now self-heal instead of crashing every cached flow.
+- **Unquoted `when: true` silently disabled exit rules** (YAML bool ≠ string). Bools are coerced, other non-strings error cleanly; `stepwise validate` also warns when a `when:` references undeclared inputs (previously silently skipped the step).
+- **Session snapshots silently failed** for any path containing `.` — including stepwise's own default `.stepwise` workspaces — due to a wrong slug algorithm.
+- ACP `cancel()` always targeted the first active process (no-op with >1 agent); now routed to the session's host. JSON-RPC stdin writes are lock-serialized. `emit_flow` files are namespaced per step+attempt (stale emissions no longer picked up by the wrong step). Prompt rendering is single-pass — input values can no longer expand `{{placeholders}}` that exfiltrate sibling inputs.
+- `--rerun` actually bypasses the cache everywhere (AsyncEngine dropped it; `--wait`/`--async`/`--watch` and all delegation paths dropped it silently). `--watch` forwards `--meta`/`--notify`.
+- `StepDefinition.description` survives serialization; engine step launches are race-free across the HTTP threadpool and event loop; concurrent cancel can no longer be resurrected by approve/pending transitions; `delete_skipped_runs` commits (stranded WAL write lock).
+
+### Fixed — security
+- **Path traversal in the SPA catch-all route** allowed arbitrary file reads outside the web root. Paths are now resolved and containment-checked.
+- **`server stop`/`restart`/`uninstall` could SIGKILL an unrelated process** via a stale recycled PID; process identity is now verified via `/proc/<pid>/cmdline` first. `server start` no longer reports false success when another server holds the port.
+- DELETE on running jobs cancels them first instead of orphaning live agent processes.
+
+### Fixed — web UI
+- **Live monitoring no longer goes stale**: WS ticks update the job detail query (status badge/banners froze before); agent transcripts refetch on run completion instead of truncating to the mount-time snapshot; stream backfill/live overlap is deduped (no doubled text or phantom forever-spinning tool cards).
+- **Keyboard accessibility**: removed the page-wide Tab hijack on JobDetailPage — the fulfillment form (auto-selected exactly when a human is needed) is reachable by keyboard again.
+- **DAG performance**: zoom/follow-flow no longer re-renders the whole DAG per frame (`useSyncExternalStore` readout, memoized nodes/edges, O(N) parallel-siblings precompute — was O(N²) Date parsing per render).
+- Loop-closing input bindings no longer feed cycles into the dagre layout; failed DAG captures restore the view instead of breaking it; fixed a genuine hook-order bug (useState inside `.map()` in StepConfigView). Web suite: 36 stale tests rewritten against current contracts; eslint 149→0 errors.
+
+### Fixed — server & data layer performance
+- `jobs` table gained secondary indexes (status/created_at/parent/group) — observer polls and `/api/jobs` no longer full-scan workflow JSON blobs; readiness scans memoize per dispatch (~4.5× fewer queries); `_emit` stops re-parsing the full Job per event; `/api/jobs` stops loading entire event logs for paused jobs; `load_events_since` is bounded.
+- One stalled WebSocket client no longer blocks broadcasts to everyone (per-send timeout); `/api/v1/events/stream` notices disconnects; NDJSON tailers no longer drop events on line-straddling reads and survive pause/resume; project hooks dispatch off the event loop; flow-file endpoints stop blocking it; agent spawns no longer serialize behind a global lock during a 30 s handshake.
+- `stale_jobs()` treats EPERM as alive and can no longer wedge the observer loop or crash startup; `/api/jobs/stale` was shadowed by a path parameter and always 404'd.
+
 ## [0.46.4] — 2026-06-01
 
 ### Fixed
