@@ -11,10 +11,19 @@ from datetime import datetime, timezone
 from typing import Any
 
 from stepwise.models import ExecutorRef, HandoffEnvelope, Sidecar
+from stepwise.store import (
+    DatabaseIntegrityError,
+    apply_pragmas,
+    check_database_integrity,
+)
 
 logger = logging.getLogger(__name__)
 
-# Keys injected by engine at runtime — excluded from cache key computation
+# Keys injected by engine at runtime — excluded from cache key computation.
+# NOTE: `working_dir` and `flow_dir` are deliberately NOT in this set. They
+# change execution semantics (ScriptExecutor resolves relative commands
+# against flow_dir and runs with cwd=working_dir), so two steps with the same
+# command text but different directories must not share a cache entry.
 RUNTIME_CONFIG_KEYS = frozenset({
     "_registry",
     "_config",
@@ -23,9 +32,13 @@ RUNTIME_CONFIG_KEYS = frozenset({
     "_prev_session_name",
     "_session_lock_manager",
     "_injected_contexts",
-    "working_dir",
-    "flow_dir",
 })
+
+# Bump when the key derivation scheme changes. v2: working_dir/flow_dir are
+# no longer stripped from the config and flow/step identity participates in
+# the key — entries written under v1 could be shared across flows/dirs that
+# resolve the same command text differently, so they must not be served.
+CACHE_KEY_VERSION = 2
 
 # Default TTL per executor type (seconds)
 DEFAULT_TTL: dict[str, int] = {
@@ -53,21 +66,37 @@ def compute_cache_key(
     exec_ref: ExecutorRef,
     engine_version: str,
     key_extra: str | None = None,
+    *,
+    flow_name: str | None = None,
+    step_name: str | None = None,
 ) -> str:
-    """Compute a deterministic SHA-256 cache key from step inputs and config."""
-    # Strip runtime-injected keys from executor config
+    """Compute a deterministic SHA-256 cache key from step inputs and config.
+
+    ``flow_name``/``step_name`` scope the key to a specific flow/step when
+    provided. This weakens cross-step dedup but eliminates cross-flow
+    contamination: identical ``run:`` command text in two different flows
+    resolves (and executes) differently, so they must never share an entry.
+    Callers that can supply identity should.
+    """
+    # Strip runtime-injected keys from executor config. working_dir and
+    # flow_dir are kept (when present) — see RUNTIME_CONFIG_KEYS note.
     clean_config = {
         k: v for k, v in exec_ref.config.items()
         if k not in RUNTIME_CONFIG_KEYS
     }
 
     key_parts = {
+        "key_version": CACHE_KEY_VERSION,
         "inputs": inputs,
         "executor_type": exec_ref.type,
         "executor_config": clean_config,
         "engine_version": engine_version,
         "key_extra": key_extra or "",
     }
+    if flow_name is not None:
+        key_parts["flow_name"] = flow_name
+    if step_name is not None:
+        key_parts["step_name"] = step_name
     canonical = json.dumps(key_parts, sort_keys=True, default=str)
     return hashlib.sha256(canonical.encode()).hexdigest()
 
@@ -79,14 +108,66 @@ class StepResultCache:
         self._db_path = db_path
         if db_path != ":memory:":
             os.makedirs(os.path.dirname(db_path), exist_ok=True)
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA busy_timeout=5000")
-        self._create_tables()
+        try:
+            self._conn = self._open(db_path)
+        except (DatabaseIntegrityError, sqlite3.Error) as exc:
+            # The cache is a pure optimization — fail OPEN, unlike the main
+            # store (which fails closed on corruption). A corrupt cache DB
+            # must never block flow execution: recreate it from scratch.
+            logger.warning(
+                "Step result cache at %s is unusable (%s); recreating it",
+                db_path, exc,
+            )
+            self._remove_db_files(db_path)
+            try:
+                self._conn = self._open(db_path)
+            except (DatabaseIntegrityError, sqlite3.Error) as exc2:
+                logger.warning(
+                    "Recreating step result cache at %s failed (%s); "
+                    "falling back to an in-memory cache for this process",
+                    db_path, exc2,
+                )
+                self._db_path = ":memory:"
+                self._conn = self._open(":memory:")
 
-    def _create_tables(self) -> None:
-        self._conn.executescript("""
+    @staticmethod
+    def _open(db_path: str) -> sqlite3.Connection:
+        """Open + harden the cache DB, raising on any corruption.
+
+        Applies the same integrity check and PRAGMA hardening as the main
+        store (see store.apply_pragmas — WAL autocheckpoint and journal size
+        limits were added after the May 2026 btrfs WAL corruption incident,
+        CHANGELOG 0.46.1/0.46.2).
+        """
+        check_database_integrity(db_path)
+        conn = sqlite3.connect(db_path, check_same_thread=False)
+        try:
+            conn.row_factory = sqlite3.Row
+            apply_pragmas(conn)
+            StepResultCache._create_tables(conn)
+        except sqlite3.Error:
+            conn.close()
+            raise
+        return conn
+
+    @staticmethod
+    def _remove_db_files(db_path: str) -> None:
+        """Delete the cache DB and its WAL/SHM sidecars (best-effort)."""
+        if db_path == ":memory:":
+            return
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(db_path + suffix)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                logger.warning(
+                    "Failed to remove cache file %s: %s", db_path + suffix, exc
+                )
+
+    @staticmethod
+    def _create_tables(conn: sqlite3.Connection) -> None:
+        conn.executescript("""
             CREATE TABLE IF NOT EXISTS cache_entries (
                 key TEXT PRIMARY KEY,
                 step_name TEXT NOT NULL,

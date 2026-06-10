@@ -58,6 +58,47 @@ def test_project_slug_path_object():
     assert project_slug(Path("/home/zack/work/stepwise")) == "-home-zack-work-stepwise"
 
 
+def test_project_slug_dots_become_dashes():
+    """Claude slugifies ALL non-alphanumerics, not just '/'. Dots in the
+    path (e.g. stepwise's own .stepwise job workspaces) must map to '-'.
+    Verified against real ~/.claude/projects naming:
+    -home-zack--stepwise-jobs-job-6dc06ef9-workspace"""
+    assert (
+        project_slug("/fake/x/.stepwise/jobs/job-1/workspace")
+        == "-fake-x--stepwise-jobs-job-1-workspace"
+    )
+
+
+def test_project_slug_underscores_become_dashes():
+    # Real example: /home/zack/work/3d/silicon_zack →
+    # ~/.claude/projects/-home-zack-work-3d-silicon-zack
+    assert project_slug("/fake/x/work/silicon_zack") == "-fake-x-work-silicon-zack"
+
+
+def test_project_slug_trailing_slash_normalized():
+    assert project_slug("/fake/foo/") == project_slug("/fake/foo")
+
+
+def test_project_slug_dotdot_normalized():
+    assert project_slug("/fake/foo/../bar") == "-fake-bar"
+
+
+def test_snapshot_works_for_dotted_working_dir(tmp_path, monkeypatch):
+    """End-to-end: snapshot_session must locate sessions for a working_dir
+    containing dots (the default agent workspace lives under .stepwise/)."""
+    projects_root = tmp_path / "projects"
+    projects_root.mkdir()
+    monkeypatch.setattr(snapshot_mod, "CLAUDE_PROJECTS_DIR", projects_root)
+    working_dir = "/fake/.stepwise/jobs/job-1/workspace"
+    # The directory Claude would actually create:
+    sessions_dir = projects_root / "-fake--stepwise-jobs-job-1-workspace"
+    sessions_dir.mkdir(parents=True)
+    _write_session(sessions_dir, "src-uuid", b'{"messages": []}\n')
+
+    new_uuid = snapshot_session("src-uuid", working_dir)
+    assert (sessions_dir / f"{new_uuid}.jsonl").read_bytes() == b'{"messages": []}\n'
+
+
 def test_project_sessions_dir_uses_claude_projects_root(fake_project):
     working_dir, sessions_dir = fake_project
     computed = project_sessions_dir(working_dir)

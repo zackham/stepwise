@@ -177,6 +177,41 @@ class TestCacheKey:
         k2 = compute_cache_key({}, ref2, "1.0.0")
         assert k1 == k2
 
+    def test_working_dir_changes_key(self):
+        """Same command + different working_dir executes differently —
+        must not share a cache entry (F24 regression)."""
+        ref1 = ExecutorRef("script", {"command": "./build.sh", "working_dir": "/proj/a"})
+        ref2 = ExecutorRef("script", {"command": "./build.sh", "working_dir": "/proj/b"})
+        k1 = compute_cache_key({}, ref1, "1.0.0")
+        k2 = compute_cache_key({}, ref2, "1.0.0")
+        assert k1 != k2
+
+    def test_flow_dir_changes_key(self):
+        """Relative script paths resolve against flow_dir — different flow
+        dirs must not share a cache entry (F24 regression)."""
+        ref1 = ExecutorRef("script", {"command": "./build.sh", "flow_dir": "/flows/a"})
+        ref2 = ExecutorRef("script", {"command": "./build.sh", "flow_dir": "/flows/b"})
+        k1 = compute_cache_key({}, ref1, "1.0.0")
+        k2 = compute_cache_key({}, ref2, "1.0.0")
+        assert k1 != k2
+
+    def test_flow_name_scopes_key(self):
+        ref = ExecutorRef("script", {"command": "./build.sh"})
+        k1 = compute_cache_key({}, ref, "1.0.0", flow_name="flow-a")
+        k2 = compute_cache_key({}, ref, "1.0.0", flow_name="flow-b")
+        assert k1 != k2
+
+    def test_step_name_scopes_key(self):
+        ref = ExecutorRef("script", {"command": "./build.sh"})
+        k1 = compute_cache_key({}, ref, "1.0.0", step_name="step-a")
+        k2 = compute_cache_key({}, ref, "1.0.0", step_name="step-b")
+        assert k1 != k2
+
+    def test_identity_omitted_keeps_backward_compatible_key(self):
+        """Callers that don't pass identity still get deterministic keys."""
+        ref = ExecutorRef("script", {"command": "echo hi"})
+        assert compute_cache_key({}, ref, "1.0.0") == compute_cache_key({}, ref, "1.0.0")
+
 
 # ── StepResultCache store ─────────────────────────────────────────────
 
@@ -627,3 +662,77 @@ class TestForEachBatchCache:
         result2 = run_job_sync(engine2, job2.id)
         assert result2.status == JobStatus.COMPLETED
         assert call_count == 5  # no new executions
+
+
+# ── Cache DB hardening: fail-open on corruption (F25) ──────────────────
+
+
+class TestCacheCorruptionRecovery:
+    def _envelope(self) -> HandoffEnvelope:
+        return HandoffEnvelope(artifact={"x": 1}, sidecar=Sidecar(), timestamp=_now())
+
+    def test_corrupt_cache_db_is_recreated(self, tmp_path, caplog):
+        """A corrupt cache DB must never block flow execution — the cache
+        fails open: warn, recreate, continue."""
+        import logging
+        db_path = str(tmp_path / "cache" / "results.db")
+        import os as _os
+        _os.makedirs(_os.path.dirname(db_path), exist_ok=True)
+        with open(db_path, "wb") as f:
+            f.write(b"this is definitely not a sqlite database" * 100)
+
+        with caplog.at_level(logging.WARNING, logger="stepwise.cache"):
+            cache = StepResultCache(db_path)
+        try:
+            # Fully functional after recreation
+            key = "k" * 64
+            cache.put(key, "step", "flow", self._envelope())
+            hit = cache.get(key)
+            assert hit is not None
+            assert hit.artifact == {"x": 1}
+            assert cache.stats()["total_entries"] == 1
+        finally:
+            cache.close()
+        assert any("recreating" in r.message.lower() for r in caplog.records)
+
+    def test_unrecoverable_path_falls_back_to_memory(self, tmp_path):
+        """If the cache DB cannot be recreated (path is a directory), the
+        cache falls back to in-memory rather than crashing the run."""
+        bad_path = str(tmp_path / "cachedir")
+        import os as _os
+        _os.makedirs(bad_path, exist_ok=True)
+
+        cache = StepResultCache(bad_path)  # must not raise
+        try:
+            key = "k" * 64
+            cache.put(key, "step", "flow", self._envelope())
+            assert cache.get(key) is not None
+            assert cache._db_path == ":memory:"
+        finally:
+            cache.close()
+
+    def test_healthy_cache_db_untouched(self, tmp_path):
+        """A healthy on-disk cache survives reopen with entries intact."""
+        db_path = str(tmp_path / "results.db")
+        cache = StepResultCache(db_path)
+        key = "k" * 64
+        cache.put(key, "step", "flow", self._envelope())
+        cache.close()
+
+        reopened = StepResultCache(db_path)
+        try:
+            assert reopened.get(key) is not None
+        finally:
+            reopened.close()
+
+    def test_cache_db_gets_wal_hardening_pragmas(self, tmp_path):
+        """The cache DB gets the same 0.46.1 WAL hardening as the main store."""
+        db_path = str(tmp_path / "results.db")
+        cache = StepResultCache(db_path)
+        try:
+            assert cache._conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+            assert cache._conn.execute("PRAGMA wal_autocheckpoint").fetchone()[0] == 200
+            assert cache._conn.execute("PRAGMA journal_size_limit").fetchone()[0] == 16777216
+            assert cache._conn.execute("PRAGMA synchronous").fetchone()[0] == 1  # NORMAL
+        finally:
+            cache.close()

@@ -13,9 +13,12 @@ PATH LAYOUT (corrected post-canary 2026-04-07):
 Claude stores sessions per project at:
     ~/.claude/projects/<project-slug>/<uuid>.jsonl
 
-where <project-slug> is the working directory with `/` replaced by `-` and
-prepended with `-`. Example:
+where <project-slug> is the working directory with every non-alphanumeric
+character replaced by `-` (the result starts with `-` because the path
+starts with `/`). Examples:
     /home/zack/work/vita → -home-zack-work-vita
+    /home/zack/.stepwise/jobs/job-1/workspace
+        → -home-zack--stepwise-jobs-job-1-workspace
 
 The original §9.2 design doc said `~/.claude/sessions/<uuid>.json` — that
 was wrong. The first end-to-end canary run caught it: snapshot calls failed
@@ -31,6 +34,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 import uuid as _uuid
 from pathlib import Path
@@ -43,15 +47,23 @@ CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 def project_slug(working_dir: str | Path) -> str:
     """Return the project-slug Claude uses for the given working directory.
 
-    Algorithm: take the absolute path, replace `/` with `-`. The result
-    starts with `-` because the path starts with `/`.
+    Algorithm: take the resolved absolute path and replace every
+    non-alphanumeric character with `-` (the Claude CLI slugifies dots,
+    underscores, etc. — not just path separators). The result starts with
+    `-` because the path starts with `/`.
 
-    Examples:
+    Verified against real ~/.claude/projects directories:
         /home/zack/work/vita → -home-zack-work-vita
         /tmp/foo → -tmp-foo
+        /home/zack/.stepwise/jobs/job-6dc06ef9/workspace
+            → -home-zack--stepwise-jobs-job-6dc06ef9-workspace
+        /home/zack/work/3d/silicon_zack → -home-zack-work-3d-silicon-zack
+
+    The path is always resolved (even when already absolute) so trailing
+    slashes and `..` segments normalize to the slug Claude actually uses.
     """
-    abs_path = str(Path(working_dir).resolve()) if not str(working_dir).startswith("/") else str(working_dir)
-    return abs_path.replace("/", "-")
+    abs_path = str(Path(working_dir).resolve())
+    return re.sub(r"[^a-zA-Z0-9]", "-", abs_path)
 
 
 def project_sessions_dir(working_dir: str | Path) -> Path:

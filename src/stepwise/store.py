@@ -378,6 +378,27 @@ class SQLiteStore:
                 self._conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {typ}{default_clause}")
         self._conn.commit()
 
+        # Secondary indexes on jobs. Created here (not in _create_tables)
+        # because job_group only exists after the column migration above.
+        # IF NOT EXISTS makes this a safe migration for existing DBs.
+        # Matches the hot query predicates:
+        #   status = ?                      (active/pending/running/stale_jobs,
+        #                                    every 2s in the server observer loops)
+        #   ORDER BY created_at DESC        (all_jobs / recent_flows)
+        #   parent_job_id = ?               (child_jobs, top-level filters)
+        #   job_group = ?                   (jobs_in_group, group transitions)
+        self._conn.executescript("""
+            CREATE INDEX IF NOT EXISTS idx_jobs_status
+                ON jobs(status);
+            CREATE INDEX IF NOT EXISTS idx_jobs_created_at
+                ON jobs(created_at);
+            CREATE INDEX IF NOT EXISTS idx_jobs_parent
+                ON jobs(parent_job_id);
+            CREATE INDEX IF NOT EXISTS idx_jobs_group
+                ON jobs(job_group);
+        """)
+        self._conn.commit()
+
     # ── Jobs ──────────────────────────────────────────────────────────────
 
     def save_job(self, job: Job) -> None:
@@ -684,33 +705,37 @@ class SQLiteStore:
         return [r[0] for r in rows]
 
     def transition_job_to_pending(self, job_id: str) -> None:
-        """Transition a single STAGED job to PENDING. Raises ValueError if not STAGED."""
-        from stepwise.models import _now
+        """Transition a single STAGED job to PENDING. Raises ValueError if not STAGED.
+
+        The transition is atomic (UPDATE ... WHERE status = 'staged') so a
+        concurrent cancel/delete between the pre-check and the UPDATE cannot
+        be silently overwritten.
+        """
         job = self.load_job(job_id)
         if job.status == JobStatus.AWAITING_APPROVAL:
             raise ValueError(
                 f"Job {job_id} requires approval first (use 'stepwise job approve {job_id}')"
             )
-        if job.status != JobStatus.STAGED:
-            raise ValueError(f"Cannot run job in status {job.status.value} (must be STAGED)")
-        with self._conn:
-            self._conn.execute(
-                "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?",
-                (JobStatus.PENDING.value, _now().isoformat(), job_id),
+        if not self.atomic_status_transition(job_id, JobStatus.STAGED, JobStatus.PENDING):
+            # Re-read for an accurate error message (status may have changed
+            # since the pre-check — that's the race this guards against).
+            current = self.load_job(job_id)
+            raise ValueError(
+                f"Cannot run job in status {current.status.value} (must be STAGED)"
             )
 
     def transition_job_to_approved(self, job_id: str) -> None:
-        """Approve a job: AWAITING_APPROVAL → PENDING. Raises ValueError if not AWAITING_APPROVAL."""
-        from stepwise.models import _now
-        job = self.load_job(job_id)
-        if job.status != JobStatus.AWAITING_APPROVAL:
+        """Approve a job: AWAITING_APPROVAL → PENDING. Raises ValueError if not AWAITING_APPROVAL.
+
+        Atomic for the same reason as :meth:`transition_job_to_pending`.
+        """
+        self.load_job(job_id)  # raise KeyError for unknown jobs
+        if not self.atomic_status_transition(
+            job_id, JobStatus.AWAITING_APPROVAL, JobStatus.PENDING
+        ):
+            current = self.load_job(job_id)
             raise ValueError(
-                f"Cannot approve job in status {job.status.value} (must be awaiting_approval)"
-            )
-        with self._conn:
-            self._conn.execute(
-                "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?",
-                (JobStatus.PENDING.value, _now().isoformat(), job_id),
+                f"Cannot approve job in status {current.status.value} (must be awaiting_approval)"
             )
 
     def recent_flows(self, limit: int = 5) -> list[Job]:
@@ -1061,12 +1086,16 @@ class SQLiteStore:
         if not run_ids:
             return 0
         placeholders = ",".join("?" * len(run_ids))
-        self._conn.execute(
-            f"DELETE FROM step_events WHERE run_id IN ({placeholders})", run_ids
-        )
-        self._conn.execute(
-            f"DELETE FROM step_runs WHERE id IN ({placeholders})", run_ids
-        )
+        # `with self._conn:` commits on success / rolls back on exception.
+        # Without it the DELETEs ride an open implicit write transaction that
+        # can strand the WAL write lock on a server threadpool thread.
+        with self._conn:
+            self._conn.execute(
+                f"DELETE FROM step_events WHERE run_id IN ({placeholders})", run_ids
+            )
+            self._conn.execute(
+                f"DELETE FROM step_runs WHERE id IN ({placeholders})", run_ids
+            )
         return len(run_ids)
 
     # ── Job Ownership & Heartbeat ────────────────────────────────────────
@@ -1102,6 +1131,21 @@ class SQLiteStore:
                     continue
                 except ProcessLookupError:
                     pass  # Process dead — definitely stuck
+                except PermissionError:
+                    # EPERM: a process with this PID exists but we can't
+                    # signal it. Treat as alive (same policy as
+                    # process_lifecycle._is_pid_alive) — never let the
+                    # probe raise out of stale detection.
+                    continue
+                except OSError as exc:
+                    # Unexpected probe failure — be conservative: don't
+                    # mark the job stale, but never propagate (a raised
+                    # probe wedges the server observer loop / startup).
+                    logger.warning(
+                        "PID liveness probe failed for job %s (pid=%s): %s",
+                        job.id, job.runner_pid, exc,
+                    )
+                    continue
             result.append(job)
         return result
 
@@ -1372,30 +1416,39 @@ class SQLiteStore:
         self,
         since_rowid: int = 0,
         job_ids: set[str] | None = None,
+        limit: int = 5000,
     ) -> list[tuple[int, Event, dict]]:
         """Load events with rowid > since_rowid.
 
         Returns list of (rowid, Event, job_metadata_dict) tuples ordered by rowid.
         If job_ids is provided, only events for those jobs are returned.
         The caller is responsible for building envelopes from the raw data.
+
+        At most ``limit`` rows are returned (default 5000) so a full-history
+        replay can never load the entire events table into memory in one
+        call. Callers can page by passing the last returned rowid back as
+        ``since_rowid``. Pass ``limit=0`` for an unbounded read (tests only).
         """
+        limit_clause = " LIMIT ?" if limit and limit > 0 else ""
         if job_ids:
             placeholders = ",".join("?" for _ in job_ids)
             sql = f"""
                 SELECT e.rowid, e.*, j.metadata AS job_metadata
                 FROM events e LEFT JOIN jobs j ON e.job_id = j.id
                 WHERE e.rowid > ? AND e.job_id IN ({placeholders})
-                ORDER BY e.rowid
+                ORDER BY e.rowid{limit_clause}
             """
             params: list = [since_rowid, *job_ids]
         else:
-            sql = """
+            sql = f"""
                 SELECT e.rowid, e.*, j.metadata AS job_metadata
                 FROM events e LEFT JOIN jobs j ON e.job_id = j.id
                 WHERE e.rowid > ?
-                ORDER BY e.rowid
+                ORDER BY e.rowid{limit_clause}
             """
             params = [since_rowid]
+        if limit_clause:
+            params.append(limit)
 
         rows = self._conn.execute(sql, params).fetchall()
         results = []
