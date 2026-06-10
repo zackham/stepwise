@@ -289,7 +289,6 @@ Example:
 }
 ```
 
-The file path is also available as $STEPWISE_OUTPUT_FILE.
 Write this file as one of your final actions.
 </stepwise-output>
 ```
@@ -314,7 +313,7 @@ my-step:
   output_mode: effect    # explicit — prevents auto-promotion to "file"
 ```
 
-With `output_mode: effect`, the agent's artifact becomes `{"status": "completed"}`, the `<stepwise-output>` block is not appended, and `STEPWISE_OUTPUT_FILE` is not set. `outputs:` still controls the downstream binding surface, but the agent isn't asked to produce anything structured — downstream steps reading those output fields will see `None`.
+With `output_mode: effect`, the agent's artifact becomes `{"status": "completed"}` and the `<stepwise-output>` block is not appended. `outputs:` still controls the downstream binding surface, but the agent isn't asked to produce anything structured — downstream steps reading those output fields will see `None`.
 
 **Opting out with a different mode** — `output_mode: stream_result` gives you the full agent text under `result`, also skipping the structured-output block.
 
