@@ -1,9 +1,10 @@
-import { useMemo, useRef, useCallback, useEffect, useState, Suspense, lazy } from "react";
+import { useMemo, useRef, useCallback, useEffect, useState, useSyncExternalStore, Suspense, lazy } from "react";
 import { computeHierarchicalLayout } from "@/lib/dag-layout";
 import type { DagSelection } from "@/lib/dag-layout";
 import { useLayoutTransition } from "@/lib/layout-transition";
 import { useDagCamera } from "@/hooks/useDagCamera";
 import { StepNode } from "./StepNode";
+import { computeParallelSiblings } from "@/lib/parallel-siblings";
 import { DagEdges } from "./DagEdges";
 import type { HoveredLabelInfo } from "./DagEdges";
 import { ExpandedStepContainer } from "./ExpandedStepContainer";
@@ -22,6 +23,24 @@ import { useTheme } from "@/hooks/useTheme";
 import { canUseWebGL } from "@/lib/webgl/webgl-utils";
 
 const WebGLEdgeLayer = lazy(() => import("./WebGLEdgeLayer"));
+
+/** Isolated zoom-percent readout. Subscribes to the camera's zoom store
+ *  so per-frame canvas transforms re-render ONLY this tiny component,
+ *  never the whole DAG tree. */
+function ZoomPercent({
+  subscribe,
+  getSnapshot,
+}: {
+  subscribe: (fn: () => void) => () => void;
+  getSnapshot: () => number;
+}) {
+  const zoom = useSyncExternalStore(subscribe, getSnapshot);
+  return <>{zoom}%</>;
+}
+
+// Stable identity for "no parallel siblings" so memoized StepNodes
+// don't re-render and don't fall back to local computation.
+const NO_PARALLEL_SIBLINGS: string[] = [];
 
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -196,47 +215,61 @@ export function FlowDagView({
 
     setShareState("capturing");
     try {
-      // Save current state
-      const savedTransform = canvas.style.transform;
-      const savedOverflow = container.style.overflow;
-
-      // Remove transform and show full canvas for capture
-      canvas.style.transform = "none";
-      container.style.overflow = "visible";
-
-      // Hide overlays during capture
-      if (inputPanelRef.current) inputPanelRef.current.style.display = "none";
-      if (edgeTooltipRef.current) edgeTooltipRef.current.style.display = "none";
-
       const computedStyle = getComputedStyle(document.documentElement);
       const canvasBg = computedStyle.getPropertyValue("--dag-canvas-bg").trim() || "#09090b";
       const canvasBorder = computedStyle.getPropertyValue("--dag-canvas-border").trim() || "#27272a";
       const canvasText = computedStyle.getPropertyValue("--dag-canvas-text").trim() || "#fafafa";
       const canvasMuted = computedStyle.getPropertyValue("--dag-canvas-muted").trim() || "#52525b";
 
-      const pixelRatio = 2;
-      const blob = await toBlob(canvas, {
-        backgroundColor: canvasBg,
-        pixelRatio,
-        filter: (node: HTMLElement) => {
-          // Filter out counter-scaled overlays
-          if (node instanceof HTMLElement && node.dataset?.captureHide) return false;
-          return true;
-        },
-      });
+      // Save current state
+      const savedTransform = canvas.style.transform;
+      const savedOverflow = container.style.overflow;
 
-      // Restore state
-      canvas.style.transform = savedTransform;
-      container.style.overflow = savedOverflow;
-      if (inputPanelRef.current) inputPanelRef.current.style.display = "";
-      if (edgeTooltipRef.current) edgeTooltipRef.current.style.display = "";
+      const pixelRatio = 2;
+      let blob: Blob | null;
+      try {
+        // Remove transform and show full canvas for capture
+        canvas.style.transform = "none";
+        container.style.overflow = "visible";
+
+        // Hide overlays during capture
+        if (inputPanelRef.current) inputPanelRef.current.style.display = "none";
+        if (edgeTooltipRef.current) edgeTooltipRef.current.style.display = "none";
+
+        blob = await toBlob(canvas, {
+          backgroundColor: canvasBg,
+          pixelRatio,
+          filter: (node: HTMLElement) => {
+            // Filter out counter-scaled overlays
+            if (node instanceof HTMLElement && node.dataset?.captureHide) return false;
+            return true;
+          },
+        });
+      } finally {
+        // Restore state — MUST run even when toBlob rejects, otherwise a
+        // failed capture leaves the container overflowing and the inline
+        // fulfillment panel permanently display:none.
+        canvas.style.transform = savedTransform;
+        container.style.overflow = savedOverflow;
+        if (inputPanelRef.current) inputPanelRef.current.style.display = "";
+        if (edgeTooltipRef.current) edgeTooltipRef.current.style.display = "";
+      }
 
       if (!blob) { setShareState("idle"); return; }
 
       // Load captured image
       const dagImg = new Image();
       dagImg.src = URL.createObjectURL(blob);
-      await new Promise<void>((resolve) => { dagImg.onload = () => resolve(); });
+      try {
+        await new Promise<void>((resolve, reject) => {
+          dagImg.onload = () => resolve();
+          dagImg.onerror = () =>
+            reject(new Error("Failed to decode captured DAG image"));
+        });
+      } catch (err) {
+        URL.revokeObjectURL(dagImg.src);
+        throw err;
+      }
 
       // Create branded composite
       const HEADER_H = 72 * pixelRatio;
@@ -372,7 +405,8 @@ export function FlowDagView({
   const {
     followFlow,
     setFollowFlow,
-    zoomDisplay,
+    subscribeZoom,
+    getZoomDisplay,
     transformRef,
     cameraRef,
     applyTransform,
@@ -420,6 +454,14 @@ export function FlowDagView({
     }
     return map;
   }, [runs]);
+
+  // Parallel-sibling map for the temporal-ordering annotation — computed
+  // ONCE per latestRuns change for all nodes instead of O(N²) Date
+  // parsing inside every StepNode on every render.
+  const parallelSiblingsMap = useMemo(
+    () => computeParallelSiblings(latestRuns),
+    [latestRuns],
+  );
 
   // Critical path computation (only for terminal jobs when toggled on)
   const criticalPath: CriticalPathResult | null = useMemo(() => {
@@ -754,6 +796,7 @@ export function FlowDagView({
                 stepDef={stepDef}
                 latestRun={latestRuns[node.id] ?? null}
                 latestRuns={latestRuns}
+                parallelSiblings={parallelSiblingsMap[node.id] ?? NO_PARALLEL_SIBLINGS}
                 maxAttempts={maxAttemptsMap[node.id] ?? null}
                 isSelected={selectedStep === node.id}
                 isMultiSelected={multiSelected.has(node.id)}
@@ -771,7 +814,6 @@ export function FlowDagView({
                 childJobStatus={subTrees?.[0]?.job.status ?? null}
                 isCritical={criticalPath?.steps.has(node.id) ?? false}
                 jobId={jobId}
-                zoomScale={zoomDisplay / 100}
                 x={node.x}
                 y={node.y}
                 width={node.width}
@@ -918,7 +960,7 @@ export function FlowDagView({
             +
           </button>
           <span className="text-zinc-500 text-xs min-w-[3rem] text-center">
-            {zoomDisplay}%
+            <ZoomPercent subscribe={subscribeZoom} getSnapshot={getZoomDisplay} />
           </span>
           <button
             onClick={() => {

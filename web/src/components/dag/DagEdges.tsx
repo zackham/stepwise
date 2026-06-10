@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { DagEdge, LoopEdge } from "@/lib/dag-layout";
 import type { StepRun } from "@/lib/types";
 import type { CriticalPathResult } from "@/lib/critical-path";
@@ -144,7 +145,7 @@ function measureLabelWidth(text: string): number {
   return width;
 }
 
-export function DagEdges({ edges, loopEdges, width, height, onClickLabel, selectedLabel, latestRuns, onHoverLabel, onLeaveLabel, criticalPath, isJobRunning = true }: DagEdgesProps) {
+function DagEdgesImpl({ edges, loopEdges, width, height, onClickLabel, selectedLabel, latestRuns, onHoverLabel, onLeaveLabel, criticalPath, isJobRunning = true }: DagEdgesProps) {
   const theme = useTheme();
   const isDark = theme === "dark";
 
@@ -480,3 +481,8 @@ export function DagEdges({ edges, loopEdges, width, height, onClickLabel, select
     </svg>
   );
 }
+
+// Memoized: edge geometry/handlers are stable across hover/selection
+// state changes in FlowDagView; re-renders only when layout, runs, or
+// the critical path actually change.
+export const DagEdges = memo(DagEdgesImpl);

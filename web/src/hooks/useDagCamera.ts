@@ -21,7 +21,11 @@ export interface UseDagCameraOptions {
 export interface UseDagCameraReturn {
   followFlow: boolean;
   setFollowFlow: (v: boolean) => void;
-  zoomDisplay: number;
+  /** Subscribe to zoom-percent changes (for useSyncExternalStore).
+   *  Zoom is deliberately NOT React state — applyTransform runs per
+   *  wheel notch / animation frame and must not re-render the DAG. */
+  subscribeZoom: (fn: () => void) => () => void;
+  getZoomDisplay: () => number;
   transformRef: MutableRefObject<{ x: number; y: number; scale: number }>;
   cameraRef: MutableRefObject<DagCamera>;
   applyTransform: () => void;
@@ -55,7 +59,8 @@ export function useDagCamera({
   const dragStart = useRef({ x: 0, y: 0, tx: 0, ty: 0 });
   const touchStartRef = useRef<{ id: number; x: number; y: number; time: number } | null>(null);
   const pinchStartRef = useRef<{ dist: number; scale: number; mx: number; my: number } | null>(null);
-  const [zoomDisplay, setZoomDisplay] = useState(100);
+  const zoomDisplayRef = useRef(100);
+  const zoomListenersRef = useRef(new Set<() => void>());
   const hasCenteredRef = useRef(false);
   const [followFlow, setFollowFlow] = useState(true);
   const followAnimRef = useRef<number | null>(null);
@@ -72,7 +77,10 @@ export function useDagCamera({
     }
   }, [rawLayout]);
 
-  // Apply transform directly to DOM (no re-render) + sync zoom display
+  // Apply transform directly to DOM (no re-render) + sync zoom display.
+  // The zoom readout is an external store rather than React state so the
+  // per-frame follow-flow animation and wheel zoom never re-render the
+  // whole DAG tree — only the small subscribed readout component.
   const applyTransform = useCallback(() => {
     const el = canvasRef.current;
     if (!el) return;
@@ -85,8 +93,21 @@ export function useDagCamera({
     if (edgeTooltipRef.current) {
       edgeTooltipRef.current.style.transform = counterScale;
     }
-    setZoomDisplay(Math.round(scale * 100));
+    const zoomPct = Math.round(scale * 100);
+    if (zoomPct !== zoomDisplayRef.current) {
+      zoomDisplayRef.current = zoomPct;
+      for (const fn of zoomListenersRef.current) fn();
+    }
   }, [canvasRef, inputPanelRef, edgeTooltipRef]);
+
+  const subscribeZoom = useCallback((fn: () => void) => {
+    zoomListenersRef.current.add(fn);
+    return () => {
+      zoomListenersRef.current.delete(fn);
+    };
+  }, []);
+
+  const getZoomDisplay = useCallback(() => zoomDisplayRef.current, []);
 
   // Re-center only when the workflow changes (new job), not on expand/collapse
   useEffect(() => {
@@ -502,7 +523,8 @@ export function useDagCamera({
   return {
     followFlow,
     setFollowFlow,
-    zoomDisplay,
+    subscribeZoom,
+    getZoomDisplay,
     transformRef,
     cameraRef,
     applyTransform,

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { StepNode } from "./StepNode";
+import { computeParallelSiblings } from "@/lib/parallel-siblings";
 import type { StepDefinition, StepRun } from "@/lib/types";
 
 function makeStepDef(overrides: Partial<StepDefinition> = {}): StepDefinition {
@@ -470,5 +471,108 @@ describe("StepNode", () => {
       />
     );
     expect(screen.queryByText(/parallel with/i)).toBeNull();
+  });
+
+  it("uses a precomputed parallelSiblings prop when provided (hoisted FlowDagView path)", () => {
+    render(
+      <StepNode
+        stepDef={makeStepDef({ name: "a" })}
+        latestRun={makeRun({
+          step_name: "a",
+          status: "completed",
+          started_at: "2026-04-23T19:30:00.000Z",
+          completed_at: "2026-04-23T19:30:05.000Z",
+        })}
+        parallelSiblings={["sibling-x"]}
+        {...defaultProps}
+      />
+    );
+    expect(screen.getByText(/parallel with/i)).toBeInTheDocument();
+    expect(screen.getByText(/sibling-x/)).toBeInTheDocument();
+  });
+
+  it("an empty precomputed parallelSiblings prop suppresses the local fallback", () => {
+    // latestRuns would flag an overlap, but the precomputed (authoritative)
+    // empty list must win — FlowDagView passes [] for non-overlapping nodes.
+    const overlapping = {
+      a: makeRun({
+        step_name: "a",
+        status: "completed",
+        started_at: "2026-04-23T19:30:00.000Z",
+        completed_at: "2026-04-23T19:30:05.000Z",
+      }),
+      b: makeRun({
+        id: "run-b",
+        step_name: "b",
+        status: "completed",
+        started_at: "2026-04-23T19:30:00.000Z",
+        completed_at: "2026-04-23T19:30:05.000Z",
+      }),
+    };
+    render(
+      <StepNode
+        stepDef={makeStepDef({ name: "a" })}
+        latestRun={overlapping.a}
+        latestRuns={overlapping}
+        parallelSiblings={[]}
+        {...defaultProps}
+      />
+    );
+    expect(screen.queryByText(/parallel with/i)).toBeNull();
+  });
+});
+
+describe("computeParallelSiblings", () => {
+  it("flags genuinely overlapping intervals symmetrically", () => {
+    const runs: Record<string, StepRun> = {
+      a: makeRun({
+        step_name: "a",
+        status: "completed",
+        started_at: "2026-04-23T19:35:03.790Z",
+        completed_at: "2026-04-23T19:35:08.790Z",
+      }),
+      b: makeRun({
+        id: "run-b",
+        step_name: "b",
+        status: "completed",
+        started_at: "2026-04-23T19:35:03.795Z",
+        completed_at: "2026-04-23T19:35:08.500Z",
+      }),
+    };
+    const map = computeParallelSiblings(runs);
+    expect(map["a"]).toEqual(["b"]);
+    expect(map["b"]).toEqual(["a"]);
+  });
+
+  it("does not flag sequential runs or runs without a start", () => {
+    const runs: Record<string, StepRun> = {
+      a: makeRun({
+        step_name: "a",
+        status: "completed",
+        started_at: "2026-04-23T19:30:00.000Z",
+        completed_at: "2026-04-23T19:30:00.070Z",
+      }),
+      b: makeRun({
+        id: "run-b",
+        step_name: "b",
+        status: "completed",
+        started_at: "2026-04-23T19:30:00.075Z",
+        completed_at: "2026-04-23T19:30:18.275Z",
+      }),
+      unstarted: makeRun({ id: "run-p", step_name: "unstarted", started_at: null }),
+    };
+    const map = computeParallelSiblings(runs);
+    expect(map).toEqual({});
+  });
+
+  it("treats still-running siblings as overlapping with each other", () => {
+    const startedRecently = new Date(Date.now() - 5000).toISOString();
+    const runs: Record<string, StepRun> = {
+      a: makeRun({ step_name: "a", status: "running", started_at: startedRecently }),
+      b: makeRun({ id: "run-b", step_name: "b", status: "running", started_at: startedRecently }),
+    };
+    const map = computeParallelSiblings(runs);
+    expect(map["a"]).toEqual(["b"]);
+    expect(map["b"]).toEqual(["a"]);
   });
 });

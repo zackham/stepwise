@@ -1,4 +1,5 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAgentStream, buildSegmentsFromEvents } from "@/hooks/useAgentStream";
 import { useAgentOutput } from "@/hooks/useStepwise";
 import { SegmentList } from "./StreamSegments";
@@ -17,7 +18,7 @@ interface AgentStreamViewProps {
 export function AgentStreamView({ runId, isLive, startedAt, costUsd, billingMode, onUsage, compact }: AgentStreamViewProps) {
   // Always fetch historical output — for live mode this provides backfill,
   // for historical mode this is the only data source.
-  const { data: historyData } = useAgentOutput(runId, isLive ? { staleTime: 0 } : undefined);
+  const { data: historyData, refetch } = useAgentOutput(runId, isLive ? { staleTime: 0 } : undefined);
 
   // Live stream with backfill from REST API
   const { streamState } = useAgentStream(
@@ -25,13 +26,50 @@ export function AgentStreamView({ runId, isLive, startedAt, costUsd, billingMode
     isLive ? (historyData?.events ?? null) : null,
   );
 
+  // When a live run completes (isLive true→false), the cached
+  // ["agentOutput", runId] history is the stale mount-time snapshot —
+  // switching to it would visibly truncate the transcript. Refetch the
+  // full history and keep rendering the accumulated stream until it
+  // arrives. Mounted-historical views (never live) are authoritative
+  // from the start.
+  const prevIsLiveRef = useRef(isLive);
+  const [historyRefreshed, setHistoryRefreshed] = useState(!isLive);
+  // Render-time adjustment: while the run is live, the history snapshot
+  // is by definition not authoritative.
+  if (isLive && historyRefreshed) {
+    setHistoryRefreshed(false);
+  }
+  useEffect(() => {
+    const wasLive = prevIsLiveRef.current;
+    prevIsLiveRef.current = isLive;
+    if (!isLive && wasLive) {
+      refetch().finally(() => {
+        // Guard against the run going live again (rerun) while the
+        // refetch was in flight.
+        if (!prevIsLiveRef.current) setHistoryRefreshed(true);
+      });
+    }
+  }, [isLive, refetch]);
+
+  // If we unmount while the run is still live (user deselects the step),
+  // the cached snapshot only covers events up to mount time. Mark it
+  // stale so a later remount (possibly after the run completed) refetches
+  // the full transcript instead of serving the truncated cache forever.
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!isLive || !runId) return;
+    return () => {
+      queryClient.invalidateQueries({ queryKey: ["agentOutput", runId] });
+    };
+  }, [isLive, runId, queryClient]);
+
   // Historical replay (non-live)
   const replayState = useMemo(() => {
     if (isLive || !historyData?.events?.length) return null;
     return buildSegmentsFromEvents(historyData.events);
   }, [isLive, historyData]);
 
-  const state = isLive ? streamState : replayState;
+  const state = isLive || !historyRefreshed ? streamState : replayState;
   const segments = state?.segments ?? [];
   const usage = state?.usage ?? null;
 

@@ -172,12 +172,17 @@ export function useStepwiseWebSocket(): StepwiseWebSocketState {
   const handleChangedJobs = useCallback(
     (jobIds: string[]) => {
       for (const jobId of jobIds) {
+        // The single-job detail query (["job", id], used by JobDetailPage
+        // and AppLayout) fetches the FULL job shape (with workflow), so the
+        // summary fetch below can't be reused via setQueryData — a scoped
+        // invalidation keeps the detail page status/banners live.
+        queryClient.invalidateQueries({ queryKey: ["job", jobId] });
         fetchJobDeduped(jobId).then((job) => {
           if (job) patchJobIntoLists(job);
         });
       }
     },
-    [fetchJobDeduped, patchJobIntoLists],
+    [queryClient, fetchJobDeduped, patchJobIntoLists],
   );
 
   /** Long-interval safety net: throttled to max once per N seconds.

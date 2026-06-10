@@ -1,4 +1,4 @@
-import { type KeyboardEvent, type ReactNode, useState, useRef, useCallback } from "react";
+import { type KeyboardEvent, type ReactNode, memo, useMemo, useState, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import {
   CirclePause,
@@ -31,6 +31,7 @@ import type {
   StepRun,
 } from "@/lib/types";
 import { cn, safeRenderValue } from "@/lib/utils";
+import { computeParallelSiblings } from "@/lib/parallel-siblings";
 import { LiveDuration } from "@/components/LiveDuration";
 import { executorIcon, executorLabel } from "@/lib/executor-utils";
 
@@ -70,6 +71,9 @@ interface StepNodeProps {
   stepDef: StepDefinition;
   latestRun: StepRun | null;
   latestRuns?: Record<string, StepRun>;
+  /** Precomputed parallel-sibling names (see computeParallelSiblings).
+   *  When omitted, the node computes its own from latestRuns. */
+  parallelSiblings?: string[];
   maxAttempts: number | null;
   isSelected: boolean;
   isMultiSelected?: boolean;
@@ -85,7 +89,6 @@ interface StepNodeProps {
   isCritical?: boolean;
   isNested?: boolean;
   jobId?: string;
-  zoomScale?: number;
   x: number;
   y: number;
   width: number;
@@ -199,14 +202,12 @@ function PortDot({
   tooltipContent,
   popoverContent,
   modalTitle,
-  zoomScale = 1,
 }: {
   position: "top" | "bottom";
   colorClasses: string;
   tooltipContent: ReactNode | null;
   popoverContent: ReactNode | null;
   modalTitle?: string;
-  zoomScale?: number;
 }) {
   const [hovered, setHovered] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
@@ -576,10 +577,11 @@ function StepTooltip({
   );
 }
 
-export function StepNode({
+function StepNodeImpl({
   stepDef,
   latestRun,
   latestRuns,
+  parallelSiblings: parallelSiblingsProp,
   maxAttempts,
   isSelected,
   isMultiSelected,
@@ -595,7 +597,6 @@ export function StepNode({
   isCritical,
   isNested,
   jobId,
-  zoomScale = 1,
   x,
   y,
   width,
@@ -656,39 +657,13 @@ export function StepNode({
   // genuine interval overlap (not just close start times) so a fast
   // sequential chain — e.g. A finishes in 70ms and B starts
   // immediately — is correctly NOT flagged as parallel.
-  const PARALLEL_MIN_OVERLAP_MS = 100;
-  const runInterval = (run: StepRun | null | undefined): [number, number] | null => {
-    if (!run?.started_at) return null;
-    const start = new Date(run.started_at).getTime();
-    let end: number;
-    if (run.completed_at) {
-      end = new Date(run.completed_at).getTime();
-    } else if (
-      run.status === "running" ||
-      run.status === "suspended" ||
-      run.status === "delegated"
-    ) {
-      end = Date.now();
-    } else {
-      end = start;
-    }
-    return [start, end];
-  };
-  const selfInterval = runInterval(latestRun);
-  const parallelSiblings: string[] = [];
-  if (selfInterval && latestRuns) {
-    const [selfStart, selfEnd] = selfInterval;
-    for (const [otherName, otherRun] of Object.entries(latestRuns)) {
-      if (otherName === stepDef.name) continue;
-      const otherInterval = runInterval(otherRun);
-      if (!otherInterval) continue;
-      const [oStart, oEnd] = otherInterval;
-      const overlap = Math.min(selfEnd, oEnd) - Math.max(selfStart, oStart);
-      if (overlap >= PARALLEL_MIN_OVERLAP_MS) {
-        parallelSiblings.push(otherName);
-      }
-    }
-  }
+  // FlowDagView precomputes the whole map once and passes it down;
+  // nested containers (small N) fall back to computing locally.
+  const parallelSiblings: string[] = useMemo(() => {
+    if (parallelSiblingsProp) return parallelSiblingsProp;
+    if (!latestRuns || !latestRun?.started_at) return [];
+    return computeParallelSiblings(latestRuns)[stepDef.name] ?? [];
+  }, [parallelSiblingsProp, latestRuns, latestRun, stepDef.name]);
 
   const canRerun =
     !latestRun ||
@@ -782,7 +757,6 @@ export function StepNode({
         tooltipContent={inputPort.tooltipContent}
         popoverContent={inputPort.popoverContent}
         modalTitle={`${stepDef.name} — Inputs`}
-        zoomScale={zoomScale}
       />
 
       {/* Content */}
@@ -918,7 +892,6 @@ export function StepNode({
         tooltipContent={outputPort.tooltipContent}
         popoverContent={outputPort.popoverContent}
         modalTitle={`${stepDef.name} — Outputs`}
-        zoomScale={zoomScale}
       />
 
       {/* Hover action buttons */}
@@ -976,3 +949,28 @@ export function StepNode({
     </EntityContextMenu>
   );
 }
+
+/**
+ * Custom memo comparator: compare all props shallowly EXCEPT function
+ * props, which are treated as equal when both sides are functions.
+ * Call sites pass inline closures (onClick, onToggleExpand, ...) whose
+ * identity changes every render but whose behavior depends only on
+ * other compared props (step name, isSelected, ...). Without this the
+ * memo would never skip. NOTE: any new function prop must keep that
+ * invariant — its behavior must be derivable from the data props.
+ */
+function stepNodePropsEqual(prev: StepNodeProps, next: StepNodeProps): boolean {
+  const keys = new Set([
+    ...Object.keys(prev),
+    ...Object.keys(next),
+  ]) as Set<keyof StepNodeProps>;
+  for (const key of keys) {
+    const a = prev[key];
+    const b = next[key];
+    if (typeof a === "function" && typeof b === "function") continue;
+    if (!Object.is(a, b)) return false;
+  }
+  return true;
+}
+
+export const StepNode = memo(StepNodeImpl, stepNodePropsEqual);

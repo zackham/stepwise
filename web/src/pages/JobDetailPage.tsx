@@ -262,6 +262,14 @@ export function JobDetailPage() {
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
         return;
       }
+      // Never hijack keys that drive native interaction when focus is on
+      // an interactive control (banner buttons, links, the fulfillment
+      // form's submit button, ...). Note: Tab is deliberately NOT
+      // intercepted at all — sequential focus navigation must keep
+      // working; j/k and the arrow keys already cycle steps.
+      const onInteractive = !!target.closest?.(
+        'button, a[href], [role="button"], [role="link"], select, summary',
+      );
 
       const stepCount = topoStepNames.length;
       if (stepCount === 0) return;
@@ -271,6 +279,7 @@ export function JobDetailPage() {
       switch (e.key) {
         case "j":
         case "ArrowDown": {
+          if (e.key === "ArrowDown" && onInteractive) break;
           e.preventDefault();
           const next = currentIndex < 0 ? 0 : (currentIndex + 1) % stepCount;
           handleSelectStep(topoStepNames[next]);
@@ -278,21 +287,14 @@ export function JobDetailPage() {
         }
         case "k":
         case "ArrowUp": {
+          if (e.key === "ArrowUp" && onInteractive) break;
           e.preventDefault();
           const prev = currentIndex < 0 ? stepCount - 1 : (currentIndex - 1 + stepCount) % stepCount;
           handleSelectStep(topoStepNames[prev]);
           break;
         }
-        case "Tab": {
-          if (selectedStep) {
-            e.preventDefault();
-            const delta = e.shiftKey ? -1 : 1;
-            const next = (currentIndex + delta + stepCount) % stepCount;
-            handleSelectStep(topoStepNames[next]);
-          }
-          break;
-        }
         case "Enter": {
+          if (onInteractive) break;
           if (selectedStep) {
             e.preventDefault();
             setDataFlowSelection(null);

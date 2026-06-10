@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render as rtlRender, screen, act } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AgentStreamView } from "./AgentStreamView";
 import type { AgentStreamState, StreamSegment } from "@/hooks/useAgentStream";
+import type { AgentStreamEvent } from "@/lib/types";
 
 // ── Mocks ──────────────────────────────────────────────────────────────
 
@@ -21,10 +24,11 @@ vi.mock("@/hooks/useAgentStream", async () => {
   };
 });
 
-let mockHistoryData: { events: never[] } | undefined = undefined;
+let mockHistoryData: { events: AgentStreamEvent[] } | undefined = undefined;
+const mockRefetch = vi.fn(() => Promise.resolve());
 
 vi.mock("@/hooks/useStepwise", () => ({
-  useAgentOutput: () => ({ data: mockHistoryData }),
+  useAgentOutput: () => ({ data: mockHistoryData, refetch: mockRefetch }),
 }));
 
 beforeEach(() => {
@@ -32,7 +36,25 @@ beforeEach(() => {
   mockStreamState.usage = null;
   mockVersion = 0;
   mockHistoryData = undefined;
+  mockRefetch.mockReset();
+  mockRefetch.mockImplementation(() => Promise.resolve());
 });
+
+// AgentStreamView uses useQueryClient (cache invalidation on unmount of a
+// live view) — wrap renders in a provider.
+function render(ui: ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const wrap = (el: ReactElement) => (
+    <QueryClientProvider client={queryClient}>{el}</QueryClientProvider>
+  );
+  const result = rtlRender(wrap(ui));
+  return {
+    ...result,
+    rerender: (next: ReactElement) => result.rerender(wrap(next)),
+  };
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -202,5 +224,48 @@ describe("AgentStreamView", () => {
     expect(screen.getByText("Reading file")).toBeInTheDocument();
     // Output should not be visible even though it exists — tool is still running
     expect(screen.queryByText("partial")).toBeNull();
+  });
+
+  // ── Live → done transition (transcript must not truncate) ───────────
+
+  it("refetches history on the live→done transition and keeps the accumulated stream until it arrives", async () => {
+    mockStreamState.segments = [textSeg("accumulated live transcript")];
+    mockHistoryData = { events: [{ t: "text", text: "stale mount-time snapshot" }] };
+
+    let resolveRefetch!: () => void;
+    mockRefetch.mockImplementation(
+      () => new Promise<void>((resolve) => { resolveRefetch = resolve; }),
+    );
+
+    const { rerender } = render(<AgentStreamView runId="r1" isLive={true} />);
+    expect(screen.getByText("accumulated live transcript")).toBeInTheDocument();
+
+    // Run completes — isLive flips false
+    rerender(<AgentStreamView runId="r1" isLive={false} />);
+
+    // The stale history must be refetched...
+    expect(mockRefetch).toHaveBeenCalledTimes(1);
+    // ...and until it resolves, the accumulated stream stays on screen
+    // instead of truncating back to the mount-time snapshot.
+    expect(screen.getByText("accumulated live transcript")).toBeInTheDocument();
+    expect(screen.queryByText("stale mount-time snapshot")).toBeNull();
+
+    // Fresh full transcript arrives
+    mockHistoryData = { events: [{ t: "text", text: "full final transcript" }] };
+    await act(async () => {
+      resolveRefetch();
+    });
+    rerender(<AgentStreamView runId="r1" isLive={false} />);
+
+    expect(screen.getByText("full final transcript")).toBeInTheDocument();
+    expect(screen.queryByText("accumulated live transcript")).toBeNull();
+  });
+
+  it("does not refetch when mounted on an already-finished run", () => {
+    mockHistoryData = { events: [{ t: "text", text: "historical transcript" }] };
+    render(<AgentStreamView runId="r1" isLive={false} />);
+
+    expect(screen.getByText("historical transcript")).toBeInTheDocument();
+    expect(mockRefetch).not.toHaveBeenCalled();
   });
 });

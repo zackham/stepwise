@@ -78,6 +78,38 @@ export function buildSegmentsFromEvents(events: AgentStreamEvent[]): AgentStream
   return { segments, usage, eventToSegment };
 }
 
+// ── Backfill / live-queue overlap trimming ──────────────────────────
+
+/**
+ * Drop queued live WS events that are already covered by the REST
+ * backfill. The server broadcasts agent_output events with no sequence
+ * numbers, so every event broadcast between WS subscription and the
+ * server's file read appears in BOTH the backfill and the queue.
+ * Because the queue starts before the REST read, any overlap is a
+ * suffix of the backfill that equals a prefix of the queue — find the
+ * largest such overlap and drop it. Returns the trimmed queue.
+ */
+export function trimBackfillOverlap(
+  backfill: AgentStreamEvent[],
+  queue: AgentStreamEvent[],
+): AgentStreamEvent[] {
+  const maxK = Math.min(backfill.length, queue.length);
+  for (let k = maxK; k > 0; k--) {
+    let match = true;
+    for (let i = 0; i < k; i++) {
+      if (
+        JSON.stringify(backfill[backfill.length - k + i]) !==
+        JSON.stringify(queue[i])
+      ) {
+        match = false;
+        break;
+      }
+    }
+    if (match) return queue.slice(k);
+  }
+  return queue;
+}
+
 // ── Live stream hook (with backfill support) ────────────────────────
 
 export function useAgentStream(
@@ -101,15 +133,26 @@ export function useAgentStream(
             state.segments.push({ type: "text", text: ev.text });
           }
         } else if (ev.t === "tool_start") {
-          state.segments.push({
-            type: "tool",
-            tool: {
-              id: ev.id,
-              title: ev.title,
-              kind: ev.kind,
-              status: "running",
-            },
-          });
+          // Dedupe by id: a replayed/duplicated tool_start must not create
+          // a second card — its matching tool_end was already consumed by
+          // the first copy, leaving a phantom forever-"running" spinner.
+          const existing = state.segments.find(
+            (s) => s.type === "tool" && s.tool.id === ev.id,
+          );
+          if (existing && existing.type === "tool") {
+            existing.tool.title = ev.title;
+            existing.tool.kind = ev.kind;
+          } else {
+            state.segments.push({
+              type: "tool",
+              tool: {
+                id: ev.id,
+                title: ev.title,
+                kind: ev.kind,
+                status: "running",
+              },
+            });
+          }
         } else if (ev.t === "tool_title") {
           for (const seg of state.segments) {
             if (seg.type === "tool" && seg.tool.id === ev.id) {
@@ -169,11 +212,11 @@ export function useAgentStream(
       processEvents(backfillEvents);
     }
 
-    // Replay queued live events. The backfill covers everything in the file
-    // at REST-read time. Live events may partially overlap, but text
-    // concatenation is idempotent and tool updates are keyed by ID,
-    // so a small overlap at the boundary is harmless.
-    const queue = liveQueueRef.current;
+    // Replay queued live events. The backfill covers everything in the
+    // file at REST-read time, and events broadcast between subscription
+    // and that read appear in both — trim the overlap so text isn't
+    // duplicated and tool cards aren't double-created at the boundary.
+    const queue = trimBackfillOverlap(backfillEvents, liveQueueRef.current);
     if (queue.length > 0) {
       processEvents(queue);
     }
