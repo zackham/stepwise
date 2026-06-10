@@ -1410,7 +1410,7 @@ class Engine:
                                 self._emit(job.id, STEP_COMPLETED, {
                                     "step": run.step_name,
                                     "attempt": run.attempt,
-                                })
+                                }, job=job)
                                 self._emit_effector_events(job.id, result_envelope)
                                 self._process_completion(job, run)
                             made_progress = True
@@ -1499,7 +1499,7 @@ class Engine:
                 job.status = JobStatus.COMPLETED
                 job.updated_at = _now()
                 self.store.save_job(job)
-                self._emit(job.id, JOB_COMPLETED)
+                self._emit(job.id, JOB_COMPLETED, job=job)
                 self._cleanup_job_sessions(job.id, job)
                 self._check_dependent_jobs(job.id)
                 return
@@ -1516,14 +1516,14 @@ class Engine:
                         job.status = JobStatus.COMPLETED
                         job.updated_at = _now()
                         self.store.save_job(job)
-                        self._emit(job.id, JOB_COMPLETED)
+                        self._emit(job.id, JOB_COMPLETED, job=job)
                         self._cleanup_job_sessions(job.id, job)
                         self._check_dependent_jobs(job.id)
                     else:
                         job.status = JobStatus.FAILED
                         job.updated_at = _now()
                         self.store.save_job(job)
-                        self._emit(job.id, JOB_FAILED, {"reason": "no_terminal_reached"})
+                        self._emit(job.id, JOB_FAILED, {"reason": "no_terminal_reached"}, job=job)
                         self._cleanup_job_sessions(job.id, job)
                 return  # No progress possible, wait for next tick
 
@@ -1532,13 +1532,20 @@ class Engine:
     def _find_ready(self, job: Job) -> list[str]:
         """Find steps that are ready to launch."""
         ready = []
+        # Per-scan memo: currentness/supersession results are stable for
+        # the duration of one synchronous scan, and the recursive dep walks
+        # would otherwise cost O(N²) store queries per scan.
+        memo: dict = {}
         for step_name, step_def in job.workflow.steps.items():
-            if self._is_step_ready(job, step_name, step_def):
+            if self._is_step_ready(job, step_name, step_def, _memo=memo):
                 ready.append(step_name)
         return ready
 
     # Central readiness gate — all step launches flow through here
-    def _is_step_ready(self, job: Job, step_name: str, step_def: StepDefinition) -> bool:
+    def _is_step_ready(
+        self, job: Job, step_name: str, step_def: StepDefinition,
+        _memo: dict | None = None,
+    ) -> bool:
         """A step is ready when:
         1. No active run exists (running, suspended, delegated)
         2. No current completed run exists (or loop guard prevents re-trigger)
@@ -1574,7 +1581,7 @@ class Engine:
 
         # Check no current completed run
         if latest and latest.status == StepRunStatus.COMPLETED:
-            if self._is_current(job, latest):
+            if self._is_current(job, latest, _memo=_memo):
                 return False
 
             # Settled terminal guard: steps without loop exit rules don't
@@ -1630,12 +1637,12 @@ class Engine:
             regular_deps.append(step_def.for_each.source_step)
 
         for dep_step in regular_deps:
-            if not self._is_dep_settled(job, dep_step):
+            if not self._is_dep_settled(job, dep_step, _memo=_memo):
                 return False
 
         # Check after_resolved deps: ALL must be resolved (COMPLETED or SKIPPED)
         for dep_step in step_def.after_resolved:
-            if not self._is_dep_resolved(job, dep_step):
+            if not self._is_dep_resolved(job, dep_step, _memo=_memo):
                 return False
 
         # Check after_any_of groups: at least ONE member per group must be settled
@@ -1643,7 +1650,7 @@ class Engine:
         for group in step_def.after_any_of:
             has_settled = False
             for member in group:
-                if self._is_dep_settled(job, member):
+                if self._is_dep_settled(job, member, _memo=_memo):
                     has_settled = True
                     break
                 if self._is_dep_settled_on_error_continue(job, member):
@@ -1664,8 +1671,8 @@ class Engine:
                 has_available = False
                 for src_step, _ in binding.any_of_sources:
                     dep_latest = self.store.latest_completed_run(job.id, src_step)
-                    if dep_latest and self._is_current(job, dep_latest):
-                        if not self._dep_will_be_superseded(job, src_step):
+                    if dep_latest and self._is_current(job, dep_latest, _memo=_memo):
+                        if not self._dep_will_be_superseded(job, src_step, _memo=_memo):
                             has_available = True
                             break
                     # Also consider on_error: continue failed deps as available
@@ -1698,13 +1705,32 @@ class Engine:
 
         return True
 
-    def _dep_will_be_superseded(self, job: Job, dep_step_name: str) -> bool:
+    def _dep_will_be_superseded(
+        self, job: Job, dep_step_name: str, _memo: dict | None = None,
+    ) -> bool:
         """Check if a dep step will be superseded by an in-flight loop.
 
         Returns True if any running step has a loop exit rule targeting
         dep_step_name, meaning dep's current completed run will be replaced.
         """
-        for run in self.store.running_runs(job.id):
+        if _memo is not None:
+            cached = _memo.get(("superseded", dep_step_name))
+            if cached is not None:
+                return cached
+            running = _memo.get("running_runs")
+            if running is None:
+                running = self.store.running_runs(job.id)
+                _memo["running_runs"] = running
+        else:
+            running = self.store.running_runs(job.id)
+        result = self._dep_will_be_superseded_impl(job, dep_step_name, running)
+        if _memo is not None:
+            _memo[("superseded", dep_step_name)] = result
+        return result
+
+    @staticmethod
+    def _dep_will_be_superseded_impl(job: Job, dep_step_name: str, running_runs) -> bool:
+        for run in running_runs:
             run_step_def = job.workflow.steps.get(run.step_name)
             if not run_step_def:
                 continue
@@ -1728,7 +1754,9 @@ class Engine:
         latest = self.store.latest_run(job.id, dep_step_name)
         return latest is not None and latest.status == StepRunStatus.FAILED
 
-    def _is_dep_settled(self, job: Job, dep_step_name: str) -> bool:
+    def _is_dep_settled(
+        self, job: Job, dep_step_name: str, _memo: dict | None = None,
+    ) -> bool:
         """Check if a dep step is settled: either has a current completed run
         or has failed with on_error: continue.
 
@@ -1736,15 +1764,17 @@ class Engine:
         """
         # Standard: current completed run
         dep_latest = self.store.latest_completed_run(job.id, dep_step_name)
-        if dep_latest and self._is_current(job, dep_latest):
-            if not self._dep_will_be_superseded(job, dep_step_name):
+        if dep_latest and self._is_current(job, dep_latest, _memo=_memo):
+            if not self._dep_will_be_superseded(job, dep_step_name, _memo=_memo):
                 return True
         # on_error: continue failed dep also counts as settled
         if self._is_dep_settled_on_error_continue(job, dep_step_name):
             return True
         return False
 
-    def _is_dep_resolved(self, job: Job, dep_step_name: str) -> bool:
+    def _is_dep_resolved(
+        self, job: Job, dep_step_name: str, _memo: dict | None = None,
+    ) -> bool:
         """Check if a dep step is resolved: COMPLETED, SKIPPED, or FAILED
         with on_error: continue.
 
@@ -1753,7 +1783,7 @@ class Engine:
         after conditional branches.
         """
         # Standard: current completed run
-        if self._is_dep_settled(job, dep_step_name):
+        if self._is_dep_settled(job, dep_step_name, _memo=_memo):
             return True
         # SKIPPED run counts as resolved
         dep_latest = self.store.latest_run(job.id, dep_step_name)
@@ -1764,11 +1794,50 @@ class Engine:
     # ── Currentness ───────────────────────────────────────────────────────
 
     # Currentness with cycle detection
-    def _is_current(self, job: Job, run: StepRun, _checking_steps: set | None = None) -> bool:
+    def _is_current(
+        self,
+        job: Job,
+        run: StepRun,
+        _checking_steps: set | None = None,
+        _memo: dict | None = None,
+    ) -> bool:
         """A run is current if:
         1. It is the latest run (any status) for its step
         2. It has COMPLETED status
         3. Every dependency run it used is itself current
+
+        _memo (optional) is a per-readiness-scan cache keyed by run.id.
+        The recursive dep walk costs O(depth) store queries per run, and a
+        full _find_ready scan repeats it per step — O(N²) queries without
+        memoization. Results are only cached when their computation did not
+        rely on cycle-breaking (cycle-broken results depend on the caller's
+        chain and are not context-free).
+        """
+        if _memo is None:
+            return self._is_current_impl(job, run, _checking_steps, None)
+        cached = _memo.get(("current", run.id))
+        # Cycle-breaking is monotone (it can only turn False into True), so
+        # a cached context-free True is valid in any chain context. A cached
+        # False is only valid at entry level: mid-chain, the cycle-break
+        # heuristic may legitimately override it to True (loop-back deps).
+        if cached is True:
+            return True
+        if cached is False and not _checking_steps:
+            return False
+        breaks_before = _memo.get("breaks", 0)
+        result = self._is_current_impl(job, run, _checking_steps, _memo)
+        if _memo.get("breaks", 0) == breaks_before:
+            _memo[("current", run.id)] = result
+        return result
+
+    def _is_current_impl(
+        self,
+        job: Job,
+        run: StepRun,
+        _checking_steps: set | None,
+        _memo: dict | None,
+    ) -> bool:
+        """Uncached currentness check — call _is_current instead.
 
         _checking_steps tracks which step names are being checked up the call
         stack. If we encounter a step already being checked, we've hit a
@@ -1778,6 +1847,8 @@ class Engine:
         if _checking_steps is None:
             _checking_steps = set()
         if run.step_name in _checking_steps:
+            if _memo is not None:
+                _memo["breaks"] = _memo.get("breaks", 0) + 1
             return True  # Break cycle — steps in the loop are self-consistent
         _checking_steps = _checking_steps | {run.step_name}  # copy to avoid mutation across branches
 
@@ -1825,7 +1896,7 @@ class Engine:
                 if latest_dep and latest_dep.id == source_run.id:
                     continue  # settled — treat as current
                 return False
-            if not self._is_current(job, source_run, _checking_steps):
+            if not self._is_current(job, source_run, _checking_steps, _memo):
                 return False
 
         # For after_resolved deps: check provenance. SKIPPED deps are always
@@ -1846,7 +1917,7 @@ class Engine:
                 if latest_dep and latest_dep.id == source_run.id:
                     continue
                 return False
-            if not self._is_current(job, source_run, _checking_steps):
+            if not self._is_current(job, source_run, _checking_steps, _memo):
                 return False
 
         # For any_of deps: only check the source that was actually used (in dep_run_ids).
@@ -1866,7 +1937,7 @@ class Engine:
                         source_run_id = run.dep_run_ids[src_step]
                         try:
                             source_run = self.store.load_run(source_run_id)
-                            if self._is_current(job, source_run, _checking_steps):
+                            if self._is_current(job, source_run, _checking_steps, _memo):
                                 found_current = True
                                 break
                         except KeyError:
@@ -2103,7 +2174,7 @@ class Engine:
                     self.store.save_run(run)
                     self._emit(job.id, STEP_SKIPPED, {
                         "step": step_name, "reason": "when_false",
-                    })
+                    }, job=job)
                     skipped_any = True
                     _engine_logger.info(
                         "Eagerly skipped step %s/%s (when condition false)",
@@ -2132,9 +2203,10 @@ class Engine:
             return False
         # Nothing in motion, nothing ready → settled
         # Complete if at least one terminal has a current completed run
+        memo: dict = {}
         for t in job.workflow.terminal_steps():
             latest = self.store.latest_completed_run(job.id, t)
-            if latest and self._is_current(job, latest):
+            if latest and self._is_current(job, latest, _memo=memo):
                 return True
         # Also complete if every step has been resolved (completed or skipped),
         # or failed with on_error: continue (treated as settled for completion purposes).
@@ -2166,7 +2238,7 @@ class Engine:
                     started_at=_now(), completed_at=_now(),
                 )
                 self.store.save_run(run)
-                self._emit(job.id, STEP_SKIPPED, {"step": step_name, "reason": "settlement"})
+                self._emit(job.id, STEP_SKIPPED, {"step": step_name, "reason": "settlement"}, job=job)
 
     def _cleanup_job_sessions(self, job_id: str, job: Job | None = None) -> None:
         """Clean up per-job resources for a completed/failed/cancelled job.
@@ -2215,7 +2287,7 @@ class Engine:
                     completed_at=_now(),
                 )
                 self.store.save_run(run)
-                self._emit(job.id, STEP_FAILED, {"step": step_name, "error": str(e)})
+                self._emit(job.id, STEP_FAILED, {"step": step_name, "error": str(e)}, job=job)
                 self._halt_job(job, run)
                 return run
 
@@ -2362,7 +2434,7 @@ class Engine:
         self._emit(job.id, STEP_STARTED, {
             "step": step_name,
             "attempt": attempt,
-        })
+        }, job=job)
 
         ctx = ExecutionContext(
             job_id=job.id,
@@ -2407,7 +2479,7 @@ class Engine:
                 "step": step_name,
                 "attempt": run.attempt,
                 "from_cache": True,
-            })
+            }, job=job)
             self._process_completion(job, run)
             return run, None, None, None  # sentinel: cache hit
 
@@ -2595,7 +2667,7 @@ class Engine:
                 "step": step_name,
                 "attempt": run.attempt,
                 "error": str(error),
-            })
+            }, job=job)
             self._halt_job(job, run)
 
     def _process_launch_result(
@@ -2642,7 +2714,7 @@ class Engine:
                             "step": step_name,
                             "attempt": attempt,
                             "error": validation_error,
-                        })
+                        }, job=job)
                         self._halt_job(job, run)
                     else:
                         run.result = result.envelope
@@ -2654,7 +2726,7 @@ class Engine:
                         self._emit(job.id, STEP_COMPLETED, {
                             "step": step_name,
                             "attempt": attempt,
-                        })
+                        }, job=job)
                         self._emit_effector_events(job.id, result.envelope)
                         # Write to cache if enabled
                         self._write_step_cache(job, step_def, run, result.envelope)
@@ -2705,7 +2777,7 @@ class Engine:
                     "run_id": run.id,
                     "watch_mode": result.watch.mode if result.watch else None,
                     "prompt": result.watch.config.get("prompt") if result.watch else None,
-                })
+                }, job=job)
 
             case "async":
                 run.executor_state = result.executor_state
@@ -2714,7 +2786,7 @@ class Engine:
                     "step": step_name,
                     "attempt": attempt,
                     "executor_type": step_def.executor.type,
-                })
+                }, job=job)
 
             case "delegate":
                 sub_def = result.sub_job_def
@@ -2749,7 +2821,7 @@ class Engine:
                     "attempt": attempt,
                     "sub_job_id": sub.id,
                     "emitted_flow": True,
-                })
+                }, job=job)
 
     # ── For-Each Launching ────────────────────────────────────────────────
 
@@ -2903,7 +2975,7 @@ class Engine:
                 "attempt": attempt,
                 "for_each": True,
                 "item_count": 0,
-            })
+            }, job=job)
             self._process_completion(job, run)
             return run
 
@@ -2971,7 +3043,7 @@ class Engine:
                 "for_each": True,
                 "item_count": len(source_list),
                 "cached_count": len(cached_results),
-            })
+            }, job=job)
             self._process_completion(job, run)
             return run
 
@@ -2983,7 +3055,7 @@ class Engine:
             "item_count": len(source_list),
             "sub_job_ids": actual_sub_job_ids,
             "cached_count": len(cached_results),
-        })
+        }, job=job)
 
         # Start all sub-jobs. Wrap each call individually so that one
         # failure does not orphan the rest of the batch — any sub-job left
@@ -3044,12 +3116,20 @@ class Engine:
                 any_failed = True
                 failed_indices.append(original_idx)
                 if on_error == "fail_fast":
-                    # Cancel remaining sub-jobs
+                    # Cancel ALL non-terminal siblings — including PENDING
+                    # ones that were capacity-queued during the launch loop
+                    # (they would otherwise auto-start via _start_queued_jobs
+                    # after the parent has already failed, burning agent/LLM
+                    # cost on discarded work) and PAUSED (escalated) ones.
                     for other_id in sub_job_ids:
                         if other_id != sub_job_id:
                             try:
                                 other = self.store.load_job(other_id)
-                                if other.status == JobStatus.RUNNING:
+                                if other.status in (
+                                    JobStatus.RUNNING,
+                                    JobStatus.PENDING,
+                                    JobStatus.PAUSED,
+                                ):
                                     self.cancel_job(other_id)
                             except (KeyError, ValueError):
                                 pass
@@ -3063,11 +3143,15 @@ class Engine:
                 else:
                     # continue mode: record failure, keep going
                     all_results[original_idx] = {"_error": f"Sub-job {sub_job_id} failed"}
-            elif sub_job.status in (JobStatus.CANCELLED, JobStatus.PAUSED):
+            elif sub_job.status == JobStatus.CANCELLED:
                 any_failed = True
                 failed_indices.append(original_idx)
                 all_results[original_idx] = {"_error": f"Sub-job {sub_job.status.value}"}
             else:
+                # RUNNING / PENDING / PAUSED → still in flight. PAUSED is
+                # the documented human-escalation state (action: escalate):
+                # the parent for_each waits for the human to resolve it
+                # rather than permanently recording the item as an error.
                 all_done = False
 
         if not all_done:
@@ -3095,7 +3179,7 @@ class Engine:
                 "step": run.step_name,
                 "item_count": item_count,
                 "failed_count": len(failed_indices),
-            })
+            }, job=job)
             self._halt_job(job, run)
             return True
 
@@ -3113,12 +3197,12 @@ class Engine:
             "step": run.step_name,
             "item_count": item_count,
             "failed_count": len(failed_indices),
-        })
+        }, job=job)
         self._emit(job.id, STEP_COMPLETED, {
             "step": run.step_name,
             "attempt": run.attempt,
             "for_each": True,
-        })
+        }, job=job)
 
         self._process_completion(job, run)
         return True
@@ -3160,7 +3244,7 @@ class Engine:
         self.store.save_run(run)
         self._emit(job.id, STEP_DELEGATED, {
             "step": step_def.name, "sub_job_id": sub.id, "flow_ref": flow_ref,
-        })
+        }, job=job)
         return run
 
     def _resolve_flow_ref(self, ref: str, job: Job) -> WorkflowDefinition:
@@ -3351,7 +3435,7 @@ class Engine:
                 "step": run.step_name,
                 "rule": "implicit_advance",
                 "action": "advance",
-            })
+            }, job=job)
             return
 
         # Evaluate rules in priority order (highest first)
@@ -3365,7 +3449,7 @@ class Engine:
                     "step": run.step_name,
                     "rule": rule.name,
                     "action": action,
-                })
+                }, job=job)
 
                 match action:
                     case "advance":
@@ -3385,7 +3469,7 @@ class Engine:
                                     "target": target,
                                     "completed_count": completed_count,
                                     "max_iterations": max_iterations,
-                                })
+                                }, job=job)
                                 # Escalate
                                 job.status = JobStatus.PAUSED
                                 job.updated_at = _now()
@@ -3394,14 +3478,14 @@ class Engine:
                                     "reason": "max_iterations_reached",
                                     "step": run.step_name,
                                     "target": target,
-                                })
+                                }, job=job)
                                 return
 
                         self._emit(job.id, LOOP_ITERATION, {
                             "step": run.step_name,
                             "target": target,
                             "count": self.store.completed_run_count(job.id, target),
-                        })
+                        }, job=job)
                         # Step 7 (§11.5): increment the loop frame for this
                         # target. The frame's iteration_index bumps and its
                         # presence map clears (each iteration starts fresh).
@@ -3437,7 +3521,7 @@ class Engine:
                             "reason": "escalated",
                             "step": run.step_name,
                             "rule": rule.name,
-                        })
+                        }, job=job)
                         return
 
                     case "abandon":
@@ -3448,7 +3532,7 @@ class Engine:
                             "reason": "abandoned",
                             "step": run.step_name,
                             "rule": rule.name,
-                        })
+                        }, job=job)
                         return
 
         # No rule matched — behavior depends on whether advance rules exist
@@ -3467,7 +3551,7 @@ class Engine:
                 "step": run.step_name,
                 "rule": "implicit_advance",
                 "action": "advance",
-            })
+            }, job=job)
 
     def _evaluate_rule(self, rule: ExitRule, artifact: dict,
                        attempt: int = 1) -> bool:
@@ -3499,18 +3583,44 @@ class Engine:
     # ── Watch Checking ────────────────────────────────────────────────────
 
     def _check_poll_watch(self, job: Job, run: StepRun) -> bool:
-        """Check a poll watch. Returns True if fulfilled."""
+        """Check a poll watch synchronously. Returns True if fulfilled.
+
+        Used by the legacy tick-based Engine. AsyncEngine runs the blocking
+        command in its thread pool instead (see AsyncEngine._run_poll_check)
+        using the same _prepare_poll_check / _apply_poll_result halves.
+        """
         from stepwise.poll_eval import evaluate_poll_command_sync
 
-        if not run.watch or run.watch.mode != "poll":
+        prep = self._prepare_poll_check(job, run)
+        if prep is None:
             return False
+        check_command, workspace, env = prep
+
+        # Use shared poll evaluation logic
+        poll_result = evaluate_poll_command_sync(
+            command=check_command,
+            cwd=workspace,
+            env=env,
+            timeout_seconds=300,  # in-job polls get generous timeout
+        )
+
+        return self._apply_poll_result(job, run, poll_result)
+
+    def _prepare_poll_check(self, job: Job, run: StepRun) -> tuple[str, str, dict] | None:
+        """Gate a poll check and build its inputs.
+
+        Returns (check_command, cwd, env), or None if the run has no poll
+        watch / no command / the interval has not elapsed yet.
+        """
+        if not run.watch or run.watch.mode != "poll":
+            return None
 
         config = run.watch.config
         check_command = config.get("check_command")
         interval_seconds = config.get("interval_seconds", 60)
 
         if not check_command:
-            return False
+            return None
 
         # Check timing
         watch_state = (run.executor_state or {}).get("_watch", {})
@@ -3519,7 +3629,7 @@ class Engine:
             last_dt = datetime.fromisoformat(last_checked)
             elapsed = (_now() - last_dt).total_seconds()
             if elapsed < interval_seconds:
-                return False
+                return None
 
         # Write step input file for the check command
         workspace = job.workspace_path or "."
@@ -3530,15 +3640,10 @@ class Engine:
             input_file.write_text(json.dumps(run.inputs, default=str))
 
         env = {"JOB_ENGINE_INPUTS": str(input_file)}
+        return check_command, workspace, env
 
-        # Use shared poll evaluation logic
-        poll_result = evaluate_poll_command_sync(
-            command=check_command,
-            cwd=workspace,
-            env=env,
-            timeout_seconds=300,  # in-job polls get generous timeout
-        )
-
+    def _apply_poll_result(self, job: Job, run: StepRun, poll_result) -> bool:
+        """Apply the outcome of a poll check. Returns True if fulfilled."""
         if poll_result.error:
             self._update_watch_state(run, error=poll_result.error)
             return False
@@ -3574,7 +3679,7 @@ class Engine:
             "run_id": run.id,
             "mode": "poll",
             "payload": payload,
-        })
+        }, job=job)
         self._process_completion(job, run)
         return True
 
@@ -3807,7 +3912,7 @@ class Engine:
             "error": error,
             "error_category": error_category,
             "on_error": step_def.on_error,
-        })
+        }, job=job)
 
         # on_error: continue — record failure but do not halt the job.
         # Downstream steps will receive a null/error marker for this step's outputs.
@@ -3864,7 +3969,7 @@ class Engine:
                         "rule": rule.name,
                         "action": action,
                         "on_failure": True,
-                    })
+                    }, job=job)
                     match action:
                         case "loop":
                             target = rule.config.get("target", run.step_name)
@@ -3877,7 +3982,7 @@ class Engine:
                             self._emit(job.id, LOOP_ITERATION, {
                                 "step": run.step_name, "target": target,
                                 "count": self.store.run_count(job.id, target),
-                            })
+                            }, job=job)
                             # Step 7 (§11.5): bump loop frame iteration_index
                             # for failure-routing loop fires too.
                             parent_fid = self._parent_frame_for_target(job, target)
@@ -3906,7 +4011,7 @@ class Engine:
                                 "reason": "escalated",
                                 "step": run.step_name,
                                 "rule": rule.name,
-                            })
+                            }, job=job)
                             return
                         case "abandon":
                             job.status = JobStatus.FAILED
@@ -3916,7 +4021,7 @@ class Engine:
                                 "reason": "abandoned",
                                 "step": run.step_name,
                                 "rule": rule.name,
-                            })
+                            }, job=job)
                             self._cleanup_job_sessions(job.id, job)
                             return
                         case "advance":
@@ -3937,12 +4042,19 @@ class Engine:
             "reason": "step_failed",
             "step": run.step_name,
             "error": run.error,
-        })
+        }, job=job)
         self._cleanup_job_sessions(job.id, job)
 
     # ── Events ────────────────────────────────────────────────────────────
 
-    def _emit(self, job_id: str, event_type: str, data: dict | None = None, is_effector: bool = False) -> None:
+    def _emit(
+        self,
+        job_id: str,
+        event_type: str,
+        data: dict | None = None,
+        is_effector: bool = False,
+        job: "Job | None" = None,
+    ) -> None:
         event = Event(
             id=_gen_id("evt"),
             job_id=job_id,
@@ -3953,13 +4065,18 @@ class Engine:
         )
         rowid = self.store.save_event(event)
 
-        # Load job once for metadata and notify_url
-        try:
-            job = self.store.load_job(job_id)
-            job_metadata = job.metadata
-        except KeyError:
-            job_metadata = {"sys": {}, "app": {}}
-            job = None
+        # Job is needed only for metadata and notify_url. Callers that
+        # already hold a loaded Job pass it in to avoid re-deserializing
+        # the full workflow JSON on every event emission (hot path: a
+        # single step completion emits 3-6 events).
+        if job is not None and job.id != job_id:
+            job = None  # defensive: mismatched job — reload below
+        if job is None:
+            try:
+                job = self.store.load_job(job_id)
+            except KeyError:
+                job = None
+        job_metadata = job.metadata if job is not None else {"sys": {}, "app": {}}
 
         envelope = build_event_envelope(
             event_type, event.data, job_id, rowid,
@@ -4069,6 +4186,11 @@ class AsyncEngine(Engine):
         self._queue: asyncio.Queue = asyncio.Queue()
         self._tasks: dict = {}  # run_id → Task or Future (for cancellation)
         self._poll_tasks: dict = {}  # run_id → asyncio.Task (poll watch timers)
+        self._poll_checks_inflight: set[str] = set()  # run_ids with a check in the thread pool
+        # Serializes step launches across threads (event loop vs FastAPI
+        # threadpool, e.g. HTTP fulfill). Reentrant: _launch can recurse
+        # via loop targets and sub-flow dispatch on the same thread.
+        self._launch_guard = threading.RLock()
         self._job_done: dict[str, asyncio.Event] = {}  # job_id → done signal
         self._loop: asyncio.AbstractEventLoop | None = None  # set by run()
         self.on_broadcast: Callable[[dict], None] | None = None
@@ -4135,8 +4257,19 @@ class AsyncEngine(Engine):
                 event = await asyncio.wait_for(self._queue.get(), timeout=5.0)
             except asyncio.TimeoutError:
                 # Poll for external changes — check if any suspended runs
-                # were fulfilled by another process (e.g. CLI fulfill)
-                self._poll_external_changes()
+                # were fulfilled by another process (e.g. CLI fulfill).
+                # Guarded: an exception here (e.g. a job deleted mid-poll
+                # raising KeyError, or a transient sqlite lock) must never
+                # kill the engine loop — it is the ONLY consumer of the
+                # event queue, so its death strands every running job
+                # while the server keeps serving HTTP.
+                try:
+                    self._poll_external_changes()
+                except Exception:
+                    _async_logger.error(
+                        "Error during external-change poll (engine loop continues)",
+                        exc_info=True,
+                    )
                 continue
             try:
                 self._handle_queue_event(event)
@@ -4190,7 +4323,7 @@ class AsyncEngine(Engine):
                             self._emit(job.id, STEP_FAILED, {
                                 "step": run.step_name,
                                 "error": run.error,
-                            })
+                            }, job=job)
                         else:
                             self._fail_run(
                                 job, run, step_def,
@@ -4259,23 +4392,32 @@ class AsyncEngine(Engine):
         job = self.store.load_job(job_id)
         if job.status != JobStatus.PENDING:
             raise ValueError(f"Cannot start job in status {job.status.value}")
-        if self.max_concurrent_jobs > 0 and len(self.store.active_jobs()) >= self.max_concurrent_jobs:
-            self._emit(job_id, JOB_QUEUED)
-            _async_logger.info(
-                "Job %s queued: %d concurrent jobs at limit",
-                job_id, self.max_concurrent_jobs,
-            )
-            return  # stays PENDING, started later by _start_queued_jobs
-        # Group concurrency limit
-        if job.job_group:
-            group_limit = self.store.get_group_max_concurrent(job.job_group)
-            if group_limit > 0 and len(self.store.active_jobs_in_group(job.job_group)) >= group_limit:
-                self._emit(job_id, JOB_QUEUED)
+        # Delegated sub-jobs from direct sub_flow / emit_flow steps bypass
+        # the capacity gates: their parent step already occupies a slot in
+        # DELEGATED state while it waits, so queue-gating the sub-job
+        # double-counts and self-deadlocks when the parent holds the last
+        # slot (_start_queued_jobs historically only recovered for_each
+        # sub-jobs). for_each fan-outs still queue — their concurrency is
+        # intentionally capped and _start_queued_jobs recovers them.
+        capacity_exempt = self._is_capacity_exempt_sub_job(job)
+        if not capacity_exempt:
+            if self.max_concurrent_jobs > 0 and len(self.store.active_jobs()) >= self.max_concurrent_jobs:
+                self._emit(job_id, JOB_QUEUED, job=job)
                 _async_logger.info(
-                    "Job %s queued: group '%s' at capacity (%d/%d)",
-                    job_id, job.job_group, group_limit, group_limit,
+                    "Job %s queued: %d concurrent jobs at limit",
+                    job_id, self.max_concurrent_jobs,
                 )
-                return
+                return  # stays PENDING, started later by _start_queued_jobs
+            # Group concurrency limit
+            if job.job_group:
+                group_limit = self.store.get_group_max_concurrent(job.job_group)
+                if group_limit > 0 and len(self.store.active_jobs_in_group(job.job_group)) >= group_limit:
+                    self._emit(job_id, JOB_QUEUED, job=job)
+                    _async_logger.info(
+                        "Job %s queued: group '%s' at capacity (%d/%d)",
+                        job_id, job.job_group, group_limit, group_limit,
+                    )
+                    return
         # Resolve cross-job data references before running. _resolve_job_ref_inputs
         # mutates job.inputs in place; persist so downstream loaders see the
         # resolved values, not the raw {"$job_ref": ...} markers.
@@ -4283,6 +4425,12 @@ class AsyncEngine(Engine):
         self.store.save_job(job)
         # Build named session registry
         self._ensure_session_registry(job)
+        # Extract rerun_steps from job metadata (cache bypass for --rerun).
+        # Mirrors Engine.start_job — without this, --rerun silently returns
+        # stale cached results under AsyncEngine.
+        rerun = job.config.metadata.get("rerun_steps", [])
+        if rerun:
+            self._rerun_steps[job_id] = set(rerun)
         # Atomic status transition: only set RUNNING if still PENDING
         # (prevents race with concurrent cancel_job)
         updated = self.store.atomic_status_transition(
@@ -4664,6 +4812,19 @@ class AsyncEngine(Engine):
             if run.watch and run.watch.mode == "poll" and run.id not in self._poll_tasks:
                 self._schedule_poll_watch(job_id, run.id, run.watch)
         self._emit(job_id, JOB_RESUMED)
+        # Process exit rules for runs that completed while the job was not
+        # RUNNING (results preserved by _preserve_inflight_result). Their
+        # loop/escalate/abandon actions were deferred until resume.
+        job = self.store.load_job(job_id)
+        for run in self.store.runs_for_job(job_id):
+            if (run.status == StepRunStatus.COMPLETED
+                    and run.executor_state
+                    and run.executor_state.pop("_deferred_exit", None)):
+                self.store.save_run(run)
+                self._process_completion(job, run)
+                job = self.store.load_job(job_id)
+                if job.status != JobStatus.RUNNING:
+                    break
         self._dispatch_ready(job_id)
 
     def cancel_job(self, job_id: str) -> None:
@@ -5068,9 +5229,20 @@ class AsyncEngine(Engine):
             self._throttled_jobs.discard(job_id)
 
     def _launch(self, job: Job, step_name: str) -> StepRun:
-        """Override: dispatch normal-step executors to thread pool."""
+        """Override: dispatch normal-step executors to thread pool.
+
+        Serialized by _launch_guard so the duplicate-launch check below is
+        atomic with run creation. Without it, two threads (HTTP fulfill
+        thread + event loop poll) could both pass the check-then-act window
+        and dispatch two executors for the same step.
+        """
+        with self._launch_guard:
+            return self._launch_locked(job, step_name)
+
+    def _launch_locked(self, job: Job, step_name: str) -> StepRun:
         # Guard against concurrent launches of the same step (race between
-        # HTTP fulfill thread and event loop poll thread).
+        # HTTP fulfill thread and event loop poll thread). Atomic only
+        # because the caller holds _launch_guard.
         existing = self.store.latest_run(job.id, step_name)
         if existing and existing.status == StepRunStatus.RUNNING:
             _async_logger.debug(
@@ -5103,7 +5275,7 @@ class AsyncEngine(Engine):
                     completed_at=_now(),
                 )
                 self.store.save_run(run)
-                self._emit(job.id, STEP_FAILED, {"step": step_name, "error": str(e)})
+                self._emit(job.id, STEP_FAILED, {"step": step_name, "error": str(e)}, job=job)
                 self._halt_job(job, run)
                 return run
 
@@ -5267,9 +5439,33 @@ class AsyncEngine(Engine):
             if session_name:
                 lock = self._session_locks.get_lock(session_name)
                 async with lock:
-                    result = await loop.run_in_executor(
+                    future = loop.run_in_executor(
                         self._executor_pool, executor.start, inputs, ctx
                     )
+                    try:
+                        result = await asyncio.shield(future)
+                    except asyncio.CancelledError:
+                        # Task cancelled (pause/cancel/reset) — but
+                        # run_in_executor cannot interrupt the pool thread,
+                        # which may still be talking to the shared agent
+                        # session. Hold the session lock until the executor
+                        # call actually finishes (bounded) so another step
+                        # can't interleave prompts into the same session.
+                        if not future.done():
+                            try:
+                                await asyncio.wait_for(
+                                    asyncio.shield(future), timeout=30.0
+                                )
+                            except (asyncio.TimeoutError, asyncio.CancelledError):
+                                _async_logger.warning(
+                                    "Session %s: executor thread for step %s "
+                                    "still running 30s after cancellation — "
+                                    "releasing session lock anyway",
+                                    session_name, step_name,
+                                )
+                            except Exception:
+                                pass  # executor raised — thread is done
+                        raise
             else:
                 result = await loop.run_in_executor(
                     self._executor_pool, executor.start, inputs, ctx
@@ -5330,8 +5526,6 @@ class AsyncEngine(Engine):
                 job = self.store.load_job(job_id)
             except KeyError:
                 return  # job was removed or never persisted
-            if job.status != JobStatus.RUNNING:
-                return
 
             try:
                 run = self.store.load_run(run_id)
@@ -5339,6 +5533,16 @@ class AsyncEngine(Engine):
                 return
             if run.status != StepRunStatus.RUNNING:
                 return  # already handled (e.g. cancelled)
+
+            if job.status != JobStatus.RUNNING:
+                # The job was paused/failed (e.g. a sibling step escalated
+                # or abandoned) while this executor was still in the thread
+                # pool. Persist the result instead of discarding it —
+                # otherwise the run stays RUNNING with its completed
+                # (possibly expensive) work lost, and the stuck-run
+                # watchdog later mislabels it as an infra failure.
+                self._preserve_inflight_result(job, run, result)
+                return
 
             self._process_launch_result(job, run, result)
             # If the step suspended with a poll watch, schedule periodic checking
@@ -5356,8 +5560,6 @@ class AsyncEngine(Engine):
                 job = self.store.load_job(job_id)
             except KeyError:
                 return
-            if job.status != JobStatus.RUNNING:
-                return
 
             try:
                 run = self.store.load_run(run_id)
@@ -5366,11 +5568,30 @@ class AsyncEngine(Engine):
             if run.status != StepRunStatus.RUNNING:
                 return
 
+            if job.status != JobStatus.RUNNING:
+                # Persist the failure instead of leaving the run stuck in
+                # RUNNING (see step_result handling above). No exit-rule
+                # routing — the job is not RUNNING, so loop/escalate
+                # actions must not fire.
+                run.status = StepRunStatus.FAILED
+                run.error = str(error)
+                run.pid = None
+                run.completed_at = _now()
+                self.store.save_run(run)
+                self._emit(job.id, STEP_FAILED, {
+                    "step": step_name,
+                    "attempt": run.attempt,
+                    "error": str(error),
+                }, job=job)
+                return
+
             self._handle_executor_crash(job, run, step_name, error)
             self._after_step_change(job_id)
 
         elif event_type == "poll_check":
             _, job_id, run_id = event
+            if run_id in self._poll_checks_inflight:
+                return  # previous check still running — skip this tick
             try:
                 job = self.store.load_job(job_id)
                 run = self.store.load_run(run_id)
@@ -5380,9 +5601,166 @@ class AsyncEngine(Engine):
             if job.status != JobStatus.RUNNING or run.status != StepRunStatus.SUSPENDED:
                 self._cancel_poll_task(run_id)
                 return
-            if self._check_poll_watch(job, run):
+            # Run the (potentially slow, up to 300s) check_command in the
+            # executor thread pool — NEVER inline on the event loop, which
+            # in server mode also serves all HTTP/WS traffic and every
+            # other job's queue events.
+            self._poll_checks_inflight.add(run_id)
+            coro = self._run_poll_check(job_id, run_id)
+            try:
+                asyncio.get_running_loop().create_task(coro)
+            except RuntimeError:
+                self._poll_checks_inflight.discard(run_id)
+                coro.close()
+                # No running loop (e.g. direct test invocation) — fall back
+                # to the synchronous path.
+                if self._check_poll_watch(job, run):
+                    self._cancel_poll_task(run_id)
+                    self._after_step_change(job_id)
+
+    async def _run_poll_check(self, job_id: str, run_id: str) -> None:
+        """Run one poll check with the blocking command in the thread pool."""
+        from stepwise.poll_eval import evaluate_poll_command_sync
+
+        try:
+            try:
+                job = self.store.load_job(job_id)
+                run = self.store.load_run(run_id)
+            except KeyError:
+                self._cancel_poll_task(run_id)
+                return
+            prep = self._prepare_poll_check(job, run)
+            if prep is None:
+                return
+            check_command, workspace, env = prep
+
+            loop = asyncio.get_running_loop()
+            poll_result = await loop.run_in_executor(
+                self._executor_pool,
+                lambda: evaluate_poll_command_sync(
+                    command=check_command,
+                    cwd=workspace,
+                    env=env,
+                    timeout_seconds=300,  # in-job polls get generous timeout
+                ),
+            )
+
+            # Re-validate after the blocking call: the run may have been
+            # fulfilled externally, cancelled, or the job paused meanwhile.
+            try:
+                job = self.store.load_job(job_id)
+                run = self.store.load_run(run_id)
+            except KeyError:
+                self._cancel_poll_task(run_id)
+                return
+            if job.status != JobStatus.RUNNING or run.status != StepRunStatus.SUSPENDED:
+                self._cancel_poll_task(run_id)
+                return
+
+            if self._apply_poll_result(job, run, poll_result):
                 self._cancel_poll_task(run_id)
                 self._after_step_change(job_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _async_logger.error(
+                "Poll check failed for run %s (job %s)", run_id, job_id, exc_info=True,
+            )
+        finally:
+            self._poll_checks_inflight.discard(run_id)
+
+    def _preserve_inflight_result(self, job: Job, run: StepRun, result: ExecutorResult) -> None:
+        """Persist an executor result that arrived after the job left RUNNING.
+
+        When a sibling step escalates/abandons (or max_iterations pauses the
+        job) while this step's executor is still in flight, the job is no
+        longer RUNNING when the result lands on the queue. The run's terminal
+        state is persisted here; exit-rule evaluation is deferred until the
+        job resumes (marked via executor_state["_deferred_exit"]) because
+        loop/escalate/abandon actions must not fire on a non-running job.
+        """
+        step_def = job.workflow.steps.get(run.step_name)
+
+        if result.type == "data":
+            is_failure = False
+            error_msg = None
+            if result.executor_state and result.executor_state.get("failed"):
+                is_failure = True
+                error_msg = result.executor_state.get("error", "Executor failed")
+            elif result.envelope and result.envelope.executor_meta.get("failed"):
+                is_failure = True
+                error_msg = result.envelope.executor_meta.get("reason", "Executor failed")
+
+            validation_error = None
+            if not is_failure and step_def is not None:
+                validation_error = self._apply_derived_outputs(step_def, result.envelope)
+                if not validation_error:
+                    validation_error = self._validate_artifact(step_def, result.envelope)
+                if not validation_error:
+                    validation_error = self._check_artifact_size(step_def, result.envelope)
+
+            run.result = result.envelope
+            run.executor_state = result.executor_state
+            run.pid = None
+            run.completed_at = _now()
+            if is_failure or validation_error:
+                run.status = StepRunStatus.FAILED
+                run.error = error_msg or validation_error or "Executor failed"
+                self.store.save_run(run)
+                self._emit(job.id, STEP_FAILED, {
+                    "step": run.step_name,
+                    "attempt": run.attempt,
+                    "error": run.error,
+                }, job=job)
+            else:
+                run.status = StepRunStatus.COMPLETED
+                run.executor_state = {
+                    **(run.executor_state or {}),
+                    "_deferred_exit": True,
+                }
+                self.store.save_run(run)
+                self._emit(job.id, STEP_COMPLETED, {
+                    "step": run.step_name,
+                    "attempt": run.attempt,
+                    "deferred_exit": True,
+                }, job=job)
+                if step_def is not None:
+                    self._write_step_cache(job, step_def, run, result.envelope)
+
+        elif result.type == "watch":
+            # Mirror pause semantics: the run suspends; resume_job
+            # re-schedules poll watches for suspended runs.
+            run.status = StepRunStatus.SUSPENDED
+            run.watch = result.watch
+            run.executor_state = result.executor_state
+            if run.watch and not run.watch.fulfillment_outputs and step_def is not None:
+                run.watch.fulfillment_outputs = list(step_def.outputs)
+            self.store.save_run(run)
+            self._emit(job.id, STEP_SUSPENDED, {
+                "step": run.step_name,
+                "run_id": run.id,
+                "watch_mode": result.watch.mode if result.watch else None,
+            }, job=job)
+
+        else:
+            # "async" / "delegate" — cannot safely continue on a
+            # non-running job. Mark FAILED so the run is not stranded;
+            # the step can be retried after resume.
+            run.status = StepRunStatus.FAILED
+            run.error = (
+                f"Job left RUNNING ({job.status.value}) before "
+                f"'{result.type}' result could be processed"
+            )
+            run.pid = None
+            run.completed_at = _now()
+            self.store.save_run(run)
+            self._emit(job.id, STEP_FAILED, {
+                "step": run.step_name,
+                "attempt": run.attempt,
+                "error": run.error,
+            }, job=job)
+
+        self._broadcast({"type": "job_changed", "job_id": job.id})
 
     def _after_step_change(self, job_id: str) -> None:
         """After a step result is processed, broadcast, dispatch ready steps, check terminal."""
@@ -5399,11 +5777,14 @@ class AsyncEngine(Engine):
             pass
         self._dispatch_ready(job_id)
         # When executor limits are active, a slot opening in this job may
-        # unblock throttled steps in other jobs. Re-evaluate all running jobs.
-        if self._executor_limits:
-            for other_job in self.store.active_jobs():
-                if other_job.id != job_id:
-                    self._dispatch_ready(other_job.id)
+        # unblock throttled steps in other jobs. Only jobs that actually
+        # have steps waiting for capacity (_throttled_jobs) need
+        # re-evaluation — re-dispatching every active job here caused an
+        # O(jobs × steps²) query storm on every step event.
+        if self._executor_limits or self._agent_limits:
+            for other_id in list(self._throttled_jobs):
+                if other_id != job_id:
+                    self._dispatch_ready(other_id)
         self._check_job_terminal(job_id)
 
     def _check_job_terminal(self, job_id: str) -> None:
@@ -5415,7 +5796,7 @@ class AsyncEngine(Engine):
             job.status = JobStatus.COMPLETED
             job.updated_at = _now()
             self.store.save_job(job)
-            self._emit(job.id, JOB_COMPLETED)
+            self._emit(job.id, JOB_COMPLETED, job=job)
             self._cleanup_job_sessions(job.id, job)
             self._check_dependent_jobs(job.id)
         elif job.status == JobStatus.RUNNING:
@@ -5434,14 +5815,14 @@ class AsyncEngine(Engine):
                     job.status = JobStatus.COMPLETED
                     job.updated_at = _now()
                     self.store.save_job(job)
-                    self._emit(job.id, JOB_COMPLETED)
+                    self._emit(job.id, JOB_COMPLETED, job=job)
                     self._cleanup_job_sessions(job.id, job)
                     self._check_dependent_jobs(job.id)
                 else:
                     job.status = JobStatus.FAILED
                     job.updated_at = _now()
                     self.store.save_job(job)
-                    self._emit(job.id, JOB_FAILED, {"reason": "no_terminal_reached"})
+                    self._emit(job.id, JOB_FAILED, {"reason": "no_terminal_reached"}, job=job)
                     self._cleanup_job_sessions(job.id, job)
 
         # Signal done if terminal
@@ -5467,10 +5848,15 @@ class AsyncEngine(Engine):
             if self.max_concurrent_jobs > 0 and active_count >= self.max_concurrent_jobs:
                 break
             # Sub-jobs are normally managed by their parent step. EXCEPTION:
-            # for_each sub-jobs that hit max_concurrent_jobs / group capacity
-            # during the parent's launch loop need to be auto-started here,
-            # otherwise they orphan and the parent for_each waits forever.
-            if pending_job.parent_job_id and not self._is_for_each_sub_job(pending_job):
+            # sub-jobs whose parent step run is still DELEGATED (for_each
+            # fan-out items, and any direct sub_flow/emit_flow sub-job that
+            # somehow got queued) need to be auto-started here, otherwise
+            # they orphan and the parent waits forever. Conversely, if the
+            # parent run/job is no longer live (e.g. for_each fail_fast
+            # already failed the parent), the queued sub-job must NOT be
+            # started — it would burn agent/LLM cost on work whose results
+            # are discarded.
+            if pending_job.parent_job_id and not self._sub_job_parent_waiting(pending_job):
                 continue
             # Check group concurrency limit
             grp = pending_job.job_group
@@ -5501,6 +5887,41 @@ class AsyncEngine(Engine):
         except KeyError:
             return False
         return bool(parent_run.executor_state and parent_run.executor_state.get("for_each"))
+
+    def _is_capacity_exempt_sub_job(self, job: Job) -> bool:
+        """True for delegated sub-jobs that must bypass the capacity gates.
+
+        Direct sub_flow / emit_flow delegation creates exactly one sub-job
+        while the parent step run sits in DELEGATED state, still counting
+        against max_concurrent_jobs. Gating the sub-job double-counts that
+        slot and can deadlock permanently (parent occupies the last slot,
+        sub-job stays PENDING forever). for_each sub-jobs are NOT exempt —
+        their fan-out is intentionally capacity-capped and recovered by
+        _start_queued_jobs / the watchdog.
+        """
+        if not job.parent_job_id or not job.parent_step_run_id:
+            return False
+        return not self._is_for_each_sub_job(job)
+
+    def _sub_job_parent_waiting(self, job: Job) -> bool:
+        """True if a queued sub-job's parent is still actively waiting for it.
+
+        The parent step run must be DELEGATED and the parent job RUNNING.
+        Used by _start_queued_jobs so it (a) recovers any capacity-queued
+        sub-job whose parent still waits, and (b) never starts orphaned
+        sub-jobs whose parent has already failed/completed/paused.
+        """
+        if not job.parent_job_id or not job.parent_step_run_id:
+            return False
+        try:
+            parent_run = self.store.load_run(job.parent_step_run_id)
+            parent_job = self.store.load_job(job.parent_job_id)
+        except KeyError:
+            return False
+        return (
+            parent_run.status == StepRunStatus.DELEGATED
+            and parent_job.status == JobStatus.RUNNING
+        )
 
     def _recover_orphaned_for_each_sub_jobs(self) -> None:
         """Watchdog: re-dispatch for_each sub-jobs stuck in PENDING.
@@ -5554,7 +5975,7 @@ class AsyncEngine(Engine):
                     "step": run.step_name,
                     "orphaned_sub_jobs": orphaned,
                     "age_seconds": age,
-                })
+                }, job=parent_job)
                 for sub_id in orphaned:
                     try:
                         self.start_job(sub_id)
@@ -5611,7 +6032,7 @@ class AsyncEngine(Engine):
                     self._emit(parent_job.id, STEP_COMPLETED, {
                         "step": run.step_name,
                         "attempt": run.attempt,
-                    })
+                    }, job=parent_job)
                     self._process_completion(parent_job, run)
                     self._after_step_change(parent_job.id)
                 elif sub_job.status in (JobStatus.FAILED, JobStatus.CANCELLED):
