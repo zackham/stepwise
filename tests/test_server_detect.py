@@ -307,3 +307,45 @@ def test_detect_server_from_pidfile_healthy(tmp_path):
 def test_detect_server_from_pidfile_corrupt(tmp_path):
     (tmp_path / "server.pid").write_text("not json{{")
     assert _detect_server_from_pidfile(tmp_path) is None
+
+
+# ── _pid_is_stepwise_server: identity verification (F29) ──────────────
+
+
+def _write_cmdline(proc_root, pid, argv_parts):
+    pid_dir = proc_root / str(pid)
+    pid_dir.mkdir(parents=True)
+    (pid_dir / "cmdline").write_bytes(b"\x00".join(argv_parts) + b"\x00")
+
+
+def test_pid_is_stepwise_server_detached_server(tmp_path):
+    from stepwise.server_detect import _pid_is_stepwise_server
+    _write_cmdline(tmp_path, 100, [b"/usr/bin/python3", b"-m", b"stepwise.server_bg", b"--port", b"8341"])
+    assert _pid_is_stepwise_server(100, proc_root=str(tmp_path)) is True
+
+
+def test_pid_is_stepwise_server_cli_entrypoint(tmp_path):
+    from stepwise.server_detect import _pid_is_stepwise_server
+    _write_cmdline(tmp_path, 101, [b"/home/u/.local/bin/stepwise", b"server", b"start", b"--no-detach"])
+    assert _pid_is_stepwise_server(101, proc_root=str(tmp_path)) is True
+
+
+def test_pid_is_stepwise_server_rejects_unrelated_process(tmp_path):
+    from stepwise.server_detect import _pid_is_stepwise_server
+    _write_cmdline(tmp_path, 102, [b"/usr/bin/vim", b"notes.txt"])
+    assert _pid_is_stepwise_server(102, proc_root=str(tmp_path)) is False
+
+
+def test_pid_is_stepwise_server_unreadable_assumes_match(tmp_path):
+    """No /proc entry (e.g. platform without procfs) → can't verify, keep
+    previous behavior."""
+    from stepwise.server_detect import _pid_is_stepwise_server
+    assert _pid_is_stepwise_server(103, proc_root=str(tmp_path)) is True
+
+
+def test_pid_is_stepwise_server_empty_cmdline_assumes_match(tmp_path):
+    from stepwise.server_detect import _pid_is_stepwise_server
+    pid_dir = tmp_path / "104"
+    pid_dir.mkdir()
+    (pid_dir / "cmdline").write_bytes(b"")
+    assert _pid_is_stepwise_server(104, proc_root=str(tmp_path)) is True

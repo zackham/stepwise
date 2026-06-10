@@ -169,10 +169,8 @@ class TestWatchMode:
 class TestSubmitWatchJobProjectPath:
     """_submit_watch_job shows project path from server health endpoint."""
 
-    def _make_mock_workflow(self):
-        wf = MagicMock()
-        wf.to_dict.return_value = {"steps": {}}
-        return wf
+    def _make_body(self):
+        return {"objective": "test", "workflow": {"steps": {}}, "inputs": None}
 
     def _make_args(self):
         args = MagicMock()
@@ -212,8 +210,8 @@ class TestSubmitWatchJobProjectPath:
         with patch("urllib.request.urlopen", side_effect=self._mock_urlopen_responses(health)):
             rc = _submit_watch_job(
                 "http://localhost:8340",
-                self._make_mock_workflow(),
-                "test", {}, self._make_args(),
+                self._make_body(),
+                self._make_args(),
             )
 
         assert rc == EXIT_SUCCESS
@@ -227,8 +225,8 @@ class TestSubmitWatchJobProjectPath:
         with patch("urllib.request.urlopen", side_effect=self._mock_urlopen_responses(health)):
             rc = _submit_watch_job(
                 "http://localhost:8340",
-                self._make_mock_workflow(),
-                "test", {}, self._make_args(),
+                self._make_body(),
+                self._make_args(),
             )
 
         assert rc == EXIT_SUCCESS
@@ -241,8 +239,8 @@ class TestSubmitWatchJobProjectPath:
                    side_effect=self._mock_urlopen_responses(health_error=True)):
             rc = _submit_watch_job(
                 "http://localhost:8340",
-                self._make_mock_workflow(),
-                "test", {}, self._make_args(),
+                self._make_body(),
+                self._make_args(),
             )
 
         assert rc == EXIT_SUCCESS
@@ -256,8 +254,8 @@ class TestSubmitWatchJobProjectPath:
         with patch("urllib.request.urlopen", side_effect=self._mock_urlopen_responses(health)):
             rc = _submit_watch_job(
                 "http://localhost:8340",
-                self._make_mock_workflow(),
-                "test", {}, self._make_args(),
+                self._make_body(),
+                self._make_args(),
             )
 
         assert rc == EXIT_SUCCESS

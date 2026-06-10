@@ -705,7 +705,7 @@ def _server_start_detached(
     # start_new_session gives the server its own clean session. Required for
     # agent sessions to work when started from Claude Code or similar
     # tools that create sessions per command.
-    subprocess.Popen(
+    proc = subprocess.Popen(
         cmd,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -715,10 +715,22 @@ def _server_start_detached(
 
     # Wait for server to become healthy
     url = f"http://{host}:{port}"
-    from stepwise.server_detect import _probe_health
+    from stepwise.server_detect import _probe_health, verify_server_identity
     for _ in range(50):  # up to 5 seconds
         time.sleep(0.1)
+        if proc.poll() is not None:
+            # Child exited (e.g. port already bound by another process)
+            io.log("error", f"Server process exited during startup (exit code {proc.returncode})")
+            io.log("info", f"Check log: {log_file}")
+            return EXIT_JOB_FAILED
         if _probe_health(url, timeout=1.0):
+            # A healthy response is not enough: another stepwise server
+            # (e.g. a different project's) may already hold this port while
+            # our child failed to bind. Confirm the responder is ours.
+            if not verify_server_identity(url, project.root):
+                io.log("error", f"Port {port} is already serving a different project's stepwise server")
+                io.log("info", f"Check log: {log_file}")
+                return EXIT_JOB_FAILED
             io.banner(f"Stepwise v{_get_version()}", url)
             io.log("info", f"Log: {log_file}")
             io.log("info", "Run `stepwise server stop` to shut down")
@@ -740,7 +752,12 @@ def _stop_server_for_project(dot_dir: Path, io: IOAdapter) -> bool:
     import signal
     import time
 
-    from stepwise.server_detect import read_pidfile, remove_pidfile, _pid_alive
+    from stepwise.server_detect import (
+        read_pidfile,
+        remove_pidfile,
+        _pid_alive,
+        _pid_is_stepwise_server,
+    )
 
     data = read_pidfile(dot_dir)
     pid = data.get("pid")
@@ -751,9 +768,28 @@ def _stop_server_for_project(dot_dir: Path, io: IOAdapter) -> bool:
             remove_pidfile(dot_dir)
         return False
 
+    # Identity check: a stale pidfile can record a PID the OS has since
+    # recycled for an unrelated process. Never SIGTERM/SIGKILL a process
+    # we can't identify as a stepwise server.
+    if not _pid_is_stepwise_server(pid):
+        io.log("warn", f"PID {pid} in server.pid is not a stepwise server (stale pidfile) — removing it")
+        remove_pidfile(dot_dir)
+        return False
+
     # Send SIGTERM and wait
     io.log("info", f"Stopping server (PID {pid})...")
-    os.kill(pid, signal.SIGTERM)
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        # Exited between the liveness check and the signal
+        remove_pidfile(dot_dir)
+        io.log("success", "Server stopped")
+        return True
+    except PermissionError:
+        # Not our process (recycled PID owned by another user) — stale
+        io.log("warn", f"No permission to signal PID {pid} (stale pidfile) — removing it")
+        remove_pidfile(dot_dir)
+        return False
     for _ in range(50):  # up to 5 seconds
         time.sleep(0.1)
         if not _pid_alive(pid):
@@ -2604,18 +2640,37 @@ def cmd_run(args: argparse.Namespace) -> int:
         io.log("error", str(e))
         return EXIT_USAGE_ERROR
 
+    # Parse --notify-context once (shared by --async/--wait/--watch)
+    notify_context = None
+    if getattr(args, "notify_context", None):
+        import json as _json
+        try:
+            notify_context = _json.loads(args.notify_context)
+        except _json.JSONDecodeError:
+            msg = f"Invalid --notify-context JSON: {args.notify_context}"
+            if getattr(args, "wait", False) or getattr(args, "async_mode", False):
+                from stepwise.runner import _json_error
+                _json_error(2, msg)
+            else:
+                io.log("error", msg)
+            return EXIT_USAGE_ERROR
+
+    # Apply --containment override to config (shared by --wait and headless)
+    containment_override = getattr(args, "containment", None)
+    run_config = None
+    if containment_override:
+        from stepwise.config import load_config
+        run_config = load_config()
+        run_config.agent_containment = containment_override if containment_override != "none" else None
+
+    rerun_steps = getattr(args, "rerun_steps", None)
+
     # --async mode: fire-and-forget (handles own errors as JSON)
     if getattr(args, "async_mode", False):
         from stepwise.runner import run_async
-        notify_context = None
-        if getattr(args, "notify_context", None):
-            import json as _json
-            try:
-                notify_context = _json.loads(args.notify_context)
-            except _json.JSONDecodeError:
-                from stepwise.runner import _json_error
-                _json_error(2, f"Invalid --notify-context JSON: {args.notify_context}")
-                return EXIT_USAGE_ERROR
+        if containment_override:
+            # The detached/delegated runner loads its own config
+            io.log("warn", "--containment is not supported with --async; flag ignored")
         return run_async(
             flow_path=flow_path,
             project=project,
@@ -2627,31 +2682,25 @@ def cmd_run(args: argparse.Namespace) -> int:
             notify_context=notify_context,
             name=getattr(args, "job_name", None),
             metadata=metadata,
+            rerun_steps=rerun_steps,
         )
 
     # --wait mode: blocking JSON output (handles own errors as JSON)
     if getattr(args, "wait", False):
         from stepwise.runner import run_wait
-        wait_notify_context = None
-        if getattr(args, "notify_context", None):
-            import json as _json
-            try:
-                wait_notify_context = _json.loads(args.notify_context)
-            except _json.JSONDecodeError:
-                from stepwise.runner import _json_error
-                _json_error(2, f"Invalid --notify-context JSON: {args.notify_context}")
-                return EXIT_USAGE_ERROR
         return run_wait(
             flow_path=flow_path,
             project=project,
             objective=args.objective,
             inputs=inputs if inputs else None,
             workspace=args.workspace,
+            config=run_config,
             force_local=getattr(args, "local", False),
             notify_url=getattr(args, "notify", None),
-            notify_context=wait_notify_context,
+            notify_context=notify_context,
             name=getattr(args, "job_name", None),
             metadata=metadata,
+            rerun_steps=rerun_steps,
         )
 
     if not flow_path.exists():
@@ -2659,15 +2708,17 @@ def cmd_run(args: argparse.Namespace) -> int:
         return EXIT_USAGE_ERROR
 
     if args.watch:
-        return _run_watch(args, project, flow_path, inputs)  # args.job_name accessed inside
-
-    # Apply --containment override to config
-    containment_override = getattr(args, "containment", None)
-    run_config = None
-    if containment_override:
-        from stepwise.config import load_config
-        run_config = load_config()
-        run_config.agent_containment = containment_override if containment_override != "none" else None
+        if containment_override:
+            io.log("warn", "--containment is not supported with --watch (the server uses its own config); flag ignored")
+        if args.report or args.report_output:
+            io.log("warn", "--report is not supported with --watch; flag ignored")
+        return _run_watch(
+            args, project, flow_path, inputs,
+            metadata=metadata,
+            notify_url=getattr(args, "notify", None),
+            notify_context=notify_context,
+            rerun_steps=rerun_steps,
+        )
 
     # Headless mode (default)
     return run_flow(
@@ -2811,11 +2862,44 @@ def cmd_open(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
+def _watch_job_body(
+    workflow,
+    objective: str,
+    inputs: dict,
+    name: str | None = None,
+    metadata: dict | None = None,
+    notify_url: str | None = None,
+    notify_context: dict | None = None,
+    rerun_steps: list[str] | None = None,
+) -> dict:
+    """Build the POST /api/jobs body for --watch submissions."""
+    body: dict = {
+        "objective": objective,
+        "workflow": workflow.to_dict(),
+        "inputs": inputs if inputs else None,
+    }
+    if name:
+        body["name"] = name
+    if metadata:
+        body["metadata"] = metadata
+    if notify_url:
+        body["notify_url"] = notify_url
+        body["notify_context"] = notify_context or {}
+    if rerun_steps:
+        # Engine reads cache-bypass steps from job.config.metadata
+        body["config"] = {"metadata": {"rerun_steps": rerun_steps}}
+    return body
+
+
 def _run_watch(
     args: argparse.Namespace,
     project,
     flow_path: Path,
     inputs: dict,
+    metadata: dict | None = None,
+    notify_url: str | None = None,
+    notify_context: dict | None = None,
+    rerun_steps: list[str] | None = None,
 ) -> int:
     """--watch mode: start or reuse server, submit job via API."""
     import os
@@ -2839,11 +2923,19 @@ def _run_watch(
     objective = args.objective or flow_display_name(flow_path)
 
     job_name = getattr(args, "job_name", None)
+    job_body = _watch_job_body(
+        workflow, objective, inputs,
+        name=job_name,
+        metadata=metadata,
+        notify_url=notify_url,
+        notify_context=notify_context,
+        rerun_steps=rerun_steps,
+    )
 
     # If a server is already running, submit there and exit
     existing_url = detect_server(project.dot_dir)
     if existing_url:
-        return _submit_watch_job(existing_url, workflow, objective, inputs, args, name=job_name)
+        return _submit_watch_job(existing_url, job_body, args)
 
     # Start a new server, submit the job once it's ready
     if args.port:
@@ -2865,7 +2957,7 @@ def _run_watch(
     print(f"  Press Ctrl+C to stop.")
 
     # Background thread: wait for server ready → submit job → open browser
-    _submit_job_when_ready(host, port, server_url, workflow, objective, inputs, args, name=job_name)
+    _submit_job_when_ready(host, port, server_url, job_body, args)
 
     try:
         acquire_pidfile_guard(project.dot_dir, port)
@@ -2886,25 +2978,15 @@ def _run_watch(
 
 def _submit_watch_job(
     server_url: str,
-    workflow,
-    objective: str,
-    inputs: dict,
+    job_body: dict,
     args,
-    name: str | None = None,
 ) -> int:
     """Submit a job to a server via REST API, start it, and open the browser."""
     import json
     import urllib.request
     import urllib.error
 
-    body: dict = {
-        "objective": objective,
-        "workflow": workflow.to_dict(),
-        "inputs": inputs if inputs else None,
-    }
-    if name:
-        body["name"] = name
-    payload = json.dumps(body).encode()
+    payload = json.dumps(job_body).encode()
 
     try:
         req = urllib.request.Request(
@@ -2957,11 +3039,8 @@ def _submit_job_when_ready(
     host: str,
     port: int,
     server_url: str,
-    workflow,
-    objective: str,
-    inputs: dict,
+    job_body: dict,
     args,
-    name: str | None = None,
 ) -> None:
     """Background thread: wait for server, submit job via API, open browser."""
     import json
@@ -2982,14 +3061,7 @@ def _submit_job_when_ready(
             return  # server never came up
 
         # Submit the job
-        body: dict = {
-            "objective": objective,
-            "workflow": workflow.to_dict(),
-            "inputs": inputs if inputs else None,
-        }
-        if name:
-            body["name"] = name
-        payload = json.dumps(body).encode()
+        payload = json.dumps(job_body).encode()
 
         try:
             req = urllib.request.Request(
@@ -3297,29 +3369,64 @@ def _cancel_force(args: argparse.Namespace, store, job) -> int:
 
 
 def _cancel_run(args: argparse.Namespace, run_id: str) -> int:
-    """Cancel a specific step run by ID."""
+    """Cancel a specific step run by ID.
+
+    Refuses when the parent job is owned by a live engine process (writing
+    FAILED under a live engine would either strand the job in RUNNING or
+    race the owning engine). For orphaned runs (dead runner), marks the run
+    FAILED and settles the parent job so it doesn't strand in RUNNING.
+    """
+    import os
+
     project = _find_project_or_exit(args)
 
     from stepwise.store import SQLiteStore
-    from stepwise.models import StepRunStatus, _now as _models_now
+    from stepwise.models import JobStatus, StepRunStatus, _now as _models_now
+    from stepwise.server_detect import _pid_alive
+
+    json_mode = getattr(args, "output", None) == "json"
+
+    def _error(msg: str, code: int) -> int:
+        if json_mode:
+            print(json.dumps({"status": "error", "error": msg}))
+        else:
+            _io(args).log("error", msg)
+        return code
 
     store = SQLiteStore(str(project.db_path))
     try:
         try:
             run = store.load_run(run_id)
         except KeyError:
-            if getattr(args, "output", None) == "json":
-                print(json.dumps({"status": "error", "error": f"Run not found: {run_id}"}))
-            else:
-                _io(args).log("error", f"Run not found: {run_id}")
-            return EXIT_JOB_FAILED
+            return _error(f"Run not found: {run_id}", EXIT_JOB_FAILED)
 
         if run.status != StepRunStatus.RUNNING:
-            if getattr(args, "output", None) == "json":
-                print(json.dumps({"status": "error", "error": f"Run is not running (status: {run.status.value})"}))
-            else:
-                _io(args).log("error", f"Run is not running (status: {run.status.value})")
-            return EXIT_USAGE_ERROR
+            return _error(f"Run is not running (status: {run.status.value})", EXIT_USAGE_ERROR)
+
+        job = store.load_job(run.job_id)
+
+        # An alive owning engine (server or CLI runner) manages this run's
+        # lifecycle — flipping the run to FAILED behind its back strands the
+        # job (the engine drops the executor result and never settles).
+        owner_pid = job.runner_pid
+        if owner_pid and owner_pid != os.getpid() and _pid_alive(owner_pid):
+            return _error(
+                f"Job {job.id} is actively managed by a live process (PID {owner_pid}). "
+                f"Cancel the whole job with 'stepwise cancel {job.id}', "
+                "or cancel the step from the web UI.",
+                EXIT_USAGE_ERROR,
+            )
+
+        # Best-effort: kill the executor's recorded process so a zombie
+        # subprocess doesn't keep running after the run is marked failed.
+        from stepwise.registry_factory import create_default_registry
+        registry = create_default_registry()
+        step_def = job.workflow.steps.get(run.step_name)
+        if step_def:
+            try:
+                registry.create(step_def.executor).cancel(run.executor_state or {})
+            except Exception:
+                pass
 
         run.status = StepRunStatus.FAILED
         run.error = "Cancelled by user (--run)"
@@ -3327,14 +3434,73 @@ def _cancel_run(args: argparse.Namespace, run_id: str) -> int:
         run.completed_at = _models_now()
         store.save_run(run)
 
-        if getattr(args, "output", None) == "json":
-            print(json.dumps({"status": "ok", "run_id": run_id, "cancelled": True}))
+        # Re-evaluate the parent job so it settles instead of stranding in
+        # RUNNING with zero active runs (nothing else re-evaluates it: the
+        # owning runner is dead and the server skips foreign-owned jobs).
+        job_status = _settle_job_after_run_cancel(
+            store, registry, project, run.job_id, cancelled_step=run.step_name,
+        )
+
+        if json_mode:
+            print(json.dumps({
+                "status": "ok",
+                "run_id": run_id,
+                "cancelled": True,
+                "job_status": job_status,
+            }))
         else:
-            _io(args).log("success", f"Cancelled run {run_id}")
+            _io(args).log("success", f"Cancelled run {run_id} (job now {job_status})")
 
         return EXIT_SUCCESS
     finally:
         store.close()
+
+
+def _settle_job_after_run_cancel(
+    store, registry, project, job_id: str, cancelled_step: str,
+) -> str:
+    """Settle a job after one of its runs was cancelled externally.
+
+    Mirrors the engine's settled-but-failed terminal check: if nothing is in
+    motion and nothing (other than the cancelled step) is ready, the job is
+    settled — completed if a terminal step finished, failed otherwise.
+    Returns the job's resulting status value.
+    """
+    from stepwise.engine import Engine
+    from stepwise.events import JOB_COMPLETED, JOB_FAILED
+    from stepwise.models import JobStatus, _now as _models_now
+
+    job = store.load_job(job_id)
+    if job.status != JobStatus.RUNNING:
+        return job.status.value
+
+    engine = Engine(
+        store, registry,
+        jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir,
+    )
+
+    if (store.running_runs(job.id) or store.suspended_runs(job.id)
+            or store.delegated_runs(job.id)):
+        return job.status.value  # other work still in flight
+
+    # The just-cancelled step's FAILED run makes it eligible for relaunch in
+    # readiness terms — exclude it: the user explicitly cancelled it.
+    ready = [s for s in engine._find_ready(job) if s != cancelled_step]
+    if ready:
+        return job.status.value  # other steps still runnable; leave RUNNING
+
+    engine._settle_unstarted_steps(job)
+    if engine._job_complete(job):
+        job.status = JobStatus.COMPLETED
+        job.updated_at = _models_now()
+        store.save_job(job)
+        engine._emit(job.id, JOB_COMPLETED)
+    else:
+        job.status = JobStatus.FAILED
+        job.updated_at = _models_now()
+        store.save_job(job)
+        engine._emit(job.id, JOB_FAILED, {"reason": "run_cancelled"})
+    return job.status.value
 
 
 def _job_summary(job) -> dict:
@@ -3770,7 +3936,7 @@ def cmd_get(args: argparse.Namespace) -> int:
 
     # URL download
     if target.startswith("http://") or target.startswith("https://"):
-        return _flow_get_url(target)
+        return _flow_get_url(target, force=getattr(args, "force", False))
 
     # Registry name lookup — require @author:name format
     parsed = parse_registry_ref(target)
@@ -4354,7 +4520,7 @@ def cmd_info(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
-def _flow_get_url(url: str) -> int:
+def _flow_get_url(url: str, force: bool = False) -> int:
     """Download a flow from a URL."""
     import urllib.request
     import urllib.error
@@ -4367,7 +4533,7 @@ def _flow_get_url(url: str) -> int:
         return EXIT_USAGE_ERROR
 
     target = Path(filename)
-    if target.exists():
+    if target.exists() and not force:
         io.log("error", f"{target} already exists. Use --force to overwrite")
         return EXIT_USAGE_ERROR
 
@@ -4537,26 +4703,41 @@ def cmd_output(args: argparse.Namespace) -> int:
 def cmd_fulfill(args: argparse.Namespace) -> int:
     """Satisfy a suspended external step from the command line."""
     io = _io(args)
-    # Server routing (always JSON)
     server_url = _detect_server_url(args)
+
+    # Parse the payload exactly once, up front. Stdin can only be consumed
+    # once: if the server path read it and then fell back to the direct
+    # path, a re-read would yield "" and fail with a bogus JSON error.
+    def _payload_error(msg: str) -> None:
+        if server_url:
+            io.log("error", msg)
+        else:
+            print(json.dumps({"status": "error", "error": msg}))
+
+    raw_payload = args.payload
+    if raw_payload == "-" or (raw_payload is None and getattr(args, "stdin", False)):
+        raw_payload = sys.stdin.read().strip()
+    elif raw_payload is None:
+        _payload_error(
+            "No payload provided. "
+            "Usage: stepwise fulfill <run-id> '{\"field\": \"value\"}' (or use --stdin)"
+        )
+        return EXIT_USAGE_ERROR
+    try:
+        payload = json.loads(raw_payload)
+    except json.JSONDecodeError as e:
+        _payload_error(
+            f"Invalid JSON payload: {e}. "
+            f"Usage: stepwise fulfill {args.run_id} '{{\"field\": \"value\"}}'"
+        )
+        return EXIT_USAGE_ERROR
+    if not isinstance(payload, dict):
+        _payload_error("Payload must be a JSON object, not " + type(payload).__name__)
+        return EXIT_USAGE_ERROR
+
+    # Server routing (always JSON)
     if server_url:
         from stepwise.api_client import StepwiseClient, StepwiseAPIError
-
-        # Parse payload first (shared with direct path)
-        raw_payload = args.payload
-        if raw_payload == "-" or (raw_payload is None and getattr(args, "stdin", False)):
-            raw_payload = sys.stdin.read().strip()
-        elif raw_payload is None:
-            io.log("error", "No payload provided. Usage: stepwise fulfill <run-id> '{\"field\": \"value\"}'")
-            return EXIT_USAGE_ERROR
-        try:
-            payload = json.loads(raw_payload)
-        except json.JSONDecodeError as e:
-            io.log("error", f"Invalid JSON payload: {e}")
-            return EXIT_USAGE_ERROR
-        if not isinstance(payload, dict):
-            io.log("error", "Payload must be a JSON object")
-            return EXIT_USAGE_ERROR
 
         client = StepwiseClient(server_url)
         try:
@@ -4593,35 +4774,7 @@ def cmd_fulfill(args: argparse.Namespace) -> int:
     try:
         engine = Engine(store, create_default_registry(), jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir)
 
-        # Read payload from stdin or argv
-        raw_payload = args.payload
-        if raw_payload == "-" or (raw_payload is None and args.stdin):
-            raw_payload = sys.stdin.read().strip()
-        elif raw_payload is None:
-            print(json.dumps({
-                "status": "error",
-                "error": "No payload provided. Pass JSON as argument or use --stdin.",
-            }))
-            return EXIT_USAGE_ERROR
-
-        # Parse JSON payload
-        try:
-            payload = json.loads(raw_payload)
-        except json.JSONDecodeError as e:
-            print(json.dumps({
-                "status": "error",
-                "error": f"Invalid JSON payload: {e}. "
-                         f"Usage: stepwise fulfill {args.run_id} '{{\"field\": \"value\"}}'",
-            }))
-            return EXIT_USAGE_ERROR
-
-        if not isinstance(payload, dict):
-            print(json.dumps({
-                "status": "error",
-                "error": "Payload must be a JSON object, not " + type(payload).__name__,
-            }))
-            return EXIT_USAGE_ERROR
-
+        # Payload already parsed once above (stdin is consumed on first read)
         try:
             result = engine.fulfill_watch(args.run_id, payload)
         except (ValueError, KeyError) as e:
@@ -7443,15 +7596,16 @@ def _hoist_global_flags(argv: list[str]) -> list[str]:
         i += 1
     # Insert hoisted flags before the first positional (subcommand)
     if hoisted:
-        # Find insertion point: before the first non-flag token in rest
-        insert_at = 0
-        for j, tok in enumerate(rest):
+        # Find insertion point: before the first non-flag token in rest,
+        # skipping over value-flag pairs (e.g. `--project-dir /x`) so the
+        # hoisted flags are never spliced between a flag and its value.
+        j = 0
+        while j < len(rest):
+            tok = rest[j]
             if not tok.startswith("-"):
-                insert_at = j
                 break
-            # skip value for flags that take one
-            if tok in VALUE_FLAGS:
-                insert_at = j + 2
+            j += 2 if tok in VALUE_FLAGS else 1
+        insert_at = min(j, len(rest))
         return rest[:insert_at] + hoisted + rest[insert_at:]
     return rest
 

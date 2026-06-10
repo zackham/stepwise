@@ -215,6 +215,29 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def _pid_is_stepwise_server(pid: int, proc_root: str = "/proc") -> bool:
+    """Best-effort identity check: does *pid* look like a stepwise server?
+
+    A pidfile that survives a crash or reboot can hold a PID that the OS has
+    recycled for an unrelated process. Before signaling the PID, verify its
+    command line carries a stepwise marker (``stepwise.server_bg``,
+    ``stepwise.server``, or the ``stepwise`` CLI entry point).
+
+    Returns True when the command line cannot be read (no /proc on this
+    platform, permission denied), preserving previous behavior where
+    verification is impossible.
+    """
+    try:
+        with open(f"{proc_root}/{pid}/cmdline", "rb") as f:
+            raw = f.read()
+    except OSError:
+        return True  # cannot verify (e.g. no /proc) — assume it matches
+    if not raw:
+        return True  # zombie/kernel thread: empty cmdline, signal is harmless
+    cmdline = raw.replace(b"\x00", b" ").decode("utf-8", errors="replace")
+    return "stepwise" in cmdline
+
+
 def _probe_health(url: str, timeout: float = 2.0) -> bool:
     """Probe the server health endpoint."""
     try:

@@ -447,6 +447,83 @@ class TestFulfillCommand:
         result = json.loads(output)
         assert "No payload" in result["error"]
 
+    def test_fulfill_stdin_survives_server_fallback(self, tmp_project):
+        """F34: --stdin payload is parsed exactly once. When the server path
+        fails with a connection error and falls back to direct mode, the
+        already-parsed payload must be reused — never a second stdin read
+        (which would yield "" and a bogus 'Invalid JSON payload' error)."""
+        import io
+        import sys
+        from stepwise.api_client import StepwiseAPIError
+
+        old_stdin = sys.stdin
+        sys.stdin = io.StringIO('{"field": "value"}')
+        try:
+            with patch("stepwise.cli._detect_server_url",
+                       return_value="http://localhost:1"), \
+                 patch("stepwise.api_client.StepwiseClient.fulfill",
+                       side_effect=StepwiseAPIError(0, "Connection failed")):
+                code, output = _capture_stdout([
+                    "--project-dir", str(tmp_project),
+                    "fulfill", "run-nonexistent", "--stdin",
+                ])
+        finally:
+            sys.stdin = old_stdin
+
+        # Fails on run-not-found in direct mode — not on re-read stdin
+        assert code == EXIT_USAGE_ERROR
+        result = json.loads(output)
+        assert "Invalid JSON" not in result["error"]
+        assert "No payload" not in result["error"]
+
+
+# ── Flow Get URL Tests (F35) ────────────────────────────────────────────
+
+
+class TestFlowGetUrlForce:
+    def test_refuses_existing_file_without_force(self, tmp_path, monkeypatch):
+        from stepwise.cli import _flow_get_url
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "my.flow.yaml").write_text("old")
+
+        with patch("urllib.request.urlretrieve") as mock_retrieve:
+            rc = _flow_get_url("https://example.test/my.flow.yaml")
+
+        assert rc == EXIT_USAGE_ERROR
+        mock_retrieve.assert_not_called()
+        assert (tmp_path / "my.flow.yaml").read_text() == "old"
+
+    def test_force_overwrites_existing_file(self, tmp_path, monkeypatch):
+        """F35: the --force flag advertised by the error message must work."""
+        from stepwise.cli import _flow_get_url
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "my.flow.yaml").write_text("old")
+
+        def fake_retrieve(url, filename):
+            Path(filename).write_text("new")
+
+        with patch("urllib.request.urlretrieve", side_effect=fake_retrieve):
+            rc = _flow_get_url("https://example.test/my.flow.yaml", force=True)
+
+        assert rc == EXIT_SUCCESS
+        assert (tmp_path / "my.flow.yaml").read_text() == "new"
+
+    def test_get_command_threads_force_flag(self, tmp_path, monkeypatch):
+        """`stepwise get <url> --force` reaches _flow_get_url with force=True."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "my.flow.yaml").write_text("old")
+
+        def fake_retrieve(url, filename):
+            Path(filename).write_text("new")
+
+        with patch("urllib.request.urlretrieve", side_effect=fake_retrieve):
+            code = main(["get", "https://example.test/my.flow.yaml", "--force"])
+
+        assert code == EXIT_SUCCESS
+        assert (tmp_path / "my.flow.yaml").read_text() == "new"
+
 
 # ── Agent Help Tests ────────────────────────────────────────────────────
 

@@ -403,3 +403,115 @@ class TestCancelRun:
             result = _cancel_run(args, "run-nonexistent")
 
         assert result == EXIT_JOB_FAILED
+
+
+class TestCancelRunSettlement:
+    """F30: cancel --run must not strand the parent job in RUNNING."""
+
+    def _make_job(self, store, workflow=None, **kwargs):
+        job = Job(
+            id=_gen_id("job"),
+            objective="test",
+            workflow=workflow or _simple_workflow(),
+            status=JobStatus.RUNNING,
+            inputs={},
+            workspace_path="/tmp/test",
+            config=JobConfig(),
+            created_by=kwargs.pop("created_by", "server"),
+        )
+        for k, v in kwargs.items():
+            setattr(job, k, v)
+        store.save_job(job)
+        return job
+
+    def _make_run(self, store, job, step_name="step-a", status=StepRunStatus.RUNNING):
+        run = StepRun(
+            id=_gen_id("run"), job_id=job.id, step_name=step_name,
+            attempt=1, status=status, started_at=_now(),
+        )
+        store.save_run(run)
+        return run
+
+    def test_cancel_run_settles_orphaned_job(self, tmp_path):
+        """Cancelling the only active run of an orphaned job settles the job
+        (FAILED) instead of leaving it RUNNING forever."""
+        import json as json_mod
+        from stepwise.project import init_project
+        project = init_project(tmp_path)
+        store = SQLiteStore(str(project.db_path))
+        job = self._make_job(store)  # runner_pid unset → no live owner
+        run = self._make_run(store, job)
+        store.close()
+
+        from stepwise.cli import _cancel_run, EXIT_SUCCESS
+        args = argparse.Namespace(output="json")
+
+        with patch("stepwise.cli._find_project_or_exit", return_value=project):
+            result = _cancel_run(args, run.id)
+
+        assert result == EXIT_SUCCESS
+
+        store2 = SQLiteStore(str(project.db_path))
+        reloaded_run = store2.load_run(run.id)
+        reloaded_job = store2.load_job(job.id)
+        store2.close()
+        assert reloaded_run.status == StepRunStatus.FAILED
+        assert reloaded_job.status == JobStatus.FAILED  # settled, not stranded
+
+    def test_cancel_run_leaves_job_running_with_other_active_runs(self, tmp_path):
+        """A sibling step still RUNNING keeps the job alive."""
+        from stepwise.project import init_project
+        project = init_project(tmp_path)
+        store = SQLiteStore(str(project.db_path))
+
+        workflow = WorkflowDefinition(steps={
+            "step-a": StepDefinition(
+                name="step-a",
+                executor=ExecutorRef(type="callable", config={"fn_name": "echo"}),
+                outputs=["result"],
+            ),
+            "step-b": StepDefinition(
+                name="step-b",
+                executor=ExecutorRef(type="callable", config={"fn_name": "echo"}),
+                outputs=["result"],
+            ),
+        })
+        job = self._make_job(store, workflow=workflow)
+        run_a = self._make_run(store, job, "step-a")
+        self._make_run(store, job, "step-b")
+        store.close()
+
+        from stepwise.cli import _cancel_run, EXIT_SUCCESS
+        args = argparse.Namespace(output="json")
+
+        with patch("stepwise.cli._find_project_or_exit", return_value=project):
+            result = _cancel_run(args, run_a.id)
+
+        assert result == EXIT_SUCCESS
+        store2 = SQLiteStore(str(project.db_path))
+        assert store2.load_run(run_a.id).status == StepRunStatus.FAILED
+        assert store2.load_job(job.id).status == JobStatus.RUNNING
+        store2.close()
+
+    def test_cancel_run_refuses_when_owner_alive(self, tmp_path):
+        """A run whose job is owned by a live engine process is refused —
+        flipping it behind the engine's back would strand or race the job."""
+        from stepwise.project import init_project
+        project = init_project(tmp_path)
+        store = SQLiteStore(str(project.db_path))
+        job = self._make_job(store, runner_pid=999999)
+        run = self._make_run(store, job)
+        store.close()
+
+        from stepwise.cli import _cancel_run, EXIT_USAGE_ERROR
+        args = argparse.Namespace(output="json")
+
+        with patch("stepwise.cli._find_project_or_exit", return_value=project), \
+             patch("stepwise.server_detect._pid_alive", return_value=True):
+            result = _cancel_run(args, run.id)
+
+        assert result == EXIT_USAGE_ERROR
+        store2 = SQLiteStore(str(project.db_path))
+        assert store2.load_run(run.id).status == StepRunStatus.RUNNING  # untouched
+        assert store2.load_job(job.id).status == JobStatus.RUNNING
+        store2.close()
