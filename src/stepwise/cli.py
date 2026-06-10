@@ -7524,6 +7524,8 @@ def cmd_cache(args: argparse.Namespace) -> int:
         key = compute_cache_key(
             resolved_inputs, exec_ref, engine_version,
             step_def.cache.key_extra,
+            flow_name=(workflow.metadata.name if workflow.metadata else ""),
+            step_name=step_name,
         )
 
         print(f"Cache key: {key}")

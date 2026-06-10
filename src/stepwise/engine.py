@@ -2350,6 +2350,8 @@ class Engine:
         key = compute_cache_key(
             inputs, exec_ref, self._get_engine_version(),
             step_def.cache.key_extra,
+            flow_name=(job.workflow.metadata.name if job.workflow.metadata else ""),
+            step_name=run.step_name,
         )
 
         envelope = self.cache.get(key)
@@ -2395,6 +2397,8 @@ class Engine:
         cache_key = compute_cache_key(
             run.inputs or {}, exec_ref, self._get_engine_version(),
             step_def.cache.key_extra,
+            flow_name=(job.workflow.metadata.name if job.workflow.metadata else ""),
+            step_name=run.step_name,
         )
 
         # Determine TTL
@@ -2871,9 +2875,13 @@ class Engine:
                     type=exec_ref.type, config=interpolated,
                     decorators=exec_ref.decorators,
                 )
+            # Must match what the sub-job's own engine derives when it
+            # writes the cache: its workflow IS the sub_flow.
             key = compute_cache_key(
                 sub_inputs, exec_ref, engine_version,
                 target_step.cache.key_extra if target_step.cache else None,
+                flow_name=(sub_flow.metadata.name if sub_flow.metadata else ""),
+                step_name=target_step.name,
             )
             keys_by_index[key] = i
 

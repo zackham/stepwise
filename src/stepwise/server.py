@@ -945,6 +945,7 @@ async def _observe_external_jobs() -> None:
         except asyncio.CancelledError:
             break
         except Exception:
+            logger.error("Error in external-job observer loop", exc_info=True)
             await asyncio.sleep(5)
 
 
@@ -989,6 +990,7 @@ async def _flow_source_watcher() -> None:
         except asyncio.CancelledError:
             break
         except Exception:
+            logger.error("Error in flow-source watcher loop", exc_info=True)
             await asyncio.sleep(5)
 
 
