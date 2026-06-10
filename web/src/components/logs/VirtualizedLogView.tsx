@@ -88,8 +88,11 @@ function VirtualizedLogViewInner({
   const setContainerRef = useCallback((el: HTMLDivElement | null) => {
     (parentRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
     (measureRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
-  }, []);
+  }, [parentRef, measureRef]);
 
+  // TanStack Virtual is incompatible with React Compiler memoization by design;
+  // the compiler skips this component, which is the expected, documented behavior.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer({
     count: lines.length,
     getScrollElement: () => parentRef.current,
@@ -103,7 +106,7 @@ function VirtualizedLogViewInner({
     if (lines.length > 0) {
       virtualizer.scrollToIndex(lines.length - 1, { align: "end" });
     }
-  }, [version, lines.length]);
+  }, [version, lines.length, isLive, userScrolledRef, virtualizer]);
 
   const handleScroll = useCallback(() => {
     const el = parentRef.current;
@@ -111,7 +114,7 @@ function VirtualizedLogViewInner({
     const nearBottom =
       el.scrollTop + el.clientHeight >= el.scrollHeight - 50;
     userScrolledRef.current = !nearBottom;
-  }, []);
+  }, [parentRef, userScrolledRef]);
 
   return (
     <div

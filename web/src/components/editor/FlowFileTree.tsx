@@ -1,7 +1,6 @@
 import { useState, useMemo } from "react";
 import {
   FileText, FolderOpen, Folder, ChevronRight, ChevronDown,
-  RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { FlowFile } from "@/lib/api";
@@ -75,8 +74,6 @@ export function FlowFileTree({
   files,
   selectedFile,
   onSelectFile,
-  onRefresh,
-  isRefreshing,
 }: FlowFileTreeProps) {
   const tree = useMemo(() => buildTree(files), [files]);
 

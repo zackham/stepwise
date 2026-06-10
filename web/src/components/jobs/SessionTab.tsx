@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useJobSessions, useSessionStepEntries } from "@/hooks/useStepwise";
 import { SessionTranscriptView } from "./SessionTranscriptView";
 import { SessionStepFlow } from "./SessionStepFlow";
@@ -38,7 +38,7 @@ function formatDurationMs(ms: number): string {
 /** Extract a human-readable session name.
  *  Named sessions (from session: field) are already clean.
  *  Auto-generated pattern: "step-{8char_hash}-{step_name}-{attempt}" → extract step name. */
-function formatSessionName(name: string, _stepNames: string[]): string {
+function formatSessionName(name: string): string {
   const autoMatch = name.match(/^step-[a-f0-9]{8}-(.+?)(?:-\d+)?$/);
   if (autoMatch) {
     return autoMatch[1];
@@ -57,7 +57,7 @@ function SessionCard({
   onClick: () => void;
   onNavigateToStep?: (stepName: string) => void;
 }) {
-  const displayName = formatSessionName(session.session_name, session.step_names);
+  const displayName = formatSessionName(session.session_name);
   const stepEntries = useSessionStepEntries(jobId, session);
 
   // Calculate duration
@@ -120,10 +120,13 @@ export function SessionTab({ jobId, highlightStep, onNavigateToStep, focusStep, 
   const firstSession = sessions.length === 1 ? sessions[0] : null;
   const singleSessionEntries = useSessionStepEntries(jobId, firstSession);
 
-  // React to external initialSession changes (e.g., "View full session" from right panel)
-  useEffect(() => {
+  // React to external initialSession changes (e.g., "View full session" from
+  // right panel) — render-phase adjustment instead of an effect.
+  const [prevInitialSession, setPrevInitialSession] = useState(initialSession);
+  if (prevInitialSession !== initialSession) {
+    setPrevInitialSession(initialSession);
     if (initialSession) setSelectedSession(initialSession);
-  }, [initialSession]);
+  }
 
   if (isLoading) {
     return (
@@ -188,7 +191,7 @@ export function SessionTab({ jobId, highlightStep, onNavigateToStep, focusStep, 
             Sessions
           </button>
           <span className="text-xs font-medium text-foreground truncate">
-            {formatSessionName(activeSessionInfo.session_name, activeSessionInfo.step_names)}
+            {formatSessionName(activeSessionInfo.session_name)}
           </span>
           {activeSessionInfo.is_active && (
             <span className="relative flex h-2 w-2 shrink-0">

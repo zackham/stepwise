@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { Search, Loader2, WifiOff } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { useRegistrySearch } from "@/hooks/useEditor";

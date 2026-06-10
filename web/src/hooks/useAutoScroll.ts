@@ -9,7 +9,6 @@ import { useEffect, useRef, useCallback, useState } from "react";
 export function useAutoScroll(
   containerRef: React.RefObject<HTMLElement | null>,
   contentVersion: number,
-  isLive: boolean,
 ) {
   const [position, setPosition] = useState<"top" | "middle" | "bottom" | "none">("none");
   const followRef = useRef(true);
@@ -84,13 +83,6 @@ export function useAutoScroll(
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
   }, [containerRef, computePosition]);
-
-  // Reset when container changes
-  useEffect(() => {
-    hasScrolledInitially.current = false;
-    followRef.current = true;
-    setPosition("none");
-  }, [containerRef]);
 
   return {
     showBackToBottom: position === "middle" || position === "top",

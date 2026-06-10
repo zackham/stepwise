@@ -7,17 +7,13 @@ import {
   List,
   LayoutGrid,
   Search,
-  Terminal,
-  Monitor,
   AlertTriangle,
   CirclePause,
-  ArrowUpDown,
   Check,
   Minus,
 } from "lucide-react";
 import { cn, formatDuration, formatCost } from "@/lib/utils";
 import { useJobs } from "@/hooks/useStepwise";
-import { useLocalFlows } from "@/hooks/useEditor";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { LiveDuration } from "@/components/LiveDuration";
 import { EntityContextMenu } from "@/components/menus/EntityContextMenu";
@@ -27,7 +23,6 @@ import { Input } from "@/components/ui/input";
 import { ComboBox } from "@/components/ui/ComboBox";
 import { BulkActionBar } from "@/components/canvas/BulkActionBar";
 import type { Job, JobStatus } from "@/lib/types";
-import { JOB_STATUS_COLORS } from "@/lib/status-colors";
 import { useSchedules } from "@/hooks/useSchedules";
 
 // ── localStorage keys ─────────────────────────────────────────────────
@@ -40,10 +35,6 @@ function isStale(job: Job): boolean {
   if (job.status !== "running" || job.created_by === "server") return false;
   if (!job.heartbeat_at) return true;
   return Date.now() - new Date(job.heartbeat_at).getTime() > 60_000;
-}
-
-function isCliOwned(created_by: string): boolean {
-  return created_by.startsWith("cli:");
 }
 
 function timeAgo(ts: string): string {
@@ -96,13 +87,6 @@ const STATUS_HEX: Record<string, string> = {
 };
 
 type TimeRange = "today" | "7d" | "30d" | undefined;
-
-const TIME_RANGE_LABELS: Record<string, string> = {
-  all: "All time",
-  today: "Today",
-  "7d": "7 days",
-  "30d": "30 days",
-};
 
 // ── Filter logic ───────────────────────────────────────────────────────
 
@@ -297,7 +281,6 @@ const JobListRow = memo(function JobListRow({
   cost,
   depNames,
   selected,
-  isSelectionActive,
   onToggleSelect,
   onHoverDeps,
   onLeaveDeps,
@@ -446,8 +429,6 @@ const JobListRow = memo(function JobListRow({
 // ── Job List View ──────────────────────────────────────────────────────
 
 function JobListView({ jobs }: { jobs: Job[] }) {
-  const navigate = useNavigate();
-
   // Sort state
   const [sortCol, setSortCol] = useState<SortCol | null>(null);
   const [sortAsc, setSortAsc] = useState(false);
@@ -502,8 +483,10 @@ function JobListView({ jobs }: { jobs: Job[] }) {
             for (let i = lo; i <= hi; i++) {
               next.add(orderedJobIds[i]);
             }
+          } else if (next.has(jobId)) {
+            next.delete(jobId);
           } else {
-            next.has(jobId) ? next.delete(jobId) : next.add(jobId);
+            next.add(jobId);
           }
         } else {
           if (next.has(jobId)) {
@@ -764,6 +747,9 @@ function JobListView({ jobs }: { jobs: Job[] }) {
   const JOB_ROW_HEIGHT = 64;
   const GROUP_HEADER_HEIGHT = 44;
 
+  // TanStack Virtual is incompatible with React Compiler memoization by design;
+  // the compiler skips this component, which is the expected, documented behavior.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer({
     count: flatRows.length,
     getScrollElement: () => scrollContainerRef.current,
@@ -984,9 +970,8 @@ export function JobsPage() {
 
   const [showArchived, setShowArchived] = useState(false);
   const { data: jobsResponse, isLoading } = useJobs(undefined, true, showArchived);
-  const allJobs = jobsResponse?.jobs ?? [];
+  const allJobs = useMemo(() => jobsResponse?.jobs ?? [], [jobsResponse]);
   const totalJobCount = jobsResponse?.total ?? allJobs.length;
-  const { data: flows = [] } = useLocalFlows();
   const [flowFilter, setFlowFilter] = useState("all");
 
   // Fetch scheduled count from schedules API

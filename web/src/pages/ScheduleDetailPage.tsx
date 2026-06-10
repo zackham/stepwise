@@ -1,7 +1,6 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { toast } from "sonner";
 import {
   ArrowLeft,
   Play,
@@ -460,13 +459,17 @@ function EditScheduleDialog({
     queryFn: () => fetchLocalFlows(),
   });
 
-  useEffect(() => {
+  // Reset the form when the dialog (re)opens or the schedule changes,
+  // using the render-phase adjustment pattern instead of an effect.
+  const [prevReset, setPrevReset] = useState({ open, schedule });
+  if (prevReset.open !== open || prevReset.schedule !== schedule) {
+    setPrevReset({ open, schedule });
     if (open) {
       setForm(scheduleToFormData(schedule));
       setFlowSearch("");
       setFlowDropdownOpen(false);
     }
-  }, [open, schedule]);
+  }
 
   const update = <K extends keyof ScheduleFormData>(key: K, value: ScheduleFormData[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));

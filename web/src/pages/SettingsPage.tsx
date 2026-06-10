@@ -525,13 +525,6 @@ function getConfigValue(key: AgentConfigKey): string {
   return "";
 }
 
-function getDeliveryMechanism(key: AgentConfigKey): string {
-  if (key.flag) return `--flag: ${key.flag}`;
-  if (key.env) return `env: ${key.env}`;
-  if (key.acp) return `acp: ${key.acp}`;
-  return "none";
-}
-
 function getModelValue(config: Record<string, AgentConfigKey>): string | null {
   const modelKey = config.model;
   if (!modelKey) return null;
@@ -564,7 +557,6 @@ interface ConfigKeyEditorRowProps {
 }
 
 function ConfigKeyEditorRow({ keyName, keyConfig, isBuiltin, onChange, onRemove }: ConfigKeyEditorRowProps) {
-  const isMobile = useIsMobile();
   return (
     <div className="py-2 px-2 rounded hover:bg-zinc-50/50 dark:hover:bg-zinc-900/50">
       <div className="flex items-center gap-2 flex-wrap">
@@ -650,13 +642,17 @@ function AgentEditDialog({ open, onOpenChange, agent, onSave, isPending }: Agent
   const [command, setCommand] = useState("");
   const [newKeyName, setNewKeyName] = useState("");
 
-  useEffect(() => {
+  // Reset local edit state when the dialog (re)opens or the agent changes,
+  // using the render-phase adjustment pattern instead of an effect.
+  const [prevReset, setPrevReset] = useState<{ open: boolean; agent: AgentInfo | null }>({ open: false, agent: null });
+  if (prevReset.open !== open || prevReset.agent !== agent) {
+    setPrevReset({ open, agent });
     if (open) {
       setConfig({ ...agent.config });
       setCommand(agent.command.join(" "));
       setNewKeyName("");
     }
-  }, [open, agent]);
+  }
 
   const handleConfigChange = (name: string, keyConfig: AgentConfigKey) => {
     setConfig((prev) => ({ ...prev, [name]: keyConfig }));
@@ -809,7 +805,11 @@ function AddAgentDialog({ open, onOpenChange, onCreate, isPending, existingNames
   const [newKeyName, setNewKeyName] = useState("");
   const [error, setError] = useState("");
 
-  useEffect(() => {
+  // Reset the form when the dialog (re)opens, using the render-phase
+  // adjustment pattern instead of an effect.
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (prevOpen !== open) {
+    setPrevOpen(open);
     if (open) {
       setName("");
       setCommand("");
@@ -818,7 +818,7 @@ function AddAgentDialog({ open, onOpenChange, onCreate, isPending, existingNames
       setNewKeyName("");
       setError("");
     }
-  }, [open]);
+  }
 
   const handleConfigChange = (keyName: string, keyConfig: AgentConfigKey) => {
     setConfig((prev) => ({ ...prev, [keyName]: keyConfig }));
@@ -1536,9 +1536,13 @@ function NumericLimitRow({
   max?: number;
 }) {
   const [local, setLocal] = useState(String(value || ""));
-  useEffect(() => {
+  // Sync the local draft when the upstream value changes (render-phase
+  // adjustment instead of an effect).
+  const [prevValue, setPrevValue] = useState(value);
+  if (prevValue !== value) {
+    setPrevValue(value);
     setLocal(String(value || ""));
-  }, [value]);
+  }
 
   return (
     <div className="flex items-start gap-3 px-3 py-2">
@@ -1815,14 +1819,18 @@ function WebhookBlock({
   );
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  // Sync drafts when the saved config changes (render-phase adjustment
+  // instead of an effect).
+  const [prevConfig, setPrevConfig] = useState({ url: config.notify_url, context: config.notify_context });
+  if (prevConfig.url !== config.notify_url || prevConfig.context !== config.notify_context) {
+    setPrevConfig({ url: config.notify_url, context: config.notify_context });
     setUrl(config.notify_url ?? "");
     setContextText(
       config.notify_context && Object.keys(config.notify_context).length > 0
         ? JSON.stringify(config.notify_context, null, 2)
         : "",
     );
-  }, [config.notify_url, config.notify_context]);
+  }
 
   const handleSave = () => {
     const trimmedUrl = url.trim();

@@ -39,7 +39,6 @@ export function createEdgeCurve(
   const rest = points.slice(1);
 
   for (let i = 0; i < rest.length; i++) {
-    const ctrl = i === 0 ? start : rest[i - 1];
     const p = rest[i];
 
     if (i === rest.length - 1) {

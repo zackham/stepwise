@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { Settings, Code, Save, Eye, EyeOff, PlayCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -175,14 +175,16 @@ export function FlowConfigPanel({ flowPath }: FlowConfigPanelProps) {
   const [rawYaml, setRawYaml] = useState("");
   const [dirty, setDirty] = useState(false);
 
-  // Sync from server data
-  useEffect(() => {
+  // Sync from server data (render-phase adjustment instead of an effect)
+  const [prevConfig, setPrevConfig] = useState(config);
+  if (prevConfig !== config) {
+    setPrevConfig(config);
     if (config) {
       setFormValues(config.values);
       setRawYaml(config.raw_yaml);
       setDirty(false);
     }
-  }, [config]);
+  }
 
   const handleFieldChange = useCallback(
     (name: string, value: unknown) => {

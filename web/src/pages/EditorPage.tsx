@@ -10,7 +10,8 @@ import { ChatSidebar } from "@/components/editor/ChatSidebar";
 import { FlowFileViewer } from "@/components/editor/FlowFileViewer";
 import { FlowFileTree } from "@/components/editor/FlowFileTree";
 import { useEditorChat } from "@/hooks/useEditorChat";
-import { JobInputForm, extractJobInputs } from "@/components/jobs/JobInputForm";
+import { JobInputForm } from "@/components/jobs/JobInputForm";
+import { extractJobInputs } from "@/lib/job-inputs";
 import {
   useLocalFlows,
   useLocalFlow,
@@ -75,7 +76,9 @@ function PromptEditor({
   const [local, setLocal] = useState(initialValue);
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const onPatchRef = useRef(onPatch);
-  onPatchRef.current = onPatch;
+  useEffect(() => {
+    onPatchRef.current = onPatch;
+  });
 
   useEffect(() => () => clearTimeout(timerRef.current), []);
 
@@ -327,7 +330,7 @@ export function EditorPage() {
         },
       }
     );
-  }, [selectedFlow?.path, selectedStep, stepContext, deleteStepMutation, applyVisualResult]);
+  }, [selectedFlow?.path, selectedStep, stepContext, deleteStepMutation, applyVisualResult, setSelectedStep]);
 
   // When selecting a step, also set it as chat context
   const handleSelectStep = useCallback((stepName: string | null) => {

@@ -5,7 +5,6 @@ import { CreateFlowDialog } from "@/components/editor/CreateFlowDialog";
 import { MiniFlowDag } from "@/components/canvas/MiniFlowDag";
 import {
   useLocalFlows,
-  useLocalFlow,
   useKits,
   useDeleteFlow,
   useArchiveFlow,
@@ -18,13 +17,8 @@ import {
 import { useStepwiseMutations } from "@/hooks/useStepwise";
 import {
   ArrowLeft,
-  Bot,
   Check,
-  ChevronRight,
-  Code2,
   Download,
-  ExternalLink,
-  Eye,
   GitFork,
   FileText,
   FolderOpen,
@@ -33,16 +27,12 @@ import {
   LayoutGrid,
   List,
   Loader2,
-  MessageSquare,
   Minus,
   Package,
-  Play,
   Plus,
   Search,
-  Terminal,
   Trash2,
   User,
-  Variable,
   WifiOff,
   X,
   Workflow,
@@ -66,7 +56,6 @@ import {
 } from "@/components/ui/dialog";
 import { ConfirmDialog } from "@/components/menus/ConfirmDialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { useIsMobile } from "@/hooks/useMediaQuery";
 import { Badge } from "@/components/ui/badge";
 import { cn, flowEditorPath } from "@/lib/utils";
 import { ContentModal } from "@/components/ui/content-modal";
@@ -74,8 +63,6 @@ import type { Kit, LocalFlow, RegistryFlow } from "@/lib/types";
 import {
   Sheet,
   SheetContent,
-  SheetHeader,
-  SheetTitle,
 } from "@/components/ui/sheet";
 
 type Tab = "local" | "registry";
@@ -190,12 +177,11 @@ function KitFolderCard({ kit, flowCount, onOpen, onInfo }: {
   );
 }
 
-function KitFolderRow({ kit, flowCount, onOpen, onInfo, statsMap }: {
+function KitFolderRow({ kit, flowCount, onOpen, onInfo }: {
   kit: Kit;
   flowCount: number;
   onOpen: () => void;
   onInfo: () => void;
-  statsMap: Map<string, { job_count: number; last_run_at?: string | null }>;
 }) {
   return (
     <div
@@ -451,29 +437,9 @@ const FlowListRow = memo(function FlowListRow({ flow, statsMap, selected, active
 });
 
 /* ── Executor type icon + color mapping ──────────────────────────────── */
-const EXECUTOR_META: Record<string, { icon: typeof Bot; color: string; label: string }> = {
-  agent: { icon: Bot, color: "text-blue-400 bg-blue-500/10 ring-blue-500/20", label: "Agent" },
-  llm: { icon: MessageSquare, color: "text-violet-400 bg-violet-500/10 ring-violet-500/20", label: "LLM" },
-  script: { icon: Code2, color: "text-emerald-400 bg-emerald-500/10 ring-emerald-500/20", label: "Script" },
-  external: { icon: ExternalLink, color: "text-amber-400 bg-amber-500/10 ring-amber-500/20", label: "External" },
-  poll: { icon: Terminal, color: "text-cyan-400 bg-cyan-500/10 ring-cyan-500/20", label: "Poll" },
-  mock_llm: { icon: MessageSquare, color: "text-violet-400 bg-violet-500/10 ring-violet-500/20", label: "Mock LLM" },
-};
-
-function ExecutorBadge({ type }: { type: string }) {
-  const meta = EXECUTOR_META[type] ?? { icon: Terminal, color: "text-zinc-400 bg-zinc-500/10 ring-zinc-500/20", label: type };
-  const Icon = meta.icon;
-  return (
-    <span className={cn("inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-md ring-1", meta.color)}>
-      <Icon className="w-3 h-3" />
-      {meta.label}
-    </span>
-  );
-}
 
 export function FlowsPage() {
   const navigate = useNavigate();
-  const isMobile = useIsMobile();
   const [tab, setTab] = useState<Tab>("local");
   const [filter, setFilter] = useState("");
   const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>("all");
@@ -559,10 +525,10 @@ export function FlowsPage() {
   }, [regSortCol]);
 
   const { data: registryData, isLoading: registryLoading, isError: registryError } = useRegistrySearch(registryQuery);
-  const registryFlows = registryData?.flows ?? [];
+  const registryFlows = useMemo(() => registryData?.flows ?? [], [registryData]);
 
   const sortedRegistryFlows = useMemo(() => {
-    let result = registryFilter === "featured"
+    const result = registryFilter === "featured"
       ? registryFlows.filter((f) => f.featured)
       : [...registryFlows];
     result.sort((a, b) => {
@@ -737,8 +703,10 @@ export function FlowsPage() {
             for (let i = lo; i <= hi; i++) {
               next.add(orderedFlowPaths[i]);
             }
+          } else if (next.has(flowPath)) {
+            next.delete(flowPath);
           } else {
-            next.has(flowPath) ? next.delete(flowPath) : next.add(flowPath);
+            next.add(flowPath);
           }
         } else {
           if (next.has(flowPath)) {
@@ -825,15 +793,6 @@ export function FlowsPage() {
   const [showForkDialog, setShowForkDialog] = useState(false);
   const [forkName, setForkName] = useState("");
   const [forkSource, setForkSource] = useState<LocalFlow | null>(null);
-
-  const handleFork = useCallback(
-    (flow: LocalFlow) => {
-      setForkSource(flow);
-      setForkName(flow.name);
-      setShowForkDialog(true);
-    },
-    []
-  );
 
   const handleForkSubmit = useCallback(() => {
     if (!forkSource || !forkName.trim()) return;
@@ -1147,7 +1106,6 @@ export function FlowsPage() {
                                   flowCount={kitFlowCounts.get(row.kit.name) ?? 0}
                                   onOpen={() => setActiveKit(row.kit.name)}
                                   onInfo={() => setKitDetailName(row.kit.name)}
-                                  statsMap={statsMap}
                                 />
                               </div>
                             );

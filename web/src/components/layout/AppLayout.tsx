@@ -25,7 +25,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CommandPalette } from "@/components/CommandPalette";
-import { PanelProvider, usePanelControls } from "@/contexts/PanelContext";
+import { PanelProvider } from "@/contexts/PanelContext";
+import { usePanelControls } from "@/contexts/panel-context";
 import type { AgentMode } from "@/hooks/useEditorChat";
 import {
   Dialog,
@@ -361,7 +362,7 @@ export function AppLayout() {
   const markAllSeen = useCallback(() => {
     const now = Date.now();
     setLastSeenAt(now);
-    try { localStorage.setItem("stepwise:notifications:lastSeenAt", String(now)); } catch {}
+    try { localStorage.setItem("stepwise:notifications:lastSeenAt", String(now)); } catch { /* localStorage unavailable */ }
   }, []);
 
   const isEventNew = useCallback(

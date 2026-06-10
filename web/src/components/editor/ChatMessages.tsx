@@ -17,7 +17,7 @@ interface ChatMessagesProps {
 export function ChatMessages({ messages, isStreaming, onApplyYaml, emptyMessage }: ChatMessagesProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentVersion = useMemo(() => messages.length + (isStreaming ? 1 : 0), [messages.length, isStreaming]);
-  const { showBackToBottom, showJumpToTop, scrollToBottom, scrollToTop } = useAutoScroll(scrollRef, contentVersion, isStreaming);
+  const { showBackToBottom, showJumpToTop, scrollToBottom, scrollToTop } = useAutoScroll(scrollRef, contentVersion);
 
   return (
     <div className="flex-1 min-h-0 relative flex flex-col overflow-hidden">

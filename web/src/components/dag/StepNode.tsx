@@ -214,11 +214,30 @@ function PortDot({
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const isTop = position === "top";
+  const dotRef = useRef<HTMLDivElement>(null);
+  const [tooltipStyle, setTooltipStyle] = useState<React.CSSProperties>({ display: "none" });
+
   const handleEnter = useCallback(() => {
     if (modalOpen) return;
     if (leaveTimer.current) { clearTimeout(leaveTimer.current); leaveTimer.current = null; }
-    hoverTimer.current = setTimeout(() => setHovered(true), 250);
-  }, [modalOpen]);
+    hoverTimer.current = setTimeout(() => {
+      // Measure the dot position when the tooltip is shown (event time, not render time)
+      const el = dotRef.current;
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        const left = rect.left + rect.width / 2;
+        setTooltipStyle(
+          isTop
+            ? { position: "fixed", left, bottom: window.innerHeight - rect.top + 6, transform: "translateX(-50%)", zIndex: 99999 }
+            : { position: "fixed", left, top: rect.bottom + 6, transform: "translateX(-50%)", zIndex: 99999 },
+        );
+      } else {
+        setTooltipStyle({ display: "none" });
+      }
+      setHovered(true);
+    }, 250);
+  }, [modalOpen, isTop]);
 
   const handleLeave = useCallback(() => {
     if (hoverTimer.current) {
@@ -243,22 +262,7 @@ function PortDot({
     if (!open) modalClosedAt.current = Date.now();
   }, []);
 
-  const isTop = position === "top";
   const hasInteraction = !!tooltipContent || !!popoverContent;
-
-  const dotRef = useRef<HTMLDivElement>(null);
-
-  // Get screen position of the dot for portaled tooltip
-  const getTooltipStyle = useCallback((): React.CSSProperties => {
-    const el = dotRef.current;
-    if (!el) return { display: "none" };
-    const rect = el.getBoundingClientRect();
-    const left = rect.left + rect.width / 2;
-    if (isTop) {
-      return { position: "fixed", left, bottom: window.innerHeight - rect.top + 6, transform: "translateX(-50%)", zIndex: 99999 };
-    }
-    return { position: "fixed", left, top: rect.bottom + 6, transform: "translateX(-50%)", zIndex: 99999 };
-  }, [isTop]);
 
   return (
     <div
@@ -277,7 +281,7 @@ function PortDot({
       {hovered && tooltipContent && !modalOpen && createPortal(
         <div
           className="pointer-events-none"
-          style={getTooltipStyle()}
+          style={tooltipStyle}
         >
           <div className="bg-zinc-900 border border-zinc-700 rounded-md shadow-xl p-2 min-w-[300px] max-w-[500px]">
             <div
@@ -592,7 +596,6 @@ function StepNodeImpl({
   onNavigateSubJob,
   onToggleExpand,
   childStepCount,
-  childJobStatus,
   flowStatus,
   isCritical,
   isNested,

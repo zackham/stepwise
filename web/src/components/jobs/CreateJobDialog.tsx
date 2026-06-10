@@ -24,7 +24,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { JobInputForm, extractJobInputs } from "@/components/jobs/JobInputForm";
+import { JobInputForm } from "@/components/jobs/JobInputForm";
+import { extractJobInputs } from "@/lib/job-inputs";
 import { Plus } from "lucide-react";
 import type { FlowDefinition } from "@/lib/types";
 

@@ -187,7 +187,7 @@ export function InputsSection({
 
 /** Detect if text looks like markdown (has headings, bold, lists, code blocks, links) */
 function looksLikeMarkdown(text: string): boolean {
-  return /^#{1,6}\s|^\*\*|^\- |\*\*.*\*\*|```|^\d+\.\s|\[.*\]\(.*\)/m.test(text);
+  return /^#{1,6}\s|^\*\*|^- |\*\*.*\*\*|```|^\d+\.\s|\[.*\]\(.*\)/m.test(text);
 }
 
 export function OutputsSection({

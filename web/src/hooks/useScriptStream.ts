@@ -136,7 +136,6 @@ export function useScriptStream(runId: string | undefined): {
         setVersion((v) => v + 1);
       });
     return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId]);
 
   // WS subscription
@@ -151,7 +150,6 @@ export function useScriptStream(runId: string | undefined): {
       applyWsMessage(msg);
       setVersion((v) => v + 1);
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId]);
 
   const stdout = useMemo(

@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useCallback } from "react";
+import { useRef, useState, useEffect } from "react";
 import type { HierarchicalDagLayout, HierarchicalDagNode, FlowPortNode, LoopEdge } from "./dag-layout";
 import type { DagEdge } from "./dag-layout";
 import { computeLoopEdgePath } from "./dag-layout";
@@ -152,49 +152,45 @@ function lerpLayout(
 export function useLayoutTransition(
   targetLayout: HierarchicalDagLayout,
 ): HierarchicalDagLayout {
+  // The displayed (possibly mid-interpolation) layout. A ref mirror lets the
+  // start-animation effect snapshot the current display without re-running.
+  const [display, setDisplay] = useState(targetLayout);
   const displayRef = useRef(targetLayout);
-  const [, forceRender] = useState(0);
   const prevTargetRef = useRef(targetLayout);
   const animRef = useRef<number | null>(null);
-  const startTimeRef = useRef(0);
-  const fromLayoutRef = useRef(targetLayout);
-  const targetRef = useRef(targetLayout);
-
-  // Keep targetRef in sync for the animation callback
-  targetRef.current = targetLayout;
-
-  const animate = useCallback((timestamp: number) => {
-    const elapsed = timestamp - startTimeRef.current;
-    const t = ease(Math.min(elapsed / TRANSITION_MS, 1));
-
-    const interpolated = lerpLayout(fromLayoutRef.current, targetRef.current, t);
-    displayRef.current = interpolated;
-    forceRender(n => n + 1);
-
-    if (t < 1) {
-      animRef.current = requestAnimationFrame(animate);
-    } else {
-      animRef.current = null;
-    }
-  }, []);
 
   useEffect(() => {
     if (prevTargetRef.current === targetLayout) return;
 
     // Snapshot the currently displayed (mid-interpolation) layout as "from",
     // so rapid layout changes blend from where we are, not where we started
-    fromLayoutRef.current = displayRef.current;
+    const fromLayout = displayRef.current;
     prevTargetRef.current = targetLayout;
+
+    const startTime = performance.now();
+    function animate(timestamp: number) {
+      const elapsed = timestamp - startTime;
+      const t = ease(Math.min(elapsed / TRANSITION_MS, 1));
+
+      const interpolated = lerpLayout(fromLayout, targetLayout, t);
+      displayRef.current = interpolated;
+      setDisplay(interpolated);
+
+      if (t < 1) {
+        animRef.current = requestAnimationFrame(animate);
+      } else {
+        animRef.current = null;
+      }
+    }
 
     // Start animation
     if (animRef.current) cancelAnimationFrame(animRef.current);
-    startTimeRef.current = performance.now();
     animRef.current = requestAnimationFrame(animate);
 
     return () => {
       if (animRef.current) cancelAnimationFrame(animRef.current);
     };
-  }, [targetLayout, animate]);
+  }, [targetLayout]);
 
-  return displayRef.current;
+  return display;
 }

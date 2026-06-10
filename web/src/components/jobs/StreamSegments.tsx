@@ -13,7 +13,6 @@ import {
 } from "lucide-react";
 import { highlightMatches, countMatches } from "@/lib/log-search";
 import { cn } from "@/lib/utils";
-import { ContentModal } from "@/components/ui/content-modal";
 import { FadedText } from "@/components/ui/FadedText";
 import { Markdown } from "@/components/ui/markdown";
 

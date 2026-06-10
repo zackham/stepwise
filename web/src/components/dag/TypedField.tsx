@@ -34,11 +34,6 @@ function FieldLabel({
   );
 }
 
-// Description is now shown inline in FieldLabel — kept as no-op for compatibility
-function FieldDescription({ schema: _schema }: { schema: OutputFieldSchema }) {
-  return null;
-}
-
 function FieldError({ error }: { error?: string }) {
   if (!error) return null;
   return <p className="text-[10px] text-red-500 dark:text-red-400 mt-0.5">{error}</p>;
@@ -120,11 +115,9 @@ function NumberField({
 function BoolField({
   value,
   onChange,
-  schema,
 }: {
   value: unknown;
   onChange: (v: boolean) => void;
-  schema: OutputFieldSchema;
 }) {
   const checked = value === true || value === "true";
   return (
@@ -265,7 +258,7 @@ export function TypedField({
         />
       )}
       {fieldType === "bool" && (
-        <BoolField value={value} onChange={onChange} schema={schema} />
+        <BoolField value={value} onChange={onChange} />
       )}
       {fieldType === "choice" && !schema.multiple && (
         <ChoiceSingleField
@@ -281,7 +274,6 @@ export function TypedField({
           schema={schema}
         />
       )}
-      <FieldDescription schema={schema} />
       <FieldError error={error} />
     </div>
   );

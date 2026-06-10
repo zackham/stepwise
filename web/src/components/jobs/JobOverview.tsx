@@ -4,9 +4,10 @@ import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 import { Button } from "@/components/ui/button";
 import type { Job } from "@/lib/types";
 import { cn, formatDuration, formatCost } from "@/lib/utils";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import { Terminal, Monitor, Play, Pause, RotateCcw, XCircle, RefreshCw, AlertTriangle } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
+import { isStale } from "@/lib/actions/job-actions";
 import { SidebarSection, JobInputsSection, JobOutputsSection } from "./RunSections";
 
 interface JobOverviewProps {
@@ -47,14 +48,12 @@ function normalizeOutputValue(value: unknown): unknown {
 
 export function JobOverview({ job }: JobOverviewProps) {
   const { copy: copyId, justCopied: idCopied } = useCopyFeedback();
-  const navigate = useNavigate();
   const mutations = useStepwiseMutations();
   const isTerminal =
     job.status === "completed" || job.status === "failed" || job.status === "cancelled";
   const { data: outputs, isLoading: outputsLoading } = useJobOutput(job.id, isTerminal);
   const { data: costData } = useJobCost(job.id);
-  const stale = job.status === "running" && job.created_by !== "server" &&
-    (!job.heartbeat_at || Date.now() - new Date(job.heartbeat_at).getTime() > 60_000);
+  const stale = isStale(job);
 
   const normalizedOutputs = useMemo(() => {
     if (!outputs) return null;

@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -13,7 +13,6 @@ import {
   Pencil,
   X,
   Loader2,
-  Bot,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -53,7 +52,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import type { Schedule, ScheduleStatus, ScheduleType } from "@/lib/schedule-types";
 import type { CreateSchedulePayload } from "@/lib/schedule-api";
-import type { LocalFlow } from "@/lib/types";
+import type { JobStatus, LocalFlow } from "@/lib/types";
 import { fetchLocalFlows } from "@/lib/api";
 import cronstrue from "cronstrue";
 import { ScheduleChat } from "@/components/schedules/ScheduleChat";
@@ -252,7 +251,6 @@ function CronIntervalPicker({
   cronPreview: string;
   label?: string;
 }) {
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const [customMode, setCustomMode] = useState<"minute" | "hourly" | "daily" | "weekly" | "custom" | null>(null);
 
   const mode = customMode ?? parseCronMode(value);
@@ -330,7 +328,7 @@ function CronIntervalPicker({
         ))}
         <button
           type="button"
-          onClick={() => { setCustomMode("custom"); setShowAdvanced(true); }}
+          onClick={() => setCustomMode("custom")}
           className={cn(
             "px-2 py-1 text-[11px] rounded-md border transition-colors cursor-pointer",
             mode === "custom" && !activePreset
@@ -540,17 +538,17 @@ function ScheduleFormDialog({
     queryFn: () => fetchLocalFlows(),
   });
 
-  useEffect(() => {
+  // Reset the form when the dialog (re)opens or the edited schedule changes,
+  // using the render-phase adjustment pattern instead of an effect.
+  const [prevReset, setPrevReset] = useState({ open, editingSchedule });
+  if (prevReset.open !== open || prevReset.editingSchedule !== editingSchedule) {
+    setPrevReset({ open, editingSchedule });
     if (open) {
-      if (editingSchedule) {
-        setForm(scheduleToFormData(editingSchedule));
-      } else {
-        setForm(DEFAULT_FORM);
-      }
+      setForm(editingSchedule ? scheduleToFormData(editingSchedule) : DEFAULT_FORM);
       setFlowSearch("");
       setFlowDropdownOpen(false);
     }
-  }, [open, editingSchedule]);
+  }
 
   const update = <K extends keyof ScheduleFormData>(key: K, value: ScheduleFormData[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -968,7 +966,7 @@ function ScheduleRow({
       {/* Last job status */}
       <div className="hidden md:flex w-24 justify-end shrink-0">
         {schedule.last_job_status ? (
-          <JobStatusBadge status={schedule.last_job_status as any} />
+          <JobStatusBadge status={schedule.last_job_status as JobStatus} />
         ) : (
           <span className="text-xs text-zinc-600">—</span>
         )}

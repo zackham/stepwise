@@ -224,6 +224,8 @@ export function useAgentStream(
   }, [runId, backfillEvents, processEvents]);
 
   return {
+    // Intentional: the ref is a mutable stream accumulator; `version` invalidates consumers on change.
+    // eslint-disable-next-line react-hooks/refs
     streamState: stateRef.current,
     version,
   };

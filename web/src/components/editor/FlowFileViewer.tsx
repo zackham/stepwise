@@ -32,13 +32,15 @@ export function FlowFileViewer({ flowPath, filePath, onClose }: FlowFileViewerPr
   const lang = EXT_LANG[ext] ?? ext;
   const isDirty = content !== savedContent;
 
-  // Load content when data arrives
-  useEffect(() => {
+  // Load content when data arrives (render-phase adjustment instead of an effect)
+  const [prevData, setPrevData] = useState(data);
+  if (prevData !== data) {
+    setPrevData(data);
     if (data?.content != null) {
       setContent(data.content);
       setSavedContent(data.content);
     }
-  }, [data]);
+  }
 
   const handleSave = useCallback(() => {
     if (!isDirty) return;

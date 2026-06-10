@@ -87,7 +87,7 @@ function executorLabel(type: string): string {
 export function TimelineView({ job, runs, onSelectStep, selectedStep }: TimelineViewProps) {
   const [hoveredRun, setHoveredRun] = useState<string | null>(null);
   const [hoverOffsetPx, setHoverOffsetPx] = useState(0); // mouse X offset within bar, in px
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(() => Date.now());
   const containerRef = useRef<HTMLDivElement>(null);
 
   const jobIsRunning = job.status === "running" || job.status === "paused";
@@ -99,7 +99,7 @@ export function TimelineView({ job, runs, onSelectStep, selectedStep }: Timeline
     return () => clearInterval(id);
   }, [jobIsRunning]);
 
-  const { groups, timeOrigin, rangeMs, ticks } = useMemo(() => {
+  const { groups, rangeMs, ticks } = useMemo(() => {
     // Only show runs that have started
     const startedRuns = runs.filter((r) => r.started_at);
     if (startedRuns.length === 0) {

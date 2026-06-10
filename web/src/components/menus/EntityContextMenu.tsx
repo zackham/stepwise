@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import type { EntityType, ActionDefinition } from "@/lib/actions/types";
 import { getActionsForEntity } from "@/lib/actions";
-import { useActionContext } from "./ActionContextProvider";
+import { useActionContext } from "./action-context";
 import { ActionMenuItems } from "./ActionMenuItems";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {

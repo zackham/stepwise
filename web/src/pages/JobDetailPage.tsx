@@ -93,7 +93,6 @@ export function JobDetailPage() {
   const navigate = useNavigate({ from: "/jobs/$jobId" });
   const isMobile = useIsMobile();
   const { data: job, isLoading } = useJob(jobId);
-  const { data: parentJob } = useJob(job?.parent_job_id ?? undefined);
   const { data: jobTree } = useJobTree(jobId);
   const { data: runs = [] } = useRuns(jobId);
   const { data: events = [] } = useEvents(jobId);
@@ -166,13 +165,20 @@ export function JobDetailPage() {
     }
   }, [job?.status]);
 
-  const selection: DagSelection = dataFlowSelection ?? (selectedStep ? { kind: "step", stepName: selectedStep } : null);
+  const selection: DagSelection = useMemo(
+    () => dataFlowSelection ?? (selectedStep ? { kind: "step", stepName: selectedStep } : null),
+    [dataFlowSelection, selectedStep],
+  );
 
   const activeTab: RightPanelTab = searchParams.tab ?? "run";
 
-  useEffect(() => {
+  // Clear the session focus when leaving the session tab (render-phase
+  // adjustment instead of an effect).
+  const [prevActiveTab, setPrevActiveTab] = useState(activeTab);
+  if (prevActiveTab !== activeTab) {
+    setPrevActiveTab(activeTab);
     if (activeTab !== "session") setFocusRunId(undefined);
-  }, [activeTab]);
+  }
 
   const viewMode = searchParams.view ?? "dag";
 
@@ -197,21 +203,24 @@ export function JobDetailPage() {
 
   useAutoSelectSuspended(runs, selection, handleSelectStep);
 
-  useEffect(() => {
+  // Reset per-job UI state when navigating to a different job (render-phase
+  // adjustment instead of an effect).
+  const [prevJobId, setPrevJobId] = useState(jobId);
+  if (prevJobId !== jobId) {
+    setPrevJobId(jobId);
     setDataFlowSelection(null);
     setExpandedStep(false);
     setAutoOpenedPanel(false);
     setLeftTab("overview");
-  }, [jobId]);
+  }
 
-  useEffect(() => {
-    if (searchParams.panel || autoOpenedPanel) return;
-    if (job) {
-      const terminal =
-        job.status === "completed" || job.status === "failed" || job.status === "cancelled";
-      if (terminal) setAutoOpenedPanel(true);
-    }
-  }, [job, searchParams.panel, autoOpenedPanel]);
+  // Mark the panel as auto-opened once the job reaches a terminal state
+  // (render-phase adjustment instead of an effect).
+  if (!searchParams.panel && !autoOpenedPanel && job) {
+    const terminal =
+      job.status === "completed" || job.status === "failed" || job.status === "cancelled";
+    if (terminal) setAutoOpenedPanel(true);
+  }
 
   const topoStepNames = useMemo(() => {
     if (!job?.workflow?.steps) return [];
@@ -320,7 +329,7 @@ export function JobDetailPage() {
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [selection, selectedStep, topoStepNames, handleSelectStep]);
+  }, [selection, selectedStep, topoStepNames, handleSelectStep, navigate]);
 
   if (isLoading) {
     return (

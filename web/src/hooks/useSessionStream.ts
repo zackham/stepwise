@@ -26,7 +26,12 @@ export function useSessionStream(
   const liveQueueRef = useRef<AgentStreamEvent[]>([]);
   const runIdSetRef = useRef(new Set(runIds));
 
-  // Reset synchronously during render when runIds change
+  // Reset synchronously during render when runIds change.
+  // eslint-disable react-hooks/refs — intentional mutable-accumulator pattern:
+  // the refs hold a stream buffer that must be cleared before this render's
+  // returned snapshot; re-render correctness is governed by the `version`
+  // counter, not by these refs.
+  /* eslint-disable react-hooks/refs */
   const runIdKey = runIds.join(",");
   const prevRunIdKeyRef = useRef(runIdKey);
   if (prevRunIdKeyRef.current !== runIdKey) {
@@ -35,6 +40,7 @@ export function useSessionStream(
     backfilledRef.current = false;
     liveQueueRef.current = [];
   }
+  /* eslint-enable react-hooks/refs */
 
   // Keep runId set in sync
   useEffect(() => {
@@ -119,5 +125,7 @@ export function useSessionStream(
     liveQueueRef.current = [];
   }, [backfillEvents, backfillBoundaries, processEvents]);
 
+  // Intentional: the ref is a mutable stream accumulator; `version` invalidates consumers on change.
+  // eslint-disable-next-line react-hooks/refs
   return { state: stateRef.current, version };
 }

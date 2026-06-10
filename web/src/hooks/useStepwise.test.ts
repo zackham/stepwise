@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement } from "react";
@@ -57,7 +57,7 @@ describe("useJobs", () => {
         updated_at: "2024-01-01T00:00:00Z",
       },
     ];
-    mockedApi.fetchJobs.mockResolvedValueOnce(jobs as any);
+    mockedApi.fetchJobs.mockResolvedValueOnce(jobs as unknown as Awaited<ReturnType<typeof api.fetchJobs>>);
 
     const { result } = renderHook(() => useJobs(), {
       wrapper: createWrapper(),
@@ -96,7 +96,7 @@ describe("useJobs", () => {
 describe("useJob", () => {
   it("fetches a job when jobId is provided", async () => {
     const job = { id: "j1", objective: "Test" };
-    mockedApi.fetchJob.mockResolvedValueOnce(job as any);
+    mockedApi.fetchJob.mockResolvedValueOnce(job as unknown as Awaited<ReturnType<typeof api.fetchJob>>);
 
     const { result } = renderHook(() => useJob("j1"), {
       wrapper: createWrapper(),
@@ -119,7 +119,7 @@ describe("useJob", () => {
 describe("useRuns", () => {
   it("fetches runs for a job", async () => {
     const runs = [{ id: "r1", step_name: "step1", attempt: 1, status: "completed" }];
-    mockedApi.fetchRuns.mockResolvedValueOnce(runs as any);
+    mockedApi.fetchRuns.mockResolvedValueOnce(runs as unknown as Awaited<ReturnType<typeof api.fetchRuns>>);
 
     const { result } = renderHook(() => useRuns("j1"), {
       wrapper: createWrapper(),
@@ -154,7 +154,7 @@ describe("useRuns", () => {
 describe("useEvents", () => {
   it("fetches events for a job", async () => {
     const events = [{ id: "e1", type: "step.started", timestamp: "2024-01-01T00:00:00Z" }];
-    mockedApi.fetchEvents.mockResolvedValueOnce(events as any);
+    mockedApi.fetchEvents.mockResolvedValueOnce(events as unknown as Awaited<ReturnType<typeof api.fetchEvents>>);
 
     const { result } = renderHook(() => useEvents("j1"), {
       wrapper: createWrapper(),

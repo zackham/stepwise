@@ -12,7 +12,6 @@ import { Separator } from "@/components/ui/separator";
 import { FlowConfigPanel } from "@/components/editor/FlowConfigPanel";
 import { useFlowJobs, useKits } from "@/hooks/useEditor";
 import { useNavigate } from "@tanstack/react-router";
-import { ContentModal } from "@/components/ui/content-modal";
 import { FolderOpen, Info } from "lucide-react";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import { formatDuration } from "@/lib/utils";

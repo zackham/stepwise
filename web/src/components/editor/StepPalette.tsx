@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -44,13 +44,15 @@ export function StepPalette({
   const [selectedType, setSelectedType] = useState<string | null>(null);
   const [name, setName] = useState("");
 
-  // Reset state when dialog closes
-  useEffect(() => {
+  // Reset state when dialog closes (render-phase adjustment instead of an effect)
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (prevOpen !== open) {
+    setPrevOpen(open);
     if (!open) {
       setSelectedType(null);
       setName("");
     }
-  }, [open]);
+  }
 
   const isDuplicate = existingStepNames.includes(name.trim());
   const canSubmit = name.trim() && !isDuplicate && !isPending;

@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Loader2 } from "lucide-react";
-import type { WatchSpec, OutputSchema } from "@/lib/types";
+import type { OutputSchema } from "@/lib/types";
 import { TypedField } from "./TypedField";
 import { validateAll } from "@/lib/validate-fields";
 
@@ -31,14 +31,13 @@ function AutoTextarea({
   const internalRef = useRef<HTMLTextAreaElement>(null);
   const ref = (inputRef as React.RefObject<HTMLTextAreaElement>) ?? internalRef;
 
-  const resize = useCallback(() => {
+  // Auto-resize to fit content whenever the value changes
+  useEffect(() => {
     const el = ref.current;
     if (!el) return;
     el.style.height = "0";
     el.style.height = el.scrollHeight + "px";
-  }, [ref]);
-
-  useEffect(() => resize(), [value, resize]);
+  }, [value, ref]);
 
   return (
     <textarea
@@ -233,13 +232,4 @@ export function ExternalInputPanel({
       </form>
     </div>
   );
-}
-
-export function getWatchProps(watch: WatchSpec | null | undefined) {
-  if (!watch || watch.mode !== "external") return null;
-  return {
-    prompt: (watch.config?.prompt as string) ?? "Provide the required input",
-    outputs: watch.fulfillment_outputs ?? [],
-    outputSchema: watch.output_schema,
-  };
 }

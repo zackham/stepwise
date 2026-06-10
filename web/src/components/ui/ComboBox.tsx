@@ -36,7 +36,7 @@ export function ComboBox({
   const [sortMode, setSortMode] = useState<"recent" | "az">("recent");
   const triggerRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const posRef = useRef({ top: 0, left: 0 });
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
 
   const filtered = (() => {
     let result = query
@@ -63,7 +63,7 @@ export function ComboBox({
   const handleToggle = useCallback(() => {
     if (!open && triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect();
-      posRef.current = { top: rect.bottom + 4, left: rect.left };
+      setMenuPos({ top: rect.bottom + 4, left: rect.left });
     }
     setOpen((o) => !o);
   }, [open]);
@@ -92,7 +92,7 @@ export function ComboBox({
               "fixed z-[100] bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md shadow-2xl overflow-hidden",
               hasSublabels ? "w-72" : "w-56",
             )}
-            style={{ top: posRef.current.top, left: posRef.current.left }}
+            style={{ top: menuPos.top, left: menuPos.left }}
           >
             <div className="flex items-center gap-1.5 px-2.5 py-2 border-b border-zinc-200 dark:border-zinc-800">
               <Search className="w-3.5 h-3.5 text-zinc-500 shrink-0" />

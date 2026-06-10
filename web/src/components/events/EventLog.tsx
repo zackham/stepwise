@@ -158,9 +158,10 @@ export function EventLog({ jobId }: EventLogProps) {
     }, 0);
   }, [filteredEvents, search.compiledRegex]);
 
+  const setMatchCount = search.setMatchCount;
   useEffect(() => {
-    search.setMatchCount(totalMatches);
-  }, [totalMatches]);
+    setMatchCount(totalMatches);
+  }, [totalMatches, setMatchCount]);
 
   const toggleFilter = (cat: keyof typeof EVENT_CATEGORIES) => {
     setActiveFilters((prev) => {

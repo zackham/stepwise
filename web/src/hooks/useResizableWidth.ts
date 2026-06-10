@@ -38,7 +38,9 @@ export function useResizableWidth({
   const rafId = useRef(0);
   const shouldCollapse = useRef(false);
   const onCollapseRef = useRef(onCollapse);
-  onCollapseRef.current = onCollapse;
+  useEffect(() => {
+    onCollapseRef.current = onCollapse;
+  });
 
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {

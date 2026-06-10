@@ -55,9 +55,6 @@ export function ContainerPortEdges({
   layoutHeight,
   jobInputs,
   latestRuns,
-  containerHeight,
-  headerHeight,
-  contentTop,
 }: ContainerPortEdgesProps) {
   const [hover, setHover] = useState<HoverInfo | null>(null);
   const theme = useTheme();

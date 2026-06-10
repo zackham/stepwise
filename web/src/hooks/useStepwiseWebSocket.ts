@@ -205,94 +205,94 @@ export function useStepwiseWebSocket(): StepwiseWebSocketState {
     }, BROAD_REFETCH_SAFETY_NET_MS - elapsed);
   }, [queryClient]);
 
-  const connect = useCallback(() => {
-    if (
-      wsRef.current?.readyState === WebSocket.OPEN ||
-      wsRef.current?.readyState === WebSocket.CONNECTING
-    ) {
-      return;
-    }
-
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = null;
-    }
-
-    setWsState("reconnecting");
-
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/ws`;
-
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      console.log("[ws] connected");
-      setWsState("connected");
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === "tick" && msg.changed_jobs?.length > 0) {
-          // Smart per-job updates: fetch ONLY the changed jobs (one
-          // small request per job, deduped) and splice them into the
-          // cached job-list queries via setQueryData. No more
-          // /api/jobs?limit=500 refetch on every tick.
-          handleChangedJobs(msg.changed_jobs);
-          // Step-detail caches stay fresh via cheap scoped invalidates.
-          for (const jobId of msg.changed_jobs) {
-            queryClient.invalidateQueries({ queryKey: ["runs", jobId] });
-            queryClient.invalidateQueries({ queryKey: ["events", jobId] });
-            queryClient.invalidateQueries({ queryKey: ["jobTree", jobId] });
-            queryClient.invalidateQueries({ queryKey: ["sessions", jobId] });
-            queryClient.invalidateQueries({ queryKey: ["sessionTranscript", jobId] });
-          }
-          // Long-interval safety net for status counts, etc. — throttled
-          // to once every few seconds, NOT once per tick.
-          scheduleSafetyNetRefetch();
-          for (const fn of tickListeners) fn(msg as TickMessage);
-        } else if (msg.type === "stale_jobs") {
-          // Stale jobs: patch each one into the lists rather than
-          // refetching the entire list.
-          if (msg.jobs?.length > 0) {
-            handleChangedJobs(msg.jobs.map((s: { id: string }) => s.id));
-          }
-        } else if (msg.type === "flow_source_changed") {
-          for (const fn of flowSourceListeners) fn(msg as FlowSourceChangedMessage);
-        } else if (msg.type === "agent_output") {
-          for (const fn of agentOutputListeners) fn(msg);
-        } else if (msg.type === "script_output") {
-          for (const fn of scriptOutputListeners) fn(msg as ScriptOutputMessage);
-        }
-      } catch {
-        // ignore parse errors
-      }
-    };
-
-    ws.onclose = () => {
-      wsRef.current = null;
-      setWsState("disconnected");
-
-      if (!shouldReconnectRef.current) {
+  useEffect(() => {
+    function connect() {
+      if (
+        wsRef.current?.readyState === WebSocket.OPEN ||
+        wsRef.current?.readyState === WebSocket.CONNECTING
+      ) {
         return;
       }
 
-      console.log("[ws] disconnected, reconnecting in 3s");
-      reconnectTimeoutRef.current = setTimeout(() => {
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+
+      setWsState("reconnecting");
+
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = `${protocol}//${window.location.host}/ws`;
+
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        console.log("[ws] connected");
+        setWsState("connected");
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === "tick" && msg.changed_jobs?.length > 0) {
+            // Smart per-job updates: fetch ONLY the changed jobs (one
+            // small request per job, deduped) and splice them into the
+            // cached job-list queries via setQueryData. No more
+            // /api/jobs?limit=500 refetch on every tick.
+            handleChangedJobs(msg.changed_jobs);
+            // Step-detail caches stay fresh via cheap scoped invalidates.
+            for (const jobId of msg.changed_jobs) {
+              queryClient.invalidateQueries({ queryKey: ["runs", jobId] });
+              queryClient.invalidateQueries({ queryKey: ["events", jobId] });
+              queryClient.invalidateQueries({ queryKey: ["jobTree", jobId] });
+              queryClient.invalidateQueries({ queryKey: ["sessions", jobId] });
+              queryClient.invalidateQueries({ queryKey: ["sessionTranscript", jobId] });
+            }
+            // Long-interval safety net for status counts, etc. — throttled
+            // to once every few seconds, NOT once per tick.
+            scheduleSafetyNetRefetch();
+            for (const fn of tickListeners) fn(msg as TickMessage);
+          } else if (msg.type === "stale_jobs") {
+            // Stale jobs: patch each one into the lists rather than
+            // refetching the entire list.
+            if (msg.jobs?.length > 0) {
+              handleChangedJobs(msg.jobs.map((s: { id: string }) => s.id));
+            }
+          } else if (msg.type === "flow_source_changed") {
+            for (const fn of flowSourceListeners) fn(msg as FlowSourceChangedMessage);
+          } else if (msg.type === "agent_output") {
+            for (const fn of agentOutputListeners) fn(msg);
+          } else if (msg.type === "script_output") {
+            for (const fn of scriptOutputListeners) fn(msg as ScriptOutputMessage);
+          }
+        } catch {
+          // ignore parse errors
+        }
+      };
+
+      ws.onclose = () => {
+        wsRef.current = null;
+        setWsState("disconnected");
+
         if (!shouldReconnectRef.current) {
           return;
         }
-        connect();
-      }, 3000);
-    };
 
-    ws.onerror = () => {
-      ws.close();
-    };
-  }, [queryClient]);
+        console.log("[ws] disconnected, reconnecting in 3s");
+        reconnectTimeoutRef.current = setTimeout(() => {
+          if (!shouldReconnectRef.current) {
+            return;
+          }
+          connect();
+        }, 3000);
+      };
 
-  useEffect(() => {
+      ws.onerror = () => {
+        ws.close();
+      };
+    }
+
     shouldReconnectRef.current = true;
     connect();
     return () => {
@@ -302,7 +302,7 @@ export function useStepwiseWebSocket(): StepwiseWebSocketState {
       }
       wsRef.current?.close();
     };
-  }, [connect]);
+  }, [queryClient, handleChangedJobs, scheduleSafetyNetRefetch]);
 
   return { wsState };
 }

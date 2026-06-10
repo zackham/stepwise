@@ -303,14 +303,17 @@ export function useAdaptiveLines(
     };
   }, [containerRef, compute]);
 
-  // Reset allocations array length when slot count changes
-  useEffect(() => {
+  // Reset allocations array length when slot count changes (render-phase
+  // adjustment instead of an effect).
+  const [prevSlotCount, setPrevSlotCount] = useState(slots.length);
+  if (prevSlotCount !== slots.length) {
+    setPrevSlotCount(slots.length);
     setResult((prev) => ({
       ...prev,
       allocations: slots.map((s) => s.minLines ?? 1),
       ready: false,
     }));
-  }, [slots.length]);
+  }
 
   return result;
 }

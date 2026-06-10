@@ -1,12 +1,9 @@
 import { describe, it, expect } from "vitest";
-import type { Job, JobStatus } from "@/lib/types";
+import type { Job } from "@/lib/types";
 import {
-  canStart,
   canPause,
-  canResume,
   canRetry,
   canCancel,
-  canReset,
   canArchive,
   isStale,
   JOB_ACTIONS,

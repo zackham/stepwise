@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { DagCamera, DEAD_ZONE_FRACTION, TARGET_BLEND_MS } from "./dag-camera";
+import { DagCamera, TARGET_BLEND_MS } from "./dag-camera";
 import type { Rect } from "./dag-camera";
 
 const VIEWPORT = { width: 1000, height: 800 };

@@ -50,6 +50,9 @@ describe("useMediaQuery", () => {
     expect(result.current).toBe(false);
 
     act(() => {
+      // In a real browser the MediaQueryList reflects the new state when the
+      // change event fires.
+      mockMql.matches = true;
       listeners.forEach((cb) => cb({ matches: true }));
     });
     expect(result.current).toBe(true);

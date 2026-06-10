@@ -10,8 +10,7 @@ import type {
 } from "@/hooks/useEditor";
 import type { ActionContext, SideEffects } from "@/lib/actions/types";
 import { copyToClipboard } from "@/hooks/useCopyFeedback";
-
-const ActionCtx = React.createContext<ActionContext | null>(null);
+import { ActionCtx } from "./action-context";
 
 interface ActionContextProviderProps {
   sideEffects?: Partial<SideEffects>;
@@ -55,11 +54,4 @@ export function ActionContextProvider({
   );
 
   return <ActionCtx.Provider value={ctx}>{children}</ActionCtx.Provider>;
-}
-
-export function useActionContext(): ActionContext {
-  const ctx = React.useContext(ActionCtx);
-  if (!ctx)
-    throw new Error("useActionContext must be used within ActionContextProvider");
-  return ctx;
 }

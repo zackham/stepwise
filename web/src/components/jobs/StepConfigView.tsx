@@ -18,6 +18,24 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
   );
 }
 
+function DerivedOutputRow({ name, expr }: { name: string; expr: unknown }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <div
+        className="cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800/30 rounded px-1 py-0.5 -mx-1 transition-colors"
+        onClick={() => setOpen(true)}
+      >
+        <div className="text-[10px] font-mono text-violet-400">{name}</div>
+        <div className="text-xs font-mono text-zinc-700 dark:text-zinc-300 line-clamp-2 mt-0.5">{String(expr)}</div>
+      </div>
+      <ContentModal open={open} onOpenChange={setOpen} title={name} copyContent={String(expr)}>
+        <pre className="whitespace-pre-wrap text-sm text-zinc-300 font-mono p-2">{String(expr)}</pre>
+      </ContentModal>
+    </>
+  );
+}
+
 const ACTION_COLORS: Record<string, string> = {
   advance: "text-emerald-600 dark:text-emerald-400",
   loop: "text-purple-600 dark:text-purple-400",
@@ -125,23 +143,9 @@ export function StepConfigView({ stepDef }: StepConfigViewProps) {
         <div className="space-y-1.5">
           <SectionHeading>Derived Outputs</SectionHeading>
           <div className="space-y-0.5">
-            {Object.entries(stepDef.derived_outputs).map(([name, expr]) => {
-              const [open, setOpen] = useState(false);
-              return (
-                <React.Fragment key={name}>
-                  <div
-                    className="cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800/30 rounded px-1 py-0.5 -mx-1 transition-colors"
-                    onClick={() => setOpen(true)}
-                  >
-                    <div className="text-[10px] font-mono text-violet-400">{name}</div>
-                    <div className="text-xs font-mono text-zinc-700 dark:text-zinc-300 line-clamp-2 mt-0.5">{String(expr)}</div>
-                  </div>
-                  <ContentModal open={open} onOpenChange={setOpen} title={name} copyContent={String(expr)}>
-                    <pre className="whitespace-pre-wrap text-sm text-zinc-300 font-mono p-2">{String(expr)}</pre>
-                  </ContentModal>
-                </React.Fragment>
-              );
-            })}
+            {Object.entries(stepDef.derived_outputs).map(([name, expr]) => (
+              <DerivedOutputRow key={name} name={name} expr={expr} />
+            ))}
           </div>
         </div>
       )}

@@ -5,7 +5,7 @@ import { SegmentList } from "./StreamSegments";
 import {
   buildBoundarySegmentMap,
   durationBetween,
-} from "./SessionTranscriptView";
+} from "./session-transcript-utils";
 import type { SessionInfo, SessionBoundary } from "@/lib/types";
 import type { StreamSegment } from "@/hooks/useAgentStream";
 import { cn } from "@/lib/utils";
@@ -147,7 +147,6 @@ export function StepSessionView({
   // Compute durations for step boundaries only
   const stepBoundaryDurations = useMemo(() => {
     // For each step boundary, find its full index and the next boundary (any step) after it
-    let stepIdx = 0;
     const durations: string[] = [];
     for (let fullIdx = 0; fullIdx < boundaries.length; fullIdx++) {
       if (boundaries[fullIdx].step_name === stepName) {
@@ -155,7 +154,6 @@ export function StepSessionView({
         durations.push(
           durationBetween(boundaries[fullIdx].started_at, next?.started_at ?? null)
         );
-        stepIdx++;
       }
     }
     return durations;
@@ -214,7 +212,7 @@ export function StepSessionView({
   };
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  const { showBackToBottom, showJumpToTop, scrollToBottom, scrollToTop } = useAutoScroll(scrollRef, version, sessionInfo.is_active);
+  const { showBackToBottom, showJumpToTop, scrollToBottom, scrollToTop } = useAutoScroll(scrollRef, version);
 
   return (
     <div className="flex-1 relative min-w-0 flex flex-col overflow-hidden">

@@ -8,18 +8,6 @@ import { cn } from "@/lib/utils";
 import { JobStatusBadge } from "@/components/StatusBadge";
 import type { Job, JobStatus, StepRun } from "@/lib/types";
 
-const STATUS_PRIORITY: Record<string, number> = {
-  running: 0,
-  paused: 1,
-  pending: 2,
-  staged: 3,
-  failed: 4,
-  completed: 5,
-  cancelled: 6,
-  archived: 7,
-};
-
-const ACTIVE_STATUSES = new Set(["running", "paused", "pending", "staged", "awaiting_input", "awaiting_approval"]);
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "archived"]);
 
 export interface CanvasPageProps {
@@ -99,21 +87,15 @@ export function CanvasPage({ jobs: visibleJobs }: CanvasPageProps) {
     return map;
   }, [visibleJobs]);
 
-  // Build dependency maps: dependsOn[jobId] = set of job IDs it depends on,
-  // dependedBy[jobId] = set of job IDs that depend on it
-  const { dependsOnMap, dependedByMap } = useMemo(() => {
+  // Build dependency map: dependsOn[jobId] = set of job IDs it depends on
+  const dependsOnMap = useMemo(() => {
     const dependsOn = new Map<string, Set<string>>();
-    const dependedBy = new Map<string, Set<string>>();
     for (const job of visibleJobs) {
       if (job.depends_on && job.depends_on.length > 0) {
         dependsOn.set(job.id, new Set(job.depends_on));
-        for (const depId of job.depends_on) {
-          if (!dependedBy.has(depId)) dependedBy.set(depId, new Set());
-          dependedBy.get(depId)!.add(job.id);
-        }
       }
     }
-    return { dependsOnMap: dependsOn, dependedByMap: dependedBy };
+    return dependsOn;
   }, [visibleJobs]);
 
   // Compute highlight state: only highlight upstream dependencies (parents)
@@ -125,7 +107,7 @@ export function CanvasPage({ jobs: visibleJobs }: CanvasPageProps) {
       for (const id of deps) map.set(id, "dependency");
     }
     return map;
-  }, [hoveredJobId, dependsOnMap, dependedByMap]);
+  }, [hoveredJobId, dependsOnMap]);
 
   // Sort all jobs by status priority then recency
   const sortedJobs = useMemo(() => {

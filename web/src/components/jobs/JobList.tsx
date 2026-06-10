@@ -93,7 +93,9 @@ function getSavedSort(): SortOption {
   try {
     const saved = localStorage.getItem("stepwise-job-sort");
     if (saved && SORT_OPTIONS.some((o) => o.value === saved)) return saved as SortOption;
-  } catch {}
+  } catch {
+    // localStorage unavailable — fall back to default sort
+  }
   return "recent";
 }
 
@@ -204,6 +206,9 @@ function VirtualJobList({
   onToggleSelect: (jobId: string) => void;
   bulkMode: boolean;
 }) {
+  // TanStack Virtual is incompatible with React Compiler memoization by design;
+  // the compiler skips this component, which is the expected, documented behavior.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer({
     count: filteredJobs.length,
     getScrollElement: () => scrollRef.current,
@@ -364,7 +369,7 @@ export function JobList({
   const [bulkMode, setBulkMode] = useState(false);
   const showArchived = statusFilter === "archived";
   const { data: jobsResponse, isLoading, isFetching, dataUpdatedAt } = useJobs(undefined, true, showArchived);
-  const jobs = jobsResponse?.jobs ?? [];
+  const jobs = useMemo(() => jobsResponse?.jobs ?? [], [jobsResponse]);
   const mutations = useStepwiseMutations();
   const wsStatus = useWsStatus();
   const queryClient = useQueryClient();
@@ -506,11 +511,17 @@ export function JobList({
     return sortJobs(filtered, sortBy);
   }, [dateFilteredJobs, query, statusFilter, sortBy]);
 
-  // Reset focused index and scroll position when filtered list changes
-  useEffect(() => {
+  // Reset focused index when the filtered list changes (render-phase
+  // adjustment), and scroll back to the top (DOM side effect).
+  const filterKey = `${filteredJobs.length}|${query}|${statusFilter}|${dateRange}|${sortBy}`;
+  const [prevFilterKey, setPrevFilterKey] = useState(filterKey);
+  if (prevFilterKey !== filterKey) {
+    setPrevFilterKey(filterKey);
     setFocusedIndex(-1);
+  }
+  useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 });
-  }, [filteredJobs.length, query, statusFilter, dateRange, sortBy]);
+  }, [filterKey]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -833,7 +844,7 @@ export function JobList({
             onValueChange={(v) => {
               const val = v as SortOption;
               setSortBy(val);
-              try { localStorage.setItem("stepwise-job-sort", val); } catch {}
+              try { localStorage.setItem("stepwise-job-sort", val); } catch { /* localStorage unavailable */ }
             }}
           >
             <SelectTrigger className="h-5 w-auto gap-1 px-1.5 border-none bg-transparent text-[10px] text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 focus:ring-0 shadow-none">

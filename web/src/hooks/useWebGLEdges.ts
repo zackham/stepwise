@@ -61,10 +61,12 @@ export function useWebGLEdges({
   const onReadyRef = useRef(onReady);
   const onLostRef = useRef(onLost);
 
-  layoutRef.current = layout;
-  latestRunsRef.current = latestRuns;
-  onReadyRef.current = onReady;
-  onLostRef.current = onLost;
+  useEffect(() => {
+    layoutRef.current = layout;
+    latestRunsRef.current = latestRuns;
+    onReadyRef.current = onReady;
+    onLostRef.current = onLost;
+  });
 
   /** Build or update edge meshes to match the current layout. */
   const syncMeshes = useCallback((scene: Scene, edges: DagEdge[], loopEdges: LoopEdge[]) => {
@@ -199,6 +201,10 @@ export function useWebGLEdges({
   // Initialize Three.js scene
   useEffect(() => {
     if (!enabled) return;
+    // These refs hold stable non-DOM containers created once per hook instance;
+    // capture them so the cleanup uses the same objects.
+    const meshMapForCleanup = meshMapRef.current;
+    const stateManagerForCleanup = stateManagerRef.current;
 
     let renderer: WebGLRenderer;
     try {
@@ -321,8 +327,8 @@ export function useWebGLEdges({
       disposeScene(scene);
       bloom.dispose();
       renderer.dispose();
-      meshMapRef.current.clear();
-      stateManagerRef.current.reset();
+      meshMapForCleanup.clear();
+      stateManagerForCleanup.reset();
       rendererRef.current = null;
       sceneRef.current = null;
       cameraRef.current = null;

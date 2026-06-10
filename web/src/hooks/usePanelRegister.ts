@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { usePanelControls, type PanelControls } from "@/contexts/PanelContext";
+import { usePanelControls, type PanelControls } from "@/contexts/panel-context";
 
 /**
  * Register panel toggle controls from a page component.
@@ -11,7 +11,9 @@ import { usePanelControls, type PanelControls } from "@/contexts/PanelContext";
 export function usePanelRegister(controls: PanelControls) {
   const { register, unregister } = usePanelControls();
   const controlsRef = useRef(controls);
-  controlsRef.current = controls;
+  useEffect(() => {
+    controlsRef.current = controls;
+  });
 
   // Build a fingerprint of the scalar values so we only re-register when something changes.
   const fingerprint = JSON.stringify({
@@ -30,7 +32,7 @@ export function usePanelRegister(controls: PanelControls) {
 
   useEffect(() => {
     register(controlsRef.current);
-  }, [register, fingerprint]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [register, fingerprint]);
 
   useEffect(() => {
     return () => unregister();

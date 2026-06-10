@@ -187,9 +187,6 @@ export function useDagCamera({
     return map;
   }, [runs]);
 
-  // Fallback screen-pixel height of the ExternalInputPanel popover
-  // 300px scroll body + ~90px submit/chrome + 12px gap
-  const EXTERNAL_PANEL_SCREEN_HEIGHT_FALLBACK = 400;
   const EXTERNAL_PANEL_GAP = 12;
 
   const [measuredPanelHeight, setMeasuredPanelHeight] = useState(0);
@@ -271,7 +268,7 @@ export function useDagCamera({
       }
     }
     return rects;
-  }, [layout, activeStepInfo, selectedStep, measuredPanelHeight]);
+  }, [layout, activeStepInfo, measuredPanelHeight]);
 
   // Feed active rects to camera whenever they change
   useEffect(() => {

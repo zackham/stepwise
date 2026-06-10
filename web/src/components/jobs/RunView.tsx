@@ -4,7 +4,6 @@ import { useConfig } from "@/hooks/useConfig";
 import type { StepDefinition, StepRun, HandoffEnvelope, InputBinding } from "@/lib/types";
 import { StepStatusBadge } from "@/components/StatusBadge";
 import { AgentStreamView } from "./AgentStreamView";
-import { SessionStepFlow } from "./SessionStepFlow";
 import { SectionHeading, SidebarSection, InputsSection, OutputsSection } from "./RunSections";
 import { JsonView } from "@/components/JsonView";
 import { Button } from "@/components/ui/button";
@@ -22,7 +21,6 @@ import {
 import { useCopyFeedback } from "@/hooks/useCopyFeedback";
 import { ContentModal } from "@/components/ui/content-modal";
 import { useScriptStream } from "@/hooks/useScriptStream";
-import { toast } from "sonner";
 import { cn, formatCost, formatDuration } from "@/lib/utils";
 import { VirtualizedLogView } from "@/components/logs/VirtualizedLogView";
 import { LiveDuration } from "@/components/LiveDuration";
@@ -554,7 +552,7 @@ function RunNavigator({
 
 /* ── Main RunView ─────────────────────────────────────────────────── */
 
-export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onViewFullSession }: RunViewProps) {
+export function RunView({ jobId, stepDef, onSelectStep, onViewFullSession }: RunViewProps) {
   const { data: runs = [] } = useRuns(jobId, stepDef.name);
   const { data: events = [] } = useEvents(jobId);
   const mutations = useStepwiseMutations();
@@ -717,11 +715,14 @@ export function RunView({ jobId, stepDef, hasLiveSource, onSelectStep, onViewFul
     [runs],
   );
 
-  // Reset index when step changes or new runs come in
-  useEffect(() => { setRunIndex(0); }, [stepDef.name]);
-  useEffect(() => {
-    if (runIndex >= sortedRuns.length && sortedRuns.length > 0) setRunIndex(0);
-  }, [sortedRuns.length, runIndex]);
+  // Reset index when the step changes, and clamp it when runs shrink
+  // (render-phase adjustments instead of effects).
+  const [prevStepName, setPrevStepName] = useState(stepDef.name);
+  if (prevStepName !== stepDef.name) {
+    setPrevStepName(stepDef.name);
+    setRunIndex(0);
+  }
+  if (runIndex >= sortedRuns.length && sortedRuns.length > 0) setRunIndex(0);
 
   const run = sortedRuns[runIndex] ?? null;
   const isRunning = run?.status === "running";
