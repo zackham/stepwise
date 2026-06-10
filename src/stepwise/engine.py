@@ -3449,6 +3449,7 @@ class Engine:
                             "step": run.step_name,
                             "rule": rule.name,
                         })
+                        self._cleanup_job_sessions(job.id, job)
                         return
 
         # No rule matched — behavior depends on whether advance rules exist
