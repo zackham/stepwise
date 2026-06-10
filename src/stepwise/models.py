@@ -630,6 +630,8 @@ class StepDefinition:
             "exit_rules": [r.to_dict() for r in self.exit_rules],
             "idempotency": self.idempotency,
         }
+        if self.description:
+            d["description"] = self.description
         if self.after_resolved:
             d["after_resolved"] = list(self.after_resolved)
         if self.when is not None:
@@ -686,13 +688,20 @@ class StepDefinition:
             after_resolved=d.get("after_resolved", []),
             exit_rules=[ExitRule.from_dict(r) for r in d.get("exit_rules", [])],
             idempotency=d.get("idempotency", "idempotent"),
+            description=d.get("description", ""),
             when=(
                 WhenPredicate.from_dict(d["when"])
                 if isinstance(d.get("when"), dict)
                 else d.get("when")
             ),
             output_schema={k: OutputFieldSpec.from_dict(v) for k, v in d.get("output_schema", {}).items()},
-            limits=StepLimits.from_dict(d["limits"]) if d.get("limits") else None,
+            # `is not None` (not truthiness): an all-defaults StepLimits
+            # serializes to {} and must round-trip back to StepLimits().
+            limits=(
+                StepLimits.from_dict(d["limits"])
+                if d.get("limits") is not None
+                else None
+            ),
             for_each=ForEachSpec.from_dict(d["for_each"]) if d.get("for_each") else None,
             sub_flow=WorkflowDefinition.from_dict(d["sub_flow"]) if d.get("sub_flow") else None,
             session=d.get("session"),
@@ -1236,7 +1245,7 @@ class WorkflowDefinition:
                 for r in step.exit_rules if r.type == "expression"
             ]
             has_catch_all = any(
-                c.strip().lower() == "true"
+                str(c).strip().lower() == "true"
                 for c in conditions
             ) or any(r.type == "always" for r in step.exit_rules)
             if not has_catch_all:
@@ -1295,7 +1304,7 @@ class WorkflowDefinition:
             import re
             for rule in step.exit_rules:
                 cond = rule.config.get("condition", "")
-                if re.search(r"float\(|int\(|bool\(", cond):
+                if isinstance(cond, str) and re.search(r"float\(|int\(|bool\(", cond):
                     warns.append(
                         f"\u2139 Step '{name}': exit rule '{rule.name}' "
                         f"uses type coercion — verify input is always "
@@ -1462,6 +1471,51 @@ class WorkflowDefinition:
             for name in sorted(job_fields):
                 warns.append(
                     f"\u2139 $job.{name} is used but no config: or inputs: block is declared"
+                )
+
+        # Undeclared names in string `when:` conditions.
+        # evaluate_when_condition()'s namespace is exactly the step's
+        # resolved input local names plus SAFE_BUILTINS — any other name
+        # raises NameError, which is swallowed and the condition silently
+        # evaluates False, so the step is skipped with no diagnostic.
+        import ast as _ast
+        from stepwise.yaml_loader import SAFE_BUILTINS as _safe_builtins
+
+        for name, step in self.steps.items():
+            if not isinstance(step.when, str):
+                continue
+            try:
+                tree = _ast.parse(step.when, mode="eval")
+            except SyntaxError:
+                warns.append(
+                    f"⚠ Step '{name}': when condition {step.when!r} is "
+                    f"not a valid expression — it will always evaluate False "
+                    f"and the step will be skipped"
+                )
+                continue
+            # Names bound inside the expression itself (comprehension
+            # targets like `x` in `any(x > 1 for x in items)`).
+            bound: set[str] = set()
+            for node in _ast.walk(tree):
+                if isinstance(node, _ast.comprehension):
+                    for t in _ast.walk(node.target):
+                        if isinstance(t, _ast.Name):
+                            bound.add(t.id)
+            declared = {b.local_name for b in step.inputs}
+            allowed = declared | set(_safe_builtins) | bound
+            refs = {
+                n.id for n in _ast.walk(tree)
+                if isinstance(n, _ast.Name) and isinstance(n.ctx, _ast.Load)
+            }
+            unknown = sorted(refs - allowed)
+            if unknown:
+                names_str = ", ".join(f"'{u}'" for u in unknown)
+                warns.append(
+                    f"⚠ Step '{name}': when condition references "
+                    f"undeclared input(s) {names_str} — the condition will "
+                    f"always evaluate False and the step will be skipped "
+                    f"(declared inputs: "
+                    f"{', '.join(sorted(declared)) or 'none'})"
                 )
 
         # Cache on uncacheable step types

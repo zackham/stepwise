@@ -159,6 +159,11 @@ def _parse_when(when_data: Any, step_name: str) -> str | WhenPredicate | None:
     """
     if when_data is None:
         return None
+    if isinstance(when_data, bool):
+        # YAML parses unquoted true/True/false/False as a bool. Coerce to
+        # the equivalent expression string so the condition still evaluates
+        # (a raw bool would silently fail AST validation at runtime).
+        return "True" if when_data else "False"
     if isinstance(when_data, str):
         return when_data
     if isinstance(when_data, dict):
@@ -723,8 +728,15 @@ def _parse_inputs(inputs_data: Any, step_name: str) -> list[InputBinding]:
                 raise ValueError(f"Step '{step_name}': {e}") from e
         elif isinstance(source, dict) and "from" in source:
             # {from: "step.field", optional: true} dict form
+            from_val = source["from"]
+            if not isinstance(from_val, str):
+                raise ValueError(
+                    f"Step '{step_name}': input '{local_name}' 'from' must be "
+                    f"a string like 'step_name.field_name', "
+                    f"got {type(from_val).__name__}"
+                )
             try:
-                binding = _parse_input_binding(local_name, source["from"])
+                binding = _parse_input_binding(local_name, from_val)
             except ValueError as e:
                 raise ValueError(f"Step '{step_name}': {e}") from e
             binding.optional = source.get("optional", False)
@@ -806,6 +818,11 @@ def _parse_executor(
     """Parse executor from step YAML data."""
     if "run" in step_data:
         command = step_data["run"]
+        if not isinstance(command, str):
+            raise ValueError(
+                f"Step '{step_name}': 'run' must be a string command, "
+                f"got {type(command).__name__}"
+            )
         # If it's a .py file, prepend python3
         if command.endswith(".py"):
             command = f"python3 {command}"
@@ -873,8 +890,18 @@ def _parse_executor(
 
 def _parse_exit_rules(exits_data: list[dict], step_name: str) -> list[ExitRule]:
     """Parse exit rules from YAML."""
+    if not isinstance(exits_data, list):
+        raise ValueError(
+            f"Step '{step_name}': 'exits' must be a list of rule mappings, "
+            f"got {type(exits_data).__name__}"
+        )
     rules: list[ExitRule] = []
     for i, rule_data in enumerate(exits_data):
+        if not isinstance(rule_data, dict):
+            raise ValueError(
+                f"Step '{step_name}': 'exits' entry {i} must be a mapping "
+                f"(name/when/action), got {type(rule_data).__name__}"
+            )
         name = rule_data.get("name", f"rule_{i}")
         condition = rule_data.get("when")
         action = rule_data.get("action", "advance")
@@ -883,6 +910,17 @@ def _parse_exit_rules(exits_data: list[dict], step_name: str) -> list[ExitRule]:
         if condition is None:
             raise ValueError(
                 f"Step '{step_name}': exit rule '{name}' missing 'when' condition"
+            )
+        if isinstance(condition, bool):
+            # YAML parses unquoted true/True/false/False as a bool. Coerce
+            # to the equivalent expression string — a raw bool would fail
+            # AST validation at runtime and silently disable the rule.
+            condition = "True" if condition else "False"
+        elif not isinstance(condition, str):
+            raise ValueError(
+                f"Step '{step_name}': exit rule '{name}' 'when' must be a "
+                f"string expression, got {type(condition).__name__} — "
+                f"quote it, e.g. when: \"attempt < 3\""
             )
 
         if action not in ("advance", "loop", "escalate", "abandon"):
@@ -1527,12 +1565,20 @@ def _parse_step(
         ttl = None
         ttl_raw = cache_raw.get("ttl")
         if ttl_raw is not None:
+            if isinstance(ttl_raw, bool) or not isinstance(ttl_raw, (int, str)):
+                raise ValueError(
+                    f"Step '{step_name}': cache ttl must be seconds (int) or "
+                    f"a duration string like '30m', got {type(ttl_raw).__name__}"
+                )
             if isinstance(ttl_raw, int):
                 ttl = ttl_raw
-            elif isinstance(ttl_raw, str):
+            else:
                 ttl = parse_duration(ttl_raw)
                 if ttl is None:
-                    errors.append(f"Step '{step_name}': invalid cache ttl '{ttl_raw}'")
+                    raise ValueError(
+                        f"Step '{step_name}': invalid cache ttl '{ttl_raw}' "
+                        f"(expected e.g. '30m', '24h', '7d')"
+                    )
         cache_config = CacheConfig(
             enabled=cache_raw.get("enabled", True),
             ttl=ttl,
@@ -2040,9 +2086,14 @@ def load_workflow_yaml(
             )
         except ValueError as e:
             errors.append(str(e))
-
-    if errors:
-        raise YAMLLoadError(errors)
+        except (TypeError, AttributeError) as e:
+            # Backstop: a wrong-typed YAML scalar slipped past explicit
+            # isinstance guards — surface a clean load error with step
+            # context instead of a raw traceback.
+            errors.append(
+                f"Step '{step_name}': invalid value in step definition "
+                f"({type(e).__name__}: {e})"
+            )
 
     if errors:
         raise YAMLLoadError(errors)

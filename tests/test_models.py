@@ -366,3 +366,68 @@ class TestSerialization:
         sd2 = SubJobDefinition.from_dict(d)
         assert sd2.objective == "sub task"
         assert "x" in sd2.workflow.steps
+
+
+# ── RC hardening: F54 — StepDefinition serialization round-trips ──
+
+
+class TestStepDefinitionRoundtrip:
+    def test_description_roundtrip(self):
+        """description must survive to_dict/from_dict (job persistence)."""
+        sd = StepDefinition(
+            name="fetch",
+            outputs=["data"],
+            executor=ExecutorRef("script", {"command": "echo hi"}),
+            description="Fetches the data from upstream",
+        )
+        d = sd.to_dict()
+        assert d["description"] == "Fetches the data from upstream"
+        sd2 = StepDefinition.from_dict(d)
+        assert sd2.description == "Fetches the data from upstream"
+
+    def test_empty_description_omitted_and_defaults(self):
+        sd = StepDefinition(
+            name="fetch",
+            outputs=["data"],
+            executor=ExecutorRef("script", {"command": "echo hi"}),
+        )
+        d = sd.to_dict()
+        assert "description" not in d
+        assert StepDefinition.from_dict(d).description == ""
+
+    def test_description_survives_workflow_roundtrip(self):
+        from stepwise.models import StepLimits
+
+        wf = WorkflowDefinition(steps={
+            "a": StepDefinition(
+                name="a",
+                outputs=["x"],
+                executor=ExecutorRef("script", {"command": "true"}),
+                description="step a does things",
+            ),
+        })
+        wf2 = WorkflowDefinition.from_dict(wf.to_dict())
+        assert wf2.steps["a"].description == "step a does things"
+
+    def test_all_defaults_step_limits_roundtrip(self):
+        """A StepLimits() with all defaults serializes to {} — it must
+        round-trip back to a StepLimits instance, not None."""
+        from stepwise.models import StepLimits
+
+        sd = StepDefinition(
+            name="a",
+            outputs=["x"],
+            executor=ExecutorRef("script", {"command": "true"}),
+            limits=StepLimits(),
+        )
+        sd2 = StepDefinition.from_dict(sd.to_dict())
+        assert sd2.limits is not None
+        assert sd2.limits.max_infra_retries == 3
+
+    def test_no_limits_roundtrips_to_none(self):
+        sd = StepDefinition(
+            name="a",
+            outputs=["x"],
+            executor=ExecutorRef("script", {"command": "true"}),
+        )
+        assert StepDefinition.from_dict(sd.to_dict()).limits is None

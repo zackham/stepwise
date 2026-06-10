@@ -847,3 +847,259 @@ steps:
 """)
         errors = wf.validate()
         assert errors == []
+
+
+# ── RC hardening: F52 — exit-rule / step-level `when:` scalar types ──
+
+
+class TestWhenScalarCoercion:
+    def test_exit_rule_unquoted_true_coerced_to_string(self):
+        """`when: True` (YAML bool) must become the string "True"."""
+        wf = load_workflow_string("""
+steps:
+  check:
+    run: scripts/check.py
+    outputs: [passed]
+    exits:
+      - name: done
+        when: "outputs.passed == True"
+        action: advance
+      - name: retry
+        when: True
+        action: loop
+        target: check
+        max_iterations: 3
+""")
+        retry = wf.steps["check"].exit_rules[1]
+        assert retry.config["condition"] == "True"
+        # The coerced condition must actually evaluate (catch-all retry).
+        assert evaluate_exit_condition(retry.config["condition"], {}, attempt=1)
+
+    def test_exit_rule_unquoted_lowercase_true_coerced(self):
+        wf = load_workflow_string("""
+steps:
+  check:
+    run: scripts/check.py
+    outputs: [passed]
+    exits:
+      - when: true
+        action: loop
+        target: check
+        max_iterations: 3
+""")
+        assert wf.steps["check"].exit_rules[0].config["condition"] == "True"
+
+    def test_exit_rule_false_coerced_to_string(self):
+        wf = load_workflow_string("""
+steps:
+  check:
+    run: scripts/check.py
+    outputs: [passed]
+    exits:
+      - when: false
+        action: escalate
+""")
+        assert wf.steps["check"].exit_rules[0].config["condition"] == "False"
+
+    def test_exit_rule_non_string_non_bool_when_rejected(self):
+        """`when: 5` must produce a clean YAMLLoadError, not load silently."""
+        with pytest.raises(YAMLLoadError) as exc:
+            load_workflow_string("""
+steps:
+  check:
+    run: scripts/check.py
+    outputs: [passed]
+    exits:
+      - name: weird
+        when: 5
+        action: advance
+""")
+        assert "exit rule 'weird'" in str(exc.value)
+        assert "must be a string" in str(exc.value)
+
+    def test_step_level_when_bool_coerced(self):
+        """Step-level `when: true` must coerce to the string "True"."""
+        wf = load_workflow_string("""
+steps:
+  a:
+    run: scripts/a.py
+    outputs: [x]
+  b:
+    run: scripts/b.py
+    outputs: [y]
+    inputs:
+      x: a.x
+    when: true
+""")
+        assert wf.steps["b"].when == "True"
+
+    def test_step_level_when_false_coerced(self):
+        wf = load_workflow_string("""
+steps:
+  a:
+    run: scripts/a.py
+    outputs: [x]
+    when: False
+""")
+        assert wf.steps["a"].when == "False"
+
+    def test_exit_rule_coerced_bool_does_not_crash_warnings(self):
+        """warnings() must treat a coerced `when: True` as the catch-all."""
+        wf = load_workflow_string("""
+steps:
+  check:
+    run: scripts/check.py
+    outputs: [passed]
+    exits:
+      - when: "outputs.passed == True"
+        action: advance
+      - when: True
+        action: loop
+        target: check
+        max_iterations: 3
+""")
+        warns = wf.warnings()  # must not raise
+        assert not any("no unconditional" in w for w in warns)
+
+
+# ── RC hardening: F53 — invalid cache ttl must be a clean error ──
+
+
+class TestCacheTtlErrors:
+    def test_invalid_ttl_string_raises_yaml_load_error(self):
+        with pytest.raises(YAMLLoadError) as exc:
+            load_workflow_string("""
+steps:
+  fetch:
+    run: scripts/fetch.py
+    outputs: [data]
+    cache:
+      ttl: 30min
+""")
+        assert "invalid cache ttl '30min'" in str(exc.value)
+        assert "'fetch'" in str(exc.value)
+
+    def test_invalid_ttl_week_suffix(self):
+        with pytest.raises(YAMLLoadError) as exc:
+            load_workflow_string("""
+steps:
+  fetch:
+    run: scripts/fetch.py
+    outputs: [data]
+    cache:
+      ttl: 1w
+""")
+        assert "invalid cache ttl" in str(exc.value)
+
+    def test_bool_ttl_rejected(self):
+        with pytest.raises(YAMLLoadError) as exc:
+            load_workflow_string("""
+steps:
+  fetch:
+    run: scripts/fetch.py
+    outputs: [data]
+    cache:
+      ttl: true
+""")
+        assert "cache ttl" in str(exc.value)
+        assert "bool" in str(exc.value)
+
+    def test_float_ttl_rejected(self):
+        with pytest.raises(YAMLLoadError) as exc:
+            load_workflow_string("""
+steps:
+  fetch:
+    run: scripts/fetch.py
+    outputs: [data]
+    cache:
+      ttl: 1.5
+""")
+        assert "cache ttl" in str(exc.value)
+
+    def test_valid_ttl_forms_still_parse(self):
+        wf = load_workflow_string("""
+steps:
+  fetch:
+    run: scripts/fetch.py
+    outputs: [data]
+    cache:
+      ttl: 30m
+  fetch2:
+    run: scripts/fetch2.py
+    outputs: [data2]
+    cache:
+      ttl: 3600
+""")
+        assert wf.steps["fetch"].cache.ttl == 1800
+        assert wf.steps["fetch2"].cache.ttl == 3600
+
+
+# ── RC hardening: F56 — non-string YAML scalars get clean load errors ──
+
+
+class TestNonStringScalarErrors:
+    def test_run_int_rejected_cleanly(self):
+        with pytest.raises(YAMLLoadError) as exc:
+            load_workflow_string("""
+steps:
+  go:
+    run: 123
+    outputs: [x]
+""")
+        assert "'run' must be a string" in str(exc.value)
+        assert "'go'" in str(exc.value)
+
+    def test_run_yaml_bool_rejected_cleanly(self):
+        with pytest.raises(YAMLLoadError) as exc:
+            load_workflow_string("""
+steps:
+  go:
+    run: yes
+    outputs: [x]
+""")
+        assert "'run' must be a string" in str(exc.value)
+
+    def test_input_from_non_string_rejected_cleanly(self):
+        with pytest.raises(YAMLLoadError) as exc:
+            load_workflow_string("""
+steps:
+  a:
+    run: scripts/a.py
+    outputs: [x]
+  b:
+    run: scripts/b.py
+    outputs: [y]
+    inputs:
+      n:
+        from: 5
+""")
+        assert "'from' must be" in str(exc.value)
+        assert "'n'" in str(exc.value)
+
+    def test_exits_mapping_rejected_cleanly(self):
+        """`exits:` written as a mapping must produce a clean error."""
+        with pytest.raises(YAMLLoadError) as exc:
+            load_workflow_string("""
+steps:
+  check:
+    run: scripts/check.py
+    outputs: [passed]
+    exits:
+      done:
+        when: "outputs.passed == True"
+        action: advance
+""")
+        assert "'exits' must be a list" in str(exc.value)
+        assert "'check'" in str(exc.value)
+
+    def test_exits_list_of_scalars_rejected_cleanly(self):
+        with pytest.raises(YAMLLoadError) as exc:
+            load_workflow_string("""
+steps:
+  check:
+    run: scripts/check.py
+    outputs: [passed]
+    exits:
+      - advance
+""")
+        assert "must be a mapping" in str(exc.value)

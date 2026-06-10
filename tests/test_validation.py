@@ -817,3 +817,101 @@ steps:
         assert result.returncode == 0
         combined = result.stderr + result.stdout
         assert "Structure OK" in combined
+
+
+# ── RC hardening: F55 — undeclared names in string `when:` conditions ──
+
+
+def _script_step(name, outputs, inputs=None, when=None):
+    return StepDefinition(
+        name=name,
+        outputs=outputs,
+        executor=ExecutorRef("script", {"command": "true"}),
+        inputs=inputs or [],
+        when=when,
+    )
+
+
+class TestWhenUndeclaredReferenceWarning:
+    def test_typo_in_when_warns(self):
+        """`when: "statuss == 'pass'"` with input `status` must warn."""
+        wf = WorkflowDefinition(steps={
+            "run-tests": _script_step("run-tests", ["status"]),
+            "open-pr": _script_step(
+                "open-pr", ["pr_url"],
+                inputs=[InputBinding("status", "run-tests", "status")],
+                when="statuss == 'pass'",
+            ),
+        })
+        warns = wf.warnings()
+        hits = [w for w in warns if "undeclared input" in w]
+        assert len(hits) == 1
+        assert "'open-pr'" in hits[0]
+        assert "'statuss'" in hits[0]
+        assert "status" in hits[0]  # declared inputs listed
+
+    def test_declared_input_does_not_warn(self):
+        wf = WorkflowDefinition(steps={
+            "run-tests": _script_step("run-tests", ["status"]),
+            "open-pr": _script_step(
+                "open-pr", ["pr_url"],
+                inputs=[InputBinding("status", "run-tests", "status")],
+                when="status == 'pass'",
+            ),
+        })
+        assert not any("undeclared input" in w for w in wf.warnings())
+
+    def test_builtins_and_keywords_allowed(self):
+        wf = WorkflowDefinition(steps={
+            "a": _script_step("a", ["items"]),
+            "b": _script_step(
+                "b", ["y"],
+                inputs=[InputBinding("items", "a", "items")],
+                when="items is not None and len(items) > 0 and bool(items)",
+            ),
+        })
+        assert not any("undeclared input" in w for w in wf.warnings())
+
+    def test_comprehension_variable_allowed(self):
+        wf = WorkflowDefinition(steps={
+            "a": _script_step("a", ["scores"]),
+            "b": _script_step(
+                "b", ["y"],
+                inputs=[InputBinding("scores", "a", "scores")],
+                when="any(s > 0.5 for s in scores)",
+            ),
+        })
+        assert not any("undeclared input" in w for w in wf.warnings())
+
+    def test_invalid_syntax_when_warns(self):
+        wf = WorkflowDefinition(steps={
+            "a": _script_step("a", ["x"]),
+            "b": _script_step(
+                "b", ["y"],
+                inputs=[InputBinding("x", "a", "x")],
+                when="x == ",
+            ),
+        })
+        hits = [w for w in wf.warnings() if "not a valid expression" in w]
+        assert len(hits) == 1
+        assert "'b'" in hits[0]
+
+    def test_predicate_form_when_not_flagged(self):
+        """Predicate-form when (dict) is out of scope for this check."""
+        from stepwise.models import WhenPredicate
+
+        wf = WorkflowDefinition(steps={
+            "a": _script_step("a", ["x"]),
+            "b": _script_step(
+                "b", ["y"],
+                inputs=[InputBinding("x", "a", "x")],
+                when=WhenPredicate(op="eq", input="x", value="pass"),
+            ),
+        })
+        assert not any("undeclared input" in w for w in wf.warnings())
+
+    def test_no_when_no_warning(self):
+        wf = WorkflowDefinition(steps={
+            "a": _script_step("a", ["x"]),
+        })
+        assert not any("undeclared input" in w for w in wf.warnings())
