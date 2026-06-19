@@ -4333,10 +4333,9 @@ class AsyncEngine(Engine):
                                 "error": run.error,
                             }, job=job)
                         else:
-                            self._fail_run(
+                            self._recover_or_fail_orphaned_run(
                                 job, run, step_def,
-                                error="Executor task lost (possible thread pool crash)",
-                                error_category="infra_failure",
+                                observed="RUNNING in store but no executor task in registry",
                             )
                 # PID liveness check: task exists but subprocess is dead
                 # (e.g. process crashed but executor thread is stuck on I/O)
@@ -4388,6 +4387,86 @@ class AsyncEngine(Engine):
                 # Ghosts were occupying slots — re-evaluate throttled jobs
                 for jid in list(self._throttled_jobs):
                     self._dispatch_ready(jid)
+
+    def _recover_or_fail_orphaned_run(
+        self,
+        job: "Job",
+        run: "StepRun",
+        step_def: "StepDefinition",
+        *,
+        observed: str,
+    ) -> None:
+        """Handle a run that is RUNNING in the store but whose executor task has
+        vanished from the in-memory registry.
+
+        This is NOT a confirmed crash — the engine merely lost track of the
+        task (a server restart, a dropped task, a stalled executor_state
+        writeback). Historically it was failed terminally with the speculative
+        label "possible thread pool crash", which killed the whole job on what
+        is usually a transient blip. Instead, re-dispatch the step as a fresh
+        attempt up to `max_infra_retries` times; only fail terminally (which
+        routes through the circuit breaker / exit rules / halt) once that retry
+        budget is spent. This is what finally makes the long-standing
+        `max_infra_retries` knob actually do something for orphaned runs.
+
+        `observed` is a short, factual description of what was seen — it
+        replaces the old guess so these stay diagnosable.
+        """
+        budget = step_def.limits.max_infra_retries if step_def.limits else 3
+        if budget <= 0:
+            # max_infra_retries=0 disables the consecutive-failure cap in
+            # _fail_run; never read that as "re-dispatch orphans forever".
+            budget = 3
+
+        # Consecutive prior FAILED attempts for this step (excluding the
+        # still-RUNNING current run) — the orphan retry counter.
+        prior_failures = 0
+        for r in reversed(self.store.runs_for_step(job.id, run.step_name)):
+            if r.id == run.id:
+                continue
+            if r.status == StepRunStatus.FAILED:
+                prior_failures += 1
+            else:
+                break
+
+        # This detection is failure number (prior_failures + 1). Halt once it
+        # reaches the budget, mirroring the _fail_run circuit breaker.
+        if prior_failures + 1 >= budget:
+            self._fail_run(
+                job, run, step_def,
+                error=(
+                    f"Executor task lost — orphaned run ({observed}); "
+                    f"gave up after {prior_failures} infra retries"
+                ),
+                error_category="infra_failure",
+            )
+            return
+
+        run.status = StepRunStatus.FAILED
+        run.error = (
+            f"Executor task lost — orphaned run ({observed}); "
+            f"re-dispatching (infra retry {prior_failures + 1}/{budget})"
+        )
+        run.error_category = "infra_failure"
+        run.pid = None
+        run.completed_at = _now()
+        self.store.save_run(run)
+        self._emit(job.id, STEP_FAILED, {
+            "step": run.step_name,
+            "attempt": run.attempt,
+            "error": run.error,
+            "error_category": "infra_failure",
+            "recovered": True,
+        }, job=job)
+        _async_logger.warning(
+            "Re-dispatching orphaned step %s/%s (%s) — infra retry %d/%d",
+            job.id, run.step_name, observed, prior_failures + 1, budget,
+        )
+        # Re-dispatch as a new attempt if the job is still running. The current
+        # run is now FAILED, so _launch's duplicate-RUNNING guard won't block.
+        job = self.store.load_job(job.id)
+        if job.status == JobStatus.RUNNING:
+            self._launch(job, run.step_name)
 
     # ── Job lifecycle overrides ──────────────────────────────────────────
 
@@ -5421,14 +5500,31 @@ class AsyncEngine(Engine):
 
             def update_state(state: dict) -> None:
                 def _do_update():
-                    self.store.update_run_state(
-                        run_id,
-                        executor_state=state,
-                        pid=state.get("pid"),
+                    # This writeback records the executor's pid/state. If it
+                    # silently fails (e.g. a transient sqlite lock) the run is
+                    # left with no recorded pid and can later be mislabeled as
+                    # an orphaned/lost task. Retry briefly, and never let the
+                    # exception escape into the loop's callback handler (an
+                    # unhandled callback exception is exactly how this used to
+                    # strand runs).
+                    last_exc: Exception | None = None
+                    for _ in range(3):
+                        try:
+                            self.store.update_run_state(
+                                run_id,
+                                executor_state=state,
+                                pid=state.get("pid"),
+                            )
+                            # Broadcast tick when usage limit state changes so UI refreshes
+                            if "usage_limit_waiting" in state and self.on_broadcast:
+                                self.on_broadcast({"job_id": job_id})
+                            return
+                        except Exception as exc:  # noqa: BLE001 — see docstring
+                            last_exc = exc
+                    _async_logger.warning(
+                        "executor_state writeback failed for run %s after retries: %s",
+                        run_id, last_exc,
                     )
-                    # Broadcast tick when usage limit state changes so UI refreshes
-                    if "usage_limit_waiting" in state and self.on_broadcast:
-                        self.on_broadcast({"job_id": job_id})
                 if _loop and _loop.is_running():
                     _loop.call_soon_threadsafe(_do_update)
                 else:

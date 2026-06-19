@@ -383,21 +383,22 @@ class TestPermanentErrors:
 class TestStuckTaskRouting:
     """Stuck RUNNING steps route through _fail_run()."""
 
-    def test_stuck_task_routes_through_fail_run(self, async_engine):
-        """A stuck running step (no task in registry, age > 60s) goes through
-        _fail_run with error_category=infra_failure."""
-        # Create a simple workflow and job
+    def test_stuck_task_redispatches_within_infra_budget(self, async_engine):
+        """A stuck running step (no task in registry, age > 60s) is re-dispatched
+        as a fresh attempt instead of failing the job — bounded by
+        max_infra_retries. The recorded error is honest (no 'thread pool crash'
+        guess)."""
         register_step_fn("ok", lambda inputs: {"result": "done"})
         wf = WorkflowDefinition(steps={
             "step-a": StepDefinition(
                 name="step-a",
                 executor=ExecutorRef(type="callable", config={"fn_name": "ok"}),
                 outputs=["result"],
+                limits=StepLimits(max_infra_retries=3),
             ),
         })
         job = async_engine.create_job(objective="test stuck", workflow=wf)
 
-        # Manually create a "stuck" run: RUNNING status, started > 60s ago, no task
         from stepwise.models import StepRun, _gen_id
         stuck_run = StepRun(
             id=_gen_id("run"),
@@ -408,53 +409,82 @@ class TestStuckTaskRouting:
             started_at=_now() - timedelta(seconds=120),
         )
         async_engine.store.save_run(stuck_run)
-        # Make job RUNNING so _poll_external_changes processes it
         job.status = JobStatus.RUNNING
         async_engine.store.save_job(job)
 
-        # Run poll — should detect stuck run and route through _fail_run
+        # Spy on re-dispatch: mimic _launch (which needs a running engine loop)
+        # by recording the call and creating the replacement RUNNING run.
+        relaunched = []
+
+        def _spy_launch(j, step):
+            relaunched.append(step)
+            new = StepRun(
+                id=_gen_id("run"), job_id=j.id, step_name=step,
+                attempt=async_engine.store.next_attempt(j.id, step),
+                status=StepRunStatus.RUNNING, started_at=_now(),
+            )
+            async_engine.store.save_run(new)
+            return new
+
+        async_engine._launch = _spy_launch
+
         async_engine._poll_external_changes()
 
-        # Reload the run
-        runs = async_engine.store.runs_for_step(job.id, "step-a")
-        assert len(runs) == 1
-        assert runs[0].status == StepRunStatus.FAILED
-        assert runs[0].error_category == "infra_failure"
-        assert "Executor task lost" in runs[0].error
+        # The orphaned attempt is recorded FAILED (infra_failure) but honestly,
+        # and the step is re-dispatched rather than halting the job.
+        first = async_engine.store.runs_for_step(job.id, "step-a")[0]
+        assert first.status == StepRunStatus.FAILED
+        assert first.error_category == "infra_failure"
+        assert "Executor task lost" in first.error
+        assert "re-dispatching" in first.error
+        assert "thread pool crash" not in first.error  # speculative label gone
+        assert "step-a" in relaunched
+        assert async_engine.store.load_job(job.id).status == JobStatus.RUNNING
 
-    def test_stuck_task_no_exit_rules_halts_job(self, async_engine):
-        """A stuck task with no exit rules halts the job via _halt_job."""
+    def test_stuck_task_halts_after_infra_budget_spent(self, async_engine):
+        """Once the infra-retry budget is exhausted, a stuck step stops being
+        re-dispatched and fails the job (no exit rules → _halt_job)."""
         register_step_fn("ok2", lambda inputs: {"result": "done"})
         wf = WorkflowDefinition(steps={
             "step-a": StepDefinition(
                 name="step-a",
                 executor=ExecutorRef(type="callable", config={"fn_name": "ok2"}),
                 outputs=["result"],
+                limits=StepLimits(max_infra_retries=2),
             ),
         })
         job = async_engine.create_job(objective="test stuck halt", workflow=wf)
 
         from stepwise.models import StepRun, _gen_id
-        stuck_run = StepRun(
-            id=_gen_id("run"),
-            job_id=job.id,
-            step_name="step-a",
-            attempt=1,
+        # One prior orphan re-dispatch already FAILED (attempt 1)...
+        async_engine.store.save_run(StepRun(
+            id=_gen_id("run"), job_id=job.id, step_name="step-a", attempt=1,
+            status=StepRunStatus.FAILED, error_category="infra_failure",
+            error="Executor task lost — orphaned run (...); re-dispatching (infra retry 1/2)",
+            started_at=_now() - timedelta(seconds=200),
+            completed_at=_now() - timedelta(seconds=140),
+        ))
+        # ...and the re-dispatched attempt 2 is now itself stuck.
+        async_engine.store.save_run(StepRun(
+            id=_gen_id("run"), job_id=job.id, step_name="step-a", attempt=2,
             status=StepRunStatus.RUNNING,
             started_at=_now() - timedelta(seconds=120),
-        )
-        async_engine.store.save_run(stuck_run)
+        ))
         job.status = JobStatus.RUNNING
         async_engine.store.save_job(job)
 
+        relaunched = []
+        async_engine._launch = lambda j, step: relaunched.append(step)
+
         async_engine._poll_external_changes()
 
-        # No exit rules → _fail_run halts the job
+        # Budget (2) spent → no further re-dispatch, job halts.
+        assert relaunched == []
         job = async_engine.store.load_job(job.id)
         assert job.status == JobStatus.FAILED
         runs = async_engine.store.runs_for_step(job.id, "step-a")
-        assert runs[0].status == StepRunStatus.FAILED
-        assert runs[0].error_category == "infra_failure"
+        assert runs[-1].status == StepRunStatus.FAILED
+        assert runs[-1].error_category == "infra_failure"
 
 
 class TestStepLimitsSerialization:
