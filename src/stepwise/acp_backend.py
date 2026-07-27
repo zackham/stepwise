@@ -18,7 +18,13 @@ from pathlib import Path
 from typing import Any
 
 from stepwise.acp_client import ACPClient
-from stepwise.acp_ndjson import extract_cost, extract_session_id, read_last_error
+from stepwise.acp_ndjson import (
+    extract_cost,
+    extract_session_id,
+    extract_usage,
+    normalize_usage,
+    read_last_error,
+)
 from stepwise.acp_transport import AcpError, JsonRpcTransport
 from stepwise.agent import AgentProcess, AgentStatus
 from stepwise.agent_registry import ResolvedAgentConfig, resolve_config
@@ -894,6 +900,7 @@ class ACPBackend:
         """
         session_id = extract_session_id(process.output_path, result_only=True)
         cost = extract_cost(process.output_path)
+        usage = normalize_usage(extract_usage(process.output_path))
         error = read_last_error(process.output_path)
 
         # Check for prompt-level transport errors (agent killed, connection lost)
@@ -906,6 +913,7 @@ class ACPBackend:
                 session_id=session_id or process.session_id,
                 error=error,
                 cost_usd=cost,
+                usage=usage,
             )
 
         if prompt_error:
@@ -915,6 +923,7 @@ class ACPBackend:
                 session_id=session_id or process.session_id,
                 error=prompt_error,
                 cost_usd=cost,
+                usage=usage,
             )
 
         # Verify the output has a completed result (stopReason).
@@ -928,6 +937,7 @@ class ACPBackend:
                 session_id=session_id or process.session_id,
                 error="Agent terminated without completing (no stopReason in output)",
                 cost_usd=cost,
+                usage=usage,
             )
 
         # A stopReason is only success if the agent actually finished its
@@ -941,6 +951,7 @@ class ACPBackend:
                 session_id=session_id or process.session_id,
                 error=f"Agent did not complete: stopReason={stop_reason!r}",
                 cost_usd=cost,
+                usage=usage,
             )
 
         return AgentStatus(
@@ -948,6 +959,7 @@ class ACPBackend:
             exit_code=0,
             session_id=session_id or process.session_id,
             cost_usd=cost,
+            usage=usage,
         )
 
     def check(self, process: AgentProcess) -> AgentStatus:
@@ -963,6 +975,7 @@ class ACPBackend:
 
         session_id = extract_session_id(process.output_path, result_only=True)
         cost = extract_cost(process.output_path)
+        usage = normalize_usage(extract_usage(process.output_path))
 
         # Check if we have a completed result (stopReason in output)
         stop_reason = _read_stop_reason(process.output_path)
@@ -975,6 +988,7 @@ class ACPBackend:
                     session_id=session_id or process.session_id,
                     error=error,
                     cost_usd=cost,
+                    usage=usage,
                 )
             if stop_reason in _FAILURE_STOP_REASONS:
                 return AgentStatus(
@@ -983,18 +997,21 @@ class ACPBackend:
                     session_id=session_id or process.session_id,
                     error=f"Agent did not complete: stopReason={stop_reason!r}",
                     cost_usd=cost,
+                    usage=usage,
                 )
             return AgentStatus(
                 state="completed",
                 exit_code=0,
                 session_id=session_id or process.session_id,
                 cost_usd=cost,
+                usage=usage,
             )
 
         return AgentStatus(
             state="running",
             session_id=session_id or process.session_id,
             cost_usd=cost,
+            usage=usage,
         )
 
     def cancel(self, process: AgentProcess) -> None:

@@ -164,6 +164,41 @@ limits:
 
 When a limit is hit, the step fails with a descriptive error (e.g., `cost_limit_exceeded`). Exit rules can catch this and route to a fallback.
 
+> **`max_cost_usd` only bites under API-key billing.** On a subscription (Claude Max
+> and similar) the dollar cost of an agent run is zero by definition, so a cost limit
+> can never trigger. Bound those runs with `max_duration_minutes` / `max_iterations`,
+> and watch **token usage** (below) for consumption.
+
+**Token metering:** Agent steps record a per-step token breakdown alongside cost:
+
+```json
+"tokens": {
+  "input_tokens": 754,
+  "output_tokens": 943,
+  "cached_read_tokens": 79700,
+  "cached_write_tokens": 4078,
+  "total_tokens": 85475,
+  "billable_input_tokens": 4832
+}
+```
+
+Cost answers *what was billed*; tokens answer *what was consumed*. The two are not
+interchangeable, and on a subscription only the second one carries information:
+
+- **`cost_usd` is 0 for every agent step under subscription billing.** That is correct
+  — there is no per-token charge — but it means cost alone cannot tell you whether a
+  run was cheap or enormous. The scarce resource is your **rate-limit quota**, which
+  is denominated in tokens.
+- **`cached_read_tokens` are weighted far cheaper than fresh input.** In the example
+  above, 94% of the input was cache reads; totals alone would make that turn look
+  ~18× more expensive than it was. `billable_input_tokens` (fresh input + cache
+  writes) is the derived figure that tracks quota burn most closely.
+
+Tokens appear in `stepwise status <job>` per step and summed for the job, and in the
+API at `GET /api/jobs/{id}/status`. The field is **omitted entirely** when the
+transport does not report usage — an unmetered step is never rendered as a metered
+zero, so "we didn't measure" stays distinguishable from "it cost nothing".
+
 **Containment:** Agent steps can run inside hardware-isolated microVMs, bounding the blast radius of autonomous sessions. Enable containment per-step with the `containment` field:
 
 ```yaml

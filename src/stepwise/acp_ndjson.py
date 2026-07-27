@@ -71,6 +71,90 @@ def extract_cost(output_path: str) -> float | None:
     return last_cost
 
 
+def extract_usage(output_path: str) -> dict | None:
+    """Extract the token breakdown from the ACP prompt result.
+
+    The agent's final JSON-RPC response carries a `result.usage` object:
+
+        {"jsonrpc": "2.0", "id": 0, "result": {
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 754, "outputTokens": 943,
+                      "cachedReadTokens": 79700, "cachedWriteTokens": 4078,
+                      "totalTokens": 85475}}}
+
+    This is the ONLY place the cached/uncached split is reported — the
+    `usage_update` session events that `extract_cost` reads carry a running
+    context-window figure (`used`/`size`) and a dollar `cost`, but no token
+    breakdown.
+
+    Why this matters: under subscription billing the dollar cost is zero by
+    definition (see `AgentExecutor._build_envelope`), so cost-only metering
+    reports 0 for every agent step and the actual scarce resource — rate-limit
+    quota, denominated in tokens with cached reads weighted far cheaper than
+    fresh input — is invisible. A caller cannot distinguish a cheap 85k-token
+    turn that was 94% cache reads from an expensive one that was all fresh input.
+
+    Returns the last complete usage object found (a resumed/multi-prompt session
+    writes one per prompt), or None if the run produced none. Missing renders
+    None — never a zero-filled dict, which would read as "measured, and it was
+    nothing."
+    """
+    last_usage = None
+    try:
+        with open(output_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                result = data.get("result")
+                if not isinstance(result, dict):
+                    continue
+                usage = result.get("usage")
+                if isinstance(usage, dict) and usage:
+                    last_usage = usage
+    except FileNotFoundError:
+        pass
+    return last_usage
+
+
+def normalize_usage(usage: dict | None) -> dict | None:
+    """Normalize an ACP usage object to stepwise's snake_case token schema.
+
+    ACP reports camelCase; stepwise stores snake_case so the fields read the same
+    as every other persisted metric. Unknown/absent fields stay absent rather than
+    defaulting to 0 — a missing measurement must not render as a measured zero.
+
+    `billable_input_tokens` is a derived convenience: fresh input + cache writes,
+    i.e. the part that is NOT a discounted cache read. It is the number that
+    tracks rate-limit burn most closely.
+    """
+    if not usage:
+        return None
+    mapping = {
+        "inputTokens": "input_tokens",
+        "outputTokens": "output_tokens",
+        "cachedReadTokens": "cached_read_tokens",
+        "cachedWriteTokens": "cached_write_tokens",
+        "totalTokens": "total_tokens",
+    }
+    out: dict = {}
+    for src, dst in mapping.items():
+        val = usage.get(src)
+        if isinstance(val, (int, float)):
+            out[dst] = int(val)
+    if not out:
+        return None
+    if "input_tokens" in out or "cached_write_tokens" in out:
+        out["billable_input_tokens"] = (
+            out.get("input_tokens", 0) + out.get("cached_write_tokens", 0)
+        )
+    return out
+
+
 def extract_final_text(output_path: str) -> str:
     """Extract the final assistant text from ACP NDJSON output.
 

@@ -715,8 +715,24 @@ class Engine:
         self._emit(job_id, JOB_RESUMED)
         self.tick()
 
-    def cancel_job(self, job_id: str) -> None:
+    def cancel_job(
+        self,
+        job_id: str,
+        *,
+        reason: str | None = None,
+        source: str | None = None,
+    ) -> None:
+        """Cancel a job and all its active runs.
+
+        `reason`/`source` record WHO cancelled and WHY in the run error and
+        a job.cancelled event. Before this, external cancels (e.g. a
+        `stepwise run --wait` client reaped by its parent process) left no
+        recorded cause — the job just died with a bare "Job cancelled"
+        (observed in production: externally cancelled jobs left no trace at all).
+        """
         job = self.store.load_job(job_id)
+        run_error = f"Job cancelled: {reason}" if reason else "Job cancelled"
+        sub_reason = reason or f"parent job {job_id} cancelled"
 
         # Cancel all active runs
         for run in self.store.running_runs(job_id):
@@ -738,28 +754,30 @@ class Engine:
                         run.step_name, run.id, exc_info=True,
                     )
             run.status = StepRunStatus.CANCELLED
-            run.error = "Job cancelled"
+            run.error = run_error
             run.pid = None
             run.completed_at = _now()
             self.store.save_run(run)
 
         for run in self.store.suspended_runs(job_id):
             run.status = StepRunStatus.CANCELLED
-            run.error = "Job cancelled"
+            run.error = run_error
             run.pid = None
             run.completed_at = _now()
             self.store.save_run(run)
 
         for run in self.store.delegated_runs(job_id):
             run.status = StepRunStatus.CANCELLED
-            run.error = "Job cancelled"
+            run.error = run_error
             run.pid = None
             run.completed_at = _now()
             self.store.save_run(run)
             # Cancel sub-job(s)
             if run.sub_job_id:
                 try:
-                    self.cancel_job(run.sub_job_id)
+                    self.cancel_job(
+                        run.sub_job_id, reason=sub_reason, source=source,
+                    )
                 except Exception:
                     pass
             # Cancel for_each sub-jobs
@@ -767,13 +785,17 @@ class Engine:
             if es.get("for_each"):
                 for sid in es.get("sub_job_ids", []):
                     try:
-                        self.cancel_job(sid)
+                        self.cancel_job(sid, reason=sub_reason, source=source)
                     except Exception:
                         pass
 
         job.status = JobStatus.CANCELLED
         job.updated_at = _now()
         self.store.save_job(job)
+        self._emit(job_id, JOB_CANCELLED, {
+            "reason": reason or "unspecified",
+            "source": source or "unknown",
+        }, job=job)
         self._cleanup_job_sessions(job.id, job)
 
     def _prepare_suspended_runs_for_resume(self, job_id: str) -> None:
@@ -851,7 +873,11 @@ class Engine:
                     dep_job.id, dep_job.status.value, job_id,
                 )
                 try:
-                    self.cancel_job(dep_job.id)
+                    self.cancel_job(
+                        dep_job.id,
+                        reason=f"dependency {job_id} was reset",
+                        source="engine_reset_cascade",
+                    )
                 except (KeyError, ValueError):
                     pass
                 # Reset the dependent back to PENDING so it re-waits
@@ -1180,6 +1206,49 @@ class Engine:
                 return float(meta_cost)
         return 0.0
 
+    # Token fields aggregated by _run_tokens/job_tokens. Kept as an explicit tuple
+    # so a new field in the ACP payload cannot silently start summing garbage.
+    _TOKEN_FIELDS = (
+        "input_tokens",
+        "output_tokens",
+        "cached_read_tokens",
+        "cached_write_tokens",
+        "total_tokens",
+        "billable_input_tokens",
+    )
+
+    def _run_tokens(self, run: StepRun) -> dict:
+        """Token usage for a single run, from executor_meta. {} when unreported.
+
+        The sibling of `_run_cost`. Under subscription billing `cost_usd` is 0 by
+        definition, so tokens are the only signal that reflects real consumption.
+        Returns {} rather than a zero-filled dict so "not measured" stays
+        distinguishable from "measured zero".
+        """
+        if not (run.result and run.result.executor_meta):
+            return {}
+        usage = run.result.executor_meta.get("usage")
+        if not isinstance(usage, dict):
+            return {}
+        return {k: int(v) for k, v in usage.items()
+                if k in self._TOKEN_FIELDS and isinstance(v, (int, float))}
+
+    def job_tokens(self, job_id: str) -> dict:
+        """Total token usage across all runs for a job, including sub-jobs.
+
+        {} when no run reported usage — an unmetered job must not render as a
+        metered zero.
+        """
+        totals: dict = {}
+        for run in self.store.runs_for_job(job_id):
+            for k, v in self._run_tokens(run).items():
+                totals[k] = totals.get(k, 0) + v
+            sub_id = getattr(run, "sub_job_id", None)
+            if sub_id:
+                for k, v in self.job_tokens(sub_id).items():
+                    totals[k] = totals.get(k, 0) + v
+        return totals
+
     def job_cost(self, job_id: str) -> float:
         """Total accumulated cost across all runs for a job, including sub-jobs."""
         runs = self.store.runs_for_job(job_id)
@@ -1231,6 +1300,11 @@ class Engine:
                 step_info["status"] = run.status.value
                 step_info["attempt"] = run.attempt
                 step_info["cost_usd"] = round(self._run_cost(run), 4)
+                # Omitted entirely when unreported — an unmetered step must
+                # not render as a metered zero.
+                run_tokens = self._run_tokens(run)
+                if run_tokens:
+                    step_info["tokens"] = run_tokens
 
                 if run.status == StepRunStatus.COMPLETED and run.result:
                     step_info["outputs"] = list(run.result.artifact.keys())
@@ -1307,6 +1381,9 @@ class Engine:
             "steps": steps,
             "sub_jobs": sub_jobs,
         }
+        job_tok = self.job_tokens(job_id)
+        if job_tok:
+            result["tokens"] = job_tok
         if job.metadata != {"sys": {}, "app": {}}:
             result["metadata"] = job.metadata
         return result
@@ -3138,7 +3215,14 @@ class Engine:
                                     JobStatus.PENDING,
                                     JobStatus.PAUSED,
                                 ):
-                                    self.cancel_job(other_id)
+                                    self.cancel_job(
+                                        other_id,
+                                        reason=(
+                                            f"sibling for_each item {original_idx} "
+                                            "failed (on_error=fail_fast)"
+                                        ),
+                                        source="engine_for_each_fail_fast",
+                                    )
                             except (KeyError, ValueError):
                                 pass
                     # Fail the for_each run
@@ -4914,7 +4998,13 @@ class AsyncEngine(Engine):
                     break
         self._dispatch_ready(job_id)
 
-    def cancel_job(self, job_id: str) -> None:
+    def cancel_job(
+        self,
+        job_id: str,
+        *,
+        reason: str | None = None,
+        source: str | None = None,
+    ) -> None:
         from stepwise.process_lifecycle import kill_job_processes
 
         # Snapshot running runs before cancel mutates their status
@@ -4940,7 +5030,7 @@ class AsyncEngine(Engine):
                 len(killed), job_id, killed,
             )
 
-        super().cancel_job(job_id)
+        super().cancel_job(job_id, reason=reason, source=source)
         # Belt-and-suspenders: untrack any runs that were tracked by a
         # concurrent _launch between the initial snapshot and super().cancel_job().
         # This closes the race where _track_task is called AFTER our initial

@@ -82,6 +82,12 @@ class AgentStatus:
     error: str | None = None
     cost_usd: float | None = None
     result: dict | None = None  # Artifact data from completed agent
+    # Token breakdown from the ACP prompt result (input / output / cached read /
+    # cached write / total). None when the transport does not report it — never a
+    # zero-filled dict, which would read as "measured, and it was nothing".
+    # Under subscription billing cost_usd is 0 by definition, so this is the only
+    # signal that reflects real rate-limit consumption.
+    usage: dict | None = None
 
 
 class AgentBackend(Protocol):
@@ -956,21 +962,34 @@ class AgentExecutor(Executor):
                         "session_id": agent_status.session_id,
                     }
 
-        # Zero out cost for subscription billing (agent runs are free on Max/subscription)
+        # Zero out COST for subscription billing (agent runs carry no dollar charge
+        # on Max/subscription). Tokens are NOT zeroed: under subscription billing the
+        # dollar figure is zero by definition, so it says nothing about consumption —
+        # the scarce resource is rate-limit quota, denominated in tokens. Reporting
+        # only the zero made real usage invisible: in production virtually every
+        # agent step recorded cost_usd=0 while the account's weekly rate-limit
+        # window filled up unobserved. Keep both: cost answers "what was billed",
+        # usage answers "what was consumed".
         cost = agent_status.cost_usd
         if self.config.get("_billing_mode") == "subscription":
             cost = 0
+
+        meta = {
+            "session_id": agent_status.session_id,
+            "cost_usd": cost,
+            "exit_code": agent_status.exit_code,
+        }
+        # Absent when the transport does not report it — never a zero-filled dict,
+        # which would read as "measured, and it was nothing".
+        if agent_status.usage:
+            meta["usage"] = agent_status.usage
 
         return HandoffEnvelope(
             artifact=artifact,
             sidecar=Sidecar(),
             workspace=working_dir,
             timestamp=_now(),
-            executor_meta={
-                "session_id": agent_status.session_id,
-                "cost_usd": cost,
-                "exit_code": agent_status.exit_code,
-            },
+            executor_meta=meta,
         )
 
     def _classify_error(self, status: AgentStatus) -> str:

@@ -224,7 +224,26 @@ GET /api/jobs/{job_id}/events
 GET /api/jobs/{job_id}/status
 ```
 
-Returns a detailed status breakdown with per-step information, costs, and suspension details.
+Returns a detailed status breakdown with per-step information, costs, token usage, and suspension details.
+
+Agent steps carry a `tokens` object, and the job carries the sum:
+
+```json
+{
+  "job_id": "job-abc123",
+  "cost_usd": 0.0,
+  "tokens": {
+    "input_tokens": 754, "output_tokens": 943,
+    "cached_read_tokens": 79700, "cached_write_tokens": 4078,
+    "total_tokens": 85475, "billable_input_tokens": 4832
+  },
+  "steps": [{"name": "act", "cost_usd": 0.0, "tokens": {"...": "..."}}]
+}
+```
+
+`tokens` is **omitted** when no step reported usage — an unmetered job is never
+rendered as a metered zero. See [Token metering](executors.md#agent-executor) for why
+`cost_usd` alone is insufficient under subscription billing (it is always `0.0`).
 
 ### Get job cost
 
@@ -232,7 +251,9 @@ Returns a detailed status breakdown with per-step information, costs, and suspen
 GET /api/jobs/{job_id}/cost
 ```
 
-Returns total accumulated cost across all steps.
+Returns total accumulated cost across all steps. **Under subscription billing this is
+always `0.0`** — agent runs carry no dollar charge. Use the `tokens` object from
+`/status` to measure actual consumption.
 
 ### Get suspended steps
 

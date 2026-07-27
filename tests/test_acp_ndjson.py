@@ -11,6 +11,8 @@ from stepwise.acp_ndjson import (
     extract_cost,
     extract_final_text,
     extract_session_id,
+    extract_usage,
+    normalize_usage,
     read_last_error,
     tail_for_usage_limit,
 )
@@ -439,3 +441,127 @@ class TestFullScenario:
         assert read_last_error(path) == "Final error message"
         assert extract_session_id(path) == "sess-abc-123"
         assert extract_final_text(path) == "Hello "
+
+
+# ── extract_usage / normalize_usage ───────────────────────────────────
+# The token breakdown is the ONLY signal that reflects real consumption under
+# subscription billing, where cost_usd is 0 by definition. The fixture below is a
+# VERBATIM prompt result captured from a live agent run — not an invented shape.
+
+_REAL_RESULT = {
+    "jsonrpc": "2.0",
+    "id": 0,
+    "result": {
+        "stopReason": "end_turn",
+        "usage": {
+            "inputTokens": 754,
+            "outputTokens": 943,
+            "cachedReadTokens": 79700,
+            "cachedWriteTokens": 4078,
+            "totalTokens": 85475,
+        },
+    },
+}
+
+
+def test_extract_usage_from_real_acp_result():
+    path = _write_ndjson([
+        {"jsonrpc": "2.0", "method": "session/update",
+         "params": {"update": {"sessionUpdate": "usage_update",
+                               "used": 84534, "size": 1000000}}},
+        _REAL_RESULT,
+    ])
+    try:
+        usage = extract_usage(path)
+        assert usage == _REAL_RESULT["result"]["usage"]
+    finally:
+        os.unlink(path)
+
+
+def test_extract_usage_returns_none_when_absent():
+    """Missing must render None, never a zero-filled dict.
+
+    A zero-filled dict would read as "measured, and it was nothing" — the same
+    class of lie as reporting cost_usd=0 for an unmetered subscription run.
+    """
+    path = _write_ndjson([
+        {"jsonrpc": "2.0", "method": "session/update",
+         "params": {"update": {"sessionUpdate": "agent_message_chunk"}}},
+    ])
+    try:
+        assert extract_usage(path) is None
+    finally:
+        os.unlink(path)
+
+
+def test_extract_usage_missing_file_is_none():
+    assert extract_usage("/nonexistent/path.jsonl") is None
+
+
+def test_extract_usage_takes_the_last_result():
+    """A resumed/multi-prompt session writes one result per prompt."""
+    first = {"jsonrpc": "2.0", "id": 0, "result": {
+        "stopReason": "end_turn", "usage": {"inputTokens": 1, "totalTokens": 10}}}
+    second = {"jsonrpc": "2.0", "id": 1, "result": {
+        "stopReason": "end_turn", "usage": {"inputTokens": 2, "totalTokens": 20}}}
+    path = _write_ndjson([first, second])
+    try:
+        assert extract_usage(path)["totalTokens"] == 20
+    finally:
+        os.unlink(path)
+
+
+def test_extract_usage_survives_torn_lines():
+    path = _write_ndjson([_REAL_RESULT])
+    try:
+        with open(path, "a") as f:
+            f.write("{not json\n")
+        assert extract_usage(path)["totalTokens"] == 85475
+    finally:
+        os.unlink(path)
+
+
+def test_extract_usage_ignores_non_dict_result():
+    """`result` is sometimes a bare value (e.g. a null ack) — must not crash."""
+    path = _write_ndjson([{"jsonrpc": "2.0", "id": 0, "result": None},
+                          {"jsonrpc": "2.0", "id": 1, "result": "ok"}])
+    try:
+        assert extract_usage(path) is None
+    finally:
+        os.unlink(path)
+
+
+def test_normalize_usage_maps_to_snake_case():
+    out = normalize_usage(_REAL_RESULT["result"]["usage"])
+    assert out["input_tokens"] == 754
+    assert out["output_tokens"] == 943
+    assert out["cached_read_tokens"] == 79700
+    assert out["cached_write_tokens"] == 4078
+    assert out["total_tokens"] == 85475
+
+
+def test_normalize_usage_derives_billable_input():
+    """billable_input = fresh input + cache writes (NOT discounted cache reads).
+
+    In the real fixture 94% of input was cache reads; a meter that cannot separate
+    them cannot tell a cheap 85k-token turn from an expensive one.
+    """
+    out = normalize_usage(_REAL_RESULT["result"]["usage"])
+    assert out["billable_input_tokens"] == 754 + 4078
+    assert out["billable_input_tokens"] < out["cached_read_tokens"]
+
+
+def test_normalize_usage_none_and_empty():
+    assert normalize_usage(None) is None
+    assert normalize_usage({}) is None
+
+
+def test_normalize_usage_omits_unknown_fields_rather_than_zeroing():
+    out = normalize_usage({"inputTokens": 5, "somethingNew": 9})
+    assert out["input_tokens"] == 5
+    assert "output_tokens" not in out
+    assert "somethingNew" not in out
+
+
+def test_normalize_usage_ignores_non_numeric():
+    assert normalize_usage({"inputTokens": "lots"}) is None
