@@ -3316,7 +3316,11 @@ def cmd_cancel(args: argparse.Namespace) -> int:
                         info["prompt"] = prompt
                     remaining_steps.append(info)
 
-            engine.cancel_job(args.job_id)
+            engine.cancel_job(
+                args.job_id,
+                reason="cancelled via stepwise cancel command",
+                source="cli_cancel_command",
+            )
             print(json.dumps({
                 "job_id": args.job_id,
                 "status": "cancelled",
@@ -3325,7 +3329,11 @@ def cmd_cancel(args: argparse.Namespace) -> int:
                 "remaining_steps": remaining_steps,
             }, indent=2, default=str))
         else:
-            engine.cancel_job(args.job_id)
+            engine.cancel_job(
+                args.job_id,
+                reason="cancelled via stepwise cancel command",
+                source="cli_cancel_command",
+            )
             _io(args).log("success", f"Cancelled {args.job_id}")
 
         return EXIT_SUCCESS
@@ -6638,7 +6646,11 @@ def _cmd_job_cancel(args) -> int:
             from stepwise.registry_factory import create_default_registry
             registry = create_default_registry()
             engine = Engine(store, registry, jobs_dir=str(project.jobs_dir), project_dir=project.dot_dir)
-            engine.cancel_job(args.job_id)
+            engine.cancel_job(
+                args.job_id,
+                reason="cancelled via stepwise cancel command",
+                source="cli_cancel_command",
+            )
             if args.output == "json":
                 print(json.dumps({"job_id": args.job_id, "status": "cancelled"}))
             else:

@@ -143,9 +143,9 @@ class TestDeleteCancelsActiveJobs:
         cancelled = []
         original = engine.cancel_job
 
-        def recording_cancel(job_id):
+        def recording_cancel(job_id, **kwargs):
             cancelled.append(job_id)
-            return original(job_id)
+            return original(job_id, **kwargs)
 
         monkeypatch.setattr(engine, "cancel_job", recording_cancel)
 
@@ -160,7 +160,9 @@ class TestDeleteCancelsActiveJobs:
         job = _make_job(engine.store, "job-del-done", JobStatus.COMPLETED)
 
         cancelled = []
-        monkeypatch.setattr(engine, "cancel_job", lambda jid: cancelled.append(jid))
+        monkeypatch.setattr(
+            engine, "cancel_job", lambda jid, **kw: cancelled.append(jid),
+        )
 
         resp = client.delete(f"/api/jobs/{job.id}")
         assert resp.status_code == 200
@@ -174,9 +176,9 @@ class TestDeleteCancelsActiveJobs:
         cancelled = []
         original = engine.cancel_job
 
-        def recording_cancel(job_id):
+        def recording_cancel(job_id, **kwargs):
             cancelled.append(job_id)
-            return original(job_id)
+            return original(job_id, **kwargs)
 
         monkeypatch.setattr(engine, "cancel_job", recording_cancel)
 

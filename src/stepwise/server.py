@@ -226,6 +226,14 @@ class CreateJobRequest(BaseModel):
     status: str | None = None  # "staged" to create in staged state
 
 
+class CancelJobRequest(BaseModel):
+    # Optional provenance: recorded in the job.cancelled event and run
+    # errors so external cancels are attributable (who/why), instead of
+    # a bare unexplained "Job cancelled".
+    reason: str | None = None
+    source: str | None = None
+
+
 class FulfillWatchRequest(BaseModel):
     payload: dict
 
@@ -1627,10 +1635,14 @@ def resume_job(job_id: str):
 
 
 @app.post("/api/jobs/{job_id}/cancel")
-def cancel_job(job_id: str):
+def cancel_job(job_id: str, req: CancelJobRequest | None = None):
     engine = _get_engine()
     try:
-        engine.cancel_job(job_id)
+        engine.cancel_job(
+            job_id,
+            reason=req.reason if req else None,
+            source=(req.source if req and req.source else "api"),
+        )
         _notify_change(job_id)
         return {"status": "cancelled"}
     except KeyError:
@@ -1703,7 +1715,9 @@ def _cancel_if_active(engine, job: Job) -> None:
     """
     if job.status in (JobStatus.RUNNING, JobStatus.PENDING):
         try:
-            engine.cancel_job(job.id)
+            engine.cancel_job(
+                job.id, reason="job deleted via API", source="api",
+            )
         except (KeyError, ValueError):
             logger.warning(
                 "Failed to cancel active job %s before delete", job.id,

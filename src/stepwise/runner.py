@@ -333,13 +333,25 @@ async def _delegated_ws_loop(
     import json as json_mod
 
     shutdown_requested = False
+    detach_requested = False
     loop = asyncio.get_running_loop()
+    # SIGINT (interactive Ctrl-C) cancels the job. SIGTERM only DETACHES:
+    # the job is server-owned and this process is just a viewer — an
+    # external kill (parent session reaping background children, timeout
+    # wrappers, `./run stepwise stop`) must not destroy server-side work.
+    # Scheduled jobs have been lost in production exactly this
+    # way: the launching agent session ended, its background `stepwise run
+    # --wait` client got SIGTERM'd, and the client cancelled the job.
     loop.add_signal_handler(signal.SIGINT, lambda: _set_flag())
-    loop.add_signal_handler(signal.SIGTERM, lambda: _set_flag())
+    loop.add_signal_handler(signal.SIGTERM, lambda: _set_detach())
 
     def _set_flag():
         nonlocal shutdown_requested
         shutdown_requested = True
+
+    def _set_detach():
+        nonlocal detach_requested
+        detach_requested = True
 
     start_time = time.time()
     last_fetch = 0.0  # always fetch on the first iteration
@@ -365,11 +377,25 @@ async def _delegated_ws_loop(
                 while True:
                     if shutdown_requested:
                         try:
-                            await client.post(f"/api/jobs/{job_id}/cancel")
+                            await client.post(
+                                f"/api/jobs/{job_id}/cancel",
+                                json={
+                                    "reason": "interrupted (SIGINT) at attached CLI client",
+                                    "source": "cli_client_sigint",
+                                },
+                            )
                         except Exception:
                             pass
                         _err("Interrupted — cancelled active runs.", output_stream)
                         return 130
+
+                    if detach_requested:
+                        _err(
+                            f"Detached (SIGTERM). Job {job_id} still running "
+                            f"on the server. Re-attach with: stepwise wait {job_id}",
+                            output_stream,
+                        )
+                        return EXIT_SUCCESS
 
                     # Wait for notification or poll
                     if use_ws and ws_conn:
@@ -919,7 +945,11 @@ async def _async_run_flow(
                     last_heartbeat = now
 
                 if shutdown_requested:
-                    engine.cancel_job(job.id)
+                    engine.cancel_job(
+                        job.id,
+                        reason="interrupted (signal) at local CLI runner",
+                        source="cli_local_signal",
+                    )
                     _err("Interrupted — cancelled active runs.", output_stream)
                     return 130
 
@@ -936,7 +966,11 @@ async def _async_run_flow(
                     )
                 except ExternalInputAborted as e:
                     if e.action == "cancel":
-                        engine.cancel_job(job.id)
+                        engine.cancel_job(
+                            job.id,
+                            reason="cancelled by user at input prompt",
+                            source="cli_local_user",
+                        )
                         _err("Cancelled.", output_stream)
                         return 130
                     else:  # suspend
@@ -1239,8 +1273,15 @@ async def _delegated_wait_ws_loop(
     shutdown_requested = False
     detach_requested = False
     loop = asyncio.get_running_loop()
+    # SIGINT (interactive Ctrl-C) cancels the job. SIGTERM only DETACHES:
+    # the job is server-owned and this process is just a viewer — an
+    # external kill (parent session reaping background children, timeout
+    # wrappers, `./run stepwise stop`) must not destroy server-side work.
+    # Scheduled jobs have been lost in production exactly this
+    # way: the launching agent session ended, its background `stepwise run
+    # --wait` client got SIGTERM'd, and this handler cancelled the job.
     loop.add_signal_handler(signal.SIGINT, lambda: _set_flag())
-    loop.add_signal_handler(signal.SIGTERM, lambda: _set_flag())
+    loop.add_signal_handler(signal.SIGTERM, lambda: _set_detach())
 
     def _set_flag():
         nonlocal shutdown_requested
@@ -1250,7 +1291,7 @@ async def _delegated_wait_ws_loop(
         nonlocal detach_requested
         detach_requested = True
 
-    # SIGTSTP (ctrl-z) detaches cleanly without cancelling the job
+    # SIGTSTP (ctrl-z) also detaches cleanly without cancelling the job
     try:
         loop.add_signal_handler(signal.SIGTSTP, lambda: _set_detach())
     except (OSError, NotImplementedError):
@@ -1278,7 +1319,13 @@ async def _delegated_wait_ws_loop(
             while True:
                 if shutdown_requested:
                     try:
-                        await client.post(f"/api/jobs/{job_id}/cancel")
+                        await client.post(
+                            f"/api/jobs/{job_id}/cancel",
+                            json={
+                                "reason": "interrupted (SIGINT) at attached --wait client",
+                                "source": "cli_wait_client_sigint",
+                            },
+                        )
                     except Exception:
                         pass
                     _json_stdout({
@@ -1294,6 +1341,13 @@ async def _delegated_wait_ws_loop(
                         f" Re-attach with: stepwise wait {job_id}\n"
                     )
                     sys.stderr.flush()
+                    _json_stdout({
+                        "status": "detached",
+                        "job_id": job_id,
+                        "note": "job still running on server; "
+                                f"re-attach with: stepwise wait {job_id}",
+                        "duration_seconds": round(time.time() - start_time, 1),
+                    })
                     return EXIT_SUCCESS
 
                 # Wait for WS notification or poll
@@ -1454,8 +1508,11 @@ async def _delegated_wait_multi_ws_loop(
         nonlocal detach_requested
         detach_requested = True
 
+    # SIGINT cancels; SIGTERM detaches (jobs are server-owned — an external
+    # kill of this viewer process must not destroy server-side work; see
+    # _delegated_wait_ws_loop for the incident that motivated this).
     loop.add_signal_handler(signal.SIGINT, _set_shutdown)
-    loop.add_signal_handler(signal.SIGTERM, _set_shutdown)
+    loop.add_signal_handler(signal.SIGTERM, _set_detach)
 
     try:
         loop.add_signal_handler(signal.SIGTSTP, _set_detach)
@@ -1481,7 +1538,13 @@ async def _delegated_wait_multi_ws_loop(
                     for jid in pending:
                         if pending[jid] is None:
                             try:
-                                await client.post(f"/api/jobs/{jid}/cancel")
+                                await client.post(
+                                    f"/api/jobs/{jid}/cancel",
+                                    json={
+                                        "reason": "interrupted (SIGINT) at attached --wait client",
+                                        "source": "cli_wait_client_sigint",
+                                    },
+                                )
                             except Exception:
                                 pass
                             pending[jid] = {"job_id": jid, "status": "cancelled",
@@ -1643,7 +1706,11 @@ async def _async_wait_for_job(
     try:
         while True:
             if shutdown_requested:
-                engine.cancel_job(job_id)
+                engine.cancel_job(
+                    job_id,
+                    reason="interrupted (signal) at local CLI wait loop",
+                    source="cli_local_signal",
+                )
                 result = {
                     "status": "cancelled",
                     "job_id": job_id,
@@ -1779,7 +1846,11 @@ def wait_for_job(
     try:
         while True:
             if shutdown_requested:
-                engine.cancel_job(job_id)
+                engine.cancel_job(
+                    job_id,
+                    reason="interrupted (signal) at local CLI wait loop",
+                    source="cli_local_signal",
+                )
                 result = {
                     "status": "cancelled",
                     "job_id": job_id,
@@ -1925,7 +1996,11 @@ def wait_for_jobs(
             if shutdown_requested:
                 for jid in pending:
                     if pending[jid] is None:
-                        engine.cancel_job(jid)
+                        engine.cancel_job(
+                            jid,
+                            reason="interrupted (signal) at local CLI wait loop",
+                            source="cli_local_signal",
+                        )
                         pending[jid] = {"job_id": jid, "status": "cancelled",
                                         "duration_seconds": round(time.time() - start_time, 1)}
                         _write_sentinel(project_dir, jid, "cancelled")
