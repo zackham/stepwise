@@ -745,8 +745,10 @@ class SQLiteStore:
                 SELECT *,
                     ROW_NUMBER() OVER (
                         PARTITION BY COALESCE(
-                            json_extract(workflow, '$.metadata.name'),
-                            json_extract(workflow, '$.source_dir'),
+                            CASE WHEN json_valid(workflow)
+                                 THEN json_extract(workflow, '$.metadata.name') END,
+                            CASE WHEN json_valid(workflow)
+                                 THEN json_extract(workflow, '$.source_dir') END,
                             objective
                         )
                         ORDER BY created_at DESC
@@ -784,7 +786,7 @@ class SQLiteStore:
             clauses.append("parent_job_id IS NULL")
         if meta_filters:
             for key, value in meta_filters.items():
-                clauses.append("json_extract(metadata, ?) = ?")
+                clauses.append("(json_valid(metadata) AND json_extract(metadata, ?) = ?)")
                 params.extend([f"$.{key}", value])
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         return where, params
@@ -1229,7 +1231,8 @@ class SQLiteStore:
     def accumulated_cost(self, run_id: str) -> float:
         """Sum cost from step_events for a run."""
         row = self._conn.execute(
-            """SELECT SUM(json_extract(data, '$.cost_usd')) as total
+            """SELECT SUM(CASE WHEN json_valid(data)
+                              THEN json_extract(data, '$.cost_usd') END) as total
                FROM step_events WHERE run_id = ? AND type = 'cost'""",
             (run_id,),
         ).fetchone()
@@ -1342,7 +1345,8 @@ class SQLiteStore:
         # Batch 1: sum step_event costs grouped by job_id
         placeholders = ",".join("?" for _ in job_ids)
         rows = self._conn.execute(
-            f"""SELECT sr.job_id, SUM(json_extract(se.data, '$.cost_usd')) as total
+            f"""SELECT sr.job_id, SUM(CASE WHEN json_valid(se.data)
+                                          THEN json_extract(se.data, '$.cost_usd') END) as total
                 FROM step_events se
                 JOIN step_runs sr ON se.run_id = sr.id
                 WHERE sr.job_id IN ({placeholders}) AND se.type = 'cost'
@@ -1359,7 +1363,8 @@ class SQLiteStore:
         if missing:
             mp = ",".join("?" for _ in missing)
             meta_rows = self._conn.execute(
-                f"""SELECT job_id, SUM(json_extract(result, '$.executor_meta.cost_usd')) as total
+                f"""SELECT job_id, SUM(CASE WHEN json_valid(result)
+                                           THEN json_extract(result, '$.executor_meta.cost_usd') END) as total
                     FROM step_runs
                     WHERE job_id IN ({mp}) AND result IS NOT NULL
                     GROUP BY job_id""",

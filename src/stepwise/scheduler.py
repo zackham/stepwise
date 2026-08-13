@@ -428,7 +428,8 @@ class SchedulerService:
         try:
             rows = self.store._conn.execute(
                 """SELECT id, status FROM jobs
-                   WHERE json_extract(metadata, '$.sys.schedule_id') = ?
+                   WHERE json_valid(metadata)
+                   AND json_extract(metadata, '$.sys.schedule_id') = ?
                    AND status IN ('running', 'pending', 'paused')
                    LIMIT 1""",
                 (sched.id,),

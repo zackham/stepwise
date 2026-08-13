@@ -3946,11 +3946,13 @@ def get_flow_stats():
     """Return job_count and last_run_at per flow source_dir."""
     engine = _get_engine()
     rows = engine.store._conn.execute(
-        """SELECT json_extract(workflow, '$.source_dir') as source_dir,
+        """SELECT CASE WHEN json_valid(workflow)
+                       THEN json_extract(workflow, '$.source_dir') END as source_dir,
                   COUNT(*) as job_count,
                   MAX(updated_at) as last_run_at
            FROM jobs
-           WHERE json_extract(workflow, '$.source_dir') IS NOT NULL
+           WHERE json_valid(workflow)
+           AND json_extract(workflow, '$.source_dir') IS NOT NULL
            GROUP BY source_dir"""
     ).fetchall()
     result = []
@@ -3974,7 +3976,8 @@ def get_flow_jobs(flow_dir: str = Query(...), limit: int = Query(10, ge=1, le=50
     rows = engine.store._conn.execute(
         """SELECT id, name, objective, status, created_at, updated_at
            FROM jobs
-           WHERE json_extract(workflow, '$.source_dir') = ?
+           WHERE json_valid(workflow)
+           AND json_extract(workflow, '$.source_dir') = ?
            ORDER BY created_at DESC
            LIMIT ?""",
         (abs_dir, limit),
@@ -5855,7 +5858,8 @@ def trigger_schedule(schedule_id: str):
     if sched.overlap_policy == OverlapPolicy.SKIP:
         running = engine.store._conn.execute(
             """SELECT id FROM jobs
-               WHERE json_extract(metadata, '$.sys.schedule_id') = ?
+               WHERE json_valid(metadata)
+               AND json_extract(metadata, '$.sys.schedule_id') = ?
                AND status IN ('running', 'pending', 'paused')
                LIMIT 1""",
             (sched.id,),
@@ -5964,7 +5968,10 @@ def list_schedule_jobs(
     engine = _get_engine()
 
     # Query jobs where metadata contains schedule_id
-    query = "SELECT * FROM jobs WHERE json_extract(metadata, '$.sys.schedule_id') = ?"
+    query = (
+        "SELECT * FROM jobs "
+        "WHERE json_valid(metadata) AND json_extract(metadata, '$.sys.schedule_id') = ?"
+    )
     params: list = [sched.id]
     if status:
         query += " AND status = ?"

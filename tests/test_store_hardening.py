@@ -10,6 +10,7 @@ Covers:
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 
@@ -335,3 +336,116 @@ class TestAtomicJobTransitionsStore:
         with pytest.raises(ValueError):
             store.transition_job_to_approved("j1")
         assert real_load("j1").status == JobStatus.CANCELLED
+
+
+class TestMalformedJsonColumns:
+    """A single unparseable JSON column must not take down a whole query.
+
+    Real incident (vita, 2026-08-12): three ancient step_runs rows carried
+    result = '' (empty string, not NULL) after a crash-recovery. Every
+    /api/jobs?limit=500 then died with sqlite3.OperationalError "malformed
+    JSON" inside batch_job_costs, and the jobs list rendered "No jobs yet" —
+    one bad row anywhere in the page blanked the entire UI.
+    """
+
+    @staticmethod
+    def _corrupt(store: SQLiteStore, table: str, column: str, row_id: str, value: str = "") -> None:
+        store._conn.execute(f"UPDATE {table} SET {column} = ? WHERE id = ?", (value, row_id))
+        store._conn.commit()
+
+    @staticmethod
+    def _cost_run(store: SQLiteStore, job_id: str, run_id: str, cost: float | None) -> None:
+        """Save a run, then write the result JSON straight into the column.
+
+        StepRun.result is a HandoffEnvelope; these tests only care what the raw
+        column holds, so set it directly rather than round-tripping the model.
+        """
+        store.save_run(StepRun(
+            id=run_id,
+            job_id=job_id,
+            step_name="step-a",
+            attempt=1,
+            status=StepRunStatus.COMPLETED,
+        ))
+        if cost is not None:
+            store._conn.execute(
+                "UPDATE step_runs SET result = ? WHERE id = ?",
+                (json.dumps({"executor_meta": {"cost_usd": cost}}), run_id),
+            )
+            store._conn.commit()
+
+    def test_batch_job_costs_survives_empty_result(self, store):
+        _make_job(store, "j1")
+        self._cost_run(store, "j1", "run-1", 1.25)
+        self._corrupt(store, "step_runs", "result", "run-1")
+
+        assert store.batch_job_costs(["j1"]) == {"j1": 0.0}
+
+    def test_batch_job_costs_still_sums_healthy_rows(self, store):
+        """The corrupt row is skipped; a sibling job's real cost still lands."""
+        _make_job(store, "j1")
+        _make_job(store, "j2")
+        self._cost_run(store, "j1", "run-1", 1.25)
+        self._cost_run(store, "j2", "run-2", 2.50)
+        self._corrupt(store, "step_runs", "result", "run-1")
+
+        costs = store.batch_job_costs(["j1", "j2"])
+        assert costs["j1"] == 0.0
+        assert costs["j2"] == pytest.approx(2.50)
+
+    def test_batch_job_costs_survives_empty_step_event_data(self, store):
+        _make_job(store, "j1")
+        self._cost_run(store, "j1", "run-1", None)
+        store._conn.execute(
+            "INSERT INTO step_events (id, run_id, timestamp, type, data) VALUES (?, ?, ?, ?, ?)",
+            ("ev-1", "run-1", _now().isoformat(), "cost", ""),
+        )
+        store._conn.commit()
+
+        assert store.batch_job_costs(["j1"]) == {"j1": 0.0}
+
+    def test_accumulated_cost_survives_empty_step_event_data(self, store):
+        _make_job(store, "j1")
+        self._cost_run(store, "j1", "run-1", None)
+        for ev_id, data in (("ev-1", ""), ("ev-2", '{"cost_usd": 0.75}')):
+            store._conn.execute(
+                "INSERT INTO step_events (id, run_id, timestamp, type, data) VALUES (?, ?, ?, ?, ?)",
+                (ev_id, "run-1", _now().isoformat(), "cost", data),
+            )
+        store._conn.commit()
+
+        assert store.accumulated_cost("run-1") == pytest.approx(0.75)
+
+    def test_recent_flows_survives_empty_workflow(self, store):
+        _make_job(store, "j1")
+        _make_job(store, "j2")
+        self._corrupt(store, "jobs", "workflow", "j1")
+
+        # j1 no longer deserializes into a Job, but the query must not raise
+        # and the healthy job must still come back.
+        assert "j2" in {j.id for j in store.recent_flows(limit=10)}
+
+    def test_meta_filtered_jobs_survive_empty_metadata(self, store):
+        _make_job(store, "j1")
+        _make_job(store, "j2")
+        store._conn.execute(
+            "UPDATE jobs SET metadata = ? WHERE id = ?",
+            ('{"sys": {"schedule_id": "sched-1"}}', "j2"),
+        )
+        store._conn.commit()
+        self._corrupt(store, "jobs", "metadata", "j1")
+
+        found = store.all_jobs(meta_filters={"sys.schedule_id": "sched-1"})
+        assert [j.id for j in found] == ["j2"]
+
+    def test_raw_json_extract_would_have_raised(self, store):
+        """Guard the guard: prove the unprotected form really does blow up."""
+        _make_job(store, "j1")
+        self._cost_run(store, "j1", "run-1", 1.25)
+        self._corrupt(store, "step_runs", "result", "run-1")
+
+        with pytest.raises(sqlite3.OperationalError, match="malformed JSON"):
+            store._conn.execute(
+                "SELECT SUM(json_extract(result, '$.executor_meta.cost_usd')) "
+                "FROM step_runs WHERE result IS NOT NULL"
+            ).fetchall()
