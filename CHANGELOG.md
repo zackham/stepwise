@@ -3,6 +3,13 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.99.3] — 2026-08-12
+
+### Fixed — one malformed JSON column no longer takes down the whole query
+- **A single unparseable value blanked the entire jobs list.** `batch_job_costs()` ran `json_extract(result, '$.executor_meta.cost_usd')` across the step_runs of every job on the page. Three ancient rows carrying `result = ''` (empty string, not NULL — crash-recovery debris) made SQLite raise `OperationalError: malformed JSON`, so `GET /api/jobs?limit=500` — the exact request the web UI issues — returned 500 and the page rendered "No jobs yet" against a database holding 2543 jobs. Server, proxy and data were all healthy, and `limit=50` returned fine, which is what made it read as a frontend fault. One bad row anywhere in the first 500 was enough.
+- **Every `json_extract` over a stored TEXT column is now guarded by `json_valid()`** — costs (`batch_job_costs`, `accumulated_cost`), flow grouping (`recent_flows`), metadata filters (`all_jobs`), flow stats and flow-jobs by `source_dir`, and schedule-id lookups in both the scheduler's overlap check and the server's schedule endpoints. A corrupt row is skipped instead of aborting the query, so bad data costs you that row rather than the page.
+- Regression coverage in `tests/test_store_hardening.py` reproduces the production shape (empty-string `result`, `step_events.data`, `workflow`, `metadata`), asserts healthy siblings still sum correctly, and includes a guard-the-guard test that the unprotected form really does still raise.
+
 ## [0.99.2] — 2026-07-26
 
 ### Added — token metering (cached vs uncached input, output)
