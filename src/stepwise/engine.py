@@ -2785,18 +2785,14 @@ class Engine:
                     if not validation_error:
                         validation_error = self._check_artifact_size(step_def, result.envelope)
                     if validation_error:
-                        run.status = StepRunStatus.FAILED
-                        run.error = validation_error
+                        # Match the async tick path: route through _fail_run so
+                        # exit rules can retry on output_invalid instead of
+                        # always halting the job.
                         run.result = result.envelope
                         run.pid = None
-                        run.completed_at = _now()
-                        self.store.save_run(run)
-                        self._emit(job.id, STEP_FAILED, {
-                            "step": step_name,
-                            "attempt": attempt,
-                            "error": validation_error,
-                        }, job=job)
-                        self._halt_job(job, run)
+                        self._fail_run(job, run, step_def,
+                                       error=validation_error,
+                                       error_category="output_invalid")
                     else:
                         run.result = result.envelope
                         run.executor_state = result.executor_state
