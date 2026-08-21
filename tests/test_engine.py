@@ -1252,3 +1252,55 @@ class TestExitRuleEvalSafety:
                     for r in caplog.records), (
             f"Expected warning about 'check' rule, got: {[r.message for r in caplog.records]}"
         )
+
+
+class TestSyncOutputInvalidExitRules:
+    """Sync launch must route missing outputs through _fail_run.
+
+    The async tick path already does this. The sync `_process_launch_result`
+    path used to mark FAILED and `_halt_job` immediately, so exit rules
+    that retry on `output_invalid` never fired. Repro: a callable that
+    returns {} on the first attempt (declared output `status` missing)
+    and a valid artifact on retry.
+    """
+
+    def test_missing_output_retries_via_exit_rule(self):
+        calls = {"n": 0}
+
+        def flaky_emit(inputs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return {}
+            return {"status": "ok"}
+
+        register_step_fn("flaky_emit", flaky_emit)
+
+        engine = make_engine()
+        w = WorkflowDefinition(steps={
+            "emit": StepDefinition(
+                name="emit", outputs=["status"],
+                executor=ExecutorRef("callable", {"fn_name": "flaky_emit"}),
+                exit_rules=[
+                    ExitRule("retry_invalid", "field_match", {
+                        "field": "error_category",
+                        "value": "output_invalid",
+                        "action": "loop",
+                        "target": "emit",
+                        "max_iterations": 5,
+                    }, priority=10),
+                ],
+            ),
+        })
+
+        job = engine.create_job("sync-output-invalid", w)
+        engine.start_job(job.id)
+        job = engine.get_job(job.id)
+
+        assert job.status == JobStatus.COMPLETED, (
+            f"expected retry-then-complete, got {job.status.value}; "
+            f"calls={calls['n']} runs={[r.status.value for r in engine.get_runs(job.id, 'emit')]}"
+        )
+        assert calls["n"] == 2
+        runs = engine.get_runs(job.id, "emit")
+        assert [r.status for r in runs] == [StepRunStatus.FAILED, StepRunStatus.COMPLETED]
+        assert runs[0].error_category == "output_invalid"
