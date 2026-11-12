@@ -550,3 +550,59 @@ class TestCancelRouting:
         )
         backend.cancel(ghost)  # should not raise
         assert recorded == []  # no random process received the cancel
+
+
+class TestReleaseClosesSessions:
+    """A pooled adapter outlives jobs; each session owns an agent subprocess,
+    so release_for_job must close the job's sessions or they pile up."""
+
+    def _ctx(self, context, job_id, step):
+        return ExecutionContext(
+            job_id=job_id,
+            step_name=step,
+            attempt=1,
+            workspace_path=context.workspace_path,
+            idempotency=f"{job_id}-{step}",
+        )
+
+    def _record_closes(self, backend):
+        client = backend.lifecycle.active[0].resource.client
+        closed = []
+        real = client.close_session
+
+        def close(sid):
+            closed.append(sid)
+            real(sid)
+
+        client.close_session = close
+        return closed
+
+    def test_release_closes_only_that_jobs_sessions(self, backend, context):
+        a = backend.spawn("A", _make_config(_session_name="conv"), self._ctx(context, "job-a", "s"))
+        b = backend.spawn("B", _make_config(), self._ctx(context, "job-b", "s"))
+        closed = self._record_closes(backend)
+
+        backend.release_for_job("job-a")
+
+        assert closed == [a.session_id]
+        assert len(backend.lifecycle.active) == 1  # job-b still pins the process
+        client = backend.lifecycle.active[0].resource.client
+        assert "conv" not in client.sessions
+
+        backend.release_for_job("job-b")
+        assert closed == [a.session_id, b.session_id]
+        assert not backend.lifecycle.active
+
+    def test_session_shared_by_two_jobs_closes_after_both(self, backend, context):
+        pin = backend.spawn("pin", _make_config(), self._ctx(context, "job-pin", "s"))
+        a = backend.spawn("A", _make_config(), self._ctx(context, "job-a", "s"))
+        backend.spawn(
+            "B", _make_config(_session_uuid=a.session_id), self._ctx(context, "job-b", "s"),
+        )
+        closed = self._record_closes(backend)
+
+        backend.release_for_job("job-a")
+        assert closed == []
+        backend.release_for_job("job-b")
+        assert closed == [a.session_id]
+        assert pin.session_id not in closed

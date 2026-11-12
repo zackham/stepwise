@@ -153,6 +153,11 @@ class ACPBackend:
         # is a notification (cannot fail for a live process), so probing
         # every active process would always "succeed" on the first one.
         self._session_hosts: dict[str, Any] = {}
+        # session_id -> job_ids that prompted it. Each claude-agent-acp session
+        # owns a claude subprocess (~250MB) that lives until session/close, and
+        # the pooled adapter outlives jobs (one stuck job pins it), so
+        # release_for_job must close sessions itself or they accumulate forever.
+        self._session_jobs: dict[str, set[str]] = {}
         self._session_hosts_lock = threading.Lock()
 
     def _ensure_containment_backend(self, mode: str) -> Any:
@@ -775,6 +780,13 @@ class ACPBackend:
                 if id(m) in live_ids
             }
             self._session_hosts[session_id] = managed
+            if job_id:
+                self._session_jobs.setdefault(session_id, set()).add(job_id)
+            self._session_jobs = {
+                sid: jobs
+                for sid, jobs in self._session_jobs.items()
+                if sid in self._session_hosts
+            }
 
         # Execute ACP method calls (mode, model overrides)
         for method_name, value in resolved.acp_calls:
@@ -1065,6 +1077,7 @@ class ACPBackend:
         reference sets drain to empty are torn down; resources still
         referenced by other jobs are left alone.
         """
+        self._close_job_sessions(job_id)
         self.lifecycle.release_for_job(job_id)
         if self.containment is not None:
             try:
@@ -1074,6 +1087,34 @@ class ACPBackend:
                     "containment.release_for_job(%s) raised",
                     job_id, exc_info=True,
                 )
+
+    def _close_job_sessions(self, job_id: str) -> None:
+        """Close sessions no other live job still references.
+
+        Closed sessions stay on disk, so session/load and session/fork from a
+        later job still work; only the in-memory name -> id map is dropped.
+        """
+        to_close = []
+        with self._session_hosts_lock:
+            for sid in list(self._session_jobs):
+                jobs = self._session_jobs[sid]
+                jobs.discard(job_id)
+                if jobs:
+                    continue
+                del self._session_jobs[sid]
+                host = self._session_hosts.pop(sid, None)
+                if host is not None:
+                    to_close.append((sid, host))
+        for sid, host in to_close:
+            if not any(m is host for m in self.lifecycle.active):
+                continue
+            if not self._is_alive(host.resource):
+                continue
+            client = host.resource.client
+            client.close_session(sid)
+            for name, known in list(client.sessions.items()):
+                if known == sid:
+                    client.sessions.pop(name, None)
 
     def release_all(self) -> None:
         """Release all managed processes and containment environments (server shutdown).
