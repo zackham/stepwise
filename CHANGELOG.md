@@ -3,6 +3,13 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.99.4] — 2026-11-12
+
+### Fixed — ACP sessions are closed when their job ends
+- **Every finished agent step leaked a claude subprocess.** Each `claude-agent-acp` session owns a `claude` child that lives until `session/close`, and stepwise never sent one. The pooled adapter outlives individual jobs (a single job suspended at a poll step holds a ref on it indefinitely), so sessions piled up for as long as the adapter lived: observed in production, 33 idle sessions / ~8 GB after 6 days of nightly jobs.
+- `ACPBackend.release_for_job()` now closes the job's sessions before dropping its pool refs. Sessions are ref-counted by job, so one loaded by a second still-running job (`_session_uuid`) stays open until that job ends too. Closed sessions remain on disk, so `session/load` and `session/fork` from later jobs still work; only the adapter's in-memory name → id entry is dropped.
+- Regression coverage in `tests/test_acp_backend.py::TestReleaseClosesSessions`.
+
 ## [0.99.3] — 2026-08-12
 
 ### Fixed — one malformed JSON column no longer takes down the whole query
