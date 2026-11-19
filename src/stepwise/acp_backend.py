@@ -637,6 +637,11 @@ class ACPBackend:
         # the same job the ACP process pool is tracking.
         session_name = config.get("_session_name")
         job_id = context.job_id
+        # The pooled adapter outlives jobs, so a bare name would hand the next job of the same
+        # flow the previous job's live conversation (the executive loop ran 35 cycles in one
+        # session this way). Names are only meaningful within a job; cross-job continuity is
+        # _session_uuid's job.
+        live_key = f"{job_id}:{session_name}" if session_name and job_id else session_name
         self._tls.current_job_id = job_id
         try:
             managed, was_new = self.lifecycle.acquire(
@@ -715,7 +720,7 @@ class ACPBackend:
                         "[%s] load_session failed (%s), creating new session",
                         step_id, exc,
                     )
-                    session_id = acp_proc.client.new_session(adapter_cwd, session_name)
+                    session_id = acp_proc.client.new_session(adapter_cwd, live_key)
             else:
                 # Named-session continuity without an explicit UUID
                 # (legacy continue_session / _session_id sharing): if this
@@ -725,8 +730,8 @@ class ACPBackend:
                 # Previously this always called session/new, so every loop
                 # iteration silently started a fresh conversation.
                 known_id = (
-                    acp_proc.client.sessions.get(session_name)
-                    if session_name
+                    acp_proc.client.sessions.get(live_key)
+                    if live_key
                     else None
                 )
                 if known_id:
@@ -752,7 +757,7 @@ class ACPBackend:
                             "is lost)",
                             step_id, session_name,
                         )
-                    session_id = acp_proc.client.new_session(adapter_cwd, session_name)
+                    session_id = acp_proc.client.new_session(adapter_cwd, live_key)
         except AcpError as exc:
             if was_new:
                 logger.warning(

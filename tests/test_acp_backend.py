@@ -460,6 +460,19 @@ class TestSessionResumeByName:
         r2 = backend.spawn("Second", _make_config(_session_name="conv-b"), context2)
         assert r1.session_id != r2.session_id
 
+    def test_same_name_in_a_later_job_starts_fresh(self, backend, context):
+        r1 = backend.spawn("cycle 1", _make_config(_session_name="ooda"), context)
+        later = ExecutionContext(
+            job_id="job-test-456",
+            step_name="test-step",
+            attempt=1,
+            workspace_path=context.workspace_path,
+            idempotency="test-idemp-2",
+        )
+        r2 = backend.spawn("cycle 2", _make_config(_session_name="ooda"), later)
+        assert r1.pid == r2.pid  # pooled process reused
+        assert r1.session_id != r2.session_id  # but not the previous job's conversation
+
     def test_unnamed_spawns_get_fresh_sessions(self, backend, context):
         r1 = backend.spawn("First", _make_config(), context)
         context2 = ExecutionContext(
@@ -587,7 +600,7 @@ class TestReleaseClosesSessions:
         assert closed == [a.session_id]
         assert len(backend.lifecycle.active) == 1  # job-b still pins the process
         client = backend.lifecycle.active[0].resource.client
-        assert "conv" not in client.sessions
+        assert not any(k.startswith("job-a:") for k in client.sessions)
 
         backend.release_for_job("job-b")
         assert closed == [a.session_id, b.session_id]
