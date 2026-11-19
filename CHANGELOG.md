@@ -3,6 +3,13 @@
 All notable changes to Stepwise are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/). Versioning: [Semantic Versioning](https://semver.org/).
 
+## [0.99.5] — 2026-11-18
+
+### Fixed — a named session no longer carries over to the next job
+- **The next job of a flow resumed the previous job's conversation.** `ACPClient.sessions` maps session *names* to ids on the pooled `claude-agent-acp` process, and that process outlives jobs. A step declaring `session: ooda` looked the bare name up, found the prior job's live session, and prompted it again. Observed in production: an hourly-ish reflection flow ran 35 consecutive jobs in a single conversation, its per-call context growing from ~260k to ~875k tokens before compaction, and each cycle re-paid the cache for all of it because the gap between jobs exceeded the cache TTL. 0.99.4's close-on-release did not stop it, because one job that never released kept the session referenced for every later one.
+- Named sessions now resolve within their job (the live-map key is `job_id:name`). Steps and loop iterations inside one job still share a conversation; a new job starts fresh. Deliberate cross-job continuity stays with `_session_uuid` (session/load), which is unaffected.
+- Regression coverage in `tests/test_acp_backend.py::TestSessionResumeByName::test_same_name_in_a_later_job_starts_fresh`.
+
 ## [0.99.4] — 2026-11-12
 
 ### Fixed — ACP sessions are closed when their job ends
